@@ -1,5 +1,5 @@
 const CONFIG = {
-  VERSION: "3.8.1",
+  VERSION: "3.8.2",
   MIN_MARKET_CAP: 1_000_000,
   MAX_MARKET_CAP: 500_000_000,
   MIN_DAILY_VOLUME: 250_000,
@@ -20,7 +20,7 @@ const TELEGRAM_API = "https://api.telegram.org";
 const seenUpdates = new Set();
 
 const ABOUT_TEXT =
-  "🚀 CRYPTO PUMP HUNTER V3.8.1\n\n" +
+  "🚀 CRYPTO PUMP HUNTER V3.8.2\n\n" +
   "طراحی و توسعه: علیرضا سعادتی\n\n" +
   "© تمامی حقوق مادی و معنوی این نرم‌افزار محفوظ است.\n\n" +
   "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه از صاحب اثر مجاز نیست.";
@@ -63,7 +63,7 @@ export default {
         ok: true,
         service: "Crypto Pump Hunter",
         version: CONFIG.VERSION,
-        mode: "Manual spot scan + Binance USDⓈ-M futures signals",
+        mode: "Manual spot scan + Kraken Derivatives futures signals",
         kv: Boolean(env.WATCHLIST_KV),
         membership: true
       });
@@ -616,7 +616,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "📘 راهنمای ربات\n\n" +
         "/start - نمایش منوی اصلی\n" +
         "/scan - اسکن دستی بازار\n" +
-        "/futures - دریافت سیگنال فیوچرز بایننس\n" +
+        "/futures - دریافت سیگنال فیوچرز کراکن\n" +
         "/status - وضعیت ربات\n" +
         "/help - راهنما\n\n" +
         "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
@@ -788,7 +788,7 @@ async function showStatus(env, chatId) {
     `🟢 وضعیت Crypto Pump Hunter\n\n` +
     `نسخه: V${CONFIG.VERSION}\n` +
     "حالت اسکن: فقط دستی\n" +
-    "اسپات: CoinLore و Kraken | فیوچرز: Binance USDⓈ-M\n" +
+    "اسپات: CoinLore و Kraken | فیوچرز: Kraken Derivatives\n" +
     `اتصال KV: ${env.WATCHLIST_KV ? "فعال" : "غیرفعال"}\n` +
     `آخرین اسکن ذخیره‌شده: ${lastScan}`,
     MAIN_MENU
@@ -898,9 +898,9 @@ async function showConnectionTest(env, chatId) {
     ? `✅ Kraken: متصل (${result.kraken.pairs} جفت معاملاتی)`
     : `❌ Kraken: ${result.kraken.error}`;
 
-  const binance = result.binanceFutures?.ok
-    ? `✅ Binance USDⓈ-M: متصل (${result.binanceFutures.symbols} نماد)`
-    : `❌ Binance USDⓈ-M: ${result.binanceFutures?.error || "نامشخص"}`;
+  const krakenFutures = result.krakenFutures?.ok
+    ? `✅ Kraken Futures: متصل (${result.krakenFutures.symbols} نماد)`
+    : `❌ Kraken Futures: ${result.krakenFutures?.error || "نامشخص"}`;
 
   await sendMessage(
     env,
@@ -908,7 +908,7 @@ async function showConnectionTest(env, chatId) {
     "🔌 نتیجه تست اتصال\n\n" +
     coinLore + "\n\n" +
     kraken + "\n\n" +
-    binance + "\n\n" +
+    krakenFutures + "\n\n" +
     `نسخه ربات: V${CONFIG.VERSION}`,
     MAIN_MENU
   );
@@ -1104,7 +1104,7 @@ async function testDataSources() {
     version: CONFIG.VERSION,
     coinlore: { ok: false },
     kraken: { ok: false },
-    binanceFutures: { ok: false }
+    krakenFutures: { ok: false }
   };
 
   try {
@@ -1135,19 +1135,20 @@ async function testDataSources() {
   }
 
   try {
-    const exchange = await fetchJson(
-      "https://fapi.binance.com/fapi/v1/exchangeInfo",
-      "Binance USDⓈ-M exchangeInfo"
-    );
-    result.binanceFutures = {
-      ok: Array.isArray(exchange.symbols),
-      symbols: Array.isArray(exchange.symbols) ? exchange.symbols.length : 0
+    const tickers = await krakenFuturesJson("/tickers", "Kraken Futures tickers");
+    const perpetuals = Array.isArray(tickers?.tickers)
+      ? tickers.tickers.filter(isKrakenPerpetualTicker)
+      : [];
+    result.krakenFutures = {
+      ok: Array.isArray(tickers?.tickers),
+      symbols: perpetuals.length,
+      sample: perpetuals.slice(0, 5).map(x => x.symbol)
     };
-    if (!result.binanceFutures.ok) {
-      result.binanceFutures.error = "ساختار پاسخ Binance معتبر نیست.";
+    if (!result.krakenFutures.ok) {
+      result.krakenFutures.error = "ساختار پاسخ Kraken Futures معتبر نیست.";
     }
   } catch (error) {
-    result.binanceFutures = { ok: false, error: error.message };
+    result.krakenFutures = { ok: false, error: error.message };
   }
 
   return result;
@@ -1653,11 +1654,11 @@ function formatCoin(item, isSignal) {
 }
 
 
-// ---------------- BINANCE USDⓈ-M FUTURES SIGNAL ENGINE ----------------
+// ---------------- KRAKEN DERIVATIVES FUTURES SIGNAL ENGINE ----------------
 // Public market data only. This module never places orders and never uses API keys.
 const FUTURES_CONFIG = {
-  BASE_URL: "https://fapi.binance.com",
-  QUOTE_ASSET: "USDT",
+  BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
+  CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
   MAX_SYMBOLS: 24,
   CONCURRENCY: 3,
   MIN_QUOTE_VOLUME: 5_000_000,
@@ -1668,8 +1669,8 @@ const FUTURES_CONFIG = {
   CONFIRM_INTERVAL: "4h"
 };
 
-async function binanceJson(path, label) {
-  const response = await fetch(`${FUTURES_CONFIG.BASE_URL}${path}`, {
+async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL) {
+  const response = await fetch(`${baseUrl}${path}`, {
     headers: { Accept: "application/json" }
   });
   const body = await response.text();
@@ -1680,65 +1681,66 @@ async function binanceJson(path, label) {
     throw new Error(`${label}: پاسخ JSON معتبر نیست؛ HTTP ${response.status}`);
   }
   if (!response.ok) {
-    const detail = data?.msg ? ` - ${data.msg}` : "";
-    throw new Error(`${label}: HTTP ${response.status}${detail}`);
+    throw new Error(`${label}: HTTP ${response.status}`);
   }
-  if (data && typeof data === "object" && !Array.isArray(data) && data.code < 0) {
-    throw new Error(`${label}: ${data.msg || "خطای Binance"}`);
+  if (data?.result === "error" || (Array.isArray(data?.errors) && data.errors.length)) {
+    throw new Error(`${label}: ${(data.errors || []).join(", ") || data.error || "خطای Kraken"}`);
   }
   return data;
 }
 
-function futuresSymbolAllowed(item) {
-  if (!item || item.status !== "TRADING") return false;
-  if (item.contractType !== "PERPETUAL" || item.quoteAsset !== "USDT") return false;
-  const symbol = String(item.symbol || "");
-  if (!symbol.endsWith("USDT")) return false;
-  const base = symbol.slice(0, -4);
-  if (!base || /(UP|DOWN|BULL|BEAR|[235]L|[235]S)$/.test(base)) return false;
-  if (["USDC", "BUSD", "TUSD", "FDUSD", "USDP", "DAI", "EUR", "USTC"].includes(base)) return false;
-  return true;
+function isKrakenPerpetualTicker(item) {
+  if (!item || item.tag !== "perpetual" || item.suspended === true) return false;
+  const symbol = String(item.symbol || "").toUpperCase();
+  // Kraken perpetual contracts use PI_ (inverse) or PF_ (multi-collateral) symbols.
+  if (!/^(PI|PF)_[A-Z0-9]+USD$/.test(symbol)) return false;
+  const quoteVolume = Number(item.volumeQuote);
+  const last = Number(item.last);
+  return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
+    Number.isFinite(last) && last > 0;
 }
 
-async function getBinanceFuturesUniverse() {
-  const [exchange, tickers, premiums] = await Promise.all([
-    binanceJson("/fapi/v1/exchangeInfo", "Binance exchangeInfo"),
-    binanceJson("/fapi/v1/ticker/24hr", "Binance 24hr ticker"),
-    binanceJson("/fapi/v1/premiumIndex", "Binance premiumIndex")
-  ]);
-  if (!Array.isArray(exchange?.symbols) || !Array.isArray(tickers) || !Array.isArray(premiums)) {
-    throw new Error("داده‌های بازار Binance ساختار معتبر ندارند.");
+async function getKrakenFuturesUniverse() {
+  const data = await krakenFuturesJson("/tickers", "Kraken Futures tickers");
+  if (!Array.isArray(data?.tickers)) {
+    throw new Error("فهرست نمادهای Kraken Futures معتبر نیست.");
   }
-  const allowed = new Set(exchange.symbols.filter(futuresSymbolAllowed).map(x => x.symbol));
-  const premiumMap = new Map(premiums.map(x => [x.symbol, x]));
-  return tickers
-    .filter(t => allowed.has(t.symbol) && Number(t.quoteVolume) >= FUTURES_CONFIG.MIN_QUOTE_VOLUME)
-    .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))
+  return data.tickers
+    .filter(isKrakenPerpetualTicker)
+    .sort((a, b) => Number(b.volumeQuote) - Number(a.volumeQuote))
     .slice(0, FUTURES_CONFIG.MAX_SYMBOLS)
-    .map(t => ({ ...t, premium: premiumMap.get(t.symbol) || null }));
+    .map(t => ({
+      ...t,
+      priceChangePercent: Number(t.change24h) || 0,
+      quoteVolume: Number(t.volumeQuote) || 0,
+      premium: { lastFundingRate: Number(t.fundingRate) }
+    }));
 }
 
-async function getBinanceKlines(symbol, interval) {
-  const query = new URLSearchParams({
-    symbol,
-    interval,
-    limit: String(FUTURES_CONFIG.KLINE_LIMIT)
-  });
-  const rows = await binanceJson(`/fapi/v1/klines?${query.toString()}`, `Binance ${symbol} ${interval}`);
-  if (!Array.isArray(rows)) throw new Error("ساختار کندل‌های Binance معتبر نیست.");
-  // The last kline may still be forming; exclude it to avoid repainting signals.
-  return rows.slice(0, -1).map(row => ({
-    time: Number(row[0]),
-    open: Number(row[1]),
-    high: Number(row[2]),
-    low: Number(row[3]),
-    close: Number(row[4]),
-    volume: Number(row[5])
+async function getKrakenFuturesCandles(symbol, interval) {
+  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}`;
+  const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
+    `Kraken ${symbol} ${interval}`, FUTURES_CONFIG.CHARTS_URL);
+  if (!Array.isArray(data?.candles)) {
+    throw new Error(`ساختار کندل‌های Kraken برای ${symbol} معتبر نیست.`);
+  }
+  const candles = data.candles.map(row => ({
+    time: Number(row.time) < 1e12 ? Number(row.time) * 1000 : Number(row.time),
+    open: Number(row.open),
+    high: Number(row.high),
+    low: Number(row.low),
+    close: Number(row.close),
+    volume: Number(row.volume)
   })).filter(c =>
-    Number.isFinite(c.close) && c.close > 0 &&
-    Number.isFinite(c.high) && Number.isFinite(c.low) &&
-    c.high >= c.low && c.low > 0 && Number.isFinite(c.volume)
-  );
+    Number.isFinite(c.time) && Number.isFinite(c.close) && c.close > 0 &&
+    Number.isFinite(c.high) && Number.isFinite(c.low) && c.high >= c.low && c.low > 0 &&
+    Number.isFinite(c.volume) && c.volume >= 0
+  ).sort((a, b) => a.time - b.time);
+
+  // Exclude the currently forming candle. Kraken chart responses may include it.
+  const intervalMs = interval === "4h" ? 4 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  const now = Date.now();
+  return candles.filter(c => c.time + intervalMs <= now);
 }
 
 function calculateAtr(candles, period = 14) {
@@ -1876,15 +1878,15 @@ function formatFuturesSignal(item) {
 
 async function runFuturesSignalScan(env) {
   const started = Date.now();
-  const universe = await getBinanceFuturesUniverse();
+  const universe = await getKrakenFuturesUniverse();
   if (!universe.length) {
-    return { report: "⚠️ در Binance قرارداد دائمی USDT با حجم کافی پیدا نشد.", signals: [] };
+    return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [] };
   }
   const analyzed = await mapLimit(universe, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
       const [oneHour, fourHour] = await Promise.all([
-        getBinanceKlines(ticker.symbol, FUTURES_CONFIG.INTERVAL),
-        getBinanceKlines(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL)
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.INTERVAL),
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL)
       ]);
       return analyzeFuturesSymbol(ticker, oneHour, fourHour);
     } catch (error) {
@@ -1894,9 +1896,9 @@ async function runFuturesSignalScan(env) {
   const signals = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score).slice(0, 8);
   const validData = analyzed.filter(x => x && x.score !== undefined).length;
   const rejected = analyzed.filter(x => x?.rejected).slice(0, 8);
-  let report = `📈 CRYPTO PUMP HUNTER V${CONFIG.VERSION} — BINANCE FUTURES\n` +
+  let report = `📈 CRYPTO PUMP HUNTER V${CONFIG.VERSION} — KRAKEN FUTURES\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
-    "🏦 بازار: Binance USDⓈ-M Perpetual / USDT\n" +
+    "🏦 بازار: Kraken Derivatives Perpetual\n" +
     "⏱ تایم‌فریم: 1h با تأیید روند 4h\n" +
     `📥 نمادهای پرحجم بررسی‌شده: ${universe.length}\n` +
     `📊 تحلیل‌های معتبر: ${validData}\n` +
@@ -1913,7 +1915,7 @@ async function runFuturesSignalScan(env) {
   }
   report += `\n🕒 زمان تهیه گزارش: ${new Date().toISOString()}\n` +
     `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} ثانیه\n` +
-    "📡 منبع داده: API عمومی Binance USDⓈ-M Futures\n" +
+    "📡 منبع داده: API عمومی Kraken Derivatives Futures\n" +
     "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست. قیمت ممکن است پس از بسته‌شدن کندل تغییر کند.";
 
   if (env.WATCHLIST_KV) {
@@ -1940,7 +1942,7 @@ async function runFuturesSignalsForChat(env, chatId) {
     return;
   }
   await sendMessage(env, chatId,
-    "📈 اسکن فیوچرز Binance شروع شد...\n" +
+    "📈 اسکن فیوچرز Kraken شروع شد...\n" +
     "در حال بررسی قراردادهای دائمی USDT با کندل‌های بسته‌شده ۱ساعته و تأیید ۴ساعته.\n" +
     "این بخش فقط سیگنال تحلیلی تولید می‌کند و سفارشی ثبت نمی‌کند."
   );
@@ -1950,7 +1952,7 @@ async function runFuturesSignalsForChat(env, chatId) {
     await sendMessage(env, chatId, "پایان بررسی فیوچرز.", MAIN_MENU);
   } catch (error) {
     await sendMessage(env, chatId,
-      "❌ دریافت یا تحلیل داده Binance Futures ناموفق بود.\n" +
+      "❌ دریافت یا تحلیل داده Kraken Futures ناموفق بود.\n" +
       String(error.message || "خطای ناشناخته").slice(0, 900) +
       "\n\nدر این وضعیت هیچ سیگنالی ساخته نمی‌شود.", MAIN_MENU
     );
