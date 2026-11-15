@@ -1,6 +1,6 @@
 
 const CONFIG = {
-  VERSION: "3.4",
+  VERSION: "3.5",
   MIN_MARKET_CAP: 1_000_000,
   MAX_MARKET_CAP: 500_000_000,
   MIN_DAILY_VOLUME: 250_000,
@@ -19,6 +19,38 @@ const CONFIG = {
 const TELEGRAM_API = "https://api.telegram.org";
 const seenUpdates = new Set();
 
+const ABOUT_TEXT =
+  "🚀 CRYPTO PUMP HUNTER V3.5\n\n" +
+  "طراحی و توسعه: علیرضا سعادتی\n\n" +
+  "© تمامی حقوق مادی و معنوی این نرم‌افزار محفوظ است.\n\n" +
+  "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه از صاحب اثر مجاز نیست.";
+
+const MAIN_MENU = {
+  inline_keyboard: [
+    [
+      { text: "🚀 اسکن بازار", callback_data: "scan" },
+      { text: "📊 تحلیل بازار", callback_data: "analysis" }
+    ],
+    [
+      { text: "👀 واچ‌لیست", callback_data: "watchlist" },
+      { text: "📡 وضعیت ربات", callback_data: "status" }
+    ],
+    [
+      { text: "🔌 تست اتصال", callback_data: "test" },
+      { text: "⚙️ تنظیمات", callback_data: "settings" }
+    ],
+    [
+      { text: "ℹ️ درباره", callback_data: "about" }
+    ]
+  ]
+};
+
+const BACK_MENU = {
+  inline_keyboard: [
+    [{ text: "🏠 منوی اصلی", callback_data: "menu" }]
+  ]
+};
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -28,7 +60,8 @@ export default {
         ok: true,
         service: "Crypto Pump Hunter",
         version: CONFIG.VERSION,
-        mode: "Manual scan only"
+        mode: "Manual scan only",
+        kv: Boolean(env.WATCHLIST_KV)
       });
     }
 
@@ -65,12 +98,16 @@ export default {
 
       if (updateId !== undefined) {
         if (seenUpdates.has(updateId)) return new Response("OK");
-
         seenUpdates.add(updateId);
 
         if (seenUpdates.size > 500) {
           seenUpdates.delete(seenUpdates.values().next().value);
         }
+      }
+
+      if (update.callback_query) {
+        ctx.waitUntil(handleCallback(update.callback_query, env));
+        return new Response("OK");
       }
 
       const message = update.message || update.edited_message;
@@ -112,19 +149,17 @@ async function fetchJson(url, label) {
   const response = await fetch(url, {
     headers: {
       Accept: "application/json",
-      "User-Agent": "CryptoPumpHunter/3.4"
+      "User-Agent": `CryptoPumpHunter/${CONFIG.VERSION}`
     }
   });
 
   const body = await response.text();
-
   let data;
+
   try {
     data = JSON.parse(body);
   } catch {
-    throw new Error(
-      `${label}: پاسخ JSON معتبر نیست؛ HTTP ${response.status}`
-    );
+    throw new Error(`${label}: پاسخ JSON معتبر نیست؛ HTTP ${response.status}`);
   }
 
   if (!response.ok) {
@@ -155,12 +190,16 @@ async function telegram(method, env, body) {
   return data;
 }
 
-async function sendMessage(env, chatId, text) {
-  return telegram("sendMessage", env, {
+async function sendMessage(env, chatId, text, replyMarkup = null) {
+  const body = {
     chat_id: chatId,
     text,
     disable_web_page_preview: true
-  });
+  };
+
+  if (replyMarkup) body.reply_markup = replyMarkup;
+
+  return telegram("sendMessage", env, body);
 }
 
 async function sendLongMessage(env, chatId, text) {
@@ -191,16 +230,36 @@ async function sendLongMessage(env, chatId, text) {
   if (chunk) await sendMessage(env, chatId, chunk);
 }
 
+async function answerCallback(env, callbackId, text = "") {
+  try {
+    await telegram("answerCallbackQuery", env, {
+      callback_query_id: callbackId,
+      text,
+      show_alert: false
+    });
+  } catch {
+    // Ignore callback acknowledgement errors.
+  }
+}
+
+function isOwner(chatId, env) {
+  return !env.OWNER_ID || String(chatId) === String(env.OWNER_ID);
+}
+
+async function showMenu(env, chatId) {
+  await sendMessage(
+    env,
+    chatId,
+    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\n\n` +
+    "از منوی زیر گزینه موردنظر را انتخاب کن:",
+    MAIN_MENU
+  );
+}
+
 async function handleTelegramCommand(command, chatId, env) {
   try {
-    if (command === "/start") {
-      await sendMessage(
-        env,
-        chatId,
-        "🚀 به Crypto Pump Hunter خوش آمدی.\n\n" +
-        "برای اسکن بازار دستور /scan را بفرست.\n" +
-        "راهنما: /help"
-      );
+    if (command === "/start" || command === "/menu") {
+      await showMenu(env, chatId);
       return;
     }
 
@@ -209,52 +268,272 @@ async function handleTelegramCommand(command, chatId, env) {
         env,
         chatId,
         "📘 راهنمای ربات\n\n" +
-        "/scan - اسکن بازار\n" +
+        "/start - نمایش منوی اصلی\n" +
+        "/scan - اسکن دستی بازار\n" +
         "/status - وضعیت ربات\n" +
         "/help - راهنما\n\n" +
-        "اسکن فقط با دستور دستی /scan انجام می‌شود."
+        "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
+        MAIN_MENU
       );
       return;
     }
 
     if (command === "/status") {
-      await sendMessage(
-        env,
-        chatId,
-        `🟢 ربات فعال است.\nنسخه: V${CONFIG.VERSION}\n` +
-        "حالت اسکن: دستی\nمنابع: CoinLore و Kraken"
-      );
+      await showStatus(env, chatId);
       return;
     }
 
     if (command === "/scan") {
-      if (env.OWNER_ID && String(chatId) !== String(env.OWNER_ID)) {
-        await sendMessage(env, chatId, "⛔ اجازه اسکن ندارید.");
-        return;
-      }
-
-      await sendMessage(
-        env,
-        chatId,
-        `🔎 اسکن هوشمند V${CONFIG.VERSION} شروع شد...\n` +
-        "در حال دریافت داده‌ها و بررسی روند، حجم، RSI و سطوح قیمتی."
-      );
-
-      const report = await runScan();
-      await sendLongMessage(env, chatId, report);
+      await runScanForChat(env, chatId);
+      return;
     }
+
+    await sendMessage(
+      env,
+      chatId,
+      "برای استفاده از ربات، /start را بفرست.",
+      MAIN_MENU
+    );
   } catch (error) {
     try {
       await sendMessage(
         env,
         chatId,
         "❌ خطا در اجرای دستور:\n" +
-        String(error.message || "Unknown error").slice(0, 1000)
+        String(error.message || "Unknown error").slice(0, 1000),
+        MAIN_MENU
       );
     } catch {
       // Ignore Telegram reporting errors.
     }
   }
+}
+
+async function handleCallback(query, env) {
+  const chatId = query.message?.chat?.id;
+  const action = query.data || "";
+
+  await answerCallback(env, query.id);
+
+  if (!chatId) return;
+
+  try {
+    if (action === "menu") {
+      await showMenu(env, chatId);
+      return;
+    }
+
+    if (action === "scan") {
+      await runScanForChat(env, chatId);
+      return;
+    }
+
+    if (action === "analysis") {
+      await showLastAnalysis(env, chatId);
+      return;
+    }
+
+    if (action === "watchlist") {
+      await showWatchlist(env, chatId);
+      return;
+    }
+
+    if (action === "status") {
+      await showStatus(env, chatId);
+      return;
+    }
+
+    if (action === "test") {
+      await showConnectionTest(env, chatId);
+      return;
+    }
+
+    if (action === "settings") {
+      await showSettings(env, chatId);
+      return;
+    }
+
+    if (action === "about") {
+      await sendMessage(env, chatId, ABOUT_TEXT, BACK_MENU);
+      return;
+    }
+
+    await showMenu(env, chatId);
+  } catch (error) {
+    await sendMessage(
+      env,
+      chatId,
+      "❌ خطا:\n" + String(error.message || "Unknown error").slice(0, 1000),
+      MAIN_MENU
+    );
+  }
+}
+
+async function runScanForChat(env, chatId) {
+  if (!isOwner(chatId, env)) {
+    await sendMessage(env, chatId, "⛔ اجازه اسکن ندارید.");
+    return;
+  }
+
+  await sendMessage(
+    env,
+    chatId,
+    `🔎 اسکن هوشمند V${CONFIG.VERSION} شروع شد...\n` +
+    "در حال بررسی بازار، روند، حجم، RSI و سطوح قیمتی."
+  );
+
+  const result = await runScan(env);
+  await sendLongMessage(env, chatId, result.report);
+
+  await sendMessage(
+    env,
+    chatId,
+    "عملیات اسکن به پایان رسید.",
+    MAIN_MENU
+  );
+}
+
+async function showStatus(env, chatId) {
+  let lastScan = "هنوز اسکن ذخیره‌شده‌ای وجود ندارد.";
+
+  if (env.WATCHLIST_KV) {
+    try {
+      const saved = await env.WATCHLIST_KV.get("last_scan", "json");
+      if (saved?.timestamp) {
+        lastScan = new Date(saved.timestamp).toLocaleString("en-GB", {
+          timeZone: "UTC"
+        }) + " UTC";
+      }
+    } catch {
+      lastScan = "خواندن اطلاعات اسکن قبلی ناموفق بود.";
+    }
+  }
+
+  await sendMessage(
+    env,
+    chatId,
+    `🟢 وضعیت Crypto Pump Hunter\n\n` +
+    `نسخه: V${CONFIG.VERSION}\n` +
+    "حالت اسکن: فقط دستی\n" +
+    "منابع داده: CoinLore و Kraken\n" +
+    `اتصال KV: ${env.WATCHLIST_KV ? "فعال" : "غیرفعال"}\n` +
+    `آخرین اسکن ذخیره‌شده: ${lastScan}`,
+    MAIN_MENU
+  );
+}
+
+async function showSettings(env, chatId) {
+  await sendMessage(
+    env,
+    chatId,
+    "⚙️ تنظیمات فعلی ربات\n\n" +
+    `📊 حداقل ارزش بازار: $${CONFIG.MIN_MARKET_CAP.toLocaleString("en-US")}\n` +
+    `📊 حداکثر ارزش بازار: $${CONFIG.MAX_MARKET_CAP.toLocaleString("en-US")}\n` +
+    `💧 حداقل حجم روزانه: $${CONFIG.MIN_DAILY_VOLUME.toLocaleString("en-US")}\n` +
+    `🔎 حداکثر کاندیدا: ${CONFIG.MAX_CANDIDATES}\n` +
+    `⭐ حداقل امتیاز: ${CONFIG.MIN_SCORE}/100\n` +
+    `⚖️ حداقل نسبت سود به ریسک: ${CONFIG.MIN_REWARD_RISK}R\n` +
+    `⏱ تایم‌فریم: ${CONFIG.CANDLE_INTERVAL} دقیقه\n` +
+    `👀 تعداد واچ‌لیست: ${CONFIG.WATCHLIST_SIZE}\n\n` +
+    "این مقادیر در کد ربات تعریف شده‌اند.",
+    BACK_MENU
+  );
+}
+
+async function showLastAnalysis(env, chatId) {
+  if (!env.WATCHLIST_KV) {
+    await sendMessage(
+      env,
+      chatId,
+      "⚠️ اتصال KV فعال نیست. ابتدا Binding را بررسی کن.",
+      MAIN_MENU
+    );
+    return;
+  }
+
+  const saved = await env.WATCHLIST_KV.get("last_scan", "json");
+
+  if (!saved?.report) {
+    await sendMessage(
+      env,
+      chatId,
+      "هنوز گزارشی ذخیره نشده است.\nابتدا یک‌بار اسکن بازار را اجرا کن.",
+      MAIN_MENU
+    );
+    return;
+  }
+
+  await sendLongMessage(env, chatId, saved.report);
+  await sendMessage(env, chatId, "پایان آخرین گزارش ذخیره‌شده.", MAIN_MENU);
+}
+
+async function showWatchlist(env, chatId) {
+  if (!env.WATCHLIST_KV) {
+    await sendMessage(
+      env,
+      chatId,
+      "⚠️ اتصال KV فعال نیست. Binding را در تنظیمات Worker بررسی کن.",
+      MAIN_MENU
+    );
+    return;
+  }
+
+  const saved = await env.WATCHLIST_KV.get("last_scan", "json");
+
+  if (!saved?.watchlist?.length) {
+    await sendMessage(
+      env,
+      chatId,
+      "👀 واچ‌لیست خالی است.\nپس از اجرای اسکن، ارزهای منتخب اینجا ذخیره می‌شوند.",
+      MAIN_MENU
+    );
+    return;
+  }
+
+  let text =
+    "👀 واچ‌لیست آخرین اسکن\n" +
+    "━━━━━━━━━━━━━━━━━━\n\n";
+
+  for (const item of saved.watchlist) {
+    text +=
+      `🪙 ${item.name} (${item.symbol})\n` +
+      `⭐ امتیاز: ${item.score}/100\n` +
+      `💵 قیمت: $${formatPrice(item.current)}\n` +
+      `📈 روند: ${item.trend}\n` +
+      `📊 RSI: ${Number(item.rsi).toFixed(1)}\n` +
+      `🧩 الگو: ${item.setup}\n` +
+      `🟢 حمایت: $${formatPrice(item.support)}\n` +
+      `🔴 مقاومت: $${formatPrice(item.resistance)}\n` +
+      `⚖️ نسبت سود به ریسک: ${Number(item.rewardRisk).toFixed(2)}R\n\n`;
+  }
+
+  text += "⚠️ واچ‌لیست سیگنال قطعی خرید نیست.";
+  await sendLongMessage(env, chatId, text);
+  await sendMessage(env, chatId, "پایان واچ‌لیست.", MAIN_MENU);
+}
+
+async function showConnectionTest(env, chatId) {
+  await sendMessage(env, chatId, "🔌 در حال بررسی اتصال منابع داده...");
+
+  const result = await testDataSources();
+
+  const coinLore = result.coinlore.ok
+    ? `✅ CoinLore: متصل (${result.coinlore.assets} ارز نمونه)`
+    : `❌ CoinLore: ${result.coinlore.error}`;
+
+  const kraken = result.kraken.ok
+    ? `✅ Kraken: متصل (${result.kraken.pairs} جفت معاملاتی)`
+    : `❌ Kraken: ${result.kraken.error}`;
+
+  await sendMessage(
+    env,
+    chatId,
+    "🔌 نتیجه تست اتصال\n\n" +
+    coinLore + "\n\n" +
+    kraken + "\n\n" +
+    `نسخه ربات: V${CONFIG.VERSION}`,
+    MAIN_MENU
+  );
 }
 
 async function registerWebhook(request, env) {
@@ -277,7 +556,7 @@ async function registerWebhook(request, env) {
   try {
     const body = {
       url: webhookUrl,
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "callback_query"],
       max_connections: 5
     };
 
@@ -290,7 +569,8 @@ async function registerWebhook(request, env) {
     return json({
       ok: true,
       result: result.result,
-      description: result.description || "Webhook registered"
+      description: result.description || "Webhook registered",
+      allowed_updates: ["message", "callback_query"]
     });
   } catch (error) {
     return json({ ok: false, error: error.message }, 500);
@@ -421,7 +701,6 @@ async function getCandles(pair) {
     throw new Error("کندل‌های Kraken موجود نیستند.");
   }
 
-  // آخرین ردیف، کندل در حال تشکیل است؛ حذف می‌شود.
   const candles = result[key]
     .slice(0, -1)
     .map(row => ({
@@ -533,7 +812,6 @@ function average(values) {
 }
 
 function findLevels(candles) {
-  // کندل جاری در محاسبه سقف و کف قبلی دخالت ندارد.
   const recent = candles.slice(-31, -1);
 
   if (recent.length < 10) {
@@ -619,7 +897,6 @@ function analyzeCoin(coin, candles) {
 
   score = Math.min(100, score);
 
-  // تعیین ستاپ
   let setup = "بدون ستاپ";
 
   const breakout = current > resistance * 1.002 &&
@@ -666,14 +943,11 @@ function analyzeCoin(coin, candles) {
 
   let target1 = resistance;
 
-  // در شکست مقاومت، مقاومت قبلی دیگر هدف معتبر نیست.
-  // هدف اول با ارتفاع محدوده نوسان قبلی محاسبه می‌شود.
   if (setup === "شکست مقاومت") {
     const rangeHeight = Math.max(rangeHigh - rangeLow, entry * 0.01);
     target1 = entry + rangeHeight;
   }
 
-  // اگر مقاومت نزدیک باشد، هدف اول باید حداقل 1.5R فاصله داشته باشد.
   if (validStop && target1 <= entry) {
     target1 = entry + risk * 1.5;
   }
@@ -728,18 +1002,20 @@ function analyzeCoin(coin, candles) {
 
 // ---------------- SCAN ENGINE ----------------
 
-async function runScan() {
+async function runScan(env) {
   const started = Date.now();
 
   const coinResult = await getCoins();
   const coins = coinResult.coins;
 
   if (!coins.length) {
-    return (
-      "❌ دریافت اطلاعات بازار ناموفق بود.\n" +
-      "CoinLore هیچ فهرست ارز قابل استفاده‌ای برنگرداند.\n\n" +
-      "خطاها:\n" + coinResult.errors.slice(0, 5).join("\n")
-    );
+    return {
+      report:
+        "❌ دریافت اطلاعات بازار ناموفق بود.\n" +
+        "CoinLore هیچ فهرست ارز قابل استفاده‌ای برنگرداند.\n\n" +
+        "خطاها:\n" + coinResult.errors.slice(0, 5).join("\n"),
+      watchlist: []
+    };
   }
 
   const candidates = coins
@@ -762,10 +1038,12 @@ async function runScan() {
     .slice(0, CONFIG.MAX_CANDIDATES);
 
   if (!candidates.length) {
-    return (
-      `⚠️ از ${coins.length} ارز دریافتی، هیچ ارزی با فیلترهای اولیه ` +
-      "مطابقت نداشت."
-    );
+    return {
+      report:
+        `⚠️ از ${coins.length} ارز دریافتی، هیچ ارزی با فیلترهای اولیه ` +
+        "مطابقت نداشت.",
+      watchlist: []
+    };
   }
 
   let pairs;
@@ -773,7 +1051,10 @@ async function runScan() {
   try {
     pairs = await getKrakenPairs();
   } catch (error) {
-    return `❌ دریافت جفت‌ارزهای Kraken ناموفق بود:\n${error.message}`;
+    return {
+      report: `❌ دریافت جفت‌ارزهای Kraken ناموفق بود:\n${error.message}`,
+      watchlist: []
+    };
   }
 
   const analyzed = await mapLimit(
@@ -824,7 +1105,10 @@ async function runScan() {
     .sort((a, b) => (b.score || 0) - (a.score || 0))
     .slice(0, CONFIG.DIAGNOSTIC_SIZE);
 
-  const matchedPairs = analyzed.filter(item => item && item.score !== undefined).length;
+  const matchedPairs = analyzed.filter(
+    item => item && item.score !== undefined
+  ).length;
+
   const noPair = analyzed.filter(
     item => item?.rejected?.includes("جفت معاملاتی")
   ).length;
@@ -888,7 +1172,44 @@ async function runScan() {
     "📌 منابع: CoinLore و Kraken\n" +
     "⚠️ سیگنال‌ها احتمالی‌اند و تضمین سود نیستند.";
 
-  return report;
+  const savedWatchlist = watchlist.map(item => ({
+    name: item.coin.name,
+    symbol: item.coin.symbol,
+    current: item.current,
+    score: item.score,
+    rsi: item.rsi,
+    trend: item.trend,
+    setup: item.setup,
+    support: item.support,
+    resistance: item.resistance,
+    entry: item.entry,
+    stop: item.stop,
+    target1: item.target1,
+    rewardRisk: item.rewardRisk
+  }));
+
+  if (env.WATCHLIST_KV) {
+    try {
+      await env.WATCHLIST_KV.put(
+        "last_scan",
+        JSON.stringify({
+          version: CONFIG.VERSION,
+          timestamp: Date.now(),
+          report,
+          watchlist: savedWatchlist,
+          signalCount: valid.length
+        })
+      );
+    } catch (error) {
+      report +=
+        "\n⚠️ ذخیره‌سازی واچ‌لیست ناموفق بود: " +
+        String(error.message || "خطای KV");
+    }
+  } else {
+    report += "\n⚠️ اتصال KV تنظیم نشده؛ واچ‌لیست ذخیره نشد.";
+  }
+
+  return { report, watchlist: savedWatchlist };
 }
 
 // ---------------- REPORT FORMAT ----------------
