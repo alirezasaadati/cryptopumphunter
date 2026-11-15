@@ -1,6 +1,6 @@
 
 const CONFIG = {
-  VERSION: "3.5",
+  VERSION: "3.6",
   MIN_MARKET_CAP: 1_000_000,
   MAX_MARKET_CAP: 500_000_000,
   MIN_DAILY_VOLUME: 250_000,
@@ -13,15 +13,16 @@ const CONFIG = {
   MIN_REWARD_RISK: 1.5,
   CANDLE_INTERVAL: 60,
   MIN_CANDLES: 55,
-  COINLORE_PAGES: [0, 100, 200, 300, 400, 500, 600, 700, 800, 900]
+  COINLORE_PAGES: [0, 100, 200, 300, 400, 500, 600, 700, 800, 900],
+  PENDING_TTL: 604800
 };
 
 const TELEGRAM_API = "https://api.telegram.org";
 const seenUpdates = new Set();
 
 const ABOUT_TEXT =
-  "🚀 CRYPTO PUMP HUNTER V3.5\n\n" +
-  "طراحی و توسعه: علیرضا سعادتی\n\n" +
+  "🚀 CRYPTO PUMP HUNTER V3.6\n\n" +
+  "طراحی و توسعه: ع.س\n\n" +
   "© تمامی حقوق مادی و معنوی این نرم‌افزار محفوظ است.\n\n" +
   "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه از صاحب اثر مجاز نیست.";
 
@@ -61,7 +62,8 @@ export default {
         service: "Crypto Pump Hunter",
         version: CONFIG.VERSION,
         mode: "Manual scan only",
-        kv: Boolean(env.WATCHLIST_KV)
+        kv: Boolean(env.WATCHLIST_KV),
+        membership: true
       });
     }
 
@@ -123,7 +125,7 @@ export default {
         .split("@")[0]
         .toLowerCase();
 
-      ctx.waitUntil(handleTelegramCommand(command, chatId, env));
+      ctx.waitUntil(handleTelegramCommand(command, chatId, env, message));
       return new Response("OK");
     }
 
@@ -242,9 +244,246 @@ async function answerCallback(env, callbackId, text = "") {
   }
 }
 
+// ---------------- SECURITY AND MEMBERSHIP ----------------
+
 function isOwner(chatId, env) {
-  return !env.OWNER_ID || String(chatId) === String(env.OWNER_ID);
+  return Boolean(
+    env.OWNER_ID &&
+    String(chatId) === String(env.OWNER_ID)
+  );
 }
+
+function memberKey(chatId) {
+  return `member:${chatId}`;
+}
+
+function pendingKey(chatId) {
+  return `pending:${chatId}`;
+}
+
+async function isApproved(chatId, env) {
+  if (isOwner(chatId, env)) return true;
+
+  if (!env.OWNER_ID || !env.WATCHLIST_KV) return false;
+
+  try {
+    const member = await env.WATCHLIST_KV.get(memberKey(chatId));
+    return Boolean(member);
+  } catch {
+    return false;
+  }
+}
+
+async function requestMembership(env, chatId, message) {
+  if (isOwner(chatId, env)) {
+    await showMenu(env, chatId);
+    return;
+  }
+
+  if (!env.OWNER_ID || !env.WATCHLIST_KV) {
+    await sendMessage(
+      env,
+      chatId,
+      "⚠️ در حال حاضر امکان ثبت درخواست عضویت وجود ندارد.\nلطفاً بعداً دوباره تلاش کنید."
+    );
+    return;
+  }
+
+  if (await isApproved(chatId, env)) {
+    await showMenu(env, chatId);
+    return;
+  }
+
+  try {
+    const existing = await env.WATCHLIST_KV.get(pendingKey(chatId));
+
+    if (existing) {
+      await sendMessage(
+        env,
+        chatId,
+        "⏳ درخواست عضویت شما قبلاً ثبت شده است.\n\n" +
+        "درخواست شما در انتظار بررسی است. پس از تعیین نتیجه، از طریق همین ربات مطلع می‌شوید."
+      );
+      return;
+    }
+
+    const user = message?.from || {};
+
+    const applicant = {
+      chatId: String(chatId),
+      userId: String(user.id || chatId),
+      username: user.username || "",
+      firstName: user.first_name || "",
+      lastName: user.last_name || "",
+      requestedAt: new Date().toISOString()
+    };
+
+    await env.WATCHLIST_KV.put(
+      pendingKey(chatId),
+      JSON.stringify(applicant),
+      { expirationTtl: CONFIG.PENDING_TTL }
+    );
+
+    const displayName =
+      [applicant.firstName, applicant.lastName]
+        .filter(Boolean)
+        .join(" ") || "نام ثبت نشده";
+
+    const username = applicant.username
+      ? `@${applicant.username}`
+      : "ندارد";
+
+    const adminText =
+      "🔔 درخواست عضویت جدید\n" +
+      "━━━━━━━━━━━━━━━━━━\n\n" +
+      `👤 نام: ${displayName}\n` +
+      `🔗 نام کاربری: ${username}\n` +
+      `🆔 شناسه کاربر: ${applicant.userId}\n` +
+      `🕒 زمان درخواست: ${applicant.requestedAt}\n\n` +
+      "برای تعیین وضعیت درخواست از دکمه‌های زیر استفاده کن.";
+
+    const adminButtons = {
+      inline_keyboard: [
+        [
+          {
+            text: "✅ تأیید عضویت",
+            callback_data: `approve:${chatId}`
+          },
+          {
+            text: "❌ رد درخواست",
+            callback_data: `reject:${chatId}`
+          }
+        ]
+      ]
+    };
+
+    await sendMessage(env, env.OWNER_ID, adminText, adminButtons);
+
+    await sendMessage(
+      env,
+      chatId,
+      "✅ درخواست عضویت شما با موفقیت ثبت شد.\n\n" +
+      "⏳ درخواست شما در انتظار بررسی است.\n" +
+      "پس از تعیین نتیجه، از طریق همین ربات مطلع می‌شوید."
+    );
+  } catch (error) {
+    try {
+      await env.WATCHLIST_KV.delete(pendingKey(chatId));
+    } catch {
+      // Ignore cleanup errors.
+    }
+
+    await sendMessage(
+      env,
+      chatId,
+      "❌ ثبت درخواست با مشکل مواجه شد.\nلطفاً کمی بعد دوباره تلاش کنید."
+    );
+  }
+}
+
+async function handleAdminMembershipCallback(query, env) {
+  const ownerId = env.OWNER_ID;
+  const actorId = query.from?.id;
+  const chatId = query.message?.chat?.id;
+  const action = query.data || "";
+
+  if (
+    !ownerId ||
+    String(actorId) !== String(ownerId) ||
+    String(chatId) !== String(ownerId)
+  ) {
+    await answerCallback(env, query.id, "⛔ دسترسی غیرمجاز");
+    return true;
+  }
+
+  const match = action.match(/^(approve|reject):(-?\d+)$/);
+
+  if (!match) return false;
+
+  const operation = match[1];
+  const applicantId = match[2];
+
+  await answerCallback(
+    env,
+    query.id,
+    operation === "approve" ? "در حال تأیید..." : "در حال رد درخواست..."
+  );
+
+  if (!env.WATCHLIST_KV) {
+    await sendMessage(env, ownerId, "❌ اتصال KV در دسترس نیست.");
+    return true;
+  }
+
+  try {
+    const pending = await env.WATCHLIST_KV.get(
+      pendingKey(applicantId),
+      "json"
+    );
+
+    if (!pending) {
+      await sendMessage(
+        env,
+        ownerId,
+        "⚠️ درخواست پیدا نشد یا مهلت آن به پایان رسیده است."
+      );
+      return true;
+    }
+
+    if (operation === "approve") {
+      const member = {
+        ...pending,
+        approvedAt: new Date().toISOString(),
+        approved: true
+      };
+
+      await env.WATCHLIST_KV.put(
+        memberKey(applicantId),
+        JSON.stringify(member)
+      );
+
+      await env.WATCHLIST_KV.delete(pendingKey(applicantId));
+
+      await sendMessage(
+        env,
+        applicantId,
+        "🎉 عضویت شما تأیید شد.\n\n" +
+        "اکنون دسترسی کامل به امکانات ربات برای شما فعال است.\n" +
+        "برای شروع دستور /start را ارسال کنید."
+      );
+
+      await sendMessage(
+        env,
+        ownerId,
+        "✅ عضویت کاربر با موفقیت تأیید شد."
+      );
+    } else {
+      await env.WATCHLIST_KV.delete(pendingKey(applicantId));
+
+      await sendMessage(
+        env,
+        applicantId,
+        "❌ درخواست عضویت شما تأیید نشد."
+      );
+
+      await sendMessage(
+        env,
+        ownerId,
+        "❌ درخواست عضویت رد شد."
+      );
+    }
+  } catch (error) {
+    await sendMessage(
+      env,
+      ownerId,
+      "❌ خطا در پردازش درخواست:\n" +
+      String(error.message || "Unknown error").slice(0, 500)
+    );
+  }
+
+  return true;
+}
+
+// ---------------- MAIN MENU ----------------
 
 async function showMenu(env, chatId) {
   await sendMessage(
@@ -256,10 +495,15 @@ async function showMenu(env, chatId) {
   );
 }
 
-async function handleTelegramCommand(command, chatId, env) {
+async function handleTelegramCommand(command, chatId, env, message) {
   try {
     if (command === "/start" || command === "/menu") {
-      await showMenu(env, chatId);
+      await requestMembership(env, chatId, message);
+      return;
+    }
+
+    if (!(await isApproved(chatId, env))) {
+      await requestMembership(env, chatId, message);
       return;
     }
 
@@ -313,9 +557,25 @@ async function handleCallback(query, env) {
   const chatId = query.message?.chat?.id;
   const action = query.data || "";
 
-  await answerCallback(env, query.id);
+  if (!chatId) {
+    await answerCallback(env, query.id);
+    return;
+  }
 
-  if (!chatId) return;
+  if (action.startsWith("approve:") || action.startsWith("reject:")) {
+    await handleAdminMembershipCallback(query, env);
+    return;
+  }
+
+  if (!(await isApproved(chatId, env))) {
+    await answerCallback(env, query.id);
+    await requestMembership(env, chatId, {
+      from: query.from
+    });
+    return;
+  }
+
+  await answerCallback(env, query.id);
 
   try {
     if (action === "menu") {
@@ -370,8 +630,8 @@ async function handleCallback(query, env) {
 }
 
 async function runScanForChat(env, chatId) {
-  if (!isOwner(chatId, env)) {
-    await sendMessage(env, chatId, "⛔ اجازه اسکن ندارید.");
+  if (!(await isApproved(chatId, env))) {
+    await sendMessage(env, chatId, "⛔ دسترسی شما فعال نیست.");
     return;
   }
 
