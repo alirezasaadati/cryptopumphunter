@@ -3,10 +3,13 @@ const CONFIG = {
   MARKET_CAP_MIN: 1000000,
   MARKET_CAP_MAX: 500000000,
   DAILY_VOLUME_MIN: 250000,
-  MAX_CANDIDATES: 35,
+  MAX_CANDIDATES: 60,
   MAX_RESULTS: 5,
+  WATCHLIST_SIZE: 5,
+  DIAGNOSTIC_SIZE: 8,
   CONCURRENCY: 2,
-  MIN_SCORE: 65
+  MIN_SCORE: 65,
+  MIN_REWARD_RISK: 1.5
 };
 
 export default {
@@ -14,7 +17,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/") {
-      return new Response("Crypto Pump Hunter V2 is running.");
+      return new Response("Crypto Pump Hunter V3 is running.");
     }
 
     if (url.pathname === "/testdata" && request.method === "GET") {
@@ -42,7 +45,11 @@ export default {
 
       return Response.json({
         kraken: { ok: k !== null, status: kraken?.status ?? "network_error" },
-        coinlore: { ok: c !== null, status: coinlore?.status ?? "network_error", assets: c }
+        coinlore: {
+          ok: c !== null,
+          status: coinlore?.status ?? "network_error",
+          assets: c
+        }
       });
     }
 
@@ -79,10 +86,11 @@ export default {
 
       if (command === "/start" || command === "/help") {
         await sendMessage(env, chatId,
-          "🤖 <b>Crypto Pump Hunter V2</b>\n\n" +
+          "🤖 <b>Crypto Pump Hunter V3</b>\n\n" +
           "/scan - اسکن دستی بازار\n" +
           "/status - وضعیت ربات\n" +
           "/help - راهنما\n\n" +
+          "نسخه V3 علت رد شدن ارزها و سناریوی ورود مشروط را نمایش می‌دهد.\n" +
           "اسکن فقط با دستور شما انجام می‌شود."
         );
         return new Response("OK");
@@ -92,7 +100,8 @@ export default {
         await sendMessage(env, chatId,
           "✅ ربات فعال است.\n" +
           "📊 منابع: Kraken + CoinLore\n" +
-          "🧠 نسخه تحلیل: V2\n" +
+          "🧠 نسخه تحلیل: V3\n" +
+          "🔎 حداکثر نامزدها: " + CONFIG.MAX_CANDIDATES + "\n" +
           "⏱ اسکن فقط با /scan"
         );
         return new Response("OK");
@@ -105,8 +114,8 @@ export default {
         }
 
         await sendMessage(env, chatId,
-          "🔎 اسکن هوشمند V2 شروع شد...\n" +
-          "در حال بررسی روند، حجم، RSI، حمایت و مقاومت."
+          "🔎 اسکن هوشمند V3 شروع شد...\n" +
+          "در حال بررسی روند، حجم، RSI، حمایت، مقاومت و نسبت سود به ریسک."
         );
 
         try {
@@ -114,7 +123,8 @@ export default {
           await sendLongMessage(env, chatId, report);
         } catch (error) {
           await sendMessage(env, chatId,
-            "❌ خطا در اسکن:\n" + escapeHTML(error.message || "Unknown error")
+            "❌ خطا در اسکن:\n" +
+            escapeHTML(error.message || "Unknown error")
           );
         }
 
@@ -151,9 +161,18 @@ async function sendMessage(env, chatId, text) {
 }
 
 async function sendLongMessage(env, chatId, text) {
-  const chunks = text.match(/[\s\S]{1,3800}/g) || [text];
+  const lines = text.split("\n");
+  let chunk = "";
 
-  for (const chunk of chunks) {
+  for (const line of lines) {
+    if ((chunk + line + "\n").length > 3500 && chunk) {
+      await sendMessage(env, chatId, chunk);
+      chunk = "";
+    }
+    chunk += line + "\n";
+  }
+
+  if (chunk.trim()) {
     await sendMessage(env, chatId, chunk);
   }
 }
@@ -178,7 +197,7 @@ async function fetchJSON(url) {
 }
 
 async function getCoins() {
-  const starts = [0, 100, 200, 300, 400];
+  const starts = [0, 100, 200, 300, 400, 500, 600, 700, 800, 900];
 
   const pages = await Promise.all(starts.map(async start => {
     try {
@@ -335,18 +354,29 @@ function findLevels(candles, price) {
 }
 
 function analyze(candles, coin) {
-  if (candles.length < 80) throw new Error("Insufficient candle history");
+  if (candles.length < 80) {
+    throw new Error("Insufficient candle history");
+  }
 
   // آخرین کندل Kraken ممکن است هنوز بسته نشده باشد.
   const closed = candles.slice(0, -1);
   const closes = closed.map(c => c.close);
   const last = closed[closed.length - 1];
-  const previous = closed[closed.length - 2];
   const price = last.close;
 
   const ema20 = ema(closes, 20);
   const ema50 = ema(closes, 50);
   const currentRSI = rsi(closes);
+
+  if (
+    !Number.isFinite(ema20) ||
+    !Number.isFinite(ema50) ||
+    !Number.isFinite(currentRSI) ||
+    price <= 0
+  ) {
+    throw new Error("Invalid indicator data");
+  }
+
   const levels = findLevels(closed, price);
 
   const volumeHistory = closed.slice(-21, -1).map(c => c.volume);
@@ -355,6 +385,7 @@ function analyze(candles, coin) {
 
   const recentRange = closed.slice(-25, -1);
   const priorResistance = Math.max(...recentRange.map(c => c.high));
+
   const nearSupport = levels.support > 0
     ? (price - levels.support) / price
     : 1;
@@ -362,7 +393,7 @@ function analyze(candles, coin) {
   const bullishCandle = last.close > last.open;
   const bullishTrend = ema20 > ema50 && price > ema20;
   const dailyChange = Number(coin.percent_change_24h || 0);
-  const volumeToCap = coin.volume / Math.max(coin.cap, 1);
+  const volumeToCap = Number(coin.volume || 0) / Math.max(Number(coin.cap || 0), 1);
 
   const breakout =
     price > priorResistance * 1.002 &&
@@ -383,9 +414,18 @@ function analyze(candles, coin) {
     currentRSI <= 62;
 
   let setup = "بدون الگوی ورود";
-  if (breakout) setup = "شکست مقاومت";
-  else if (pullback) setup = "پولبک به EMA20";
-  else if (supportBounce) setup = "برگشت از حمایت";
+  let trigger = "ابتدا باید الگوی شکست، پولبک یا برگشت معتبر تشکیل شود.";
+
+  if (breakout) {
+    setup = "شکست مقاومت";
+    trigger = `تثبیت کندل یک‌ساعته بالای $${fmt(priorResistance)}`;
+  } else if (pullback) {
+    setup = "پولبک به EMA20";
+    trigger = `حفظ EMA20 در محدوده $${fmt(ema20)} و تأیید کندل صعودی`;
+  } else if (supportBounce) {
+    setup = "برگشت از حمایت";
+    trigger = `حفظ حمایت $${fmt(levels.support)} و بسته‌شدن کندل صعودی`;
+  }
 
   let score = 0;
 
@@ -436,18 +476,43 @@ function analyze(candles, coin) {
   );
 
   const risk = entry - stop;
-  const target1 = Math.max(resistance, entry + risk * 1.5);
+
+  // هدف اول بر اساس مقاومت واقعی محاسبه می‌شود.
+  // اگر مقاومت نزدیک باشد، نسبت سود به ریسک پایین می‌آید.
+  const target1 = resistance;
   const target2 = entry + risk * 2.5;
   const target3 = entry + risk * 3.5;
 
-  const rewardRisk = risk > 0 ? (target1 - entry) / risk : 0;
+  const rewardRisk =
+    risk > 0 && target1 > entry
+      ? (target1 - entry) / risk
+      : 0;
 
-  const eligible =
-    score >= CONFIG.MIN_SCORE &&
-    setup !== "بدون الگوی ورود" &&
-    volumeRatio >= 0.9 &&
-    rewardRisk >= 1.5 &&
-    stop < entry;
+  const reasons = [];
+
+  if (score < CONFIG.MIN_SCORE) {
+    reasons.push(`امتیاز کمتر از ${CONFIG.MIN_SCORE}`);
+  }
+
+  if (setup === "بدون الگوی ورود") {
+    reasons.push("الگوی ورود معتبر تشکیل نشده");
+  }
+
+  if (volumeRatio < 0.9) {
+    reasons.push("حجم معاملات کافی نیست");
+  }
+
+  if (stop >= entry || risk <= 0) {
+    reasons.push("حد ضرر محاسباتی معتبر نیست");
+  }
+
+  if (resistance <= entry) {
+    reasons.push("مقاومت معتبر بالاتر از قیمت پیدا نشد");
+  } else if (rewardRisk < CONFIG.MIN_REWARD_RISK) {
+    reasons.push("نسبت سود به ریسک تا مقاومت کمتر از 1.5 است");
+  }
+
+  const eligible = reasons.length === 0;
 
   return {
     price,
@@ -460,6 +525,7 @@ function analyze(candles, coin) {
     support,
     resistance,
     setup,
+    trigger,
     score,
     entry,
     stop,
@@ -468,6 +534,7 @@ function analyze(candles, coin) {
     target3,
     rewardRisk,
     eligible,
+    reasons,
     bullishTrend,
     breakout,
     pullback,
@@ -477,7 +544,9 @@ function analyze(candles, coin) {
 
 function fmt(value) {
   if (!Number.isFinite(value)) return "N/A";
-  if (value >= 1000) return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (value >= 1000) {
+    return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  }
   if (value >= 1) return value.toFixed(4);
   if (value >= 0.01) return value.toFixed(5);
   if (value >= 0.0001) return value.toFixed(7);
@@ -514,6 +583,17 @@ async function mapConcurrent(items, limit, callback) {
   return results;
 }
 
+function formatPlan(a) {
+  return (
+    `مرجع ورود فرضی: $${fmt(a.entry)}\n` +
+    `حد ضرر محاسباتی: $${fmt(a.stop)}\n` +
+    `هدف 1 (مقاومت): $${fmt(a.target1)}\n` +
+    `هدف 2: $${fmt(a.target2)}\n` +
+    `هدف 3: $${fmt(a.target3)}\n` +
+    `نسبت سود به ریسک تا مقاومت: ${a.rewardRisk.toFixed(2)}`
+  );
+}
+
 async function runScan() {
   const [coins, pairs] = await Promise.all([
     getCoins(),
@@ -542,6 +622,7 @@ async function runScan() {
       if (!pair) return null;
 
       const candles = await getCandles(pair);
+
       return {
         name: coin.name,
         symbol: coin.symbol,
@@ -566,12 +647,18 @@ async function runScan() {
   const watchlist = usable
     .filter(item => !item.analysis.eligible)
     .sort((a, b) => b.analysis.score - a.analysis.score)
-    .slice(0, 5);
+    .slice(0, CONFIG.WATCHLIST_SIZE);
+
+  const diagnostics = usable
+    .filter(item => !item.analysis.eligible)
+    .sort((a, b) => b.analysis.score - a.analysis.score)
+    .slice(0, CONFIG.DIAGNOSTIC_SIZE);
 
   let report =
-    "🚀 <b>CRYPTO PUMP HUNTER V2</b>\n" +
+    "🚀 <b>CRYPTO PUMP HUNTER V3</b>\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
     "📊 فیلتر مارکت‌کپ: 1M تا 500M دلار\n" +
+    "📚 حداکثر نامزدهای بررسی: " + CONFIG.MAX_CANDIDATES + "\n" +
     "⏱ تایم‌فریم: یک‌ساعته\n" +
     "🔎 ارزهای دارای داده معتبر: " + usable.length + "\n" +
     "✅ فرصت‌های واجد شرایط: " + qualified.length + "\n\n";
@@ -596,11 +683,11 @@ async function runScan() {
         `🟢 حمایت: $${fmt(a.support)}\n` +
         `🔴 مقاومت: $${fmt(a.resistance)}\n` +
         `🎯 ورود مشروط: $${fmt(a.entry)}\n` +
-        `🛑 حد ضرر محاسباتی: $${fmt(a.stop)}\n` +
+        `🛑 حد ضرر: $${fmt(a.stop)}\n` +
         `🎯 هدف 1: $${fmt(a.target1)}\n` +
         `🎯 هدف 2: $${fmt(a.target2)}\n` +
         `🎯 هدف 3: $${fmt(a.target3)}\n` +
-        `⚖️ نسبت سود به ریسک تا هدف اول: ${a.rewardRisk.toFixed(2)}\n` +
+        `⚖️ نسبت سود به ریسک: ${a.rewardRisk.toFixed(2)}\n` +
         "━━━━━━━━━━━━━━━━━━\n";
     });
   } else {
@@ -611,25 +698,40 @@ async function runScan() {
   }
 
   if (watchlist.length) {
-    report += "🟡 <b>فهرست تحت نظر (بدون سیگنال خرید)</b>\n\n";
+    report += "🟡 <b>فهرست تحت نظر و سناریوی فرضی</b>\n\n";
 
     watchlist.forEach((item, index) => {
       const a = item.analysis;
 
       report +=
-        `${index + 1}. <b>${escapeHTML(item.name)} (${escapeHTML(item.symbol)})</b>\n` +
+        `<b>${index + 1}. ${escapeHTML(item.name)} (${escapeHTML(item.symbol)})</b>\n` +
         `امتیاز: ${a.score}/100 | الگو: ${a.setup}\n` +
-        `قیمت: $${fmt(a.price)} | RSI: ${a.rsi.toFixed(1)}\n` +
-        `حجم ساعتی: ${a.volumeRatio.toFixed(2)}x\n\n`;
+        `قیمت فعلی بررسی: $${fmt(a.price)}\n` +
+        `RSI: ${a.rsi.toFixed(1)} | حجم: ${a.volumeRatio.toFixed(2)}x\n` +
+        `حمایت: $${fmt(a.support)} | مقاومت: $${fmt(a.resistance)}\n` +
+        formatPlan(a) + "\n" +
+        `شرط بررسی ورود: ${a.trigger}\n` +
+        "⚠️ این سناریو سیگنال خرید نیست.\n\n";
     });
   }
 
+  report += "━━━━━━━━━━━━━━━━━━\n";
+  report += "🔍 <b>علت رد شدن ارزهای نزدیک به شرایط ورود</b>\n\n";
+
+  diagnostics.forEach((item, index) => {
+    const a = item.analysis;
+
+    report +=
+      `${index + 1}. <b>${escapeHTML(item.symbol)}</b> | امتیاز ${a.score}/100\n` +
+      `علت: ${escapeHTML(a.reasons.join("؛ "))}\n\n`;
+  });
+
   report +=
     "━━━━━━━━━━━━━━━━━━\n" +
-    "⚠️ این تحلیل خودکار است و سود را تضمین نمی‌کند.\n" +
-    "ورود مشروط به بررسی نمودار زنده و تأیید کندل است.\n" +
-    "سطوح و امتیازها ابزار غربالگری هستند، نه توصیه مالی.\n" +
-    "انباشت کیف‌پول‌های بزرگ با این منابع قابل تأیید نیست.";
+    "⚠️ سناریوها بر اساس آخرین کندل بسته‌شده محاسبه شده‌اند.\n" +
+    "قیمت مرجع ورود، سفارش پیشنهادی یا تضمین اجرای معامله نیست.\n" +
+    "قبل از هر معامله نمودار زنده، نقدشوندگی و تأیید کندل را بررسی کن.\n" +
+    "این منابع انباشت کیف‌پول‌های بزرگ را تأیید نمی‌کنند.";
 
   return report;
 }
