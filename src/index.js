@@ -184,10 +184,11 @@ async function ensureAuxiliarySchema(env) {
     CREATE INDEX IF NOT EXISTS idx_contract_acceptances_chat
     ON contract_acceptances(chat_id, accepted_at)
   `).run();
+
   await env.DB.prepare(`
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_tx_hash_unique
-  ON payments(tx_hash)
-`).run();
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_tx_hash_unique
+    ON payments(tx_hash)
+  `).run();
 
   await env.DB.prepare(`
     CREATE TABLE IF NOT EXISTS processed_updates (
@@ -223,7 +224,7 @@ async function processUpdate(update, env) {
     if (message.contact) {
       await handleContactMessage(message, env);
       return;
-    }
+          }
 
     if (!message.text) return;
 
@@ -722,8 +723,7 @@ async function createOrder(env, chatId, planKey) {
     ) VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
   `, orderId, String(chatId), plan.days, plan.priceUsdCents,
     String(price), amountWei, wallet, now, expires);
-
-  await sendMessage(env, chatId,
+    await sendMessage(env, chatId,
     "🧾 سفارش پرداخت ساخته شد.\n\n" +
     `📦 پلن: ${plan.title}\n` +
     `💵 مبلغ: $${usd}\n` +
@@ -1245,7 +1245,7 @@ async function showSettings(env, chatId) {
     `💧 حداقل حجم روزانه: $${CONFIG.MIN_DAILY_VOLUME.toLocaleString("en-US")}\n` +
     `🔎 حداکثر کاندیدا: ${CONFIG.MAX_CANDIDATES}\n⭐ حداقل امتیاز: ${CONFIG.MIN_SCORE}/100\n` +
     `⚖️ حداقل نسبت سود به ریسک: ${CONFIG.MIN_REWARD_RISK}R\n⏱ تایم‌فریم: ${CONFIG.CANDLE_INTERVAL} دقیقه\n` +
-    `👀 تعداد واچ‌لیست: ${CONFIG.WATCHLIST_SIZE}\n\nاین مقادیر در کد ربات تعریف شده‌اند.",
+    `👀 تعداد واچ‌لیست: ${CONFIG.WATCHLIST_SIZE}\n\nاین مقادیر در کد ربات تعریف شده‌اند.`,
     BACK_MENU);
 }
 
@@ -1272,12 +1272,9 @@ async function showWatchlist(env, chatId) {
   const saved = await env.WATCHLIST_KV.get("last_scan", "json");
 
   if (!saved?.watchlist?.length) {
-    await sendMessage(
-      env,
-      chatId,
+    await sendMessage(env, chatId,
       "👀 واچ‌لیست خالی است. پس از اجرای اسکن، ارزهای منتخب اینجا نمایش داده می‌شوند.",
-      mainMenu()
-    );
+      mainMenu());
     return;
   }
 
@@ -1299,7 +1296,6 @@ async function showWatchlist(env, chatId) {
   await sendLongMessage(env, chatId, report);
   await sendMessage(env, chatId, "پایان واچ‌لیست.", mainMenu());
 }
-
 async function showOpportunities(env, chatId) {
   const saved = env.WATCHLIST_KV ? await env.WATCHLIST_KV.get("last_scan", "json") : null;
   if (!saved?.report) {
@@ -1805,3 +1801,4 @@ async function mapLimit(items, limit, callback) {
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
   return results;
 }
+
