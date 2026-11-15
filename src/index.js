@@ -1268,20 +1268,35 @@ async function showWatchlist(env, chatId) {
     await sendMessage(env, chatId, "⚠️ اتصال KV فعال نیست.", mainMenu());
     return;
   }
+
   const saved = await env.WATCHLIST_KV.get("last_scan", "json");
+
   if (!saved?.watchlist?.length) {
-    await sendMessage(env, chatId, "👀 واچ‌لیست خالی است. پس از اجرای اسکن، ارزهای منتخب اینجا نمایش داده می‌شوند.", mainMenu());
+    await sendMessage(
+      env,
+      chatId,
+      "👀 واچ‌لیست خالی است. پس از اجرای اسکن، ارزهای منتخب اینجا نمایش داده می‌شوند.",
+      mainMenu()
+    );
     return;
   }
 
-  let text = "👀 واچ‌لیست آخرین اسکن\n━━━━━━━━━━━━━━━━━━\n\n";
+  let report = "👀 واچ‌لیست آخرین اسکن\n━━━━━━━━━━━━━━━━━━\n\n";
+
   for (const item of saved.watchlist) {
-    text += `🪙 ${item.name} (${item.symbol})\n⭐ امتیاز: ${item.score}/100\n💵 قیمت: $${formatPrice(item.current)}\n` +
-      `📈 روند: ${item.trend}\n📊 RSI: ${Number(item.rsi).toFixed(1)}\n🧩 الگو: ${item.setup}\n` +
-      `🟢 حمایت: $${formatPrice(item.support)}\n🔴 مقاومت: $${formatPrice(item.resistance)}\n\n`;
+    report += `🪙 ${item.name} (${item.symbol})\n`;
+    report += `⭐ امتیاز: ${item.score}/100\n`;
+    report += `💵 قیمت: $${formatPrice(item.current)}\n`;
+    report += `📈 روند: ${item.trend}\n`;
+    report += `📊 RSI: ${Number(item.rsi).toFixed(1)}\n`;
+    report += `🧩 الگو: ${item.setup}\n`;
+    report += `🟢 حمایت: $${formatPrice(item.support)}\n`;
+    report += `🔴 مقاومت: $${formatPrice(item.resistance)}\n\n`;
   }
-  text += "⚠️ واچ‌لیست سیگنال قطعی خرید نیست.";
-  await sendLongMessage(env, chatId, text);
+
+  report += "⚠️ واچ‌لیست سیگنال قطعی خرید نیست.";
+
+  await sendLongMessage(env, chatId, report);
   await sendMessage(env, chatId, "پایان واچ‌لیست.", mainMenu());
 }
 
