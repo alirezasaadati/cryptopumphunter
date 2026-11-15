@@ -1,5 +1,5 @@
 const CONFIG = {
-  VERSION: "3.8",
+  VERSION: "3.8.1",
   MIN_MARKET_CAP: 1_000_000,
   MAX_MARKET_CAP: 500_000_000,
   MIN_DAILY_VOLUME: 250_000,
@@ -20,7 +20,7 @@ const TELEGRAM_API = "https://api.telegram.org";
 const seenUpdates = new Set();
 
 const ABOUT_TEXT =
-  "🚀 CRYPTO PUMP HUNTER V3.8\n\n" +
+  "🚀 CRYPTO PUMP HUNTER V3.8.1\n\n" +
   "طراحی و توسعه: علیرضا سعادتی\n\n" +
   "© تمامی حقوق مادی و معنوی این نرم‌افزار محفوظ است.\n\n" +
   "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه از صاحب اثر مجاز نیست.";
@@ -269,8 +269,8 @@ async function isApproved(chatId, env) {
   if (!env.OWNER_ID || !env.WATCHLIST_KV) return false;
 
   try {
-    const member = await env.WATCHLIST_KV.get(memberKey(chatId));
-    return Boolean(member);
+    const member = await env.WATCHLIST_KV.get(memberKey(chatId), "json");
+    return Boolean(member && member.approved !== false && member.revoked !== true);
   } catch {
     return false;
   }
@@ -293,6 +293,21 @@ async function requestMembership(env, chatId, message) {
 
   if (await isApproved(chatId, env)) {
     await showMenu(env, chatId);
+    return;
+  }
+
+  try {
+    const existingMember = await env.WATCHLIST_KV.get(memberKey(chatId), "json");
+    if (existingMember?.revoked === true) {
+      await sendMessage(
+        env,
+        chatId,
+        "⛔ دسترسی شما توسط مدیر لغو شده است.\nبرای فعال‌سازی مجدد باید مدیر دسترسی شما را دوباره مجاز کند."
+      );
+      return;
+    }
+  } catch {
+    await sendMessage(env, chatId, "⚠️ بررسی وضعیت عضویت ناموفق بود. لطفاً بعداً تلاش کنید.");
     return;
   }
 
@@ -448,10 +463,12 @@ async function handleAdminMembershipCallback(query, env) {
       await sendMessage(
         env,
         applicantId,
-        "🎉 عضویت شما تأیید شد.\n\n" +
-        "اکنون دسترسی کامل به امکانات ربات برای شما فعال است.\n" +
-        "برای شروع دستور /start را ارسال کنید."
+        "🎉 به خانواده CRYPTO PUMP HUNTER خوش آمدید!\n\n" +
+        "✅ عضویت شما با موفقیت تأیید شد و دسترسی شما فعال است.\n\n" +
+        "🚀 از این لحظه می‌توانید از امکانات اسکن بازار و دریافت سیگنال‌های تحلیلی اسپات و فیوچرز بایننس استفاده کنید.\n\n" +
+        "⚠️ سیگنال‌ها صرفاً تحلیلی هستند؛ قبل از هر معامله مدیریت ریسک را رعایت کنید."
       );
+      await showMenu(env, applicantId);
 
       await sendMessage(
         env,
@@ -485,6 +502,71 @@ async function handleAdminMembershipCallback(query, env) {
   return true;
 }
 
+async function handleOwnerAccessCommand(command, chatId, env, message) {
+  if (!["/allow", "/revoke", "/members"].includes(command)) return false;
+  if (!isOwner(chatId, env)) {
+    await sendMessage(env, chatId, "⛔ این دستور فقط برای مدیر ربات فعال است.");
+    return true;
+  }
+  if (!env.WATCHLIST_KV) {
+    await sendMessage(env, chatId, "❌ اتصال WATCHLIST_KV فعال نیست؛ ابتدا KV را به Worker متصل کن.");
+    return true;
+  }
+
+  if (command === "/members") {
+    const listed = await env.WATCHLIST_KV.list({ prefix: "member:" });
+    const active = [];
+    const revoked = [];
+    for (const key of listed.keys || []) {
+      const id = key.name.slice("member:".length);
+      const member = await env.WATCHLIST_KV.get(key.name, "json");
+      if (member?.revoked === true || member?.approved === false) revoked.push(id);
+      else active.push(id);
+    }
+    const lines = ["👥 فهرست اعضا", "━━━━━━━━━━━━━━━━━━", `✅ مجاز: ${active.length}`,
+      ...(active.length ? active.map(id => `• ${id}`) : ["• موردی ثبت نشده"]),
+      "", `🚫 لغو دسترسی: ${revoked.length}`,
+      ...(revoked.length ? revoked.map(id => `• ${id}`) : ["• موردی ثبت نشده"])];
+    await sendLongMessage(env, chatId, lines.join("\n"));
+    return true;
+  }
+
+  const targetId = (message?.text || "").trim().split(/\s+/)[1];
+  if (!targetId || !/^-?\d+$/.test(targetId)) {
+    await sendMessage(env, chatId, `فرمت صحیح: ${command} 123456789`);
+    return true;
+  }
+  if (String(targetId) === String(env.OWNER_ID)) {
+    await sendMessage(env, chatId, "⚠️ دسترسی مدیر اصلی قابل لغو نیست.");
+    return true;
+  }
+
+  try {
+    const existing = await env.WATCHLIST_KV.get(memberKey(targetId), "json") || {};
+    if (command === "/allow") {
+      const member = { ...existing, chatId: String(targetId), approved: true, revoked: false,
+        allowedAt: new Date().toISOString(), allowedBy: String(chatId) };
+      await env.WATCHLIST_KV.put(memberKey(targetId), JSON.stringify(member));
+      await env.WATCHLIST_KV.delete(pendingKey(targetId));
+      await sendMessage(env, targetId,
+        "🎉 دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر فعال شد.\n\n" +
+        "خوش آمدید! اکنون می‌توانید از امکانات ربات استفاده کنید.");
+      await showMenu(env, targetId);
+      await sendMessage(env, chatId, `✅ کاربر ${targetId} مجاز شد و دسترسی او فعال است.`);
+    } else {
+      const member = { ...existing, chatId: String(targetId), approved: false, revoked: true,
+        revokedAt: new Date().toISOString(), revokedBy: String(chatId) };
+      await env.WATCHLIST_KV.put(memberKey(targetId), JSON.stringify(member));
+      await env.WATCHLIST_KV.delete(pendingKey(targetId));
+      await sendMessage(env, targetId, "⛔ دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر لغو شد.");
+      await sendMessage(env, chatId, `🚫 دسترسی کاربر ${targetId} لغو شد.`);
+    }
+  } catch (error) {
+    await sendMessage(env, chatId, "❌ خطا در تغییر دسترسی: " + String(error.message || "KV error").slice(0, 500));
+  }
+  return true;
+}
+
 // ---------------- MAIN MENU ----------------
 
 async function showMenu(env, chatId) {
@@ -499,8 +581,26 @@ async function showMenu(env, chatId) {
 
 async function handleTelegramCommand(command, chatId, env, message) {
   try {
-    if (command === "/start" || command === "/menu") {
+    if (await handleOwnerAccessCommand(command, chatId, env, message)) return;
+
+    if (command === "/start") {
+      await sendMessage(
+        env,
+        chatId,
+        "👋 سلام! به ربات CRYPTO PUMP HUNTER خوش آمدید.\n\n" +
+        "🚀 این ربات برای بررسی فرصت‌های بازار رمزارز و ارائه سیگنال‌های تحلیلی اسپات و فیوچرز بایننس طراحی شده است.\n\n" +
+        "🔐 برای استفاده از امکانات، ابتدا باید عضویت شما توسط مدیر تأیید شود."
+      );
       await requestMembership(env, chatId, message);
+      return;
+    }
+
+    if (command === "/menu") {
+      if (await isApproved(chatId, env)) {
+        await showMenu(env, chatId);
+      } else {
+        await requestMembership(env, chatId, message);
+      }
       return;
     }
 
