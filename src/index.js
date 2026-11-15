@@ -1,8 +1,8 @@
 
 const CONFIG = {
-  MIN_MARKET_CAP: 1_000_000,
-  MAX_MARKET_CAP: 500_000_000,
-  MIN_DAILY_VOLUME: 250_000,
+  MIN_MARKET_CAP: 1000000,
+  MAX_MARKET_CAP: 500000000,
+  MIN_DAILY_VOLUME: 250000,
   MAX_CANDIDATES: 60,
   MAX_RESULTS: 5,
   WATCHLIST_SIZE: 5,
@@ -24,7 +24,7 @@ export default {
       return json({
         ok: true,
         service: "Crypto Pump Hunter",
-        version: "3.2",
+        version: "3.3",
         mode: "Manual scan only"
       });
     }
@@ -94,7 +94,7 @@ export default {
 };
 
 function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
+  return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: { "Content-Type": "application/json" }
   });
@@ -185,7 +185,7 @@ async function handleTelegramCommand(command, chatId, env) {
       await sendMessage(
         env,
         chatId,
-        "🟢 ربات فعال است.\nنسخه: V3.2\nحالت اسکن: دستی\nمنابع: CoinLore و Kraken"
+        "🟢 ربات فعال است.\nنسخه: V3.3\nحالت اسکن: دستی\nمنابع: CoinLore و Kraken"
       );
       return;
     }
@@ -199,7 +199,7 @@ async function handleTelegramCommand(command, chatId, env) {
       await sendMessage(
         env,
         chatId,
-        "🔎 اسکن هوشمند V3.2 شروع شد...\n" +
+        "🔎 اسکن هوشمند V3.3 شروع شد...\n" +
         "در حال بررسی روند، حجم، RSI، حمایت، مقاومت و نسبت سود به ریسک."
       );
 
@@ -241,9 +241,12 @@ async function registerWebhook(request, env) {
   }
 }
 
-// CoinLore may return an array directly or an object containing data.
+// CoinLore response format:
+// { "data": [ ...coins... ], "info": { ... } }
 function extractCoinLoreAssets(payload) {
-  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload)) {
+    return payload;
+  }
 
   if (payload && Array.isArray(payload.data)) {
     return payload.data;
@@ -260,10 +263,46 @@ function extractCoinLoreAssets(payload) {
   return [];
 }
 
+async function fetchCoinLore(start, limit = 100) {
+  const url =
+    `https://api.coinlore.net/api/tickers/?start=${start}&limit=${limit}`;
+
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "CryptoPumpHunter/3.3"
+    }
+  });
+
+  const text = await response.text();
+
+  let payload;
+
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `CoinLore پاسخ JSON معتبر نداد. HTTP ${response.status}: ${text.slice(0, 180)}`
+    );
+  }
+
+  if (!response.ok) {
+    throw new Error(`CoinLore HTTP ${response.status}`);
+  }
+
+  return {
+    payload,
+    assets: extractCoinLoreAssets(payload),
+    status: response.status,
+    contentType: response.headers.get("content-type") || "unknown"
+  };
+}
+
 async function testDataSources() {
   const results = {
+    version: "3.3",
     kraken: { ok: false },
-    coinlore: { ok: false, assets: 0 }
+    coinlore: { ok: false }
   };
 
   try {
@@ -278,21 +317,34 @@ async function testDataSources() {
   }
 
   try {
-    const response = await fetch(
-      "https://api.coinlore.net/api/tickers/?start=0&limit=10",
-      { headers: { Accept: "application/json" } }
-    );
+    const result = await fetchCoinLore(0, 10);
+    const payload = result.payload;
+    const assets = result.assets;
 
-    results.coinlore.status = response.status;
-    results.coinlore.ok = response.ok;
-
-    if (response.ok) {
-      const payload = await response.json();
-      const assets = extractCoinLoreAssets(payload);
-      results.coinlore.assets = assets.length;
-    }
+    results.coinlore = {
+      ok: true,
+      status: result.status,
+      contentType: result.contentType,
+      payloadType: Array.isArray(payload) ? "array" : typeof payload,
+      topLevelKeys:
+        payload && typeof payload === "object"
+          ? Object.keys(payload)
+          : [],
+      assets: assets.length,
+      totalCoins: payload?.info?.coins_num ?? null,
+      sample: assets.slice(0, 3).map(coin => ({
+        name: coin.name,
+        symbol: coin.symbol,
+        price_usd: coin.price_usd,
+        market_cap_usd: coin.market_cap_usd,
+        volume24: coin.volume24
+      }))
+    };
   } catch (error) {
-    results.coinlore.error = error.message;
+    results.coinlore = {
+      ok: false,
+      error: error.message
+    };
   }
 
   return results;
@@ -306,7 +358,8 @@ async function runScan() {
   if (!coins.length) {
     return (
       "❌ دریافت اطلاعات بازار ناموفق بود.\n" +
-      "CoinLore پاسخ داده، اما فهرست ارزها قابل استخراج نبوده است."
+      "CoinLore هیچ فهرست ارز قابل استفاده‌ای برنگرداند.\n\n" +
+      "لطفاً تست /testdata را اجرا کن."
     );
   }
 
@@ -330,7 +383,13 @@ async function runScan() {
     return `⚠️ هیچ ارزی از ${coins.length} ارز دریافتی با فیلترهای اولیه مطابقت نداشت.`;
   }
 
-  const pairs = await getKrakenPairs();
+  let pairs;
+
+  try {
+    pairs = await getKrakenPairs();
+  } catch (error) {
+    return `❌ دریافت جفت‌ارزهای Kraken ناموفق بود:\n${error.message}`;
+  }
 
   const analyzed = await mapLimit(
     candidates,
@@ -371,7 +430,7 @@ async function runScan() {
     .slice(0, CONFIG.DIAGNOSTIC_SIZE);
 
   let report =
-    "🚀 CRYPTO PUMP HUNTER V3.2\n" +
+    "🚀 CRYPTO PUMP HUNTER V3.3\n" +
     "━━━━━━━━━━━━━━━━━━\n\n" +
     "📊 فیلتر ارزش بازار: 1M تا 500M دلار\n" +
     "💧 حداقل حجم روزانه: 250K دلار\n" +
@@ -431,17 +490,9 @@ async function getCoins() {
 
   for (const start of CONFIG.COINLORE_PAGES) {
     try {
-      const response = await fetch(
-        `https://api.coinlore.net/api/tickers/?start=${start}&limit=100`,
-        { headers: { Accept: "application/json" } }
-      );
+      const result = await fetchCoinLore(start, 100);
 
-      if (!response.ok) continue;
-
-      const payload = await response.json();
-      const assets = extractCoinLoreAssets(payload);
-
-      for (const coin of assets) {
+      for (const coin of result.assets) {
         const id = String(coin.id || coin.symbol || "");
 
         if (!id || seen.has(id)) continue;
@@ -449,7 +500,7 @@ async function getCoins() {
         seen.add(id);
         all.push(coin);
       }
-    } catch {
+    } catch (error) {
       // Continue with the next page.
     }
   }
@@ -664,8 +715,8 @@ function analyzeCoin(coin, candles) {
 
   const dailyVolume = Number(coin.volume24);
 
-  if (dailyVolume >= 1_000_000) score += 10;
-  else if (dailyVolume >= 500_000) score += 7;
+  if (dailyVolume >= 1000000) score += 10;
+  else if (dailyVolume >= 500000) score += 7;
   else score += 4;
 
   const dailyChange = Number(coin.percent_change_24h);
@@ -710,7 +761,7 @@ function analyzeCoin(coin, candles) {
     ...candles.slice(-8).map(c => c.low)
   );
 
-  let entry = current;
+  const entry = current;
   let stop = Math.min(support * 0.99, recentLow * 0.995);
 
   if (setup === "پولبک به EMA20") {
