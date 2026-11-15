@@ -4,7 +4,35 @@ const API = "https://api.telegram.org";
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+if (url.pathname === "/testdata" && request.method === "GET") {
+  if (!env.SETUP_KEY || url.searchParams.get("key") !== env.SETUP_KEY) {
+    return new Response("Unauthorized", { status: 401 });
+  }
 
+  const [binance, paprika] = await Promise.all([
+    fetch("https://data-api.binance.vision/api/v3/ping").catch(() => null),
+    fetch("https://api.coinpaprika.com/v1/tickers").catch(() => null)
+  ]);
+
+  let assetCount = null;
+
+  if (paprika && paprika.ok) {
+    const data = await paprika.json();
+    assetCount = Array.isArray(data) ? data.length : null;
+  }
+
+  return Response.json({
+    binance: {
+      ok: !!binance?.ok,
+      status: binance?.status ?? "network_error"
+    },
+    coinpaprika: {
+      ok: !!paprika?.ok,
+      status: paprika?.status ?? "network_error",
+      assets: assetCount
+    }
+  });
+}
     if (url.pathname === "/") {
       return new Response("Crypto Pump Hunter is running.");
     }
