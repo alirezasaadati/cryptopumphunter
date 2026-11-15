@@ -1,12 +1,12 @@
 
 const CONFIG = {
-  COINLORE_PAGES: [0, 100, 200],
-  MAX_CANDIDATES: 24,
-  MAX_RESULTS: 10,
-  CONCURRENCY: 3,
-  MIN_MARKET_CAP: 1000000,
-  MAX_MARKET_CAP: 500000000,
-  MIN_VOLUME: 100000,
+  MARKET_CAP_MIN: 1000000,
+  MARKET_CAP_MAX: 500000000,
+  DAILY_VOLUME_MIN: 250000,
+  MAX_CANDIDATES: 35,
+  MAX_RESULTS: 5,
+  CONCURRENCY: 2,
+  MIN_SCORE: 65
 };
 
 export default {
@@ -14,7 +14,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/") {
-      return new Response("Crypto Pump Hunter is running.");
+      return new Response("Crypto Pump Hunter V2 is running.");
     }
 
     if (url.pathname === "/testdata" && request.method === "GET") {
@@ -27,29 +27,22 @@ export default {
         fetch("https://api.coinlore.net/api/tickers/?start=0&limit=10").catch(() => null)
       ]);
 
-      let krakenTime = null;
-      let coinCount = null;
+      let k = null;
+      let c = null;
 
       if (kraken?.ok) {
         const data = await kraken.json();
-        krakenTime = data.result?.unixtime ?? null;
+        k = data.result?.unixtime ?? null;
       }
 
       if (coinlore?.ok) {
         const data = await coinlore.json();
-        coinCount = data.data?.length ?? null;
+        c = data.data?.length ?? null;
       }
 
       return Response.json({
-        kraken: {
-          ok: krakenTime !== null,
-          status: kraken?.status ?? "network_error"
-        },
-        coinlore: {
-          ok: coinCount !== null,
-          status: coinlore?.status ?? "network_error",
-          assets: coinCount
-        }
+        kraken: { ok: k !== null, status: kraken?.status ?? "network_error" },
+        coinlore: { ok: c !== null, status: coinlore?.status ?? "network_error", assets: c }
       });
     }
 
@@ -62,15 +55,11 @@ export default {
         return Response.json({ ok: false, error: "Missing bot settings" });
       }
 
-      const webhookURL = `${url.origin}/telegram`;
-
-      const result = await telegramAPI(env, "setWebhook", {
-        url: webhookURL,
+      return Response.json(await telegramAPI(env, "setWebhook", {
+        url: `${url.origin}/telegram`,
         secret_token: env.WEBHOOK_SECRET,
         allowed_updates: ["message"]
-      });
-
-      return Response.json(result);
+      }));
     }
 
     if (url.pathname === "/telegram" && request.method === "POST") {
@@ -84,41 +73,40 @@ export default {
       const update = await request.json().catch(() => null);
       const message = update?.message;
       const chatId = message?.chat?.id;
-      const text = (message?.text || "").trim();
+      const command = (message?.text || "").trim().split(/\s+/)[0].toLowerCase();
 
-      if (!chatId || !text) {
-        return new Response("OK");
-      }
+      if (!chatId || !command) return new Response("OK");
 
-      if (text === "/start" || text === "/help") {
+      if (command === "/start" || command === "/help") {
         await sendMessage(env, chatId,
-          "🤖 <b>Crypto Pump Hunter</b>\n\n" +
-          "/scan - شروع اسکن بازار\n" +
+          "🤖 <b>Crypto Pump Hunter V2</b>\n\n" +
+          "/scan - اسکن دستی بازار\n" +
           "/status - وضعیت ربات\n" +
           "/help - راهنما\n\n" +
-          "اسکن فقط با دستور شما اجرا می‌شود."
+          "اسکن فقط با دستور شما انجام می‌شود."
         );
         return new Response("OK");
       }
 
-      if (text === "/status") {
+      if (command === "/status") {
         await sendMessage(env, chatId,
           "✅ ربات فعال است.\n" +
-          "📊 منابع داده: Kraken و CoinLore\n" +
-          "⏱ اسکن فقط با دستور /scan انجام می‌شود."
+          "📊 منابع: Kraken + CoinLore\n" +
+          "🧠 نسخه تحلیل: V2\n" +
+          "⏱ اسکن فقط با /scan"
         );
         return new Response("OK");
       }
 
-      if (text === "/scan") {
+      if (command === "/scan") {
         if (env.OWNER_ID && String(chatId) !== String(env.OWNER_ID)) {
-          await sendMessage(env, chatId, "⛔ اجازه استفاده از اسکن را ندارید.");
+          await sendMessage(env, chatId, "⛔ اجازه اسکن ندارید.");
           return new Response("OK");
         }
 
         await sendMessage(env, chatId,
-          "🔎 اسکن بازار شروع شد...\n" +
-          "لطفاً کمی صبر کنید."
+          "🔎 اسکن هوشمند V2 شروع شد...\n" +
+          "در حال بررسی روند، حجم، RSI، حمایت و مقاومت."
         );
 
         try {
@@ -126,14 +114,14 @@ export default {
           await sendLongMessage(env, chatId, report);
         } catch (error) {
           await sendMessage(env, chatId,
-            "❌ خطا در اسکن بازار:\n" + escapeHTML(error.message || "Unknown error")
+            "❌ خطا در اسکن:\n" + escapeHTML(error.message || "Unknown error")
           );
         }
 
         return new Response("OK");
       }
 
-      return new Response("OK");
+      return new Response("دستور نامعتبر است. /help");
     }
 
     return new Response("Not found", { status: 404 });
@@ -150,7 +138,7 @@ async function telegramAPI(env, method, body) {
     }
   );
 
-  return await response.json();
+  return response.json();
 }
 
 async function sendMessage(env, chatId, text) {
@@ -163,10 +151,10 @@ async function sendMessage(env, chatId, text) {
 }
 
 async function sendLongMessage(env, chatId, text) {
-  const limit = 3800;
+  const chunks = text.match(/[\s\S]{1,3800}/g) || [text];
 
-  for (let i = 0; i < text.length; i += limit) {
-    await sendMessage(env, chatId, text.slice(i, i + limit));
+  for (const chunk of chunks) {
+    await sendMessage(env, chatId, chunk);
   }
 }
 
@@ -189,24 +177,23 @@ async function fetchJSON(url) {
   return response.json();
 }
 
-async function getCoinLoreCoins() {
-  const pages = await Promise.all(
-    CONFIG.COINLORE_PAGES.map(async start => {
-      try {
-        const result = await fetchJSON(
-          `https://api.coinlore.net/api/tickers/?start=${start}&limit=100`
-        );
-        return result.data || [];
-      } catch {
-        return [];
-      }
-    })
-  );
+async function getCoins() {
+  const starts = [0, 100, 200, 300, 400];
 
-  const coins = pages.flat();
+  const pages = await Promise.all(starts.map(async start => {
+    try {
+      const data = await fetchJSON(
+        `https://api.coinlore.net/api/tickers/?start=${start}&limit=100`
+      );
+      return data.data || [];
+    } catch {
+      return [];
+    }
+  }));
 
   const unique = new Map();
-  for (const coin of coins) {
+
+  for (const coin of pages.flat()) {
     if (coin.symbol && !unique.has(coin.symbol)) {
       unique.set(coin.symbol, coin);
     }
@@ -232,27 +219,23 @@ function normalizeSymbol(symbol) {
   return value === "XBT" ? "BTC" : value;
 }
 
-function findKrakenPair(symbol, pairs) {
+function findPair(symbol, pairs) {
   const wanted = normalizeSymbol(symbol);
 
   const matches = pairs.filter(pair => {
-    const wsname = pair.wsname || "";
-    const parts = wsname.split("/");
+    const parts = (pair.wsname || "").split("/");
     if (parts.length !== 2) return false;
 
-    const base = normalizeSymbol(parts[0]);
-    const quote = parts[1].toUpperCase();
-
-    return base === wanted && ["USD", "USDT"].includes(quote);
+    return normalizeSymbol(parts[0]) === wanted &&
+      ["USD", "USDT"].includes(parts[1].toUpperCase());
   });
 
   if (!matches.length) return null;
 
-  matches.sort((a, b) => {
-    const aq = (a.wsname || "").endsWith("/USD") ? 0 : 1;
-    const bq = (b.wsname || "").endsWith("/USD") ? 0 : 1;
-    return aq - bq;
-  });
+  matches.sort((a, b) =>
+    (a.wsname.endsWith("/USD") ? 0 : 1) -
+    (b.wsname.endsWith("/USD") ? 0 : 1)
+  );
 
   return matches[0].altname || matches[0].wsname;
 }
@@ -268,9 +251,7 @@ async function getCandles(pair) {
   }
 
   const key = Object.keys(data.result || {}).find(k => k !== "last");
-  if (!key || !data.result[key]) {
-    throw new Error("No candle data");
-  }
+  if (!key) throw new Error("No candle data");
 
   return data.result[key].map(row => ({
     time: Number(row[0]),
@@ -282,155 +263,234 @@ async function getCandles(pair) {
   }));
 }
 
-function calculateEMA(values, period) {
+function ema(values, period) {
   if (values.length < period) return null;
 
   const multiplier = 2 / (period + 1);
-  let ema = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  let result = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
 
   for (let i = period; i < values.length; i++) {
-    ema = (values[i] - ema) * multiplier + ema;
+    result = (values[i] - result) * multiplier + result;
   }
 
-  return ema;
+  return result;
 }
 
-function calculateRSI(values, period = 14) {
+function rsi(values, period = 14) {
   if (values.length <= period) return null;
 
-  let gains = 0;
-  let losses = 0;
+  let gain = 0;
+  let loss = 0;
 
   for (let i = 1; i <= period; i++) {
     const change = values[i] - values[i - 1];
-    if (change > 0) gains += change;
-    else losses -= change;
+    gain += Math.max(change, 0);
+    loss += Math.max(-change, 0);
   }
 
-  let avgGain = gains / period;
-  let avgLoss = losses / period;
+  let avgGain = gain / period;
+  let avgLoss = loss / period;
 
   for (let i = period + 1; i < values.length; i++) {
     const change = values[i] - values[i - 1];
-    const gain = Math.max(change, 0);
-    const loss = Math.max(-change, 0);
-
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    avgGain = (avgGain * (period - 1) + Math.max(change, 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(-change, 0)) / period;
   }
 
   if (avgLoss === 0) return 100;
 
   const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
+  return 100 - 100 / (1 + rs);
 }
 
-function analyzeCandles(candles) {
-  if (!candles || candles.length < 60) {
-    throw new Error("Not enough candle history");
+function average(values) {
+  if (!values.length) return 0;
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+function findLevels(candles, price) {
+  const recent = candles.slice(-48);
+  const lows = [];
+  const highs = [];
+
+  for (let i = 1; i < recent.length - 1; i++) {
+    if (
+      recent[i].low < recent[i - 1].low &&
+      recent[i].low < recent[i + 1].low
+    ) lows.push(recent[i].low);
+
+    if (
+      recent[i].high > recent[i - 1].high &&
+      recent[i].high > recent[i + 1].high
+    ) highs.push(recent[i].high);
   }
 
-  // آخرین کندل ممکن است هنوز بسته نشده باشد.
-  const closed = candles.slice(0, -1);
+  const supports = lows.filter(x => x < price).sort((a, b) => b - a);
+  const resistances = highs.filter(x => x > price).sort((a, b) => a - b);
 
+  return {
+    support: supports[0] ?? Math.min(...recent.map(c => c.low)),
+    resistance: resistances[0] ?? Math.max(...recent.map(c => c.high))
+  };
+}
+
+function analyze(candles, coin) {
+  if (candles.length < 80) throw new Error("Insufficient candle history");
+
+  // آخرین کندل Kraken ممکن است هنوز بسته نشده باشد.
+  const closed = candles.slice(0, -1);
   const closes = closed.map(c => c.close);
   const last = closed[closed.length - 1];
+  const previous = closed[closed.length - 2];
   const price = last.close;
 
-  const ema20 = calculateEMA(closes, 20);
-  const ema50 = calculateEMA(closes, 50);
-  const rsi = calculateRSI(closes, 14);
+  const ema20 = ema(closes, 20);
+  const ema50 = ema(closes, 50);
+  const currentRSI = rsi(closes);
+  const levels = findLevels(closed, price);
 
-  const recent = closed.slice(-24);
-  const support = Math.min(...recent.map(c => c.low));
-  const resistance = Math.max(...recent.map(c => c.high));
+  const volumeHistory = closed.slice(-21, -1).map(c => c.volume);
+  const avgVolume = average(volumeHistory);
+  const volumeRatio = avgVolume > 0 ? last.volume / avgVolume : 0;
 
-  const previousVolumes = closed.slice(-22, -2).map(c => c.volume);
-  const averageVolume =
-    previousVolumes.reduce((a, b) => a + b, 0) /
-    Math.max(previousVolumes.length, 1);
+  const recentRange = closed.slice(-25, -1);
+  const priorResistance = Math.max(...recentRange.map(c => c.high));
+  const nearSupport = levels.support > 0
+    ? (price - levels.support) / price
+    : 1;
 
-  const lastVolume = closed[closed.length - 1].volume;
-  const volumeRatio = averageVolume > 0
-    ? lastVolume / averageVolume
-    : 0;
+  const bullishCandle = last.close > last.open;
+  const bullishTrend = ema20 > ema50 && price > ema20;
+  const dailyChange = Number(coin.percent_change_24h || 0);
+  const volumeToCap = coin.volume / Math.max(coin.cap, 1);
 
-  const rangePercent = price > 0
-    ? ((resistance - support) / price) * 100
-    : 0;
+  const breakout =
+    price > priorResistance * 1.002 &&
+    volumeRatio >= 1.5 &&
+    bullishCandle;
 
-  const trend = ema20 > ema50 && price > ema20
-    ? "صعودی"
-    : ema20 < ema50 && price < ema20
-      ? "نزولی"
-      : "خنثی";
+  const pullback =
+    bullishTrend &&
+    Math.abs(price - ema20) / price <= 0.015 &&
+    currentRSI >= 45 &&
+    currentRSI <= 67 &&
+    bullishCandle;
 
-  const accumulation =
-    rangePercent < 8 &&
-    volumeRatio > 1.2 &&
-    rsi !== null &&
-    rsi >= 35 &&
-    rsi <= 60;
+  const supportBounce =
+    nearSupport <= 0.015 &&
+    bullishCandle &&
+    currentRSI >= 40 &&
+    currentRSI <= 62;
+
+  let setup = "بدون الگوی ورود";
+  if (breakout) setup = "شکست مقاومت";
+  else if (pullback) setup = "پولبک به EMA20";
+  else if (supportBounce) setup = "برگشت از حمایت";
 
   let score = 0;
 
-  if (trend === "صعودی") score += 25;
-  if (rsi >= 45 && rsi <= 65) score += 20;
-  if (volumeRatio >= 1.5) score += 20;
-  if (price > support * 1.02) score += 10;
-  if (ema20 > ema50) score += 15;
-  if (accumulation) score += 10;
+  // روند: حداکثر 25 امتیاز
+  if (price > ema20) score += 8;
+  if (ema20 > ema50) score += 12;
+  if (ema20 > ema50 && price > ema20) score += 5;
+
+  // RSI: حداکثر 15 امتیاز
+  if (currentRSI >= 50 && currentRSI <= 65) score += 15;
+  else if (currentRSI >= 45 && currentRSI < 50) score += 10;
+  else if (currentRSI > 65 && currentRSI <= 70) score += 7;
+  else if (currentRSI >= 40 && currentRSI < 45) score += 5;
+
+  // حجم: حداکثر 20 امتیاز
+  if (volumeRatio >= 2) score += 20;
+  else if (volumeRatio >= 1.5) score += 16;
+  else if (volumeRatio >= 1.2) score += 12;
+  else if (volumeRatio >= 0.9) score += 7;
+
+  // نقدشوندگی: حداکثر 10 امتیاز
+  if (volumeToCap >= 0.10) score += 10;
+  else if (volumeToCap >= 0.05) score += 8;
+  else if (volumeToCap >= 0.02) score += 5;
+  else if (volumeToCap >= 0.01) score += 2;
+
+  // رفتار روزانه: حداکثر 10 امتیاز
+  if (dailyChange > 3) score += 10;
+  else if (dailyChange > 1) score += 8;
+  else if (dailyChange > 0) score += 6;
+  else if (dailyChange > -2) score += 3;
+
+  // ساختار قیمت: حداکثر 20 امتیاز
+  if (breakout) score += 20;
+  else if (pullback) score += 17;
+  else if (supportBounce) score += 14;
+  else if (price > levels.support && nearSupport < 0.04) score += 5;
+
+  score = Math.min(100, score);
 
   const entry = price;
-  const stop = Math.min(support * 0.98, entry * 0.96);
-  const risk = entry - stop;
+  const support = levels.support;
+  const resistance = levels.resistance;
 
+  const stop = Math.min(
+    support * 0.99,
+    entry * 0.97
+  );
+
+  const risk = entry - stop;
   const target1 = Math.max(resistance, entry + risk * 1.5);
   const target2 = entry + risk * 2.5;
   const target3 = entry + risk * 3.5;
 
+  const rewardRisk = risk > 0 ? (target1 - entry) / risk : 0;
+
+  const eligible =
+    score >= CONFIG.MIN_SCORE &&
+    setup !== "بدون الگوی ورود" &&
+    volumeRatio >= 0.9 &&
+    rewardRisk >= 1.5 &&
+    stop < entry;
+
   return {
     price,
-    rsi,
     ema20,
     ema50,
+    rsi: currentRSI,
+    volumeRatio,
+    volumeToCap,
+    dailyChange,
     support,
     resistance,
-    volumeRatio,
-    trend,
-    accumulation,
+    setup,
     score,
     entry,
     stop,
     target1,
     target2,
-    target3
+    target3,
+    rewardRisk,
+    eligible,
+    bullishTrend,
+    breakout,
+    pullback,
+    supportBounce
   };
 }
 
-function formatPrice(value) {
-  if (!Number.isFinite(value)) return "نامشخص";
-
-  if (value >= 1000) {
-    return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
-  }
-
+function fmt(value) {
+  if (!Number.isFinite(value)) return "N/A";
+  if (value >= 1000) return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
   if (value >= 1) return value.toFixed(4);
   if (value >= 0.01) return value.toFixed(5);
   if (value >= 0.0001) return value.toFixed(7);
-
   return value.toExponential(3);
 }
 
-function formatMoney(value) {
-  if (!Number.isFinite(value)) return "نامشخص";
-
+function money(value) {
   if (value >= 1e9) return "$" + (value / 1e9).toFixed(2) + "B";
   if (value >= 1e6) return "$" + (value / 1e6).toFixed(2) + "M";
   return "$" + Math.round(value / 1000) + "K";
 }
 
-async function mapWithConcurrency(items, limit, callback) {
+async function mapConcurrent(items, limit, callback) {
   const results = new Array(items.length);
   let next = 0;
 
@@ -448,7 +508,7 @@ async function mapWithConcurrency(items, limit, callback) {
   }
 
   await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, () => worker())
+    Array.from({ length: Math.min(limit, items.length) }, worker)
   );
 
   return results;
@@ -456,13 +516,9 @@ async function mapWithConcurrency(items, limit, callback) {
 
 async function runScan() {
   const [coins, pairs] = await Promise.all([
-    getCoinLoreCoins(),
+    getCoins(),
     getKrakenPairs()
   ]);
-
-  if (!coins.length) {
-    throw new Error("CoinLore did not return coin data");
-  }
 
   const candidates = coins
     .map(coin => ({
@@ -471,84 +527,109 @@ async function runScan() {
       volume: Number(coin.volume24 || 0)
     }))
     .filter(coin =>
-      coin.cap >= CONFIG.MIN_MARKET_CAP &&
-      coin.cap <= CONFIG.MAX_MARKET_CAP &&
-      coin.volume >= CONFIG.MIN_VOLUME
+      coin.cap >= CONFIG.MARKET_CAP_MIN &&
+      coin.cap <= CONFIG.MARKET_CAP_MAX &&
+      coin.volume >= CONFIG.DAILY_VOLUME_MIN
     )
     .sort((a, b) => b.volume - a.volume)
     .slice(0, CONFIG.MAX_CANDIDATES);
 
-  if (!candidates.length) {
-    throw new Error("No coins passed the market-cap and volume filters");
-  }
-
-  const analyzed = await mapWithConcurrency(
+  const analyzed = await mapConcurrent(
     candidates,
     CONFIG.CONCURRENCY,
     async coin => {
-      const pair = findKrakenPair(coin.symbol, pairs);
+      const pair = findPair(coin.symbol, pairs);
       if (!pair) return null;
 
       const candles = await getCandles(pair);
-      const analysis = analyzeCandles(candles);
-
       return {
         name: coin.name,
         symbol: coin.symbol,
         cap: coin.cap,
         volume: coin.volume,
-        change24: Number(coin.percent_change_24h || 0),
-        change7d: Number(coin.percent_change_7d || 0),
-        ...analysis
+        analysis: analyze(candles, coin)
       };
     }
   );
 
-  const results = analyzed
-    .filter(Boolean)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, CONFIG.MAX_RESULTS);
+  const usable = analyzed.filter(Boolean);
 
-  if (!results.length) {
-    throw new Error("No coins had usable Kraken candle data");
+  if (!usable.length) {
+    throw new Error("No usable Kraken candle data for selected coins");
   }
 
+  const qualified = usable
+    .filter(item => item.analysis.eligible)
+    .sort((a, b) => b.analysis.score - a.analysis.score)
+    .slice(0, CONFIG.MAX_RESULTS);
+
+  const watchlist = usable
+    .filter(item => !item.analysis.eligible)
+    .sort((a, b) => b.analysis.score - a.analysis.score)
+    .slice(0, 5);
+
   let report =
-    "🚀 <b>CRYPTO PUMP HUNTER</b>\n" +
+    "🚀 <b>CRYPTO PUMP HUNTER V2</b>\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
-    "📊 فیلتر ارزش بازار: 1M تا 500M دلار\n" +
-    "⏱ تحلیل تکنیکال: کندل یک‌ساعته\n" +
-    "🔎 تعداد فرصت‌های پیدا شده: " + results.length + "\n\n";
+    "📊 فیلتر مارکت‌کپ: 1M تا 500M دلار\n" +
+    "⏱ تایم‌فریم: یک‌ساعته\n" +
+    "🔎 ارزهای دارای داده معتبر: " + usable.length + "\n" +
+    "✅ فرصت‌های واجد شرایط: " + qualified.length + "\n\n";
 
-  results.forEach((coin, index) => {
-    const rsiText = coin.rsi === null ? "N/A" : coin.rsi.toFixed(1);
+  if (qualified.length) {
+    report += "🟢 <b>فرصت‌های دارای شرایط ورود</b>\n\n";
 
+    qualified.forEach((item, index) => {
+      const a = item.analysis;
+
+      report +=
+        `<b>${index + 1}. ${escapeHTML(item.name)} (${escapeHTML(item.symbol)})</b>\n` +
+        `⭐ امتیاز: ${a.score}/100\n` +
+        `📌 الگو: ${a.setup}\n` +
+        `💵 قیمت بررسی: $${fmt(a.price)}\n` +
+        `🏦 مارکت‌کپ: ${money(item.cap)}\n` +
+        `📈 تغییر 24h: ${a.dailyChange.toFixed(2)}%\n` +
+        `📊 RSI: ${a.rsi.toFixed(1)}\n` +
+        `EMA20: $${fmt(a.ema20)}\n` +
+        `EMA50: $${fmt(a.ema50)}\n` +
+        `🔊 نسبت حجم یک‌ساعته: ${a.volumeRatio.toFixed(2)}x\n` +
+        `🟢 حمایت: $${fmt(a.support)}\n` +
+        `🔴 مقاومت: $${fmt(a.resistance)}\n` +
+        `🎯 ورود مشروط: $${fmt(a.entry)}\n` +
+        `🛑 حد ضرر محاسباتی: $${fmt(a.stop)}\n` +
+        `🎯 هدف 1: $${fmt(a.target1)}\n` +
+        `🎯 هدف 2: $${fmt(a.target2)}\n` +
+        `🎯 هدف 3: $${fmt(a.target3)}\n` +
+        `⚖️ نسبت سود به ریسک تا هدف اول: ${a.rewardRisk.toFixed(2)}\n` +
+        "━━━━━━━━━━━━━━━━━━\n";
+    });
+  } else {
     report +=
-      `<b>${index + 1}. ${escapeHTML(coin.name)} (${escapeHTML(coin.symbol)})</b>\n` +
-      `⭐ امتیاز: ${coin.score}/100\n` +
-      `💵 قیمت: $${formatPrice(coin.price)}\n` +
-      `🏦 مارکت‌کپ: ${formatMoney(coin.cap)}\n` +
-      `📈 تغییر 24h: ${coin.change24.toFixed(2)}%\n` +
-      `📊 روند: ${coin.trend}\n` +
-      `RSI: ${rsiText}\n` +
-      `EMA20: $${formatPrice(coin.ema20)}\n` +
-      `EMA50: $${formatPrice(coin.ema50)}\n` +
-      `🔊 حجم نسبت به میانگین: ${coin.volumeRatio.toFixed(2)}x\n` +
-      `🟢 حمایت: $${formatPrice(coin.support)}\n` +
-      `🔴 مقاومت: $${formatPrice(coin.resistance)}\n` +
-      `🎯 ورود بررسی: $${formatPrice(coin.entry)}\n` +
-      `🛑 حد ضرر محاسباتی: $${formatPrice(coin.stop)}\n` +
-      `🎯 هدف 1: $${formatPrice(coin.target1)}\n` +
-      `🎯 هدف 2: $${formatPrice(coin.target2)}\n` +
-      `🎯 هدف 3: $${formatPrice(coin.target3)}\n` +
-      `🔍 انباشت احتمالی: ${coin.accumulation ? "مشاهده شد" : "تأیید نشد"}\n` +
-      "━━━━━━━━━━━━━━━━━━\n";
-  });
+      "⛔ <b>فعلاً سیگنال ورود معتبر پیدا نشد.</b>\n" +
+      "هیچ ارزی تمام شروط لازم را هم‌زمان نداشت.\n" +
+      "بهتر است برای ورود عجله نکنی.\n\n";
+  }
+
+  if (watchlist.length) {
+    report += "🟡 <b>فهرست تحت نظر (بدون سیگنال خرید)</b>\n\n";
+
+    watchlist.forEach((item, index) => {
+      const a = item.analysis;
+
+      report +=
+        `${index + 1}. <b>${escapeHTML(item.name)} (${escapeHTML(item.symbol)})</b>\n` +
+        `امتیاز: ${a.score}/100 | الگو: ${a.setup}\n` +
+        `قیمت: $${fmt(a.price)} | RSI: ${a.rsi.toFixed(1)}\n` +
+        `حجم ساعتی: ${a.volumeRatio.toFixed(2)}x\n\n`;
+    });
+  }
 
   report +=
-    "\n⚠️ <b>هشدار:</b> این خروجی پیشنهاد قطعی خرید نیست.\n" +
-    "انباشت بر اساس قیمت و حجم تخمین زده می‌شود، نه ردیابی کیف‌پول نهنگ‌ها.\n" +
-    "قیمت ورود و اهداف، سطوح محاسباتی هستند و باید پیش از معامله بررسی شوند.";
+    "━━━━━━━━━━━━━━━━━━\n" +
+    "⚠️ این تحلیل خودکار است و سود را تضمین نمی‌کند.\n" +
+    "ورود مشروط به بررسی نمودار زنده و تأیید کندل است.\n" +
+    "سطوح و امتیازها ابزار غربالگری هستند، نه توصیه مالی.\n" +
+    "انباشت کیف‌پول‌های بزرگ با این منابع قابل تأیید نیست.";
 
   return report;
 }
