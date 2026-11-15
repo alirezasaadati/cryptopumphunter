@@ -184,6 +184,10 @@ async function ensureAuxiliarySchema(env) {
     CREATE INDEX IF NOT EXISTS idx_contract_acceptances_chat
     ON contract_acceptances(chat_id, accepted_at)
   `).run();
+  await env.DB.prepare(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_tx_hash_unique
+  ON payments(tx_hash)
+`).run();
 
   await env.DB.prepare(`
     CREATE TABLE IF NOT EXISTS processed_updates (
@@ -803,101 +807,260 @@ async function verifyBNBTransaction(env, txHash, order) {
   };
 }
 
-async function processPaymentTXID(env, chatId, txHash) {
-  const now = Date.now();
-  const order = await dbFirst(env, `
-    SELECT * FROM orders
-    WHERE chat_id = ? AND status = 'pending'
-    ORDER BY created_at DESC LIMIT 1
-  `, String(chatId));
+asasync function processPaymentTXID(env, chatId, txHash) {
+  const normalizedHash = String(txHash || "").trim().toLowerCase();
 
-  if (!order) {
-    await sendMessage(env, chatId, "❌ سفارش پرداخت فعالی پیدا نشد. ابتدا پلن را انتخاب کن.");
-    return;
-  }
-  if (now > Number(order.expires_at)) {
-    await dbRun(env, "UPDATE orders SET status = 'expired' WHERE id = ? AND status = 'pending'", order.id);
-    await sendMessage(env, chatId, "⌛ مهلت سفارش تمام شده است. سفارش جدید بساز.");
+  if (!/^0x[a-f0-9]{64}$/.test(normalizedHash)) {
+    await sendMessage(env, chatId, "❌ شناسه تراکنش معتبر نیست.");
     return;
   }
 
-  const verification = await verifyBNBTransaction(env, txHash, order);
-  if (!verification.ok) {
-    await sendMessage(env, chatId, "⚠️ پرداخت تأیید نشد:\n" + verification.reason);
-    return;
-  }
+  // 1. بررسی اینکه این TXID قبلاً ثبت شده است یا نه
+  const existingPayment = await dbFirst(env, `
+    SELECT p.chat_id, p.order_id
+    FROM payments p
+    WHERE LOWER(p.tx_hash) = ?
+    LIMIT 1
+  `, normalizedHash);
 
-  const normalizedHash = txHash.toLowerCase();
-  try {
-    const results = await env.DB.batch([
-      env.DB.prepare(`
-        UPDATE orders SET status = 'paid', tx_hash = ?
-        WHERE id = ? AND chat_id = ? AND status = 'pending' AND expires_at >= ?
-      `).bind(normalizedHash, order.id, String(chatId), now),
-      env.DB.prepare(`
-        INSERT INTO payments(
-          order_id, chat_id, tx_hash, sender_address, recipient_address,
-          amount_wei, block_number, paid_at
-        )
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?
-        WHERE EXISTS(
-          SELECT 1 FROM orders
-          WHERE id = ? AND status = 'paid' AND tx_hash = ?
-        )
-      `).bind(order.id, String(chatId), normalizedHash,
-        verification.sender, verification.recipient, verification.amountWei,
-        verification.blockNumber, verification.paidAt, order.id, normalizedHash),
-      env.DB.prepare(`
-        INSERT INTO subscriptions(
-          chat_id, plan_days, started_at, expires_at, payment_tx, status
-        )
-        SELECT
-          ?, ?,
-          MAX(?, COALESCE(
-            (SELECT expires_at FROM subscriptions WHERE chat_id = ? AND status = 'active'), ?
-          )),
-          MAX(?, COALESCE(
-            (SELECT expires_at FROM subscriptions WHERE chat_id = ? AND status = 'active'), ?
-          )) + ? * 86400000,
-          ?, 'active'
-        WHERE EXISTS(SELECT 1 FROM payments WHERE order_id = ?)
-        ON CONFLICT(chat_id) DO UPDATE SET
-          plan_days = excluded.plan_days,
-          started_at = excluded.started_at,
-          expires_at = excluded.expires_at,
-          payment_tx = excluded.payment_tx,
-          status = 'active'
-      `).bind(String(chatId), order.plan_days, now, String(chatId), now,
-        now, String(chatId), now, order.plan_days, normalizedHash, order.id)
-    ]);
-
-    const updated = Number(results[0]?.meta?.changes || 0);
-    const inserted = Number(results[1]?.meta?.changes || 0);
-    if (updated !== 1 || inserted !== 1) {
+  if (existingPayment) {
+    if (String(existingPayment.chat_id) !== String(chatId)) {
       await sendMessage(env, chatId,
-        "⚠️ این تراکنش قبلاً ثبت شده یا سفارش تغییر کرده است. از ارسال مجدد وجه خودداری کن.");
+        "❌ این تراکنش قبلاً برای حساب دیگری ثبت شده است.");
       return;
     }
 
-    const subscription = await getActiveSubscription(env, chatId);
-    await sendMessage(env, chatId,
-      "🎉 پرداخت با موفقیت تأیید شد!\n\n" +
-      `📦 پلن: ${order.plan_days} روز\n` +
-      `🪙 پرداخت: ${weiToBNB(verification.amountWei)} BNB\n` +
-      `📅 پایان اشتراک: ${new Date(subscription.expires_at).toLocaleString("fa-IR", { timeZone: "Asia/Tehran" })}\n` +
-      `🔗 TXID: ${normalizedHash}\n\n` +
-      "اشتراک تو فعال شد.",
-      mainMenu());
+    const existingSubscription = await dbFirst(env, `
+      SELECT * FROM subscriptions
+      WHERE chat_id = ?
+      LIMIT 1
+    `, String(chatId));
 
-    if (env.OWNER_ID) {
+    if (!existingSubscription) {
+      throw new Error("PAYMENT_EXISTS_BUT_SUBSCRIPTION_MISSING");
+    }
+
+    await sendMessage(env, chatId,
+      "✅ این تراکنش قبلاً ثبت شده است.\n\n" +
+      "اشتراک قبلاً فعال شده و پرداخت دوباره تمدید نمی‌شود.",
+      mainMenu());
+    return;
+  }
+
+  // 2. بررسی سفارش پرداخت‌شده‌ای که رکورد پرداخت ندارد
+  const paidOrder = await dbFirst(env, `
+    SELECT id FROM orders
+    WHERE LOWER(tx_hash) = ?
+    LIMIT 1
+  `, normalizedHash);
+
+  if (paidOrder) {
+    throw new Error("PAID_ORDER_WITHOUT_PAYMENT_RECORD");
+  }
+
+  // 3. دریافت آخرین سفارش در انتظار پرداخت
+  const order = await dbFirst(env, `
+    SELECT * FROM orders
+    WHERE chat_id = ? AND status = 'pending'
+    ORDER BY created_at DESC
+    LIMIT 1
+  `, String(chatId));
+
+  if (!order) {
+    await sendMessage(env, chatId,
+      "❌ سفارش پرداخت فعالی پیدا نشد. ابتدا پلن اشتراک را انتخاب کن.");
+    return;
+  }
+
+  const now = Date.now();
+
+  if (now > Number(order.expires_at)) {
+    await dbRun(env, `
+      UPDATE orders
+      SET status = 'expired'
+      WHERE id = ? AND status = 'pending'
+    `, order.id);
+
+    await sendMessage(env, chatId,
+      "⌛ مهلت سفارش تمام شده است. لطفاً سفارش جدید بساز.");
+    return;
+  }
+
+  // 4. تأیید تراکنش روی شبکه BSC
+  const verification = await verifyBNBTransaction(
+    env,
+    normalizedHash,
+    order
+  );
+
+  if (!verification.ok) {
+    await sendMessage(env, chatId,
+      "⚠️ پرداخت تأیید نشد:\n" + verification.reason);
+    return;
+  }
+
+  // 5. ثبت اتمیک سفارش، پرداخت و اشتراک
+  const results = await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE orders
+      SET status = 'paid', tx_hash = ?
+      WHERE id = ?
+        AND chat_id = ?
+        AND status = 'pending'
+        AND expires_at >= ?
+    `).bind(
+      normalizedHash,
+      order.id,
+      String(chatId),
+      now
+    ),
+
+    env.DB.prepare(`
+      INSERT OR IGNORE INTO payments(
+        order_id,
+        chat_id,
+        tx_hash,
+        sender_address,
+        recipient_address,
+        amount_wei,
+        block_number,
+        paid_at
+      )
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM orders
+        WHERE id = ?
+          AND chat_id = ?
+          AND status = 'paid'
+          AND tx_hash = ?
+      )
+    `).bind(
+      order.id,
+      String(chatId),
+      normalizedHash,
+      verification.sender,
+      verification.recipient,
+      verification.amountWei,
+      verification.blockNumber,
+      verification.paidAt,
+      order.id,
+      String(chatId),
+      normalizedHash
+    ),
+
+    env.DB.prepare(`
+      INSERT INTO subscriptions(
+        chat_id,
+        plan_days,
+        started_at,
+        expires_at,
+        payment_tx,
+        status
+      )
+      SELECT
+        ?,
+        ?,
+        MAX(
+          ?,
+          COALESCE(
+            (
+              SELECT expires_at
+              FROM subscriptions
+              WHERE chat_id = ?
+                AND status = 'active'
+            ),
+            ?
+          )
+        ),
+        MAX(
+          ?,
+          COALESCE(
+            (
+              SELECT expires_at
+              FROM subscriptions
+              WHERE chat_id = ?
+                AND status = 'active'
+            ),
+            ?
+          )
+        ) + ? * 86400000,
+        ?,
+        'active'
+      WHERE changes() = 1
+        AND EXISTS (
+          SELECT 1
+          FROM payments
+          WHERE order_id = ?
+            AND chat_id = ?
+            AND tx_hash = ?
+        )
+      ON CONFLICT(chat_id) DO UPDATE SET
+        plan_days = excluded.plan_days,
+        started_at = excluded.started_at,
+        expires_at = excluded.expires_at,
+        payment_tx = excluded.payment_tx,
+        status = 'active'
+    `).bind(
+      String(chatId),
+      order.plan_days,
+      now,
+      String(chatId),
+      now,
+      now,
+      String(chatId),
+      now,
+      order.plan_days,
+      normalizedHash,
+      order.id,
+      String(chatId),
+      normalizedHash
+    )
+  ]);
+
+  const orderUpdated = Number(results[0]?.meta?.changes || 0);
+  const paymentInserted = Number(results[1]?.meta?.changes || 0);
+  const subscriptionUpdated = Number(results[2]?.meta?.changes || 0);
+
+  if (
+    orderUpdated !== 1 ||
+    paymentInserted !== 1 ||
+    subscriptionUpdated !== 1
+  ) {
+    throw new Error(
+      `PAYMENT_BATCH_INCOMPLETE: order=${orderUpdated}, payment=${paymentInserted}, subscription=${subscriptionUpdated}`
+    );
+  }
+
+  // 6. اطمینان از ثبت اشتراک
+  const subscription = await getActiveSubscription(env, chatId);
+
+  if (!subscription) {
+    throw new Error("SUBSCRIPTION_ACTIVATION_FAILED");
+  }
+
+  // 7. پیام موفقیت به کاربر
+  await sendMessage(env, chatId,
+    "🎉 پرداخت با موفقیت تأیید شد!\n\n" +
+    `📦 پلن: ${order.plan_days} روز\n` +
+    `🪙 پرداخت: ${weiToBNB(verification.amountWei)} BNB\n` +
+    `📅 پایان اشتراک: ${new Date(subscription.expires_at).toLocaleString("fa-IR", {
+      timeZone: "Asia/Tehran"
+    })}\n` +
+    `🔗 TXID: ${normalizedHash}\n\n` +
+    "✅ اشتراک تو فعال شد.",
+    mainMenu());
+
+  // 8. خطای پیام مدیر نباید باعث پردازش مجدد پرداخت شود
+  if (env.OWNER_ID) {
+    try {
       await sendMessage(env, env.OWNER_ID,
         "💰 پرداخت جدید تأیید شد.\n\n" +
-        `کاربر: ${chatId}\nمدت: ${order.plan_days} روز\nTXID: ${normalizedHash}`);
+        `کاربر: ${chatId}\n` +
+        `مدت: ${order.plan_days} روز\n` +
+        `TXID: ${normalizedHash}`);
+    } catch (error) {
+      // پرداخت ثبت شده است؛ خطای اعلان مدیر نادیده گرفته می‌شود.
     }
-  } catch (error) {
-    await sendMessage(env, chatId,
-      "⚠️ ثبت پرداخت کامل نشد. از ارسال دوباره وجه خودداری کن و TXID را نگه دار.\n" +
-      "در صورت تداوم مشکل، وضعیت سفارش باید بررسی شود.");
   }
 }
 
