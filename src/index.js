@@ -807,7 +807,7 @@ async function verifyBNBTransaction(env, txHash, order) {
   };
 }
 
-asasync function processPaymentTXID(env, chatId, txHash) {
+async function processPaymentTXID(env, chatId, txHash) {
   const normalizedHash = String(txHash || "").trim().toLowerCase();
 
   if (!/^0x[a-f0-9]{64}$/.test(normalizedHash)) {
