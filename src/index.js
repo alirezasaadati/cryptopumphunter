@@ -1,9 +1,3 @@
-کد ربات ورژن ۳.۶ جدید
-
-
-
-
-
 const CONFIG = {
   VERSION: "3.6",
   MIN_MARKET_CAP: 1_000_000,
