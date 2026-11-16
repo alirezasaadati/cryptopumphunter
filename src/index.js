@@ -519,8 +519,8 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
   }
 
   if (command === "/member") {
-    const targetId = (message?.text || "").trim().split(/\\s+/)[1];
-    if (!targetId || !/^-?\\d+$/.test(targetId)) {
+    const targetId = (message?.text || "").trim().split(/\s+/)[1];
+    if (!targetId || !/^-?\d+$/.test(targetId)) {
       await sendMessage(env, chatId, "فرمت صحیح: /member 123456789");
     } else {
       await showMemberProfile(env, chatId, targetId);
@@ -595,7 +595,7 @@ async function showMemberList(env, ownerId, page = 0) {
     { inline_keyboard: keyboard });
 }
 async function showMemberProfile(env, ownerId, id) {
-  if (!isOwner(ownerId,env) || !env.WATCHLIST_KV || !/^-?\\d+$/.test(id)) return;
+  if (!isOwner(ownerId,env) || !env.WATCHLIST_KV || !/^-?\d+$/.test(id)) return;
   const m=await env.WATCHLIST_KV.get(memberKey(id),"json");
   if(!m){await sendMessage(env,ownerId,"عضو پیدا نشد.");return;}
   const blocked=m.revoked===true||m.approved===false;
@@ -604,7 +604,7 @@ async function showMemberProfile(env, ownerId, id) {
   await sendMessage(env,ownerId,body,{inline_keyboard:[[blocked?{text:"✅ اجازه دسترسی مجدد",callback_data:`mall:${id}`}:{text:"🚫 قطع دسترسی",callback_data:`mrev:${id}`}],[{text:"⬅️ بازگشت",callback_data:"members:"}]]});
 }
 async function changeMemberAccess(env,ownerId,id,allow) {
-  if(!isOwner(ownerId,env)||!env.WATCHLIST_KV||!/^-?\\d+$/.test(id))return;
+  if(!isOwner(ownerId,env)||!env.WATCHLIST_KV||!/^-?\d+$/.test(id))return;
   if(String(id)===String(env.OWNER_ID)){await sendMessage(env,ownerId,"دسترسی مدیر اصلی قابل تغییر نیست.");return;}
   const m=await env.WATCHLIST_KV.get(memberKey(id),"json");
   if(!m){await sendMessage(env,ownerId,"عضو پیدا نشد.");return;}
