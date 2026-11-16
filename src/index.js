@@ -674,6 +674,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/status - وضعیت ربات\n" +
         "/paperstatus - گزارش Paper Trading (فقط Owner)\n" +
         "/paperdetails - جزئیات معاملات باز Paper Trading (فقط Owner)\n" +
+        "/paperhistory - تاریخچه چرخه‌ها و علت ورود/رد سیگنال‌ها (فقط Owner)\n" +
         "/help - راهنما\n\n" +
         "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
         menuForChat(env, chatId)
@@ -703,6 +704,11 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     if (command === "/paperdetails") {
       await showPaperDetails(env, chatId);
+      return;
+    }
+
+    if (command === "/paperhistory") {
+      await showPaperHistory(env, chatId);
       return;
     }
 
@@ -1934,6 +1940,19 @@ async function runFuturesSignalScan(env) {
     const reason = item.rejected || "نامشخص";
     rejectionCounts.set(reason, (rejectionCounts.get(reason) || 0) + 1);
   }
+  const diagnostics = {
+    scanned: universe.length,
+    analyzed: validData,
+    eligible: signals.length,
+    watchlist: watchlist.length,
+    rejectedCount: allRejected.length,
+    rejectionCounts: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count })),
+    rejectedSymbols: allRejected.slice(0, 35).map(x => ({ symbol: x.symbol, reason: x.rejected || "نامشخص" })),
+    eligibleSignals: signals.map(x => ({
+      symbol: x.symbol, side: x.side, score: x.score, candleTime: x.candleTime,
+      entry: x.entry, stop: x.stop, target1: x.target1, target2: x.target2, target3: x.target3
+    }))
+  };
   let report = `📈 CRYPTO PUMP HUNTER V${CONFIG.VERSION} — KRAKEN FUTURES\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
     "🏦 بازار: Kraken Derivatives Perpetual\n" +
@@ -1990,7 +2009,7 @@ async function runFuturesSignalScan(env) {
       report += `\n⚠️ ذخیره گزارش فیوچرز ناموفق بود: ${String(error.message || "KV error")}`;
     }
   }
-  return { report, signals, watchlist };
+  return { report, signals, watchlist, diagnostics };
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
@@ -2085,10 +2104,23 @@ async function runPaperTradingCycle(env) {
       else state.history.push(position);
     }
     const openIds = new Set(stillOpen.map(p => p.id));
+    const signalDecisions = [];
     for (const signal of scan.signals) {
       const position = createPaperPosition(signal);
-      if (!position || openIds.has(position.id) || state.history.some(p => p.id === position.id)) continue;
+      if (!position) {
+        signalDecisions.push({ symbol: signal.symbol, side: signal.side, decision: "INVALID_RISK" });
+        continue;
+      }
+      if (openIds.has(position.id)) {
+        signalDecisions.push({ symbol: signal.symbol, side: signal.side, decision: "ALREADY_OPEN", id: position.id });
+        continue;
+      }
+      if (state.history.some(p => p.id === position.id)) {
+        signalDecisions.push({ symbol: signal.symbol, side: signal.side, decision: "ALREADY_CLOSED", id: position.id });
+        continue;
+      }
       stillOpen.push(position); openIds.add(position.id);
+      signalDecisions.push({ symbol: signal.symbol, side: signal.side, decision: "OPENED", id: position.id });
       events.push({ type: "OPEN", symbol: position.symbol, side: position.side, price: position.entry, netR: position.realizedR });
     }
     state.positions = stillOpen;
@@ -2096,6 +2128,20 @@ async function runPaperTradingCycle(env) {
     state.cycles = (state.cycles || 0) + 1;
     state.lastCycleAt = Date.now();
     state.lastScanSignals = scan.signals.length;
+    state.cycleHistory = Array.isArray(state.cycleHistory) ? state.cycleHistory : [];
+    state.cycleHistory.push({
+      cycle: state.cycles,
+      timestamp: state.lastCycleAt,
+      scan: scan.diagnostics || {
+        scanned: null, analyzed: null, eligible: scan.signals.length,
+        watchlist: scan.watchlist?.length || 0, rejectedCount: null,
+        rejectionCounts: [], rejectedSymbols: []
+      },
+      signalDecisions,
+      events: events.map(e => ({ ...e })),
+      openAfter: state.positions.map(p => ({ symbol: p.symbol, side: p.side, entry: p.entry, stop: p.stop, openedAt: p.openedAt }))
+    });
+    state.cycleHistory = state.cycleHistory.slice(-100);
     await env.WATCHLIST_KV.put(PAPER_KEY, JSON.stringify(state));
     if (events.length) {
       const summary = events.map(e => {
@@ -2127,6 +2173,49 @@ async function showPaperStatus(env, chatId) {
     menuForChat(env, chatId));
 }
 
+
+async function showPaperHistory(env, chatId) {
+  if (!isOwner(chatId, env)) {
+    await sendMessage(env, chatId, "⛔ فقط Owner به تاریخچه Paper Trading دسترسی دارد.");
+    return;
+  }
+  const state = await env.WATCHLIST_KV?.get(PAPER_KEY, "json");
+  const history = state?.cycleHistory || [];
+  if (!history.length) {
+    await sendMessage(env, chatId,
+      "🧪 هنوز تاریخچه چرخه‌ای ثبت نشده است. از چرخه زمان‌بندی‌شده بعدی، جزئیات اسکن و تصمیم ورود/رد ذخیره می‌شود.",
+      menuForChat(env, chatId));
+    return;
+  }
+  const recent = history.slice(-10).reverse();
+  const lines = recent.map(c => {
+    const at = c.timestamp ? new Date(c.timestamp).toISOString() : "نامشخص";
+    const scan = c.scan || {};
+    const decisions = (c.signalDecisions || []).map(d => {
+      const label = d.decision === "OPENED" ? "ورود فرضی" :
+        d.decision === "ALREADY_OPEN" ? "از قبل باز" :
+        d.decision === "ALREADY_CLOSED" ? "قبلاً بسته شده" : "ریسک نامعتبر";
+      return d.symbol + " " + d.side + ": " + label;
+    });
+    const rejects = (scan.rejectedSymbols || []).slice(0, 5)
+      .map(x => x.symbol + ": " + x.reason);
+    const reasons = (scan.rejectionCounts || []).slice(0, 4)
+      .map(x => x.reason + " (" + x.count + ")");
+    return "چرخه #" + c.cycle + " | " + at +
+      "\nبررسی: " + (scan.scanned ?? "—") +
+      " | تحلیل معتبر: " + (scan.analyzed ?? "—") +
+      " | سیگنال واجد شرایط: " + (scan.eligible ?? "—") +
+      " | واچ‌لیست: " + (scan.watchlist ?? "—") +
+      "\nتصمیم‌ها: " + (decisions.length ? decisions.join("؛ ") : "سیگنال واجد شرایطی نبود") +
+      (reasons.length ? "\nدلایل پرتکرار رد: " + reasons.join("؛ ") : "") +
+      (rejects.length ? "\nنمونه رد نمادها: " + rejects.join(" | ") : "");
+  });
+  await sendLongMessage(env, chatId,
+    "🧾 تاریخچه ۱۰ چرخه اخیر Paper Trading\n━━━━━━━━━━━━━━━━━━\n" +
+    lines.join("\n\n━━━━━━━━━━━━━━━━━━\n\n") +
+    "\n\nاین گزارش فقط چرخه‌های ثبت‌شده از زمان انتشار این نسخه به بعد را پوشش می‌دهد؛ داده‌های قدیمی قابل بازیابی نیستند. اکانت Demo صرافی جدا از Paper Trading داخلی است.");
+  await sendMessage(env, chatId, "پایان تاریخچه.", menuForChat(env, chatId));
+}
 
 async function showPaperDetails(env, chatId) {
   if (!isOwner(chatId, env)) {
