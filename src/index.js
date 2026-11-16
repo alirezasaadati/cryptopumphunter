@@ -1,5 +1,5 @@
 const CONFIG = {
-  VERSION: "3.8.2",
+  VERSION: "3.9.0",
   MIN_MARKET_CAP: 1_000_000,
   MAX_MARKET_CAP: 500_000_000,
   MIN_DAILY_VOLUME: 250_000,
@@ -20,7 +20,7 @@ const TELEGRAM_API = "https://api.telegram.org";
 const seenUpdates = new Set();
 
 const ABOUT_TEXT =
-  "🚀 CRYPTO PUMP HUNTER V3.8.2\n\n" +
+  "🚀 CRYPTO PUMP HUNTER V3.9.0\n\n" +
   "طراحی و توسعه: علیرضا سعادتی\n\n" +
   "© تمامی حقوق مادی و معنوی این نرم‌افزار محفوظ است.\n\n" +
   "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه از صاحب اثر مجاز نیست.";
@@ -40,7 +40,7 @@ const MAIN_MENU = {
     ],
     [
       { text: "🔌 تست اتصال", callback_data: "test" },
-      { text: "⚙️ تنظیمات", callback_data: "settings" }
+      { text: "🔍 دکس اسکرینر", callback_data: "dex" }
     ],
     [
       { text: "ℹ️ درباره", callback_data: "about" }
@@ -85,7 +85,7 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/telegram") {
       if (
-        env.WEBHOOK_SECRET &&
+        !env.WEBHOOK_SECRET ||
         request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET
       ) {
         return new Response("Unauthorized", { status: 401 });
@@ -465,7 +465,7 @@ async function handleAdminMembershipCallback(query, env) {
         applicantId,
         "🎉 به خانواده CRYPTO PUMP HUNTER خوش آمدید!\n\n" +
         "✅ عضویت شما با موفقیت تأیید شد و دسترسی شما فعال است.\n\n" +
-        "🚀 از این لحظه می‌توانید از امکانات اسکن بازار و دریافت سیگنال‌های تحلیلی اسپات و فیوچرز بایننس استفاده کنید.\n\n" +
+        "🚀 از این لحظه می‌توانید از اسکن اسپات، سیگنال‌های تحلیلی فیوچرز Kraken و دکس اسکرینر استفاده کنید.\n\n" +
         "⚠️ سیگنال‌ها صرفاً تحلیلی هستند؛ قبل از هر معامله مدیریت ریسک را رعایت کنید."
       );
       await showMenu(env, applicantId);
@@ -570,13 +570,12 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
 // ---------------- MAIN MENU ----------------
 
 async function showMenu(env, chatId) {
-  await sendMessage(
-    env,
-    chatId,
-    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\n\n` +
-    "از منوی زیر گزینه موردنظر را انتخاب کن:",
-    MAIN_MENU
-  );
+  const menu = JSON.parse(JSON.stringify(MAIN_MENU));
+  if (isOwner(chatId, env)) {
+    menu.inline_keyboard.splice(3, 0, [{ text: "👥 مدیریت اعضا", callback_data: "members:0" }]);
+  }
+  await sendMessage(env, chatId,
+    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\n\nاز منوی زیر گزینه موردنظر را انتخاب کن:`, menu);
 }
 
 async function handleTelegramCommand(command, chatId, env, message) {
@@ -637,6 +636,11 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     if (command === "/futures") {
       await runFuturesSignalsForChat(env, chatId);
+      return;
+    }
+
+    if (command === "/dex") {
+      await runDexScreenerForChat(env, chatId);
       return;
     }
 
@@ -701,6 +705,11 @@ async function handleCallback(query, env) {
       return;
     }
 
+    if (action === "dex") {
+      await runDexScreenerForChat(env, chatId);
+      return;
+    }
+
     if (action === "analysis") {
       await showLastAnalysis(env, chatId);
       return;
@@ -718,11 +727,6 @@ async function handleCallback(query, env) {
 
     if (action === "test") {
       await showConnectionTest(env, chatId);
-      return;
-    }
-
-    if (action === "settings") {
-      await showSettings(env, chatId);
       return;
     }
 
@@ -788,7 +792,7 @@ async function showStatus(env, chatId) {
     `🟢 وضعیت Crypto Pump Hunter\n\n` +
     `نسخه: V${CONFIG.VERSION}\n` +
     "حالت اسکن: فقط دستی\n" +
-    "اسپات: CoinLore و Kraken | فیوچرز: Kraken Derivatives\n" +
+    "اسپات: CoinLore و Kraken | فیوچرز: Kraken Derivatives | توکن‌های تازه: DexScreener\n" +
     `اتصال KV: ${env.WATCHLIST_KV ? "فعال" : "غیرفعال"}\n` +
     `آخرین اسکن ذخیره‌شده: ${lastScan}`,
     MAIN_MENU
@@ -920,7 +924,7 @@ async function registerWebhook(request, env) {
   }
 
   if (
-    env.WEBHOOK_SECRET &&
+    !env.WEBHOOK_SECRET ||
     !/^[A-Za-z0-9_-]{1,256}$/.test(env.WEBHOOK_SECRET)
   ) {
     return json({
@@ -938,9 +942,7 @@ async function registerWebhook(request, env) {
       max_connections: 5
     };
 
-    if (env.WEBHOOK_SECRET) {
-      body.secret_token = env.WEBHOOK_SECRET;
-    }
+    body.secret_token = env.WEBHOOK_SECRET;
 
     const result = await telegram("setWebhook", env, body);
 
