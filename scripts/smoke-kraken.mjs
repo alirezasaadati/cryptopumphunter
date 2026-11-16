@@ -25,18 +25,27 @@ if (!candidates.length) {
 }
 
 const ticker = candidates[0];
-const chartUrl = `${base}/api/charts/v1/trade/${encodeURIComponent(ticker.symbol)}/1h?count=5`;
-const chartData = await getJson(chartUrl);
-if (!Array.isArray(chartData?.candles) || chartData.candles.length === 0) {
-  throw new Error(`Kraken chart response for ${ticker.symbol} has no candles array`);
+
+async function checkCandles(interval) {
+  const url = `${base}/api/charts/v1/trade/${encodeURIComponent(ticker.symbol)}/${interval}?count=5`;
+  const data = await getJson(url);
+  if (!Array.isArray(data?.candles) || data.candles.length === 0) {
+    throw new Error(`Kraken ${interval} chart response for ${ticker.symbol} has no candles array`);
+  }
+
+  const candle = data.candles.at(-1);
+  for (const key of ["time", "open", "high", "low", "close", "volume"]) {
+    if (!Number.isFinite(Number(candle[key]))) {
+      throw new Error(`Invalid ${interval} candle field ${key} for ${ticker.symbol}`);
+    }
+  }
+  return { count: data.candles.length, time: Number(candle.time) };
 }
 
-const candle = chartData.candles.at(-1);
-for (const key of ["time", "open", "high", "low", "close", "volume"]) {
-  if (!Number.isFinite(Number(candle[key]))) {
-    throw new Error(`Invalid candle field ${key} for ${ticker.symbol}`);
-  }
-}
+const [oneHour, fourHour] = await Promise.all([
+  checkCandles("1h"),
+  checkCandles("4h")
+]);
 
 console.log(JSON.stringify({
   ok: true,
@@ -44,6 +53,8 @@ console.log(JSON.stringify({
   qualifyingPerpetuals: candidates.length,
   sampleSymbol: ticker.symbol,
   sampleLast: Number(ticker.last),
-  candleCount: chartData.candles.length,
-  candleTime: Number(candle.time)
+  oneHourCandles: oneHour.count,
+  oneHourLatestTime: oneHour.time,
+  fourHourCandles: fourHour.count,
+  fourHourLatestTime: fourHour.time
 }, null, 2));
