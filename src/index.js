@@ -568,24 +568,34 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
 }
 
 // ---------------- OWNER MEMBER MANAGEMENT UI ----------------
-async function showMemberList(env, ownerId, cursor = "") {
+async function showMemberList(env, ownerId, page = 0) {
   if (!isOwner(ownerId, env) || !env.WATCHLIST_KV) return;
-  const options = { prefix: "member:", limit: 10 };
-  if (cursor) options.cursor = cursor;
-  const page = await env.WATCHLIST_KV.list(options);
+  const cursorKey = `admin:members:cursor:${ownerId}:${page}`;
+  const cursor = page > 0 ? await env.WATCHLIST_KV.get(cursorKey) : null;
+  if (page > 0 && !cursor) {
+    await sendMessage(env, ownerId, "صفحه قبلی منقضی شده است؛ فهرست را دوباره باز کن.");
+    return;
+  }
+  const result = await env.WATCHLIST_KV.list({ prefix: "member:", limit: 10, ...(cursor ? { cursor } : {}) });
   const keyboard = [];
-  for (const key of page.keys || []) {
+  let active = 0, revoked = 0;
+  for (const key of result.keys || []) {
     const id = key.name.slice(7);
     const m = await env.WATCHLIST_KV.get(key.name, "json") || {};
+    const blocked = m.revoked === true || m.approved === false;
+    if (blocked) revoked++; else active++;
     const name = [m.firstName, m.lastName].filter(Boolean).join(" ") || "بدون نام";
-    const status = m.revoked || m.approved === false ? "🚫" : "✅";
-    keyboard.push([{text:`${status} ${name.slice(0,30)} | ${id}`,callback_data:`mprof:${id}`}]);
+    keyboard.push([{ text: `${blocked ? "🚫" : "✅"} ${name.slice(0,24)} | ${id}`, callback_data: `mprof:${id}` }]);
   }
-  if (page.list_complete === false && page.cursor) {
-    keyboard.push([{text:"صفحه بعدی ➡️",callback_data:`members:${page.cursor}`}]);
+  if (result.list_complete === false && result.cursor) {
+    await env.WATCHLIST_KV.put(`admin:members:cursor:${ownerId}:${page+1}`, result.cursor, { expirationTtl: 3600 });
+    keyboard.push([{ text: "صفحه بعدی ➡️", callback_data: `members:${page+1}` }]);
   }
-  keyboard.push([{text:"🏠 منوی اصلی",callback_data:"menu"}]);
-  await sendMessage(env,ownerId,`👥 مدیریت اعضا\n━━━━━━━━━━━━\nتعداد نمایش این صفحه: ${(page.keys||[]).length}\nبرای مشاهده پروفایل و مدیریت دسترسی روی عضو بزن.`,{inline_keyboard:keyboard});
+  if (page > 0) keyboard.push([{ text: "⬅️ صفحه قبل", callback_data: `members:${page-1}` }]);
+  keyboard.push([{ text: "🏠 منوی اصلی", callback_data: "menu" }]);
+  await sendMessage(env, ownerId,
+    `👥 مدیریت اعضا | صفحه ${page+1}\n━━━━━━━━━━━━━━━━━━\nفعال در این صفحه: ${active}\nلغو دسترسی در این صفحه: ${revoked}\n\nبرای دیدن پروفایل و مدیریت دسترسی روی عضو بزن.`,
+    { inline_keyboard: keyboard });
 }
 async function showMemberProfile(env, ownerId, id) {
   if (!isOwner(ownerId,env) || !env.WATCHLIST_KV || !/^-?\\d+$/.test(id)) return;
@@ -766,7 +776,7 @@ async function handleCallback(query, env) {
     }
     await answerCallback(env,query.id);
     if(action.startsWith("approve:")||action.startsWith("reject:")) await handleAdminMembershipCallback(query,env);
-    else if(action.startsWith("members:")) await showMemberList(env,chatId,action.slice(8));
+    else if(action.startsWith("members:")) await showMemberList(env,chatId,Number(action.slice(8))||0);
     else if(action.startsWith("mprof:")) await showMemberProfile(env,chatId,action.slice(6));
     else if(action.startsWith("mrev:")) await changeMemberAccess(env,chatId,action.slice(5),false);
     else if(action.startsWith("mall:")) await changeMemberAccess(env,chatId,action.slice(5),true);
@@ -996,7 +1006,7 @@ async function showConnectionTest(env, chatId) {
     ? `✅ Kraken: متصل (${result.kraken.pairs} جفت معاملاتی)`
     : `❌ Kraken: ${result.kraken.error}`;
 
-  const krakenFutures = result.krakenFutures?.ok
+  const dex = result.dex?.ok\n    ? `✅ DexScreener: متصل (${result.dex.profiles} پروفایل)`\n    : `❌ DexScreener: ${result.dex?.error || "نامشخص"}`;\n\n  const krakenFutures = result.krakenFutures?.ok
     ? `✅ Kraken Futures: متصل (${result.krakenFutures.symbols} نماد)`
     : `❌ Kraken Futures: ${result.krakenFutures?.error || "نامشخص"}`;
 
@@ -1006,7 +1016,7 @@ async function showConnectionTest(env, chatId) {
     "🔌 نتیجه تست اتصال\n\n" +
     coinLore + "\n\n" +
     kraken + "\n\n" +
-    krakenFutures + "\n\n" +
+    krakenFutures + "\n\n" +\n    dex + "\n\n" +
     `نسخه ربات: V${CONFIG.VERSION}`,
     MAIN_MENU
   );
@@ -1200,7 +1210,8 @@ async function testDataSources() {
     version: CONFIG.VERSION,
     coinlore: { ok: false },
     kraken: { ok: false },
-    krakenFutures: { ok: false }
+    krakenFutures: { ok: false },
+    dex: { ok: false }
   };
 
   try {
@@ -1247,7 +1258,7 @@ async function testDataSources() {
     result.krakenFutures = { ok: false, error: error.message };
   }
 
-  return result;
+  try {\n    const profiles = await fetch("https://api.dexscreener.com/token-profiles/latest/v1");\n    if (!profiles.ok) throw new Error("HTTP " + profiles.status);\n    const data = await profiles.json();\n    if (!Array.isArray(data)) throw new Error("ساختار پاسخ نامعتبر است");\n    result.dex = { ok: true, profiles: data.length };\n  } catch (error) { result.dex = { ok: false, error: error.message }; }\n\n  return result;
 }
 
 // ---------------- INDICATORS ----------------
