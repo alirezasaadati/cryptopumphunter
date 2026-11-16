@@ -5,15 +5,17 @@ on:
     branches: [main]
     paths:
       - "src/index.js"
+      - "scripts/smoke-kraken.mjs"
       - ".github/workflows/validate-v390.yml"
   push:
     branches: ["feature/v3.9.0"]
     paths:
       - "src/index.js"
+      - "scripts/smoke-kraken.mjs"
       - ".github/workflows/validate-v390.yml"
 
 jobs:
-  syntax:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -22,5 +24,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Check JavaScript syntax
+      - name: Check Worker JavaScript syntax
         run: node --check src/index.js
+      - name: Check Kraken smoke-test syntax
+        run: node --check scripts/smoke-kraken.mjs
+      - name: Smoke-test public Kraken Futures ticker and candle APIs
+        run: node scripts/smoke-kraken.mjs
