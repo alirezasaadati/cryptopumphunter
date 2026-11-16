@@ -774,12 +774,15 @@ async function handleCallback(query, env) {
     if (!isOwner(chatId,env) || String(query.from?.id)!==String(env.OWNER_ID)) {
       await answerCallback(env,query.id,"⛔ دسترسی غیرمجاز"); return;
     }
-    await answerCallback(env,query.id);
-    if(action.startsWith("approve:")||action.startsWith("reject:")) await handleAdminMembershipCallback(query,env);
-    else if(action.startsWith("members:")) await showMemberList(env,chatId,Number(action.slice(8))||0);
+    if(action.startsWith("approve:")||action.startsWith("reject:")) {
+      await handleAdminMembershipCallback(query,env);
+    } else {
+      await answerCallback(env,query.id);
+      if(action.startsWith("members:")) await showMemberList(env,chatId,Number(action.slice(8))||0);
     else if(action.startsWith("mprof:")) await showMemberProfile(env,chatId,action.slice(6));
     else if(action.startsWith("mrev:")) await changeMemberAccess(env,chatId,action.slice(5),false);
-    else if(action.startsWith("mall:")) await changeMemberAccess(env,chatId,action.slice(5),true);
+      else if(action.startsWith("mall:")) await changeMemberAccess(env,chatId,action.slice(5),true);
+    }
     return;
   }
 
@@ -995,33 +998,24 @@ async function showWatchlist(env, chatId) {
 
 async function showConnectionTest(env, chatId) {
   await sendMessage(env, chatId, "🔌 در حال بررسی اتصال منابع داده...");
-
   const result = await testDataSources();
-
   const coinLore = result.coinlore.ok
     ? `✅ CoinLore: متصل (${result.coinlore.assets} ارز نمونه)`
     : `❌ CoinLore: ${result.coinlore.error}`;
-
   const kraken = result.kraken.ok
     ? `✅ Kraken: متصل (${result.kraken.pairs} جفت معاملاتی)`
     : `❌ Kraken: ${result.kraken.error}`;
-
-  const dex = result.dex?.ok\n    ? `✅ DexScreener: متصل (${result.dex.profiles} پروفایل)`\n    : `❌ DexScreener: ${result.dex?.error || "نامشخص"}`;\n\n  const krakenFutures = result.krakenFutures?.ok
+  const krakenFutures = result.krakenFutures?.ok
     ? `✅ Kraken Futures: متصل (${result.krakenFutures.symbols} نماد)`
     : `❌ Kraken Futures: ${result.krakenFutures?.error || "نامشخص"}`;
-
-  await sendMessage(
-    env,
-    chatId,
-    "🔌 نتیجه تست اتصال\n\n" +
-    coinLore + "\n\n" +
-    kraken + "\n\n" +
-    krakenFutures + "\n\n" +\n    dex + "\n\n" +
-    `نسخه ربات: V${CONFIG.VERSION}`,
-    MAIN_MENU
-  );
+  const dex = result.dex?.ok
+    ? `✅ DexScreener: متصل (${result.dex.profiles} پروفایل)`
+    : `❌ DexScreener: ${result.dex?.error || "نامشخص"}`;
+  await sendMessage(env, chatId,
+    "🔌 نتیجه تست اتصال\n\n" + coinLore + "\n\n" + kraken + "\n\n" +
+    krakenFutures + "\n\n" + dex + "\n\n" +
+    `نسخه ربات: V${CONFIG.VERSION}`, MAIN_MENU);
 }
-
 async function registerWebhook(request, env) {
   if (!env.BOT_TOKEN) {
     return json({ ok: false, error: "BOT_TOKEN تنظیم نشده است." }, 400);
