@@ -1773,7 +1773,7 @@ async function getKrakenFuturesUniverse() {
 }
 
 async function getKrakenFuturesCandles(symbol, interval) {
-  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}`;
+  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}?count=${FUTURES_CONFIG.KLINE_LIMIT}`;
   const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
     `Kraken ${symbol} ${interval}`, FUTURES_CONFIG.CHARTS_URL);
   if (!Array.isArray(data?.candles)) {
@@ -1813,7 +1813,8 @@ function calculateAtr(candles, period = 14) {
 function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   const closes1h=candles1h.map(c=>c.close), closes4h=candles4h.map(c=>c.close);
-  const last=candles1h[candles1h.length-1], price=last.close;
+  const last=candles1h[candles1h.length-1], candleClose=last.close, price=Number(ticker.last);
+  if(!Number.isFinite(price)||price<=0) throw new Error("قیمت زنده قرارداد Kraken معتبر نیست.");
   const e20=ema(closes1h,20), e50=ema(closes1h,50), e20_4h=ema(closes4h,20), e50_4h=ema(closes4h,50);
   const rsiValue=rsi(closes1h,14), atr=calculateAtr(candles1h,14);
   if([e20,e50,e20_4h,e50_4h,rsiValue,atr].some(v=>!Number.isFinite(v))||atr<=0) throw new Error("محاسبه اندیکاتورها معتبر نیست.");
@@ -1832,6 +1833,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
   else if(volumeRatio>=1.1){score+=11;reasons.push("حجم بالاتر از میانگین است");}
   else return {symbol:ticker.symbol,rejected:"حجم کندل تأییدکننده پایین است"};
   const extension=Math.abs(price-e20)/atr;
+  if(Math.abs(price-candleClose)/atr>0.45)return {symbol:ticker.symbol,rejected:"قیمت زنده بیش از حد از قیمت بسته‌شدن کندل تأیید فاصله گرفته است"};
   if(extension>1.35)return {symbol:ticker.symbol,rejected:"قیمت بیش از حد از EMA20 فاصله گرفته؛ ورود تعقیبی رد شد"};
   score+=extension<=0.65?8:4;
   const change=Number(ticker.priceChangePercent)||0;
