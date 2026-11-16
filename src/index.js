@@ -681,7 +681,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         env,
         chatId,
         "👋 سلام! به ربات CRYPTO PUMP HUNTER خوش آمدید.\n\n" +
-        "🚀 این ربات برای بررسی فرصت‌های بازار رمزارز و ارائه سیگنال‌های تحلیلی اسپات و فیوچرز بایننس طراحی شده است.\n\n" +
+        "🚀 این ربات برای بررسی فرصت‌های بازار رمزارز و ارائه سیگنال‌های تحلیلی اسپات و فیوچرز Kraken و کشف توکن‌های تازه با DexScreener طراحی شده است.\n\n" +
         "🔐 برای استفاده از امکانات، ابتدا باید عضویت شما توسط مدیر تأیید شود."
       );
       await requestMembership(env, chatId, message);
