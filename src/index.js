@@ -1844,8 +1844,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
   if(up1h&&up4h&&rsiValue>=50&&rsiValue<=67){side="LONG";score=48;reasons.push("هم‌جهتی روند صعودی در تایم‌فریم‌های ۱ و ۴ ساعته");}
   else if(down1h&&down4h&&rsiValue>=33&&rsiValue<=50){side="SHORT";score=48;reasons.push("هم‌جهتی روند نزولی در تایم‌فریم‌های ۱ و ۴ ساعته");}
   else {
-    if(up1h&&up4h&&rsiValue>=45&&rsiValue<=72) return makeFuturesWatchItem(ticker,"LONG",price,rsiValue,0,"روند صعودی همسو است؛ RSI هنوز برای ورود تأیید نشده");
-    if(down1h&&down4h&&rsiValue>=28&&rsiValue<=55) return makeFuturesWatchItem(ticker,"SHORT",price,rsiValue,0,"روند نزولی همسو است؛ RSI هنوز برای ورود تأیید نشده");
+    if(up1h&&up4h&&rsiValue>=45&&rsiValue<=72) return makeFuturesWatchItem(ticker,"LONG",price,rsiValue,volumeRatio,"روند صعودی همسو است؛ RSI هنوز برای ورود تأیید نشده");
+    if(down1h&&down4h&&rsiValue>=28&&rsiValue<=55) return makeFuturesWatchItem(ticker,"SHORT",price,rsiValue,volumeRatio,"روند نزولی همسو است؛ RSI هنوز برای ورود تأیید نشده");
     return {symbol:ticker.symbol,rejected:"هم‌جهتی روند یا محدوده RSI تأیید نشد"};
   }
   const direction=side==="LONG"?1:-1, candleRange=Math.max(last.high-last.low,Number.EPSILON), body=Math.abs(last.close-last.open);
