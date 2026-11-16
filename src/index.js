@@ -1252,7 +1252,17 @@ async function testDataSources() {
     result.krakenFutures = { ok: false, error: error.message };
   }
 
-  try {\n    const profiles = await fetch("https://api.dexscreener.com/token-profiles/latest/v1");\n    if (!profiles.ok) throw new Error("HTTP " + profiles.status);\n    const data = await profiles.json();\n    if (!Array.isArray(data)) throw new Error("ساختار پاسخ نامعتبر است");\n    result.dex = { ok: true, profiles: data.length };\n  } catch (error) { result.dex = { ok: false, error: error.message }; }\n\n  return result;
+  try {
+    const response = await fetch("https://api.dexscreener.com/token-profiles/latest/v1");
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const profiles = await response.json();
+    if (!Array.isArray(profiles)) throw new Error("ساختار پاسخ نامعتبر است");
+    result.dex = { ok: true, profiles: profiles.length };
+  } catch (error) {
+    result.dex = { ok: false, error: error.message };
+  }
+
+  return result;
 }
 
 // ---------------- INDICATORS ----------------
