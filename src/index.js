@@ -710,6 +710,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/start - نمایش منوی اصلی\n" +
         "/scan - اسکن دستی بازار\n" +
         "/futures - دریافت سیگنال فیوچرز کراکن\n" +
+        "/dex - بررسی توکن‌های تازه DexScreener\n" +
         "/status - وضعیت ربات\n" +
         "/help - راهنما\n\n" +
         "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
