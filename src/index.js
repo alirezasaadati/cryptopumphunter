@@ -39,8 +39,10 @@ const MAIN_MENU = {
       { text: "📡 وضعیت ربات", callback_data: "status" }
     ],
     [
-      { text: "🔌 تست اتصال", callback_data: "test" },
-      { text: "🔍 دکس اسکرینر", callback_data: "dex" }
+      { text: "🔌 تست اتصال", callback_data: "test" }
+    ],
+    [
+      { text: "👥 دعوت از دوستان", callback_data: "invite" }
     ],
     [
       { text: "ℹ️ درباره", callback_data: "about" }
@@ -465,7 +467,7 @@ async function handleAdminMembershipCallback(query, env) {
         applicantId,
         "🎉 به خانواده CRYPTO PUMP HUNTER خوش آمدید!\n\n" +
         "✅ عضویت شما با موفقیت تأیید شد و دسترسی شما فعال است.\n\n" +
-        "🚀 از این لحظه می‌توانید از اسکن اسپات، سیگنال‌های تحلیلی فیوچرز Kraken و دکس اسکرینر استفاده کنید.\n\n" +
+        "🚀 از این لحظه می‌توانید از اسکن بازار اسپات و سیگنال‌های تحلیلی فیوچرز Kraken استفاده کنید.\n\n" +
         "⚠️ سیگنال‌ها صرفاً تحلیلی هستند؛ قبل از هر معامله مدیریت ریسک را رعایت کنید."
       );
       await showMenu(env, applicantId);
@@ -615,54 +617,22 @@ async function changeMemberAccess(env,ownerId,id,allow) {
 }
 
 // ---------------- MAIN MENU ----------------
-
-// DexScreener discovery scanner: latest profiles are filtered by liquidity, volume and FDV.
-const DEX_LIMITS={tokens:25,liquidity:25000,volume:30000,minFdv:50000,maxFdv:500000000,ageDays:60};
-async function dexJson(url){
-  const response=await fetch(url,{headers:{"accept":"application/json"}});
-  if(!response.ok)throw new Error(`DexScreener HTTP ${response.status}`);
-  return response.json();
+function menuForChat(env, chatId) {
+  const keyboard = MAIN_MENU.inline_keyboard.map(row => row.slice());
+  if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0, [
+    { text: "👥 مدیریت اعضا", callback_data: "members:0" }
+  ]);
+  return { inline_keyboard: keyboard };
 }
-async function runDexScreenerScan(){
-  const profiles=await dexJson("https://api.dexscreener.com/token-profiles/latest/v1");
-  if(!Array.isArray(profiles))throw new Error("پاسخ فهرست توکن‌های تازه معتبر نیست.");
-  const unique=[...new Map(profiles.filter(x=>x.chainId&&x.tokenAddress).map(x=>[`${x.chainId}:${x.tokenAddress}`,x])).values()].slice(0,DEX_LIMITS.tokens);
-  const results=await mapLimit(unique,3,async profile=>{
-    const pairs=await dexJson(`https://api.dexscreener.com/token-pairs/v1/${encodeURIComponent(profile.chainId)}/${encodeURIComponent(profile.tokenAddress)}`);
-    const now=Date.now();
-    const candidates=(Array.isArray(pairs)?pairs:[]).map(p=>{
-      const fdv=Number(p.marketCap||p.fdv||0),liq=Number(p.liquidity?.usd||0),vol=Number(p.volume?.h24||0),created=Number(p.pairCreatedAt||0);
-      const age=created?(now-created)/86400000:null,buys=Number(p.txns?.h24?.buys||0),sells=Number(p.txns?.h24?.sells||0),change=Number(p.priceChange?.h24||0);
-      if(fdv<DEX_LIMITS.minFdv||fdv>DEX_LIMITS.maxFdv||liq<DEX_LIMITS.liquidity||vol<DEX_LIMITS.volume||(age!==null&&age>DEX_LIMITS.ageDays))return null;
-      let score=35+(liq>=100000?15:liq>=50000?10:0)+(vol/liq>=1?15:vol/liq>=.4?9:0)+(buys>sells*1.2?10:0)+(change>0&&change<25?8:0)+(change>0&&change<60?7:0)+(age!==null&&age<=14?5:0);
-      return {p,fdv,liq,vol,age,buys,sells,change,score:Math.min(100,score)};
-    }).filter(Boolean).sort((a,b)=>b.score-a.score);
-    return candidates[0]?{profile,...candidates[0]}:null;
-  });
-  const picks=results.filter(Boolean).sort((a,b)=>b.score-a.score).slice(0,8);
-  let report=`🔍 DexScreener | فرصت‌های توکن تازه\nپروفایل‌های بررسی‌شده: ${unique.length}\nواجد شرایط: ${picks.length}\n\n`;
-  for(const [i,x] of picks.entries()){
-    const p=x.p,b=p.baseToken||{};
-    report+=`${i+1}. ${b.name||"Unknown"} (${b.symbol||"?"})\nشبکه: ${x.profile.chainId}\nقرارداد: ${x.profile.tokenAddress}\nFDV/مارکت‌کپ: $${Math.round(x.fdv).toLocaleString("en-US")}\nقیمت: $${p.priceUsd||"نامشخص"}\nنقدینگی: $${Math.round(x.liq).toLocaleString("en-US")}\nحجم ۲۴ساعته: $${Math.round(x.vol).toLocaleString("en-US")}\nسن جفت: ${x.age===null?"نامشخص":x.age.toFixed(1)+" روز"}\nتغییر ۲۴ساعته: ${x.change.toFixed(1)}%\nخرید/فروش: ${x.buys}/${x.sells}\nامتیاز غربالگری: ${x.score}/100\nDexScreener: ${p.url||"ناموجود"}\n━━━━━━━━━━━━\n`;
-  }
-  if(!picks.length)report+="این بار توکنی با حداقل نقدینگی و حجم تعیین‌شده پیدا نشد.\n";
-  report+="\n⚠️ این فهرست غربالگری است، نه توصیه قطعی خرید. DexScreener امنیت قرارداد، قفل نقدینگی، مالیات فروش یا امکان فروش را تضمین نمی‌کند؛ پیش از خرید بررسی مستقل لازم است.";
-  return {report,picks,checked:unique.length};
-}
-async function runDexScreenerForChat(env,chatId){
-  if(!(await isApproved(chatId,env))){await sendMessage(env,chatId,"⛔ دسترسی شما فعال نیست.");return;}
-  await sendMessage(env,chatId,"🔍 در حال بررسی توکن‌های تازه DexScreener بر اساس مارکت‌کپ، نقدینگی و حجم معاملات...");
-  try{
-    const result=await runDexScreenerScan();
-    await sendLongMessage(env,chatId,result.report);
-    if(env.WATCHLIST_KV)await env.WATCHLIST_KV.put("last_dex_scan",JSON.stringify({timestamp:Date.now(),checked:result.checked,picks:result.picks.map(x=>({chainId:x.profile.chainId,tokenAddress:x.profile.tokenAddress,fdv:x.fdv,liquidity:x.liq,volume:x.vol,score:x.score,url:x.p.url}))}));
-    await sendMessage(env,chatId,"پایان بررسی DexScreener.",MAIN_MENU);
-  }catch(e){await sendMessage(env,chatId,"❌ خطا در دریافت داده DexScreener:\n"+String(e.message||e).slice(0,700),MAIN_MENU);}
+async function showMenu(env, chatId) {
+  await sendMessage(env, chatId,
+    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\\n\\nاز منوی زیر گزینه موردنظر را انتخاب کن:`,
+    menuForChat(env, chatId));
 }
 
 async function showMenu(env, chatId) {
   await sendMessage(env, chatId,
-    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\n\nاز منوی زیر گزینه موردنظر را انتخاب کن:`, MAIN_MENU);
+    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\n\nاز منوی زیر گزینه موردنظر را انتخاب کن:`, menuForChat(env, chatId));
 }
 
 async function handleTelegramCommand(command, chatId, env, message) {
@@ -674,7 +644,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         env,
         chatId,
         "👋 سلام! به ربات CRYPTO PUMP HUNTER خوش آمدید.\n\n" +
-        "🚀 این ربات برای بررسی فرصت‌های بازار رمزارز و ارائه سیگنال‌های تحلیلی اسپات و فیوچرز Kraken و کشف توکن‌های تازه با DexScreener طراحی شده است.\n\n" +
+        "🚀 این ربات برای بررسی فرصت‌های بازار رمزارز و ارائه سیگنال‌های تحلیلی اسپات و فیوچرز Kraken طراحی شده است.\n\n" +
         "🔐 برای استفاده از امکانات، ابتدا باید عضویت شما توسط مدیر تأیید شود."
       );
       await requestMembership(env, chatId, message);
@@ -703,11 +673,10 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/start - نمایش منوی اصلی\n" +
         "/scan - اسکن دستی بازار\n" +
         "/futures - دریافت سیگنال فیوچرز کراکن\n" +
-        "/dex - بررسی توکن‌های تازه DexScreener\n" +
         "/status - وضعیت ربات\n" +
         "/help - راهنما\n\n" +
         "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
-        MAIN_MENU
+        menuForChat(env, chatId)
       );
       return;
     }
@@ -727,16 +696,11 @@ async function handleTelegramCommand(command, chatId, env, message) {
       return;
     }
 
-    if (command === "/dex") {
-      await runDexScreenerForChat(env, chatId);
-      return;
-    }
-
     await sendMessage(
       env,
       chatId,
       "برای استفاده از ربات، /start را بفرست.",
-      MAIN_MENU
+      menuForChat(env, chatId)
     );
   } catch (error) {
     try {
@@ -745,7 +709,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         chatId,
         "❌ خطا در اجرای دستور:\n" +
         String(error.message || "Unknown error").slice(0, 1000),
-        MAIN_MENU
+        menuForChat(env, chatId)
       );
     } catch {
       // Ignore Telegram reporting errors.
@@ -795,6 +759,14 @@ async function handleCallback(query, env) {
       await showMenu(env, chatId);
       return;
     }
+    if (action === "invite") {
+      await sendMessage(env, chatId,
+        "🚀 برای حمایت از توسعه و فعال ماندن Crypto Pump Hunter و همچنین بهره‌مندی از مزایای احتمالی ثبت‌نام، از طریق لینک اختصاصی زیر عضو صرافی LBank شوید.\\n\\n" +
+        "🎁 با ثبت‌نام از این لینک، از فرصت دریافت بونوس‌ها و طرح‌های تشویقی صرافی مطلع شوید.\\n\\n" +
+        "🔗 لینک ثبت‌نام:\\nhttps://www.lbk.pub/ref/67XF8\\n\\n" +
+        "❤️ حمایت شما به ادامه توسعه امکانات و خدمات بهتر ربات کمک می‌کند.", BACK_MENU);
+      return;
+    }
 
     if (action === "scan") {
       await runScanForChat(env, chatId);
@@ -803,11 +775,6 @@ async function handleCallback(query, env) {
 
     if (action === "futures") {
       await runFuturesSignalsForChat(env, chatId);
-      return;
-    }
-
-    if (action === "dex") {
-      await runDexScreenerForChat(env, chatId);
       return;
     }
 
@@ -842,7 +809,7 @@ async function handleCallback(query, env) {
       env,
       chatId,
       "❌ خطا:\n" + String(error.message || "Unknown error").slice(0, 1000),
-      MAIN_MENU
+      menuForChat(env, chatId)
     );
   }
 }
@@ -867,7 +834,7 @@ async function runScanForChat(env, chatId) {
     env,
     chatId,
     "عملیات اسکن به پایان رسید.",
-    MAIN_MENU
+    menuForChat(env, chatId)
   );
 }
 
@@ -893,10 +860,10 @@ async function showStatus(env, chatId) {
     `🟢 وضعیت Crypto Pump Hunter\n\n` +
     `نسخه: V${CONFIG.VERSION}\n` +
     "حالت اسکن: فقط دستی\n" +
-    "اسپات: CoinLore و Kraken | فیوچرز: Kraken Derivatives | توکن‌های تازه: DexScreener\n" +
+    "اسپات: CoinLore و Kraken | فیوچرز: Kraken Derivatives\n" +
     `اتصال KV: ${env.WATCHLIST_KV ? "فعال" : "غیرفعال"}\n` +
     `آخرین اسکن ذخیره‌شده: ${lastScan}`,
-    MAIN_MENU
+    menuForChat(env, chatId)
   );
 }
 
@@ -924,7 +891,7 @@ async function showLastAnalysis(env, chatId) {
       env,
       chatId,
       "⚠️ اتصال KV فعال نیست. ابتدا Binding را بررسی کن.",
-      MAIN_MENU
+      menuForChat(env, chatId)
     );
     return;
   }
@@ -936,13 +903,13 @@ async function showLastAnalysis(env, chatId) {
       env,
       chatId,
       "هنوز گزارشی ذخیره نشده است.\nابتدا یک‌بار اسکن بازار را اجرا کن.",
-      MAIN_MENU
+      menuForChat(env, chatId)
     );
     return;
   }
 
   await sendLongMessage(env, chatId, saved.report);
-  await sendMessage(env, chatId, "پایان آخرین گزارش ذخیره‌شده.", MAIN_MENU);
+  await sendMessage(env, chatId, "پایان آخرین گزارش ذخیره‌شده.", menuForChat(env, chatId));
 }
 
 async function showWatchlist(env, chatId) {
@@ -951,7 +918,7 @@ async function showWatchlist(env, chatId) {
       env,
       chatId,
       "⚠️ اتصال KV فعال نیست. Binding را در تنظیمات Worker بررسی کن.",
-      MAIN_MENU
+      menuForChat(env, chatId)
     );
     return;
   }
@@ -963,7 +930,7 @@ async function showWatchlist(env, chatId) {
       env,
       chatId,
       "👀 واچ‌لیست خالی است.\nپس از اجرای اسکن، ارزهای منتخب اینجا ذخیره می‌شوند.",
-      MAIN_MENU
+      menuForChat(env, chatId)
     );
     return;
   }
@@ -987,7 +954,7 @@ async function showWatchlist(env, chatId) {
 
   text += "⚠️ واچ‌لیست سیگنال قطعی خرید نیست.";
   await sendLongMessage(env, chatId, text);
-  await sendMessage(env, chatId, "پایان واچ‌لیست.", MAIN_MENU);
+  await sendMessage(env, chatId, "پایان واچ‌لیست.", menuForChat(env, chatId));
 }
 
 async function showConnectionTest(env, chatId) {
@@ -1002,13 +969,10 @@ async function showConnectionTest(env, chatId) {
   const krakenFutures = result.krakenFutures?.ok
     ? `✅ Kraken Futures: متصل (${result.krakenFutures.symbols} نماد)`
     : `❌ Kraken Futures: ${result.krakenFutures?.error || "نامشخص"}`;
-  const dex = result.dex?.ok
-    ? `✅ DexScreener: متصل (${result.dex.profiles} پروفایل)`
-    : `❌ DexScreener: ${result.dex?.error || "نامشخص"}`;
   await sendMessage(env, chatId,
     "🔌 نتیجه تست اتصال\n\n" + coinLore + "\n\n" + kraken + "\n\n" +
-    krakenFutures + "\n\n" + dex + "\n\n" +
-    `نسخه ربات: V${CONFIG.VERSION}`, MAIN_MENU);
+    krakenFutures + "\n\n" +
+    `نسخه ربات: V${CONFIG.VERSION}`, menuForChat(env, chatId));
 }
 async function registerWebhook(request, env) {
   if (!env.BOT_TOKEN) {
@@ -1769,7 +1733,7 @@ const FUTURES_CONFIG = {
   MIN_QUOTE_VOLUME: 5_000_000,
   KLINE_LIMIT: 120,
   MIN_CANDLES: 60,
-  MIN_SCORE: 72,
+  MIN_SCORE: 82,
   INTERVAL: "1h",
   CONFIRM_INTERVAL: "4h"
 };
@@ -1861,107 +1825,48 @@ function calculateAtr(candles, period = 14) {
 }
 
 function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
-  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
-    throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
-  }
-  const closes1h = candles1h.map(c => c.close);
-  const closes4h = candles4h.map(c => c.close);
-  const last = candles1h[candles1h.length - 1];
-  const price = last.close;
-  const e20 = ema(closes1h, 20);
-  const e50 = ema(closes1h, 50);
-  const e20_4h = ema(closes4h, 20);
-  const e50_4h = ema(closes4h, 50);
-  const rsiValue = rsi(closes1h, 14);
-  const atr = calculateAtr(candles1h, 14);
-  if ([e20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) {
-    throw new Error("محاسبه اندیکاتورها معتبر نیست.");
-  }
-
-  const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume));
-  const volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
-  const up1h = e20 > e50 && price > e20;
-  const down1h = e20 < e50 && price < e20;
-  const up4h = e20_4h > e50_4h;
-  const down4h = e20_4h < e50_4h;
-  let side = null;
-  let score = 0;
-  const reasons = [];
-
-  if (up1h && up4h && rsiValue >= 48 && rsiValue <= 69) {
-    side = "LONG";
-    score = 45;
-    reasons.push("روند ۱ساعته و ۴ساعته صعودی است", "قیمت بالای EMA20 قرار دارد");
-    score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
-  } else if (down1h && down4h && rsiValue >= 31 && rsiValue <= 52) {
-    side = "SHORT";
-    score = 45;
-    reasons.push("روند ۱ساعته و ۴ساعته نزولی است", "قیمت زیر EMA20 قرار دارد");
-    score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
-  } else {
-    return { symbol: ticker.symbol, rejected: "هم‌جهتی روند ۱ساعته و ۴ساعته یا محدوده RSI تأیید نشد" };
-  }
-
-  if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
-  else if (volumeRatio >= 1.0) { score += 12; reasons.push("حجم نزدیک یا بالاتر از میانگین است"); }
-  else { score += 4; reasons.push("حجم کمتر از میانگین است"); }
-
-  const change = Number(ticker.priceChangePercent) || 0;
-  if ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) score += 8;
-  else score += 3;
-
-  const funding = Number(ticker.premium?.lastFundingRate);
-  if (Number.isFinite(funding)) {
-    if (side === "LONG" && funding > 0.001) { score -= 5; reasons.push("فاندینگ مثبت و نسبتاً بالا؛ ریسک ازدحام لانگ"); }
-    else if (side === "SHORT" && funding < -0.001) { score -= 5; reasons.push("فاندینگ منفی و نسبتاً پایین؛ ریسک ازدحام شورت"); }
-    else reasons.push("فاندینگ در محدوده افراطی نیست");
-  } else {
-    reasons.push("داده فاندینگ در دسترس نبود");
-  }
-
-  const swing = candles1h.slice(-8, -1);
-  const swingLow = Math.min(...swing.map(c => c.low));
-  const swingHigh = Math.max(...swing.map(c => c.high));
-  const entry = price;
-  let stop = side === "LONG"
-    ? Math.min(swingLow, entry - atr * 1.5)
-    : Math.max(swingHigh, entry + atr * 1.5);
-  // Enforce a positive, bounded risk distance; reject malformed levels.
-  const risk = side === "LONG" ? entry - stop : stop - entry;
-  const riskPct = risk / entry;
-  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
-    return { symbol: ticker.symbol, rejected: "فاصله حد ضرر غیرمنطقی است؛ سیگنال صادر نشد" };
-  }
-
-  const direction = side === "LONG" ? 1 : -1;
-  const target1 = entry + direction * risk * 1.5;
-  const target2 = entry + direction * risk * 2.5;
-  const target3 = entry + direction * risk * 3.5;
-  score = Math.max(0, Math.min(100, Math.round(score)));
-  const eligible = score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
-  return {
-    symbol: ticker.symbol,
-    side,
-    score,
-    price,
-    entry,
-    stop,
-    target1,
-    target2,
-    target3,
-    rewardRisk: 1.5,
-    rsi: rsiValue,
-    ema20: e20,
-    ema50: e50,
-    atr,
-    volumeRatio,
-    funding: Number.isFinite(funding) ? funding : null,
-    quoteVolume: Number(ticker.quoteVolume) || 0,
-    change24h: change,
-    candleTime: last.time,
-    reasons,
-    eligible
-  };
+  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
+  const closes1h=candles1h.map(c=>c.close), closes4h=candles4h.map(c=>c.close);
+  const last=candles1h[candles1h.length-1], price=last.close;
+  const e20=ema(closes1h,20), e50=ema(closes1h,50), e20_4h=ema(closes4h,20), e50_4h=ema(closes4h,50);
+  const rsiValue=rsi(closes1h,14), atr=calculateAtr(candles1h,14);
+  if([e20,e50,e20_4h,e50_4h,rsiValue,atr].some(v=>!Number.isFinite(v))||atr<=0) throw new Error("محاسبه اندیکاتورها معتبر نیست.");
+  const avgVol=average(candles1h.slice(-21,-1).map(c=>c.volume)), volumeRatio=avgVol>0?last.volume/avgVol:0;
+  const up1h=e20>e50&&price>e20, down1h=e20<e50&&price<e20, up4h=e20_4h>e50_4h, down4h=e20_4h<e50_4h;
+  let side=null,score=0; const reasons=[];
+  if(up1h&&up4h&&rsiValue>=50&&rsiValue<=67){side="LONG";score=48;reasons.push("هم‌جهتی روند صعودی در تایم‌فریم‌های ۱ و ۴ ساعته");}
+  else if(down1h&&down4h&&rsiValue>=33&&rsiValue<=50){side="SHORT";score=48;reasons.push("هم‌جهتی روند نزولی در تایم‌فریم‌های ۱ و ۴ ساعته");}
+  else return {symbol:ticker.symbol,rejected:"هم‌جهتی روند یا محدوده RSI تأیید نشد"};
+  const direction=side==="LONG"?1:-1, candleRange=Math.max(last.high-last.low,Number.EPSILON), body=Math.abs(last.close-last.open);
+  const closeStrength=side==="LONG"?(last.close-last.low)/candleRange:(last.high-last.close)/candleRange;
+  const confirmed=side==="LONG"?last.close>last.open&&closeStrength>=0.65:last.close<last.open&&closeStrength>=0.65;
+  if(!confirmed||body<atr*0.20)return {symbol:ticker.symbol,rejected:"کندل بسته‌شده قدرت و تأیید کافی برای ورود ندارد"};
+  score+=12;reasons.push("کندل بسته‌شده در جهت معامله تأیید شده است");
+  if(volumeRatio>=1.5){score+=16;reasons.push("حجم حداقل ۱.۵ برابر میانگین است");}
+  else if(volumeRatio>=1.1){score+=11;reasons.push("حجم بالاتر از میانگین است");}
+  else return {symbol:ticker.symbol,rejected:"حجم کندل تأییدکننده پایین است"};
+  const extension=Math.abs(price-e20)/atr;
+  if(extension>1.35)return {symbol:ticker.symbol,rejected:"قیمت بیش از حد از EMA20 فاصله گرفته؛ ورود تعقیبی رد شد"};
+  score+=extension<=0.65?8:4;
+  const change=Number(ticker.priceChangePercent)||0;
+  score+=((side==="LONG"&&change>0)||(side==="SHORT"&&change<0))?5:2;
+  const funding=Number(ticker.premium?.lastFundingRate);
+  if(Number.isFinite(funding)){
+    if((side==="LONG"&&funding>0.001)||(side==="SHORT"&&funding< -0.001)){score-=6;reasons.push("فاندینگ نامتوازن و احتمال ازدحام سمت معامله");}
+    else{score+=3;reasons.push("فاندینگ مانع جدی در جهت انتخابی نشان نمی‌دهد");}
+  }else reasons.push("فاندینگ در دسترس نبود؛ امتیاز اضافه منظور نشد");
+  const structure=candles1h.slice(-13,-1), swingLow=Math.min(...structure.map(c=>c.low)), swingHigh=Math.max(...structure.map(c=>c.high));
+  const entry=price, structuralStop=side==="LONG"?swingLow-atr*0.20:swingHigh+atr*0.20, volatilityStop=side==="LONG"?entry-atr*1.35:entry+atr*1.35;
+  const stop=side==="LONG"?Math.min(structuralStop,volatilityStop):Math.max(structuralStop,volatilityStop);
+  const risk=side==="LONG"?entry-stop:stop-entry, riskPct=risk/entry;
+  if(!Number.isFinite(risk)||risk<=0||riskPct<0.0015||riskPct>0.05)return {symbol:ticker.symbol,rejected:"فاصله حد ضرر خارج از محدوده منطقی است"};
+  const target1=entry+direction*risk*1.5,target2=entry+direction*risk*2.2,target3=entry+direction*risk*3.0,rewardRisk=Math.abs(target2-entry)/risk;
+  score=Math.max(0,Math.min(100,Math.round(score)));
+  const eligible=score>=FUTURES_CONFIG.MIN_SCORE&&volumeRatio>=1.1&&rewardRisk>=2.0;
+  if(!eligible)reasons.push("امتیاز یا نسبت سود به ریسک به حد نصاب نرسید");
+  return {symbol:ticker.symbol,side,score,price,entry,stop,target1,target2,target3,rewardRisk,rsi:rsiValue,ema20:e20,ema50:e50,atr,volumeRatio,
+    funding:Number.isFinite(funding)?funding:null,quoteVolume:Number(ticker.quoteVolume)||0,change24h:change,candleTime:last.time,reasons,eligible,
+    entryZoneLow:entry-atr*0.15,entryZoneHigh:entry+atr*0.15,invalidation:side==="LONG"?"بسته‌شدن کندل ۱ساعته زیر حد ضرر":"بسته‌شدن کندل ۱ساعته بالای حد ضرر"};
 }
 
 function formatFuturesSignal(item) {
@@ -2054,12 +1959,12 @@ async function runFuturesSignalsForChat(env, chatId) {
   try {
     const result = await runFuturesSignalScan(env);
     await sendLongMessage(env, chatId, result.report);
-    await sendMessage(env, chatId, "پایان بررسی فیوچرز.", MAIN_MENU);
+    await sendMessage(env, chatId, "پایان بررسی فیوچرز.", menuForChat(env, chatId));
   } catch (error) {
     await sendMessage(env, chatId,
       "❌ دریافت یا تحلیل داده Kraken Futures ناموفق بود.\n" +
       String(error.message || "خطای ناشناخته").slice(0, 900) +
-      "\n\nدر این وضعیت هیچ سیگنالی ساخته نمی‌شود.", MAIN_MENU
+      "\n\nدر این وضعیت هیچ سیگنالی ساخته نمی‌شود.", menuForChat(env, chatId)
     );
   }
 }
