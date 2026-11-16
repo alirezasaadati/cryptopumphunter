@@ -1,0 +1,26 @@
+name: Validate Crypto Pump Hunter v3.9.0
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/index.js"
+      - ".github/workflows/validate-v390.yml"
+  push:
+    branches: ["feature/v3.9.0"]
+    paths:
+      - "src/index.js"
+      - ".github/workflows/validate-v390.yml"
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check JavaScript syntax
+        run: node --check src/index.js
