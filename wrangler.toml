@@ -6,3 +6,4 @@ compatibility_date = "2026-11-15"
 binding = "WATCHLIST_KV"
 id = "dab441cdffc0460faeb497cee6edd314"
 
+# No scheduled trigger: the worker runs only when requested.
