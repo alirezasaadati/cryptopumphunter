@@ -6,7 +6,9 @@ import {
   isKrakenPerpetualTicker,
   calculateAtr,
   analyzeFuturesSymbol,
-  getKrakenFuturesCandles
+  getKrakenFuturesCandles,
+  createPaperPosition,
+  applyPaperPrice
 } from "../src/index.js";
 
 function makeCandles({ count = 120, slope = 0.015, base = 100, volume = 100 } = {}) {
@@ -146,4 +148,26 @@ test("paper exit simulation resolves same-candle stop and target as stop first",
   assert.equal(trade.targetHits, 0);
   assert.equal(trade.exitReason, "STOP");
   assert.equal(trade.netR, -1);
+});
+
+test("paper position records entry and closes 40/35/25 scale-outs with fees", () => {
+  const p = createPaperPosition({symbol:"PF_TESTUSD",side:"LONG",entry:100,stop:99,target1:101.5,target2:102.2,target3:103,candleTime:123},1000);
+  assert.equal(p.status,"OPEN");
+  let result = applyPaperPrice(p,101.5,2000);
+  assert.equal(result.position.targetHits,1);
+  assert.ok(result.position.remaining > 0.59 && result.position.remaining < 0.61);
+  result = applyPaperPrice(result.position,102.2,3000);
+  result = applyPaperPrice(result.position,103,4000);
+  assert.equal(result.position.status,"CLOSED");
+  assert.equal(result.position.exitReason,"TARGETS");
+  assert.equal(result.position.remaining,0);
+  assert.ok(result.position.realizedR > 1.8);
+});
+
+test("paper stop closes the remaining position and records a loss", () => {
+  const p = createPaperPosition({symbol:"PF_TESTUSD",side:"SHORT",entry:100,stop:101,target1:98.5,target2:97.8,target3:97,candleTime:456},1000);
+  const result = applyPaperPrice(p,101.2,2000);
+  assert.equal(result.position.status,"CLOSED");
+  assert.equal(result.position.exitReason,"STOP");
+  assert.ok(result.position.realizedR < 0);
 });

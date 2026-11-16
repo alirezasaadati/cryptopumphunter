@@ -1,3 +1,6 @@
 name = "cryptopumphunter"
 main = "src/index.js"
 compatibility_date = "2026-11-15"
+
+[triggers]
+crons = ["*/15 * * * *"]

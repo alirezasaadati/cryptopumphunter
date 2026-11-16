@@ -57,6 +57,9 @@ const BACK_MENU = {
 };
 
 export default {
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(runPaperTradingCycle(env));
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
@@ -669,6 +672,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/scan - اسکن دستی بازار\n" +
         "/futures - دریافت سیگنال فیوچرز کراکن\n" +
         "/status - وضعیت ربات\n" +
+        "/paperstatus - گزارش Paper Trading (فقط Owner)\n" +
         "/help - راهنما\n\n" +
         "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
         menuForChat(env, chatId)
@@ -688,6 +692,11 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     if (command === "/futures") {
       await runFuturesSignalsForChat(env, chatId);
+      return;
+    }
+
+    if (command === "/paperstatus") {
+      await showPaperStatus(env, chatId);
       return;
     }
 
@@ -1959,6 +1968,117 @@ async function runFuturesSignalsForChat(env, chatId) {
   }
 }
 
+// ---------------- PAPER TRADING (SIMULATED, NO ORDERS) ----------------
+const PAPER_KEY = "paper:portfolio:v1";
+const PAPER_CONFIG = { FEE: 0.0005, SLIPPAGE: 0.0003, TARGET_WEIGHTS: [0.40, 0.35, 0.25], MAX_HISTORY: 100 };
+
+function createPaperPosition(signal, now = Date.now()) {
+  const risk = Math.abs(signal.entry - signal.stop);
+  if (!Number.isFinite(risk) || risk <= 0) return null;
+  const direction = signal.side === "LONG" ? 1 : -1;
+  const entryCostR = ((PAPER_CONFIG.FEE + PAPER_CONFIG.SLIPPAGE) * signal.entry) / risk;
+  return {
+    id: signal.symbol + ":" + signal.side + ":" + signal.candleTime,
+    symbol: signal.symbol, side: signal.side, entry: signal.entry, stop: signal.stop,
+    targets: [signal.target1, signal.target2, signal.target3],
+    candleTime: signal.candleTime, openedAt: now, direction, risk,
+    remaining: 1, targetHits: 0, realizedR: -entryCostR, status: "OPEN"
+  };
+}
+
+function applyPaperPrice(position, price, now = Date.now()) {
+  if (!position || position.status !== "OPEN" || !Number.isFinite(price) || price <= 0) return { position, events: [] };
+  const events = [];
+  const adverse = position.direction === 1 ? price <= position.stop : price >= position.stop;
+  if (adverse) {
+    const fraction = position.remaining;
+    const grossR = fraction * position.direction * (price - position.entry) / position.risk;
+    const costsR = fraction * (PAPER_CONFIG.FEE + PAPER_CONFIG.SLIPPAGE) * (position.entry + price) / position.risk;
+    position.realizedR += grossR - costsR;
+    position.remaining = 0; position.status = "CLOSED"; position.closedAt = now; position.exitReason = "STOP";
+    events.push({ type: "STOP", symbol: position.symbol, side: position.side, price, netR: position.realizedR });
+    return { position, events };
+  }
+  while (position.targetHits < 3 && position.remaining > 0) {
+    const target = position.targets[position.targetHits];
+    const reached = position.direction === 1 ? price >= target : price <= target;
+    if (!reached) break;
+    const fraction = Math.min(position.remaining, PAPER_CONFIG.TARGET_WEIGHTS[position.targetHits]);
+    const grossR = fraction * position.direction * (target - position.entry) / position.risk;
+    const costsR = fraction * (PAPER_CONFIG.FEE + PAPER_CONFIG.SLIPPAGE) * (position.entry + target) / position.risk;
+    position.realizedR += grossR - costsR;
+    position.remaining = Math.max(0, position.remaining - fraction);
+    position.targetHits++;
+    events.push({ type: "TARGET" + position.targetHits, symbol: position.symbol, side: position.side, price: target, netR: position.realizedR });
+  }
+  if (position.remaining < 1e-8) {
+    position.remaining = 0; position.status = "CLOSED"; position.closedAt = now; position.exitReason = "TARGETS";
+    events.push({ type: "CLOSED", symbol: position.symbol, side: position.side, price, netR: position.realizedR });
+  }
+  return { position, events };
+}
+
+async function runPaperTradingCycle(env) {
+  if (!env.WATCHLIST_KV || !env.OWNER_ID) throw new Error("WATCHLIST_KV یا OWNER_ID تنظیم نیست.");
+  const lockKey = "paper:cycle:lock";
+  if (await env.WATCHLIST_KV.get(lockKey)) return { skipped: true, events: [] };
+  await env.WATCHLIST_KV.put(lockKey, String(Date.now()), { expirationTtl: 240 });
+  try {
+    const state = await env.WATCHLIST_KV.get(PAPER_KEY, "json") || { version: 1, positions: [], history: [], cycles: 0 };
+    const scan = await runFuturesSignalScan(env);
+    const tickerData = await krakenFuturesJson("/tickers", "Kraken Futures paper prices");
+    const prices = new Map((tickerData.tickers || []).map(t => [t.symbol, Number(t.last)]));
+    const events = [];
+    const stillOpen = [];
+    for (const position of state.positions) {
+      const price = prices.get(position.symbol);
+      if (Number.isFinite(price) && price > 0) events.push(...applyPaperPrice(position, price).events);
+      if (position.status === "OPEN") stillOpen.push(position);
+      else state.history.push(position);
+    }
+    const openIds = new Set(stillOpen.map(p => p.id));
+    for (const signal of scan.signals) {
+      const position = createPaperPosition(signal);
+      if (!position || openIds.has(position.id) || state.history.some(p => p.id === position.id)) continue;
+      stillOpen.push(position); openIds.add(position.id);
+      events.push({ type: "OPEN", symbol: position.symbol, side: position.side, price: position.entry, netR: position.realizedR });
+    }
+    state.positions = stillOpen;
+    state.history = state.history.slice(-PAPER_CONFIG.MAX_HISTORY);
+    state.cycles = (state.cycles || 0) + 1;
+    state.lastCycleAt = Date.now();
+    state.lastScanSignals = scan.signals.length;
+    await env.WATCHLIST_KV.put(PAPER_KEY, JSON.stringify(state));
+    if (events.length) {
+      const summary = events.map(e => {
+        const label = e.type === "OPEN" ? "ورود فرضی" : e.type.startsWith("TARGET") ? e.type : e.type === "STOP" ? "حد ضرر" : "بسته شد";
+        return "• " + label + ": " + e.symbol + " " + e.side + " | قیمت " + formatPrice(e.price) + " | نتیجه تجمعی " + e.netR.toFixed(2) + "R";
+      }).join("\n");
+      await sendMessage(env, env.OWNER_ID, "🧪 گزارش Paper Trading\n━━━━━━━━━━━━━━━━━━\n" + summary);
+    }
+    return { skipped: false, events, open: state.positions.length, closed: state.history.length, cycles: state.cycles };
+  } finally {
+    await env.WATCHLIST_KV.delete(lockKey);
+  }
+}
+
+async function showPaperStatus(env, chatId) {
+  if (!isOwner(chatId, env)) { await sendMessage(env, chatId, "⛔ فقط Owner به گزارش Paper Trading دسترسی دارد."); return; }
+  const state = await env.WATCHLIST_KV?.get(PAPER_KEY, "json");
+  if (!state) { await sendMessage(env, chatId, "🧪 Paper Trading هنوز چرخه‌ای اجرا نکرده است."); return; }
+  const closed = state.history || [];
+  const wins = closed.filter(p => p.realizedR > 0).length;
+  const totalR = closed.reduce((sum, p) => sum + p.realizedR, 0);
+  await sendMessage(env, chatId,
+    "🧪 وضعیت Paper Trading\n━━━━━━━━━━━━━━━━━━\n" +
+    "چرخه‌ها: " + (state.cycles || 0) + "\nمعاملات باز: " + (state.positions || []).length +
+    "\nمعاملات بسته: " + closed.length + "\nبرد معاملات بسته: " +
+    (closed.length ? (wins / closed.length * 100).toFixed(1) : "—") + "%\nمجموع نتیجه بسته‌ها: " +
+    totalR.toFixed(2) + "R\nآخرین اجرا: " + (state.lastCycleAt ? new Date(state.lastCycleAt).toISOString() : "—") +
+    "\n\nکارمزد و لغزش فرضی هر سمت: 0.05% + 0.03%.",
+    menuForChat(env, chatId));
+}
+
 // ---------------- CONCURRENCY ----------------
 
 async function mapLimit(items, limit, callback) {
@@ -1993,4 +2113,4 @@ async function mapLimit(items, limit, callback) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, isKrakenPerpetualTicker, calculateAtr, analyzeFuturesSymbol, getKrakenFuturesCandles };
+export { FUTURES_CONFIG, isKrakenPerpetualTicker, calculateAtr, analyzeFuturesSymbol, getKrakenFuturesCandles, createPaperPosition, applyPaperPrice };
