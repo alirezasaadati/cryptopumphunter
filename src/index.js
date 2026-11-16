@@ -1948,6 +1948,7 @@ async function runFuturesSignalScan(env) {
     rejectedCount: allRejected.length,
     rejectionCounts: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count })),
     rejectedSymbols: allRejected.slice(0, 35).map(x => ({ symbol: x.symbol, reason: x.rejected || "نامشخص" })),
+    watchlistSymbols: watchlist.map(x => ({ symbol: x.symbol, side: x.side, reason: x.watchReason, score: x.score })),
     eligibleSignals: signals.map(x => ({
       symbol: x.symbol, side: x.side, score: x.score, candleTime: x.candleTime,
       entry: x.entry, stop: x.stop, target1: x.target1, target2: x.target2, target3: x.target3
@@ -2201,6 +2202,8 @@ async function showPaperHistory(env, chatId) {
       .map(x => x.symbol + ": " + x.reason);
     const reasons = (scan.rejectionCounts || []).slice(0, 4)
       .map(x => x.reason + " (" + x.count + ")");
+    const watchItems = (scan.watchlistSymbols || []).slice(0, 5)
+      .map(x => x.symbol + " " + x.side + ": " + x.reason);
     return "چرخه #" + c.cycle + " | " + at +
       "\nبررسی: " + (scan.scanned ?? "—") +
       " | تحلیل معتبر: " + (scan.analyzed ?? "—") +
@@ -2208,7 +2211,8 @@ async function showPaperHistory(env, chatId) {
       " | واچ‌لیست: " + (scan.watchlist ?? "—") +
       "\nتصمیم‌ها: " + (decisions.length ? decisions.join("؛ ") : "سیگنال واجد شرایطی نبود") +
       (reasons.length ? "\nدلایل پرتکرار رد: " + reasons.join("؛ ") : "") +
-      (rejects.length ? "\nنمونه رد نمادها: " + rejects.join(" | ") : "");
+      (rejects.length ? "\nنمونه رد نمادها: " + rejects.join(" | ") : "") +
+      (watchItems.length ? "\nواچ‌لیست بدون ورود: " + watchItems.join(" | ") : "");
   });
   await sendLongMessage(env, chatId,
     "🧾 تاریخچه ۱۰ چرخه اخیر Paper Trading\n━━━━━━━━━━━━━━━━━━\n" +
