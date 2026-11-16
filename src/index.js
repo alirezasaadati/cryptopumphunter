@@ -673,6 +673,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/futures - دریافت سیگنال فیوچرز کراکن\n" +
         "/status - وضعیت ربات\n" +
         "/paperstatus - گزارش Paper Trading (فقط Owner)\n" +
+        "/paperdetails - جزئیات معاملات باز Paper Trading (فقط Owner)\n" +
         "/help - راهنما\n\n" +
         "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
         menuForChat(env, chatId)
@@ -697,6 +698,11 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     if (command === "/paperstatus") {
       await showPaperStatus(env, chatId);
+      return;
+    }
+
+    if (command === "/paperdetails") {
+      await showPaperDetails(env, chatId);
       return;
     }
 
@@ -2119,6 +2125,52 @@ async function showPaperStatus(env, chatId) {
     totalR.toFixed(2) + "R\nآخرین اجرا: " + (state.lastCycleAt ? new Date(state.lastCycleAt).toISOString() : "—") +
     "\n\nکارمزد و لغزش فرضی هر سمت: 0.05% + 0.03%.",
     menuForChat(env, chatId));
+}
+
+
+async function showPaperDetails(env, chatId) {
+  if (!isOwner(chatId, env)) {
+    await sendMessage(env, chatId, "⛔ فقط Owner به جزئیات Paper Trading دسترسی دارد.");
+    return;
+  }
+  const state = await env.WATCHLIST_KV?.get(PAPER_KEY, "json");
+  const positions = state?.positions || [];
+  if (!positions.length) {
+    await sendMessage(env, chatId, "🧪 در حال حاضر معامله بازی در Paper Trading وجود ندارد.", menuForChat(env, chatId));
+    return;
+  }
+
+  try {
+    const tickerData = await krakenFuturesJson("/tickers", "Kraken Futures paper position details");
+    const prices = new Map((tickerData.tickers || []).map(t => [t.symbol, Number(t.last)]));
+    const lines = positions.map((p, index) => {
+      const price = prices.get(p.symbol);
+      const validPrice = Number.isFinite(price) && price > 0;
+      const remaining = Math.max(0, Number(p.remaining) || 0);
+      const unrealizedGrossR = validPrice ? remaining * p.direction * (price - p.entry) / p.risk : 0;
+      const estimatedExitCostsR = validPrice ? remaining * (PAPER_CONFIG.FEE + PAPER_CONFIG.SLIPPAGE) * price / p.risk : 0;
+      const totalR = validPrice ? p.realizedR + unrealizedGrossR - estimatedExitCostsR : null;
+      const targets = (p.targets || []).map((v, i) => "هدف " + (i + 1) + ": " + formatPrice(v)).join(" | ");
+      const result = totalR === null ? "قیمت فعلی در دسترس نیست" : (totalR >= 0 ? "+" : "") + totalR.toFixed(2) + "R";
+      return (index + 1) + ") " + p.symbol + " " + p.side +
+        "\nورود: " + formatPrice(p.entry) +
+        "\nقیمت فعلی: " + (validPrice ? formatPrice(price) : "ناموجود") +
+        "\nحد ضرر: " + formatPrice(p.stop) +
+        "\n" + targets +
+        "\nاهداف فعال‌شده: " + (p.targetHits || 0) + "/3 | حجم باقی‌مانده: " + (remaining * 100).toFixed(0) + "%" +
+        "\nسود/ضرر شناور تخمینی: " + result;
+    });
+    await sendMessage(env, chatId,
+      "🧪 جزئیات معاملات باز Paper Trading\n━━━━━━━━━━━━━━━━━━\n" +
+      lines.join("\n\n━━━━━━━━━━━━━━━━━━\n\n") +
+      "\n\nنتیجه شناور تخمینی است؛ معامله واقعی نیست و تا بسته‌شدن قطعی محسوب نمی‌شود.",
+      menuForChat(env, chatId));
+  } catch (error) {
+    await sendMessage(env, chatId,
+      "❌ دریافت قیمت فعلی ناموفق بود. اطلاعات معاملات ذخیره‌شده تغییری نکرده است.\n" +
+      String(error.message || "خطای دریافت قیمت").slice(0, 500),
+      menuForChat(env, chatId));
+  }
 }
 
 // ---------------- CONCURRENCY ----------------
