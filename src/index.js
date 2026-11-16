@@ -630,11 +630,6 @@ async function showMenu(env, chatId) {
     menuForChat(env, chatId));
 }
 
-async function showMenu(env, chatId) {
-  await sendMessage(env, chatId,
-    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\n\nاز منوی زیر گزینه موردنظر را انتخاب کن:`, menuForChat(env, chatId));
-}
-
 async function handleTelegramCommand(command, chatId, env, message) {
   try {
     if (await handleOwnerAccessCommand(command, chatId, env, message)) return;
@@ -1163,7 +1158,6 @@ async function testDataSources() {
     coinlore: { ok: false },
     kraken: { ok: false },
     krakenFutures: { ok: false },
-    dex: { ok: false }
   };
 
   try {
@@ -1210,15 +1204,7 @@ async function testDataSources() {
     result.krakenFutures = { ok: false, error: error.message };
   }
 
-  try {
-    const response = await fetch("https://api.dexscreener.com/token-profiles/latest/v1");
-    if (!response.ok) throw new Error("HTTP " + response.status);
-    const profiles = await response.json();
-    if (!Array.isArray(profiles)) throw new Error("ساختار پاسخ نامعتبر است");
-    result.dex = { ok: true, profiles: profiles.length };
-  } catch (error) {
-    result.dex = { ok: false, error: error.message };
-  }
+
 
   return result;
 }
@@ -1874,12 +1860,14 @@ function formatFuturesSignal(item) {
   const fundingText = item.funding === null ? "در دسترس نیست" : `${(item.funding * 100).toFixed(4)}%`;
   return `${sideLabel} | ${item.symbol}\n` +
     `⭐ امتیاز: ${item.score}/100\n` +
-    `💵 قیمت بررسی/ورود: ${formatPrice(item.entry)}\n` +
-    `🛑 حد ضرر: ${formatPrice(item.stop)}\n` +
+    `💵 ورود پس از تأیید کندل: ${formatPrice(item.entry)}\n` +
+    `📍 محدوده ورود: ${formatPrice(item.entryZoneLow)} تا ${formatPrice(item.entryZoneHigh)}\n` +
+    `🛑 حد ضرر ساختاری/ATR: ${formatPrice(item.stop)}\n` +
     `🥇 هدف ۱: ${formatPrice(item.target1)} (1.5R)\n` +
-    `🥈 هدف ۲: ${formatPrice(item.target2)} (2.5R)\n` +
-    `🥉 هدف ۳: ${formatPrice(item.target3)} (3.5R)\n` +
-    `📊 RSI(1h): ${item.rsi.toFixed(1)} | نسبت حجم: ${item.volumeRatio.toFixed(2)}x\n` +
+    `🥈 هدف ۲: ${formatPrice(item.target2)} (2.2R)\n` +
+    `🥉 هدف ۳: ${formatPrice(item.target3)} (3R)\n` +
+    `📊 RSI(1h): ${item.rsi.toFixed(1)} | نسبت حجم: ${item.volumeRatio.toFixed(2)}x | R:R تا هدف۲: ${item.rewardRisk.toFixed(2)}R\n` +
+    `⚠️ ابطال سناریو: ${item.invalidation}\n` +
     `💸 Funding: ${fundingText} | تغییر ۲۴ساعته: ${item.change24h.toFixed(2)}%\n` +
     `📦 حجم ۲۴ساعته: $${Math.round(item.quoteVolume).toLocaleString("en-US")}\n` +
     `🕒 کندل مبنا: ${new Date(item.candleTime).toISOString()}\n` +
