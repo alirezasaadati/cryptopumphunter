@@ -503,7 +503,7 @@ async function handleAdminMembershipCallback(query, env) {
 }
 
 async function handleOwnerAccessCommand(command, chatId, env, message) {
-  if (!["/allow", "/revoke", "/members"].includes(command)) return false;
+  if (!["/allow", "/revoke", "/members", "/member"].includes(command)) return false;
   if (!isOwner(chatId, env)) {
     await sendMessage(env, chatId, "⛔ این دستور فقط برای مدیر ربات فعال است.");
     return true;
@@ -514,20 +514,17 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
   }
 
   if (command === "/members") {
-    const listed = await env.WATCHLIST_KV.list({ prefix: "member:" });
-    const active = [];
-    const revoked = [];
-    for (const key of listed.keys || []) {
-      const id = key.name.slice("member:".length);
-      const member = await env.WATCHLIST_KV.get(key.name, "json");
-      if (member?.revoked === true || member?.approved === false) revoked.push(id);
-      else active.push(id);
+    await showMemberList(env, chatId, 0);
+    return true;
+  }
+
+  if (command === "/member") {
+    const targetId = (message?.text || "").trim().split(/\\s+/)[1];
+    if (!targetId || !/^-?\\d+$/.test(targetId)) {
+      await sendMessage(env, chatId, "فرمت صحیح: /member 123456789");
+    } else {
+      await showMemberProfile(env, chatId, targetId);
     }
-    const lines = ["👥 فهرست اعضا", "━━━━━━━━━━━━━━━━━━", `✅ مجاز: ${active.length}`,
-      ...(active.length ? active.map(id => `• ${id}`) : ["• موردی ثبت نشده"]),
-      "", `🚫 لغو دسترسی: ${revoked.length}`,
-      ...(revoked.length ? revoked.map(id => `• ${id}`) : ["• موردی ثبت نشده"])];
-    await sendLongMessage(env, chatId, lines.join("\n"));
     return true;
   }
 
@@ -664,12 +661,8 @@ async function runDexScreenerForChat(env,chatId){
 }
 
 async function showMenu(env, chatId) {
-  const menu = JSON.parse(JSON.stringify(MAIN_MENU));
-  if (isOwner(chatId, env)) {
-    menu.inline_keyboard.splice(3, 0, [{ text: "👥 مدیریت اعضا", callback_data: "members:0" }]);
-  }
   await sendMessage(env, chatId,
-    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\n\nاز منوی زیر گزینه موردنظر را انتخاب کن:`, menu);
+    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\n\nاز منوی زیر گزینه موردنظر را انتخاب کن:`, MAIN_MENU);
 }
 
 async function handleTelegramCommand(command, chatId, env, message) {
