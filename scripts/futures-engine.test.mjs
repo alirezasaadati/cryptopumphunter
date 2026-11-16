@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { simulateTrade } from "./backtest-kraken.mjs";
 import {
   FUTURES_CONFIG,
   isKrakenPerpetualTicker,
@@ -119,4 +120,30 @@ test("chart loader sorts candles, filters malformed rows and excludes the formin
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("paper exit simulation scales out 40/35/25 at the three targets", () => {
+  const candles = [
+    { time: 1, open: 100, high: 101.6, low: 100.1, close: 101.4 },
+    { time: 2, open: 101.4, high: 102.3, low: 101.2, close: 102.2 },
+    { time: 3, open: 102.2, high: 103.1, low: 102.0, close: 103.0 }
+  ];
+  const trade = simulateTrade({
+    side: "LONG", entry: 100, stop: 99, targets: [101.5, 102.2, 103],
+    candles, startIndex: 0, fee: 0, slippage: 0
+  });
+  assert.equal(trade.targetHits, 3);
+  assert.equal(trade.exitReason, "TARGETS");
+  assert.ok(Math.abs(trade.netR - 2.13) < 1e-9);
+});
+
+test("paper exit simulation resolves same-candle stop and target as stop first", () => {
+  const trade = simulateTrade({
+    side: "LONG", entry: 100, stop: 99, targets: [101.5, 102.2, 103],
+    candles: [{ time: 1, open: 100, high: 102.5, low: 98.5, close: 101 }],
+    startIndex: 0, fee: 0, slippage: 0
+  });
+  assert.equal(trade.targetHits, 0);
+  assert.equal(trade.exitReason, "STOP");
+  assert.equal(trade.netR, -1);
 });
