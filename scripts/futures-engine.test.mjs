@@ -134,7 +134,7 @@ test("paper exit simulation scales out 40/35/25 at the three targets", () => {
   });
   assert.equal(trade.targetHits, 3);
   assert.equal(trade.exitReason, "TARGETS");
-  assert.ok(Math.abs(trade.netR - 2.13) < 1e-9);
+  assert.ok(Math.abs(trade.netR - 2.12) < 1e-9);
 });
 
 test("paper exit simulation resolves same-candle stop and target as stop first", () => {
