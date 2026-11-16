@@ -2,5 +2,9 @@ name = "cryptopumphunter"
 main = "src/index.js"
 compatibility_date = "2026-11-15"
 
+[[kv_namespaces]]
+binding = "WATCHLIST_KV"
+id = "dab441cdffc0460faeb497cee6edd314"
+
 [triggers]
 crons = ["*/15 * * * *"]
