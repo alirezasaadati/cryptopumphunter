@@ -1989,3 +1989,8 @@ async function mapLimit(items, limit, callback) {
 
   return results;
 }
+
+
+// Named exports expose pure strategy functions to Node's offline test suite.
+// They do not add HTTP routes or enable order execution.
+export { FUTURES_CONFIG, isKrakenPerpetualTicker, calculateAtr, analyzeFuturesSymbol, getKrakenFuturesCandles };
