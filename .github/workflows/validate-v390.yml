@@ -13,6 +13,7 @@ on:
     paths:
       - "src/index.js"
       - "scripts/smoke-kraken.mjs"
+      - "scripts/futures-engine.test.mjs"
       - ".github/workflows/validate-v390.yml"
 
 jobs:
