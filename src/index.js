@@ -1,5 +1,5 @@
 const CONFIG = {
-  VERSION: "3.9.1",
+  VERSION: "3.9.2",
   MIN_MARKET_CAP: 1_000_000,
   MAX_MARKET_CAP: 500_000_000,
   MIN_DAILY_VOLUME: 250_000,
@@ -20,7 +20,7 @@ const TELEGRAM_API = "https://api.telegram.org";
 const seenUpdates = new Set();
 
 const ABOUT_TEXT =
-  "🚀 CRYPTO PUMP HUNTER V3.9.1\n\n" +
+  "🚀 CRYPTO PUMP HUNTER V3.9.2\n\n" +
   "طراحی و توسعه: علیرضا سعادتی\n\n" +
   "© تمامی حقوق مادی و معنوی این نرم‌افزار محفوظ است.\n\n" +
   "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه از صاحب اثر مجاز نیست.";
@@ -1823,6 +1823,13 @@ function calculateAtr(candles, period = 14) {
   return recent.length === period ? average(recent) : null;
 }
 
+function makeFuturesWatchItem(ticker, side, price, rsiValue, volumeRatio, reason, score = 0) {
+  return {
+    symbol: ticker.symbol, side, price, rsi: rsiValue, volumeRatio,
+    score, watchlist: true, watchReason: reason
+  };
+}
+
 function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   const closes1h=candles1h.map(c=>c.close), closes4h=candles4h.map(c=>c.close);
@@ -1836,14 +1843,19 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
   let side=null,score=0; const reasons=[];
   if(up1h&&up4h&&rsiValue>=50&&rsiValue<=67){side="LONG";score=48;reasons.push("هم‌جهتی روند صعودی در تایم‌فریم‌های ۱ و ۴ ساعته");}
   else if(down1h&&down4h&&rsiValue>=33&&rsiValue<=50){side="SHORT";score=48;reasons.push("هم‌جهتی روند نزولی در تایم‌فریم‌های ۱ و ۴ ساعته");}
-  else return {symbol:ticker.symbol,rejected:"هم‌جهتی روند یا محدوده RSI تأیید نشد"};
+  else {
+    if(up1h&&up4h&&rsiValue>=45&&rsiValue<=72) return makeFuturesWatchItem(ticker,"LONG",price,rsiValue,0,"روند صعودی همسو است؛ RSI هنوز برای ورود تأیید نشده");
+    if(down1h&&down4h&&rsiValue>=28&&rsiValue<=55) return makeFuturesWatchItem(ticker,"SHORT",price,rsiValue,0,"روند نزولی همسو است؛ RSI هنوز برای ورود تأیید نشده");
+    return {symbol:ticker.symbol,rejected:"هم‌جهتی روند یا محدوده RSI تأیید نشد"};
+  }
   const direction=side==="LONG"?1:-1, candleRange=Math.max(last.high-last.low,Number.EPSILON), body=Math.abs(last.close-last.open);
   const closeStrength=side==="LONG"?(last.close-last.low)/candleRange:(last.high-last.close)/candleRange;
   const confirmed=side==="LONG"?last.close>last.open&&closeStrength>=0.65:last.close<last.open&&closeStrength>=0.65;
-  if(!confirmed||body<atr*0.20)return {symbol:ticker.symbol,rejected:"کندل بسته‌شده قدرت و تأیید کافی برای ورود ندارد"};
+  if(!confirmed||body<atr*0.20) return makeFuturesWatchItem(ticker,side,price,rsiValue,volumeRatio,"جهت روند تأیید شده؛ قدرت کندل برای ورود کافی نیست",score);
   score+=12;reasons.push("کندل بسته‌شده در جهت معامله تأیید شده است");
   if(volumeRatio>=1.5){score+=16;reasons.push("حجم حداقل ۱.۵ برابر میانگین است");}
   else if(volumeRatio>=1.1){score+=11;reasons.push("حجم بالاتر از میانگین است");}
+  else if(volumeRatio>=0.70) return makeFuturesWatchItem(ticker,side,price,rsiValue,volumeRatio,"حجم هنوز برای ورود کافی نیست",score);
   else return {symbol:ticker.symbol,rejected:"حجم کندل تأییدکننده پایین است"};
   const extension=Math.abs(price-e20)/atr;
   if(Math.abs(price-candleClose)/atr>0.45)return {symbol:ticker.symbol,rejected:"قیمت زنده بیش از حد از قیمت بسته‌شدن کندل تأیید فاصله گرفته است"};
@@ -1907,6 +1919,7 @@ async function runFuturesSignalScan(env) {
     }
   });
   const signals = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score).slice(0, 8);
+  const watchlist = analyzed.filter(x => x?.watchlist).sort((a, b) => b.score - a.score).slice(0, 5);
   const validData = analyzed.filter(x => x && x.score !== undefined).length;
   const allRejected = analyzed.filter(x => x?.rejected);
   const rejected = allRejected.slice(0, 8);
@@ -1923,11 +1936,20 @@ async function runFuturesSignalScan(env) {
     `📊 تحلیل‌های دارای امتیاز: ${validData}\n` +
     `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n\n`;
   if (signals.length) {
-    report += "🎯 سیگنال‌های فعلی\n━━━━━━━━━━━━━━━━━━\n\n";
+    report += "🎯 سیگنال‌های تأییدشده\n━━━━━━━━━━━━━━━━━━\n\n";
     for (const item of signals) report += formatFuturesSignal(item) + "\n━━━━━━━━━━━━━━━━━━\n\n";
   } else {
-    report += "⚠️ در این بررسی سیگنالی به حداقل امتیاز و شرایط ورود نرسید. برای جلوگیری از سیگنال ضعیف، موردی صادر نشد.\n\n";
+    report += "⚠️ در این بررسی سیگنال تأییدشده‌ای صادر نشد.\n\n";
   }
+  report += "👀 فرصت‌های در حال شکل‌گیری (فقط واچ‌لیست؛ بدون مجوز ورود)\n";
+  if (watchlist.length) {
+    for (const item of watchlist) {
+      report += `• ${item.symbol} ${item.side} | قیمت: ${formatPrice(item.price)} | RSI: ${item.rsi.toFixed(1)} | حجم: ${item.volumeRatio.toFixed(2)}x | ${item.watchReason}\n`;
+    }
+  } else {
+    report += "• موردی نزدیک به شرایط ورود پیدا نشد.\n";
+  }
+  report += "\n";
   if (rejected.length) {
     report += "🧪 نمونه دلایل رد نمادها\n";
     for (const item of rejected) report += `• ${item.symbol}: ${item.rejected}\n`;
@@ -1939,7 +1961,7 @@ async function runFuturesSignalScan(env) {
     }
   }
   report += `\n🕒 زمان تهیه گزارش: ${new Date().toISOString()}\n` +
-    `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} ثانیه\n` +
+    `⏱ مدت بررسی: ${((Date.now() - started) / 1000).toFixed(2)} ثانیه\n` +
     "📡 منبع داده: API عمومی Kraken Derivatives Futures\n" +
     "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست. قیمت ممکن است پس از بسته‌شدن کندل تغییر کند.";
 
@@ -1952,13 +1974,17 @@ async function runFuturesSignalScan(env) {
         signals: signals.map(x => ({
           symbol: x.symbol, side: x.side, score: x.score, entry: x.entry,
           stop: x.stop, target1: x.target1, target2: x.target2, target3: x.target3
+        })),
+        watchlist: watchlist.map(x => ({
+          symbol: x.symbol, side: x.side, price: x.price, rsi: x.rsi,
+          volumeRatio: x.volumeRatio, reason: x.watchReason
         }))
       }));
     } catch (error) {
       report += `\n⚠️ ذخیره گزارش فیوچرز ناموفق بود: ${String(error.message || "KV error")}`;
     }
   }
-  return { report, signals };
+  return { report, signals, watchlist };
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
