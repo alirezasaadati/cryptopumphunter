@@ -1,0 +1,36 @@
+name: Kraken Futures Historical Backtest v3.9.0
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["feature/v3.9.0"]
+    paths:
+      - "scripts/backtest-kraken.mjs"
+      - ".github/workflows/backtest-v390.yml"
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run historical Kraken Futures backtest
+        env:
+          BACKTEST_DAYS: "30"
+          BACKTEST_SYMBOLS: "3"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+        run: node scripts/backtest-kraken.mjs
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kraken-futures-backtest-v390
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
