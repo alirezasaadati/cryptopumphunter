@@ -1976,7 +1976,7 @@ function createPaperPosition(signal, now = Date.now()) {
   const risk = Math.abs(signal.entry - signal.stop);
   if (!Number.isFinite(risk) || risk <= 0) return null;
   const direction = signal.side === "LONG" ? 1 : -1;
-  const entryCostR = ((PAPER_CONFIG.FEE + PAPER_CONFIG.SLIPPAGE) * 2 * signal.entry) / risk;
+  const entryCostR = ((PAPER_CONFIG.FEE + PAPER_CONFIG.SLIPPAGE) * signal.entry) / risk;
   return {
     id: signal.symbol + ":" + signal.side + ":" + signal.candleTime,
     symbol: signal.symbol, side: signal.side, entry: signal.entry, stop: signal.stop,
