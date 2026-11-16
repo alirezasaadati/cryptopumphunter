@@ -6,10 +6,8 @@ const CONFIG = {
   MAX_CANDIDATES: 35,
   MAX_RESULTS: 5,
   WATCHLIST_SIZE: 5,
-  DIAGNOSTIC_SIZE: 8,
   CONCURRENCY: 2,
   MIN_SCORE: 65,
-  MIN_REWARD_RISK: 1.5,
   CANDLE_INTERVAL: 60,
   MIN_CANDLES: 55,
   COINLORE_PAGES: [0, 100, 200, 300, 400, 500, 600, 700, 800, 900],
@@ -57,9 +55,6 @@ const BACK_MENU = {
 };
 
 export default {
-  async scheduled(controller, env, ctx) {
-    ctx.waitUntil(runPaperTradingCycle(env));
-  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
@@ -672,9 +667,6 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/scan - اسکن دستی بازار\n" +
         "/futures - دریافت سیگنال فیوچرز کراکن\n" +
         "/status - وضعیت ربات\n" +
-        "/paperstatus - گزارش Paper Trading (فقط Owner)\n" +
-        "/paperdetails - جزئیات معاملات باز Paper Trading (فقط Owner)\n" +
-        "/paperhistory - تاریخچه چرخه‌ها و علت ورود/رد سیگنال‌ها (فقط Owner)\n" +
         "/help - راهنما\n\n" +
         "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
         menuForChat(env, chatId)
@@ -694,21 +686,6 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     if (command === "/futures") {
       await runFuturesSignalsForChat(env, chatId);
-      return;
-    }
-
-    if (command === "/paperstatus") {
-      await showPaperStatus(env, chatId);
-      return;
-    }
-
-    if (command === "/paperdetails") {
-      await showPaperDetails(env, chatId);
-      return;
-    }
-
-    if (command === "/paperhistory") {
-      await showPaperHistory(env, chatId);
       return;
     }
 
@@ -1735,12 +1712,12 @@ function formatCoin(item, isSignal) {
 const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
-  MAX_SYMBOLS: 32,
+  MAX_SYMBOLS: 24,
   CONCURRENCY: 3,
-  MIN_QUOTE_VOLUME: 3_000_000,
+  MIN_QUOTE_VOLUME: 5_000_000,
   KLINE_LIMIT: 120,
   MIN_CANDLES: 60,
-  MIN_SCORE: 82,
+  MIN_SCORE: 72,
   INTERVAL: "1h",
   CONFIRM_INTERVAL: "4h"
 };
@@ -1770,10 +1747,6 @@ function isKrakenPerpetualTicker(item) {
   const symbol = String(item.symbol || "").toUpperCase();
   // Kraken perpetual contracts use PI_ (inverse) or PF_ (multi-collateral) symbols.
   if (!/^(PI|PF)_[A-Z0-9]+USD$/.test(symbol)) return false;
-  // Keep tokenized equities out of the crypto-only futures scan.
-  const underlying = symbol.replace(/^(PI|PF)_/, "").replace(/USD$/, "");
-  const nonCryptoUnderlyings = new Set(["NVDAX", "TSLAX", "AAPLX", "AMZNX", "GOOGLX", "MSFTX", "METAX", "COINX"]);
-  if (nonCryptoUnderlyings.has(underlying)) return false;
   const quoteVolume = Number(item.volumeQuote);
   const last = Number(item.last);
   return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
@@ -1798,7 +1771,7 @@ async function getKrakenFuturesUniverse() {
 }
 
 async function getKrakenFuturesCandles(symbol, interval) {
-  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}?count=${FUTURES_CONFIG.KLINE_LIMIT}`;
+  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}`;
   const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
     `Kraken ${symbol} ${interval}`, FUTURES_CONFIG.CHARTS_URL);
   if (!Array.isArray(data?.candles)) {
@@ -1835,63 +1808,108 @@ function calculateAtr(candles, period = 14) {
   return recent.length === period ? average(recent) : null;
 }
 
-function makeFuturesWatchItem(ticker, side, price, rsiValue, volumeRatio, reason, score = 0) {
-  return {
-    symbol: ticker.symbol, side, price, rsi: rsiValue, volumeRatio,
-    score, watchlist: true, watchReason: reason
-  };
-}
-
 function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
-  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
-  const closes1h=candles1h.map(c=>c.close), closes4h=candles4h.map(c=>c.close);
-  const last=candles1h[candles1h.length-1], candleClose=last.close, price=Number(ticker.last);
-  if(!Number.isFinite(price)||price<=0) throw new Error("قیمت زنده قرارداد Kraken معتبر نیست.");
-  const e20=ema(closes1h,20), e50=ema(closes1h,50), e20_4h=ema(closes4h,20), e50_4h=ema(closes4h,50);
-  const rsiValue=rsi(closes1h,14), atr=calculateAtr(candles1h,14);
-  if([e20,e50,e20_4h,e50_4h,rsiValue,atr].some(v=>!Number.isFinite(v))||atr<=0) throw new Error("محاسبه اندیکاتورها معتبر نیست.");
-  const avgVol=average(candles1h.slice(-21,-1).map(c=>c.volume)), volumeRatio=avgVol>0?last.volume/avgVol:0;
-  const up1h=e20>e50&&price>e20, down1h=e20<e50&&price<e20, up4h=e20_4h>e50_4h, down4h=e20_4h<e50_4h;
-  let side=null,score=0; const reasons=[];
-  if(up1h&&up4h&&rsiValue>=50&&rsiValue<=67){side="LONG";score=48;reasons.push("هم‌جهتی روند صعودی در تایم‌فریم‌های ۱ و ۴ ساعته");}
-  else if(down1h&&down4h&&rsiValue>=33&&rsiValue<=50){side="SHORT";score=48;reasons.push("هم‌جهتی روند نزولی در تایم‌فریم‌های ۱ و ۴ ساعته");}
-  else {
-    if(up1h&&up4h&&rsiValue>=45&&rsiValue<=72) return makeFuturesWatchItem(ticker,"LONG",price,rsiValue,volumeRatio,"روند صعودی همسو است؛ RSI هنوز برای ورود تأیید نشده");
-    if(down1h&&down4h&&rsiValue>=28&&rsiValue<=55) return makeFuturesWatchItem(ticker,"SHORT",price,rsiValue,volumeRatio,"روند نزولی همسو است؛ RSI هنوز برای ورود تأیید نشده");
-    return {symbol:ticker.symbol,rejected:"هم‌جهتی روند یا محدوده RSI تأیید نشد"};
+  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
+    throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   }
-  const direction=side==="LONG"?1:-1, candleRange=Math.max(last.high-last.low,Number.EPSILON), body=Math.abs(last.close-last.open);
-  const closeStrength=side==="LONG"?(last.close-last.low)/candleRange:(last.high-last.close)/candleRange;
-  const confirmed=side==="LONG"?last.close>last.open&&closeStrength>=0.65:last.close<last.open&&closeStrength>=0.65;
-  if(!confirmed||body<atr*0.20) return makeFuturesWatchItem(ticker,side,price,rsiValue,volumeRatio,"جهت روند تأیید شده؛ قدرت کندل برای ورود کافی نیست",score);
-  score+=12;reasons.push("کندل بسته‌شده در جهت معامله تأیید شده است");
-  if(volumeRatio>=1.5){score+=16;reasons.push("حجم حداقل ۱.۵ برابر میانگین است");}
-  else if(volumeRatio>=1.1){score+=11;reasons.push("حجم بالاتر از میانگین است");}
-  else if(volumeRatio>=0.70) return makeFuturesWatchItem(ticker,side,price,rsiValue,volumeRatio,"حجم هنوز برای ورود کافی نیست",score);
-  else return {symbol:ticker.symbol,rejected:"حجم کندل تأییدکننده پایین است"};
-  const extension=Math.abs(price-e20)/atr;
-  if(Math.abs(price-candleClose)/atr>0.45)return {symbol:ticker.symbol,rejected:"قیمت زنده بیش از حد از قیمت بسته‌شدن کندل تأیید فاصله گرفته است"};
-  if(extension>1.35)return {symbol:ticker.symbol,rejected:"قیمت بیش از حد از EMA20 فاصله گرفته؛ ورود تعقیبی رد شد"};
-  score+=extension<=0.65?8:4;
-  const change=Number(ticker.priceChangePercent)||0;
-  score+=((side==="LONG"&&change>0)||(side==="SHORT"&&change<0))?5:2;
-  const funding=Number(ticker.premium?.lastFundingRate);
-  if(Number.isFinite(funding)){
-    if((side==="LONG"&&funding>0.001)||(side==="SHORT"&&funding< -0.001)){score-=6;reasons.push("فاندینگ نامتوازن و احتمال ازدحام سمت معامله");}
-    else{score+=3;reasons.push("فاندینگ مانع جدی در جهت انتخابی نشان نمی‌دهد");}
-  }else reasons.push("فاندینگ در دسترس نبود؛ امتیاز اضافه منظور نشد");
-  const structure=candles1h.slice(-13,-1), swingLow=Math.min(...structure.map(c=>c.low)), swingHigh=Math.max(...structure.map(c=>c.high));
-  const entry=price, structuralStop=side==="LONG"?swingLow-atr*0.20:swingHigh+atr*0.20, volatilityStop=side==="LONG"?entry-atr*1.35:entry+atr*1.35;
-  const stop=side==="LONG"?Math.min(structuralStop,volatilityStop):Math.max(structuralStop,volatilityStop);
-  const risk=side==="LONG"?entry-stop:stop-entry, riskPct=risk/entry;
-  if(!Number.isFinite(risk)||risk<=0||riskPct<0.0015||riskPct>0.05)return {symbol:ticker.symbol,rejected:"فاصله حد ضرر خارج از محدوده منطقی است"};
-  const target1=entry+direction*risk*1.5,target2=entry+direction*risk*2.2,target3=entry+direction*risk*3.0,rewardRisk=Math.abs(target2-entry)/risk;
-  score=Math.max(0,Math.min(100,Math.round(score)));
-  const eligible=score>=FUTURES_CONFIG.MIN_SCORE&&volumeRatio>=1.1&&rewardRisk>=2.0;
-  if(!eligible)reasons.push("امتیاز یا نسبت سود به ریسک به حد نصاب نرسید");
-  return {symbol:ticker.symbol,side,score,price,entry,stop,target1,target2,target3,rewardRisk,rsi:rsiValue,ema20:e20,ema50:e50,atr,volumeRatio,
-    funding:Number.isFinite(funding)?funding:null,quoteVolume:Number(ticker.quoteVolume)||0,change24h:change,candleTime:last.time,reasons,eligible,
-    entryZoneLow:entry-atr*0.15,entryZoneHigh:entry+atr*0.15,invalidation:side==="LONG"?"بسته‌شدن کندل ۱ساعته زیر حد ضرر":"بسته‌شدن کندل ۱ساعته بالای حد ضرر"};
+  const closes1h = candles1h.map(c => c.close);
+  const closes4h = candles4h.map(c => c.close);
+  const last = candles1h[candles1h.length - 1];
+  const price = last.close;
+  const e20 = ema(closes1h, 20);
+  const e50 = ema(closes1h, 50);
+  const e20_4h = ema(closes4h, 20);
+  const e50_4h = ema(closes4h, 50);
+  const rsiValue = rsi(closes1h, 14);
+  const atr = calculateAtr(candles1h, 14);
+  if ([e20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) {
+    throw new Error("محاسبه اندیکاتورها معتبر نیست.");
+  }
+
+  const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume));
+  const volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
+  const up1h = e20 > e50 && price > e20;
+  const down1h = e20 < e50 && price < e20;
+  const up4h = e20_4h > e50_4h;
+  const down4h = e20_4h < e50_4h;
+  let side = null;
+  let score = 0;
+  const reasons = [];
+
+  if (up1h && up4h && rsiValue >= 48 && rsiValue <= 69) {
+    side = "LONG";
+    score = 45;
+    reasons.push("روند ۱ساعته و ۴ساعته صعودی است", "قیمت بالای EMA20 قرار دارد");
+    score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
+  } else if (down1h && down4h && rsiValue >= 31 && rsiValue <= 52) {
+    side = "SHORT";
+    score = 45;
+    reasons.push("روند ۱ساعته و ۴ساعته نزولی است", "قیمت زیر EMA20 قرار دارد");
+    score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
+  } else {
+    return { symbol: ticker.symbol, rejected: "هم‌جهتی روند ۱ساعته و ۴ساعته یا محدوده RSI تأیید نشد" };
+  }
+
+  if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
+  else if (volumeRatio >= 1.0) { score += 12; reasons.push("حجم نزدیک یا بالاتر از میانگین است"); }
+  else { score += 4; reasons.push("حجم کمتر از میانگین است"); }
+
+  const change = Number(ticker.priceChangePercent) || 0;
+  if ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) score += 8;
+  else score += 3;
+
+  const funding = Number(ticker.premium?.lastFundingRate);
+  if (Number.isFinite(funding)) {
+    if (side === "LONG" && funding > 0.001) { score -= 5; reasons.push("فاندینگ مثبت و نسبتاً بالا؛ ریسک ازدحام لانگ"); }
+    else if (side === "SHORT" && funding < -0.001) { score -= 5; reasons.push("فاندینگ منفی و نسبتاً پایین؛ ریسک ازدحام شورت"); }
+    else reasons.push("فاندینگ در محدوده افراطی نیست");
+  } else {
+    reasons.push("داده فاندینگ در دسترس نبود");
+  }
+
+  const swing = candles1h.slice(-8, -1);
+  const swingLow = Math.min(...swing.map(c => c.low));
+  const swingHigh = Math.max(...swing.map(c => c.high));
+  const entry = price;
+  let stop = side === "LONG"
+    ? Math.min(swingLow, entry - atr * 1.5)
+    : Math.max(swingHigh, entry + atr * 1.5);
+  // Enforce a positive, bounded risk distance; reject malformed levels.
+  const risk = side === "LONG" ? entry - stop : stop - entry;
+  const riskPct = risk / entry;
+  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
+    return { symbol: ticker.symbol, rejected: "فاصله حد ضرر غیرمنطقی است؛ سیگنال صادر نشد" };
+  }
+
+  const direction = side === "LONG" ? 1 : -1;
+  const target1 = entry + direction * risk * 1.5;
+  const target2 = entry + direction * risk * 2.5;
+  const target3 = entry + direction * risk * 3.5;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const eligible = score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
+  return {
+    symbol: ticker.symbol,
+    side,
+    score,
+    price,
+    entry,
+    stop,
+    target1,
+    target2,
+    target3,
+    rewardRisk: 1.5,
+    rsi: rsiValue,
+    ema20: e20,
+    ema50: e50,
+    atr,
+    volumeRatio,
+    funding: Number.isFinite(funding) ? funding : null,
+    quoteVolume: Number(ticker.quoteVolume) || 0,
+    change24h: change,
+    candleTime: last.time,
+    reasons,
+    eligible
+  };
 }
 
 function formatFuturesSignal(item) {
@@ -1899,14 +1917,12 @@ function formatFuturesSignal(item) {
   const fundingText = item.funding === null ? "در دسترس نیست" : `${(item.funding * 100).toFixed(4)}%`;
   return `${sideLabel} | ${item.symbol}\n` +
     `⭐ امتیاز: ${item.score}/100\n` +
-    `💵 ورود پس از تأیید کندل: ${formatPrice(item.entry)}\n` +
-    `📍 محدوده ورود: ${formatPrice(item.entryZoneLow)} تا ${formatPrice(item.entryZoneHigh)}\n` +
-    `🛑 حد ضرر ساختاری/ATR: ${formatPrice(item.stop)}\n` +
+    `💵 قیمت بررسی/ورود: ${formatPrice(item.entry)}\n` +
+    `🛑 حد ضرر: ${formatPrice(item.stop)}\n` +
     `🥇 هدف ۱: ${formatPrice(item.target1)} (1.5R)\n` +
-    `🥈 هدف ۲: ${formatPrice(item.target2)} (2.2R)\n` +
-    `🥉 هدف ۳: ${formatPrice(item.target3)} (3R)\n` +
-    `📊 RSI(1h): ${item.rsi.toFixed(1)} | نسبت حجم: ${item.volumeRatio.toFixed(2)}x | R:R تا هدف۲: ${item.rewardRisk.toFixed(2)}R\n` +
-    `⚠️ ابطال سناریو: ${item.invalidation}\n` +
+    `🥈 هدف ۲: ${formatPrice(item.target2)} (2.5R)\n` +
+    `🥉 هدف ۳: ${formatPrice(item.target3)} (3.5R)\n` +
+    `📊 RSI(1h): ${item.rsi.toFixed(1)} | نسبت حجم: ${item.volumeRatio.toFixed(2)}x\n` +
     `💸 Funding: ${fundingText} | تغییر ۲۴ساعته: ${item.change24h.toFixed(2)}%\n` +
     `📦 حجم ۲۴ساعته: $${Math.round(item.quoteVolume).toLocaleString("en-US")}\n` +
     `🕒 کندل مبنا: ${new Date(item.candleTime).toISOString()}\n` +
@@ -1931,63 +1947,27 @@ async function runFuturesSignalScan(env) {
     }
   });
   const signals = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score).slice(0, 8);
-  const watchlist = analyzed.filter(x => x?.watchlist).sort((a, b) => b.score - a.score).slice(0, 5);
   const validData = analyzed.filter(x => x && x.score !== undefined).length;
-  const allRejected = analyzed.filter(x => x?.rejected);
-  const rejected = allRejected.slice(0, 8);
-  const rejectionCounts = new Map();
-  for (const item of allRejected) {
-    const reason = item.rejected || "نامشخص";
-    rejectionCounts.set(reason, (rejectionCounts.get(reason) || 0) + 1);
-  }
-  const diagnostics = {
-    scanned: universe.length,
-    analyzed: validData,
-    eligible: signals.length,
-    watchlist: watchlist.length,
-    rejectedCount: allRejected.length,
-    rejectionCounts: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count })),
-    rejectedSymbols: allRejected.slice(0, 35).map(x => ({ symbol: x.symbol, reason: x.rejected || "نامشخص" })),
-    watchlistSymbols: watchlist.map(x => ({ symbol: x.symbol, side: x.side, reason: x.watchReason, score: x.score })),
-    eligibleSignals: signals.map(x => ({
-      symbol: x.symbol, side: x.side, score: x.score, candleTime: x.candleTime,
-      entry: x.entry, stop: x.stop, target1: x.target1, target2: x.target2, target3: x.target3
-    }))
-  };
+  const rejected = analyzed.filter(x => x?.rejected).slice(0, 8);
   let report = `📈 CRYPTO PUMP HUNTER V${CONFIG.VERSION} — KRAKEN FUTURES\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
     "🏦 بازار: Kraken Derivatives Perpetual\n" +
     "⏱ تایم‌فریم: 1h با تأیید روند 4h\n" +
     `📥 نمادهای پرحجم بررسی‌شده: ${universe.length}\n` +
-    `📊 تحلیل‌های دارای امتیاز: ${validData}\n` +
+    `📊 تحلیل‌های معتبر: ${validData}\n` +
     `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n\n`;
   if (signals.length) {
-    report += "🎯 سیگنال‌های تأییدشده\n━━━━━━━━━━━━━━━━━━\n\n";
+    report += "🎯 سیگنال‌های فعلی\n━━━━━━━━━━━━━━━━━━\n\n";
     for (const item of signals) report += formatFuturesSignal(item) + "\n━━━━━━━━━━━━━━━━━━\n\n";
   } else {
-    report += "⚠️ در این بررسی سیگنال تأییدشده‌ای صادر نشد.\n\n";
+    report += "⚠️ در این بررسی سیگنالی به حداقل امتیاز و شرایط ورود نرسید. برای جلوگیری از سیگنال ضعیف، موردی صادر نشد.\n\n";
   }
-  report += "👀 فرصت‌های در حال شکل‌گیری (فقط واچ‌لیست؛ بدون مجوز ورود)\n";
-  if (watchlist.length) {
-    for (const item of watchlist) {
-      report += `• ${item.symbol} ${item.side} | قیمت: ${formatPrice(item.price)} | RSI: ${item.rsi.toFixed(1)} | حجم: ${item.volumeRatio.toFixed(2)}x | ${item.watchReason}\n`;
-    }
-  } else {
-    report += "• موردی نزدیک به شرایط ورود پیدا نشد.\n";
-  }
-  report += "\n";
   if (rejected.length) {
     report += "🧪 نمونه دلایل رد نمادها\n";
     for (const item of rejected) report += `• ${item.symbol}: ${item.rejected}\n`;
   }
-  if (rejectionCounts.size) {
-    report += "\n📊 شمارش دلایل رد کل نمادها\n";
-    for (const [reason, count] of [...rejectionCounts.entries()].sort((a, b) => b[1] - a[1])) {
-      report += `• ${reason}: ${count}\n`;
-    }
-  }
   report += `\n🕒 زمان تهیه گزارش: ${new Date().toISOString()}\n` +
-    `⏱ مدت بررسی: ${((Date.now() - started) / 1000).toFixed(2)} ثانیه\n` +
+    `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} ثانیه\n` +
     "📡 منبع داده: API عمومی Kraken Derivatives Futures\n" +
     "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست. قیمت ممکن است پس از بسته‌شدن کندل تغییر کند.";
 
@@ -2000,17 +1980,13 @@ async function runFuturesSignalScan(env) {
         signals: signals.map(x => ({
           symbol: x.symbol, side: x.side, score: x.score, entry: x.entry,
           stop: x.stop, target1: x.target1, target2: x.target2, target3: x.target3
-        })),
-        watchlist: watchlist.map(x => ({
-          symbol: x.symbol, side: x.side, price: x.price, rsi: x.rsi,
-          volumeRatio: x.volumeRatio, reason: x.watchReason
         }))
       }));
     } catch (error) {
       report += `\n⚠️ ذخیره گزارش فیوچرز ناموفق بود: ${String(error.message || "KV error")}`;
     }
   }
-  return { report, signals, watchlist, diagnostics };
+  return { report, signals };
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
@@ -2020,249 +1996,19 @@ async function runFuturesSignalsForChat(env, chatId) {
   }
   await sendMessage(env, chatId,
     "📈 اسکن فیوچرز Kraken شروع شد...\n" +
-    "در حال بررسی قراردادهای دائمی دلاری Kraken با کندل‌های بسته‌شده ۱ساعته و تأیید ۴ساعته.\n" +
+    "در حال بررسی قراردادهای دائمی USDT با کندل‌های بسته‌شده ۱ساعته و تأیید ۴ساعته.\n" +
     "این بخش فقط سیگنال تحلیلی تولید می‌کند و سفارشی ثبت نمی‌کند."
   );
   try {
     const result = await runFuturesSignalScan(env);
     await sendLongMessage(env, chatId, result.report);
-    await sendMessage(env, chatId, "پایان بررسی فیوچرز.", menuForChat(env, chatId));
+    await sendMessage(env, chatId, "پایان بررسی فیوچرز.", MAIN_MENU);
   } catch (error) {
     await sendMessage(env, chatId,
       "❌ دریافت یا تحلیل داده Kraken Futures ناموفق بود.\n" +
       String(error.message || "خطای ناشناخته").slice(0, 900) +
-      "\n\nدر این وضعیت هیچ سیگنالی ساخته نمی‌شود.", menuForChat(env, chatId)
+      "\n\nدر این وضعیت هیچ سیگنالی ساخته نمی‌شود.", MAIN_MENU
     );
-  }
-}
-
-// ---------------- PAPER TRADING (SIMULATED, NO ORDERS) ----------------
-const PAPER_KEY = "paper:portfolio:v1";
-const PAPER_CONFIG = { FEE: 0.0005, SLIPPAGE: 0.0003, TARGET_WEIGHTS: [0.40, 0.35, 0.25], MAX_HISTORY: 100 };
-
-function createPaperPosition(signal, now = Date.now()) {
-  const risk = Math.abs(signal.entry - signal.stop);
-  if (!Number.isFinite(risk) || risk <= 0) return null;
-  const direction = signal.side === "LONG" ? 1 : -1;
-  const entryCostR = ((PAPER_CONFIG.FEE + PAPER_CONFIG.SLIPPAGE) * signal.entry) / risk;
-  return {
-    id: signal.symbol + ":" + signal.side + ":" + signal.candleTime,
-    symbol: signal.symbol, side: signal.side, entry: signal.entry, stop: signal.stop,
-    targets: [signal.target1, signal.target2, signal.target3],
-    candleTime: signal.candleTime, openedAt: now, direction, risk,
-    remaining: 1, targetHits: 0, realizedR: -entryCostR, status: "OPEN"
-  };
-}
-
-function applyPaperPrice(position, price, now = Date.now()) {
-  if (!position || position.status !== "OPEN" || !Number.isFinite(price) || price <= 0) return { position, events: [] };
-  const events = [];
-  const adverse = position.direction === 1 ? price <= position.stop : price >= position.stop;
-  if (adverse) {
-    const fraction = position.remaining;
-    const grossR = fraction * position.direction * (price - position.entry) / position.risk;
-    const costsR = fraction * (PAPER_CONFIG.FEE + PAPER_CONFIG.SLIPPAGE) * (position.entry + price) / position.risk;
-    position.realizedR += grossR - costsR;
-    position.remaining = 0; position.status = "CLOSED"; position.closedAt = now; position.exitReason = "STOP";
-    events.push({ type: "STOP", symbol: position.symbol, side: position.side, price, netR: position.realizedR });
-    return { position, events };
-  }
-  while (position.targetHits < 3 && position.remaining > 0) {
-    const target = position.targets[position.targetHits];
-    const reached = position.direction === 1 ? price >= target : price <= target;
-    if (!reached) break;
-    const fraction = Math.min(position.remaining, PAPER_CONFIG.TARGET_WEIGHTS[position.targetHits]);
-    const grossR = fraction * position.direction * (target - position.entry) / position.risk;
-    const costsR = fraction * (PAPER_CONFIG.FEE + PAPER_CONFIG.SLIPPAGE) * (position.entry + target) / position.risk;
-    position.realizedR += grossR - costsR;
-    position.remaining = Math.max(0, position.remaining - fraction);
-    position.targetHits++;
-    events.push({ type: "TARGET" + position.targetHits, symbol: position.symbol, side: position.side, price: target, netR: position.realizedR });
-  }
-  if (position.remaining < 1e-8) {
-    position.remaining = 0; position.status = "CLOSED"; position.closedAt = now; position.exitReason = "TARGETS";
-    events.push({ type: "CLOSED", symbol: position.symbol, side: position.side, price, netR: position.realizedR });
-  }
-  return { position, events };
-}
-
-async function runPaperTradingCycle(env) {
-  if (!env.WATCHLIST_KV || !env.OWNER_ID) throw new Error("WATCHLIST_KV یا OWNER_ID تنظیم نیست.");
-  const lockKey = "paper:cycle:lock";
-  if (await env.WATCHLIST_KV.get(lockKey)) return { skipped: true, events: [] };
-  await env.WATCHLIST_KV.put(lockKey, String(Date.now()), { expirationTtl: 240 });
-  try {
-    const state = await env.WATCHLIST_KV.get(PAPER_KEY, "json") || { version: 1, positions: [], history: [], cycles: 0 };
-    const scan = await runFuturesSignalScan(env);
-    const tickerData = await krakenFuturesJson("/tickers", "Kraken Futures paper prices");
-    const prices = new Map((tickerData.tickers || []).map(t => [t.symbol, Number(t.last)]));
-    const events = [];
-    const stillOpen = [];
-    for (const position of state.positions) {
-      const price = prices.get(position.symbol);
-      if (Number.isFinite(price) && price > 0) events.push(...applyPaperPrice(position, price).events);
-      if (position.status === "OPEN") stillOpen.push(position);
-      else state.history.push(position);
-    }
-    const openIds = new Set(stillOpen.map(p => p.id));
-    const signalDecisions = [];
-    for (const signal of scan.signals) {
-      const position = createPaperPosition(signal);
-      if (!position) {
-        signalDecisions.push({ symbol: signal.symbol, side: signal.side, decision: "INVALID_RISK" });
-        continue;
-      }
-      if (openIds.has(position.id)) {
-        signalDecisions.push({ symbol: signal.symbol, side: signal.side, decision: "ALREADY_OPEN", id: position.id });
-        continue;
-      }
-      if (state.history.some(p => p.id === position.id)) {
-        signalDecisions.push({ symbol: signal.symbol, side: signal.side, decision: "ALREADY_CLOSED", id: position.id });
-        continue;
-      }
-      stillOpen.push(position); openIds.add(position.id);
-      signalDecisions.push({ symbol: signal.symbol, side: signal.side, decision: "OPENED", id: position.id });
-      events.push({ type: "OPEN", symbol: position.symbol, side: position.side, price: position.entry, netR: position.realizedR });
-    }
-    state.positions = stillOpen;
-    state.history = state.history.slice(-PAPER_CONFIG.MAX_HISTORY);
-    state.cycles = (state.cycles || 0) + 1;
-    state.lastCycleAt = Date.now();
-    state.lastScanSignals = scan.signals.length;
-    state.cycleHistory = Array.isArray(state.cycleHistory) ? state.cycleHistory : [];
-    state.cycleHistory.push({
-      cycle: state.cycles,
-      timestamp: state.lastCycleAt,
-      scan: scan.diagnostics || {
-        scanned: null, analyzed: null, eligible: scan.signals.length,
-        watchlist: scan.watchlist?.length || 0, rejectedCount: null,
-        rejectionCounts: [], rejectedSymbols: []
-      },
-      signalDecisions,
-      events: events.map(e => ({ ...e })),
-      openAfter: state.positions.map(p => ({ symbol: p.symbol, side: p.side, entry: p.entry, stop: p.stop, openedAt: p.openedAt }))
-    });
-    state.cycleHistory = state.cycleHistory.slice(-100);
-    await env.WATCHLIST_KV.put(PAPER_KEY, JSON.stringify(state));
-    if (events.length) {
-      const summary = events.map(e => {
-        const label = e.type === "OPEN" ? "ورود فرضی" : e.type.startsWith("TARGET") ? e.type : e.type === "STOP" ? "حد ضرر" : "بسته شد";
-        return "• " + label + ": " + e.symbol + " " + e.side + " | قیمت " + formatPrice(e.price) + " | نتیجه تجمعی " + e.netR.toFixed(2) + "R";
-      }).join("\n");
-      await sendMessage(env, env.OWNER_ID, "🧪 گزارش Paper Trading\n━━━━━━━━━━━━━━━━━━\n" + summary);
-    }
-    return { skipped: false, events, open: state.positions.length, closed: state.history.length, cycles: state.cycles };
-  } finally {
-    await env.WATCHLIST_KV.delete(lockKey);
-  }
-}
-
-async function showPaperStatus(env, chatId) {
-  if (!isOwner(chatId, env)) { await sendMessage(env, chatId, "⛔ فقط Owner به گزارش Paper Trading دسترسی دارد."); return; }
-  const state = await env.WATCHLIST_KV?.get(PAPER_KEY, "json");
-  if (!state) { await sendMessage(env, chatId, "🧪 Paper Trading هنوز چرخه‌ای اجرا نکرده است."); return; }
-  const closed = state.history || [];
-  const wins = closed.filter(p => p.realizedR > 0).length;
-  const totalR = closed.reduce((sum, p) => sum + p.realizedR, 0);
-  await sendMessage(env, chatId,
-    "🧪 وضعیت Paper Trading\n━━━━━━━━━━━━━━━━━━\n" +
-    "چرخه‌ها: " + (state.cycles || 0) + "\nمعاملات باز: " + (state.positions || []).length +
-    "\nمعاملات بسته: " + closed.length + "\nبرد معاملات بسته: " +
-    (closed.length ? (wins / closed.length * 100).toFixed(1) : "—") + "%\nمجموع نتیجه بسته‌ها: " +
-    totalR.toFixed(2) + "R\nآخرین اجرا: " + (state.lastCycleAt ? new Date(state.lastCycleAt).toISOString() : "—") +
-    "\n\nکارمزد و لغزش فرضی هر سمت: 0.05% + 0.03%.",
-    menuForChat(env, chatId));
-}
-
-
-async function showPaperHistory(env, chatId) {
-  if (!isOwner(chatId, env)) {
-    await sendMessage(env, chatId, "⛔ فقط Owner به تاریخچه Paper Trading دسترسی دارد.");
-    return;
-  }
-  const state = await env.WATCHLIST_KV?.get(PAPER_KEY, "json");
-  const history = state?.cycleHistory || [];
-  if (!history.length) {
-    await sendMessage(env, chatId,
-      "🧪 هنوز تاریخچه چرخه‌ای ثبت نشده است. از چرخه زمان‌بندی‌شده بعدی، جزئیات اسکن و تصمیم ورود/رد ذخیره می‌شود.",
-      menuForChat(env, chatId));
-    return;
-  }
-  const recent = history.slice(-10).reverse();
-  const lines = recent.map(c => {
-    const at = c.timestamp ? new Date(c.timestamp).toISOString() : "نامشخص";
-    const scan = c.scan || {};
-    const decisions = (c.signalDecisions || []).map(d => {
-      const label = d.decision === "OPENED" ? "ورود فرضی" :
-        d.decision === "ALREADY_OPEN" ? "از قبل باز" :
-        d.decision === "ALREADY_CLOSED" ? "قبلاً بسته شده" : "ریسک نامعتبر";
-      return d.symbol + " " + d.side + ": " + label;
-    });
-    const rejects = (scan.rejectedSymbols || []).slice(0, 5)
-      .map(x => x.symbol + ": " + x.reason);
-    const reasons = (scan.rejectionCounts || []).slice(0, 4)
-      .map(x => x.reason + " (" + x.count + ")");
-    const watchItems = (scan.watchlistSymbols || []).slice(0, 5)
-      .map(x => x.symbol + " " + x.side + ": " + x.reason);
-    return "چرخه #" + c.cycle + " | " + at +
-      "\nبررسی: " + (scan.scanned ?? "—") +
-      " | تحلیل معتبر: " + (scan.analyzed ?? "—") +
-      " | سیگنال واجد شرایط: " + (scan.eligible ?? "—") +
-      " | واچ‌لیست: " + (scan.watchlist ?? "—") +
-      "\nتصمیم‌ها: " + (decisions.length ? decisions.join("؛ ") : "سیگنال واجد شرایطی نبود") +
-      (reasons.length ? "\nدلایل پرتکرار رد: " + reasons.join("؛ ") : "") +
-      (rejects.length ? "\nنمونه رد نمادها: " + rejects.join(" | ") : "") +
-      (watchItems.length ? "\nواچ‌لیست بدون ورود: " + watchItems.join(" | ") : "");
-  });
-  await sendLongMessage(env, chatId,
-    "🧾 تاریخچه ۱۰ چرخه اخیر Paper Trading\n━━━━━━━━━━━━━━━━━━\n" +
-    lines.join("\n\n━━━━━━━━━━━━━━━━━━\n\n") +
-    "\n\nاین گزارش فقط چرخه‌های ثبت‌شده از زمان انتشار این نسخه به بعد را پوشش می‌دهد؛ داده‌های قدیمی قابل بازیابی نیستند. اکانت Demo صرافی جدا از Paper Trading داخلی است.");
-  await sendMessage(env, chatId, "پایان تاریخچه.", menuForChat(env, chatId));
-}
-
-async function showPaperDetails(env, chatId) {
-  if (!isOwner(chatId, env)) {
-    await sendMessage(env, chatId, "⛔ فقط Owner به جزئیات Paper Trading دسترسی دارد.");
-    return;
-  }
-  const state = await env.WATCHLIST_KV?.get(PAPER_KEY, "json");
-  const positions = state?.positions || [];
-  if (!positions.length) {
-    await sendMessage(env, chatId, "🧪 در حال حاضر معامله بازی در Paper Trading وجود ندارد.", menuForChat(env, chatId));
-    return;
-  }
-
-  try {
-    const tickerData = await krakenFuturesJson("/tickers", "Kraken Futures paper position details");
-    const prices = new Map((tickerData.tickers || []).map(t => [t.symbol, Number(t.last)]));
-    const lines = positions.map((p, index) => {
-      const price = prices.get(p.symbol);
-      const validPrice = Number.isFinite(price) && price > 0;
-      const remaining = Math.max(0, Number(p.remaining) || 0);
-      const unrealizedGrossR = validPrice ? remaining * p.direction * (price - p.entry) / p.risk : 0;
-      const estimatedExitCostsR = validPrice ? remaining * (PAPER_CONFIG.FEE + PAPER_CONFIG.SLIPPAGE) * price / p.risk : 0;
-      const totalR = validPrice ? p.realizedR + unrealizedGrossR - estimatedExitCostsR : null;
-      const targets = (p.targets || []).map((v, i) => "هدف " + (i + 1) + ": " + formatPrice(v)).join(" | ");
-      const result = totalR === null ? "قیمت فعلی در دسترس نیست" : (totalR >= 0 ? "+" : "") + totalR.toFixed(2) + "R";
-      return (index + 1) + ") " + p.symbol + " " + p.side +
-        "\nورود: " + formatPrice(p.entry) +
-        "\nقیمت فعلی: " + (validPrice ? formatPrice(price) : "ناموجود") +
-        "\nحد ضرر: " + formatPrice(p.stop) +
-        "\n" + targets +
-        "\nاهداف فعال‌شده: " + (p.targetHits || 0) + "/3 | حجم باقی‌مانده: " + (remaining * 100).toFixed(0) + "%" +
-        "\nسود/ضرر شناور تخمینی: " + result;
-    });
-    await sendMessage(env, chatId,
-      "🧪 جزئیات معاملات باز Paper Trading\n━━━━━━━━━━━━━━━━━━\n" +
-      lines.join("\n\n━━━━━━━━━━━━━━━━━━\n\n") +
-      "\n\nنتیجه شناور تخمینی است؛ معامله واقعی نیست و تا بسته‌شدن قطعی محسوب نمی‌شود.",
-      menuForChat(env, chatId));
-  } catch (error) {
-    await sendMessage(env, chatId,
-      "❌ دریافت قیمت فعلی ناموفق بود. اطلاعات معاملات ذخیره‌شده تغییری نکرده است.\n" +
-      String(error.message || "خطای دریافت قیمت").slice(0, 500),
-      menuForChat(env, chatId));
   }
 }
 
@@ -2300,4 +2046,4 @@ async function mapLimit(items, limit, callback) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, isKrakenPerpetualTicker, calculateAtr, analyzeFuturesSymbol, getKrakenFuturesCandles, createPaperPosition, applyPaperPrice };
+export { FUTURES_CONFIG, isKrakenPerpetualTicker, calculateAtr, analyzeFuturesSymbol, getKrakenFuturesCandles };
