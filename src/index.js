@@ -2002,12 +2002,12 @@ async function runFuturesSignalsForChat(env, chatId) {
   try {
     const result = await runFuturesSignalScan(env);
     await sendLongMessage(env, chatId, result.report);
-    await sendMessage(env, chatId, "پایان بررسی فیوچرز.", MAIN_MENU);
+    await sendMessage(env, chatId, "پایان بررسی فیوچرز.", menuForChat(env, chatId));
   } catch (error) {
     await sendMessage(env, chatId,
       "❌ دریافت یا تحلیل داده Kraken Futures ناموفق بود.\n" +
       String(error.message || "خطای ناشناخته").slice(0, 900) +
-      "\n\nدر این وضعیت هیچ سیگنالی ساخته نمی‌شود.", MAIN_MENU
+      "\n\nدر این وضعیت هیچ سیگنالی ساخته نمی‌شود.", menuForChat(env, chatId)
     );
   }
 }
