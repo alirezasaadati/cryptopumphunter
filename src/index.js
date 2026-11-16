@@ -626,7 +626,7 @@ function menuForChat(env, chatId) {
 }
 async function showMenu(env, chatId) {
   await sendMessage(env, chatId,
-    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\\n\\nاز منوی زیر گزینه موردنظر را انتخاب کن:`,
+    `🚀 CRYPTO PUMP HUNTER V${CONFIG.VERSION}\n\nاز منوی زیر گزینه موردنظر را انتخاب کن:`,
     menuForChat(env, chatId));
 }
 
@@ -756,9 +756,9 @@ async function handleCallback(query, env) {
     }
     if (action === "invite") {
       await sendMessage(env, chatId,
-        "🚀 برای حمایت از توسعه و فعال ماندن Crypto Pump Hunter و همچنین بهره‌مندی از مزایای احتمالی ثبت‌نام، از طریق لینک اختصاصی زیر عضو صرافی LBank شوید.\\n\\n" +
-        "🎁 با ثبت‌نام از این لینک، از فرصت دریافت بونوس‌ها و طرح‌های تشویقی صرافی مطلع شوید.\\n\\n" +
-        "🔗 لینک ثبت‌نام:\\nhttps://www.lbk.pub/ref/67XF8\\n\\n" +
+        "🚀 برای حمایت از توسعه و فعال ماندن Crypto Pump Hunter و همچنین بهره‌مندی از مزایای احتمالی ثبت‌نام، از طریق لینک اختصاصی زیر عضو صرافی LBank شوید.\n\n" +
+        "🎁 با ثبت‌نام از این لینک، از فرصت دریافت بونوس‌ها و طرح‌های تشویقی صرافی مطلع شوید.\n\n" +
+        "🔗 لینک ثبت‌نام:\nhttps://www.lbk.pub/ref/67XF8\n\n" +
         "❤️ حمایت شما به ادامه توسعه امکانات و خدمات بهتر ربات کمک می‌کند.", BACK_MENU);
       return;
     }
