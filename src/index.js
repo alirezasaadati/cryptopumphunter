@@ -1,5 +1,5 @@
 const CONFIG = {
-  VERSION: "3.9.0",
+  VERSION: "3.9.1",
   MIN_MARKET_CAP: 1_000_000,
   MAX_MARKET_CAP: 500_000_000,
   MIN_DAILY_VOLUME: 250_000,
@@ -20,7 +20,7 @@ const TELEGRAM_API = "https://api.telegram.org";
 const seenUpdates = new Set();
 
 const ABOUT_TEXT =
-  "🚀 CRYPTO PUMP HUNTER V3.9.0\n\n" +
+  "🚀 CRYPTO PUMP HUNTER V3.9.1\n\n" +
   "طراحی و توسعه: علیرضا سعادتی\n\n" +
   "© تمامی حقوق مادی و معنوی این نرم‌افزار محفوظ است.\n\n" +
   "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه از صاحب اثر مجاز نیست.";
@@ -1723,9 +1723,9 @@ function formatCoin(item, isSignal) {
 const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
-  MAX_SYMBOLS: 24,
+  MAX_SYMBOLS: 32,
   CONCURRENCY: 3,
-  MIN_QUOTE_VOLUME: 5_000_000,
+  MIN_QUOTE_VOLUME: 3_000_000,
   KLINE_LIMIT: 120,
   MIN_CANDLES: 60,
   MIN_SCORE: 82,
@@ -1758,6 +1758,10 @@ function isKrakenPerpetualTicker(item) {
   const symbol = String(item.symbol || "").toUpperCase();
   // Kraken perpetual contracts use PI_ (inverse) or PF_ (multi-collateral) symbols.
   if (!/^(PI|PF)_[A-Z0-9]+USD$/.test(symbol)) return false;
+  // Keep tokenized equities out of the crypto-only futures scan.
+  const underlying = symbol.replace(/^(PI|PF)_/, "").replace(/USD$/, "");
+  const nonCryptoUnderlyings = new Set(["NVDAX", "TSLAX", "AAPLX", "AMZNX", "GOOGLX", "MSFTX", "METAX", "COINX"]);
+  if (nonCryptoUnderlyings.has(underlying)) return false;
   const quoteVolume = Number(item.volumeQuote);
   const last = Number(item.last);
   return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
@@ -1904,13 +1908,19 @@ async function runFuturesSignalScan(env) {
   });
   const signals = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score).slice(0, 8);
   const validData = analyzed.filter(x => x && x.score !== undefined).length;
-  const rejected = analyzed.filter(x => x?.rejected).slice(0, 8);
+  const allRejected = analyzed.filter(x => x?.rejected);
+  const rejected = allRejected.slice(0, 8);
+  const rejectionCounts = new Map();
+  for (const item of allRejected) {
+    const reason = item.rejected || "نامشخص";
+    rejectionCounts.set(reason, (rejectionCounts.get(reason) || 0) + 1);
+  }
   let report = `📈 CRYPTO PUMP HUNTER V${CONFIG.VERSION} — KRAKEN FUTURES\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
     "🏦 بازار: Kraken Derivatives Perpetual\n" +
     "⏱ تایم‌فریم: 1h با تأیید روند 4h\n" +
     `📥 نمادهای پرحجم بررسی‌شده: ${universe.length}\n` +
-    `📊 تحلیل‌های معتبر: ${validData}\n` +
+    `📊 تحلیل‌های دارای امتیاز: ${validData}\n` +
     `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n\n`;
   if (signals.length) {
     report += "🎯 سیگنال‌های فعلی\n━━━━━━━━━━━━━━━━━━\n\n";
@@ -1921,6 +1931,12 @@ async function runFuturesSignalScan(env) {
   if (rejected.length) {
     report += "🧪 نمونه دلایل رد نمادها\n";
     for (const item of rejected) report += `• ${item.symbol}: ${item.rejected}\n`;
+  }
+  if (rejectionCounts.size) {
+    report += "\n📊 شمارش دلایل رد کل نمادها\n";
+    for (const [reason, count] of [...rejectionCounts.entries()].sort((a, b) => b[1] - a[1])) {
+      report += `• ${reason}: ${count}\n`;
+    }
   }
   report += `\n🕒 زمان تهیه گزارش: ${new Date().toISOString()}\n` +
     `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} ثانیه\n` +
