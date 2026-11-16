@@ -567,7 +567,91 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
   return true;
 }
 
+// ---------------- OWNER MEMBER MANAGEMENT UI ----------------
+async function showMemberList(env, ownerId, cursor = "") {
+  if (!isOwner(ownerId, env) || !env.WATCHLIST_KV) return;
+  const options = { prefix: "member:", limit: 10 };
+  if (cursor) options.cursor = cursor;
+  const page = await env.WATCHLIST_KV.list(options);
+  const keyboard = [];
+  for (const key of page.keys || []) {
+    const id = key.name.slice(7);
+    const m = await env.WATCHLIST_KV.get(key.name, "json") || {};
+    const name = [m.firstName, m.lastName].filter(Boolean).join(" ") || "بدون نام";
+    const status = m.revoked || m.approved === false ? "🚫" : "✅";
+    keyboard.push([{text:`${status} ${name.slice(0,30)} | ${id}`,callback_data:`mprof:${id}`}]);
+  }
+  if (page.list_complete === false && page.cursor) {
+    keyboard.push([{text:"صفحه بعدی ➡️",callback_data:`members:${page.cursor}`}]);
+  }
+  keyboard.push([{text:"🏠 منوی اصلی",callback_data:"menu"}]);
+  await sendMessage(env,ownerId,`👥 مدیریت اعضا\n━━━━━━━━━━━━\nتعداد نمایش این صفحه: ${(page.keys||[]).length}\nبرای مشاهده پروفایل و مدیریت دسترسی روی عضو بزن.`,{inline_keyboard:keyboard});
+}
+async function showMemberProfile(env, ownerId, id) {
+  if (!isOwner(ownerId,env) || !env.WATCHLIST_KV || !/^-?\\d+$/.test(id)) return;
+  const m=await env.WATCHLIST_KV.get(memberKey(id),"json");
+  if(!m){await sendMessage(env,ownerId,"عضو پیدا نشد.");return;}
+  const blocked=m.revoked===true||m.approved===false;
+  const name=[m.firstName,m.lastName].filter(Boolean).join(" ")||"ثبت نشده";
+  const body=["👤 پروفایل عضو","━━━━━━━━━━━━━━━━━━",`نام: ${name}`,`نام کاربری: ${m.username?"@"+m.username:"ثبت نشده"}`,`شناسه تلگرام: ${m.userId||id}`,`شناسه گفتگو: ${m.chatId||id}`,`وضعیت: ${blocked?"🚫 لغو دسترسی":"✅ مجاز"}`,`درخواست: ${m.requestedAt||"نامشخص"}`,`تأیید: ${m.approvedAt||"ثبت نشده"}`,`آخرین فعال‌سازی: ${m.allowedAt||"ثبت نشده"}`,`لغو دسترسی: ${m.revokedAt||"ثبت نشده"}`].join("\n");
+  await sendMessage(env,ownerId,body,{inline_keyboard:[[blocked?{text:"✅ اجازه دسترسی مجدد",callback_data:`mall:${id}`}:{text:"🚫 قطع دسترسی",callback_data:`mrev:${id}`}],[{text:"⬅️ بازگشت",callback_data:"members:"}]]});
+}
+async function changeMemberAccess(env,ownerId,id,allow) {
+  if(!isOwner(ownerId,env)||!env.WATCHLIST_KV||!/^-?\\d+$/.test(id))return;
+  if(String(id)===String(env.OWNER_ID)){await sendMessage(env,ownerId,"دسترسی مدیر اصلی قابل تغییر نیست.");return;}
+  const m=await env.WATCHLIST_KV.get(memberKey(id),"json");
+  if(!m){await sendMessage(env,ownerId,"عضو پیدا نشد.");return;}
+  const next=allow?{...m,approved:true,revoked:false,allowedAt:new Date().toISOString(),allowedBy:String(ownerId)}:{...m,approved:false,revoked:true,revokedAt:new Date().toISOString(),revokedBy:String(ownerId)};
+  await env.WATCHLIST_KV.put(memberKey(id),JSON.stringify(next));
+  try{await sendMessage(env,id,allow?"🎉 دسترسی شما دوباره فعال شد.":"⛔ دسترسی شما توسط مدیر لغو شد.");}catch{}
+  await showMemberProfile(env,ownerId,id);
+}
+
 // ---------------- MAIN MENU ----------------
+
+// DexScreener discovery scanner: latest profiles are filtered by liquidity, volume and FDV.
+const DEX_LIMITS={tokens:25,liquidity:25000,volume:30000,minFdv:50000,maxFdv:500000000,ageDays:60};
+async function dexJson(url){
+  const response=await fetch(url,{headers:{"accept":"application/json"}});
+  if(!response.ok)throw new Error(`DexScreener HTTP ${response.status}`);
+  return response.json();
+}
+async function runDexScreenerScan(){
+  const profiles=await dexJson("https://api.dexscreener.com/token-profiles/latest/v1");
+  if(!Array.isArray(profiles))throw new Error("پاسخ فهرست توکن‌های تازه معتبر نیست.");
+  const unique=[...new Map(profiles.filter(x=>x.chainId&&x.tokenAddress).map(x=>[`${x.chainId}:${x.tokenAddress}`,x])).values()].slice(0,DEX_LIMITS.tokens);
+  const results=await mapLimit(unique,3,async profile=>{
+    const pairs=await dexJson(`https://api.dexscreener.com/token-pairs/v1/${encodeURIComponent(profile.chainId)}/${encodeURIComponent(profile.tokenAddress)}`);
+    const now=Date.now();
+    const candidates=(Array.isArray(pairs)?pairs:[]).map(p=>{
+      const fdv=Number(p.marketCap||p.fdv||0),liq=Number(p.liquidity?.usd||0),vol=Number(p.volume?.h24||0),created=Number(p.pairCreatedAt||0);
+      const age=created?(now-created)/86400000:null,buys=Number(p.txns?.h24?.buys||0),sells=Number(p.txns?.h24?.sells||0),change=Number(p.priceChange?.h24||0);
+      if(fdv<DEX_LIMITS.minFdv||fdv>DEX_LIMITS.maxFdv||liq<DEX_LIMITS.liquidity||vol<DEX_LIMITS.volume||(age!==null&&age>DEX_LIMITS.ageDays))return null;
+      let score=35+(liq>=100000?15:liq>=50000?10:0)+(vol/liq>=1?15:vol/liq>=.4?9:0)+(buys>sells*1.2?10:0)+(change>0&&change<25?8:0)+(change>0&&change<60?7:0)+(age!==null&&age<=14?5:0);
+      return {p,fdv,liq,vol,age,buys,sells,change,score:Math.min(100,score)};
+    }).filter(Boolean).sort((a,b)=>b.score-a.score);
+    return candidates[0]?{profile,...candidates[0]}:null;
+  });
+  const picks=results.filter(Boolean).sort((a,b)=>b.score-a.score).slice(0,8);
+  let report=`🔍 DexScreener | فرصت‌های توکن تازه\nپروفایل‌های بررسی‌شده: ${unique.length}\nواجد شرایط: ${picks.length}\n\n`;
+  for(const [i,x] of picks.entries()){
+    const p=x.p,b=p.baseToken||{};
+    report+=`${i+1}. ${b.name||"Unknown"} (${b.symbol||"?"})\nشبکه: ${x.profile.chainId}\nقرارداد: ${x.profile.tokenAddress}\nFDV/مارکت‌کپ: $${Math.round(x.fdv).toLocaleString("en-US")}\nقیمت: $${p.priceUsd||"نامشخص"}\nنقدینگی: $${Math.round(x.liq).toLocaleString("en-US")}\nحجم ۲۴ساعته: $${Math.round(x.vol).toLocaleString("en-US")}\nسن جفت: ${x.age===null?"نامشخص":x.age.toFixed(1)+" روز"}\nتغییر ۲۴ساعته: ${x.change.toFixed(1)}%\nخرید/فروش: ${x.buys}/${x.sells}\nامتیاز غربالگری: ${x.score}/100\nDexScreener: ${p.url||"ناموجود"}\n━━━━━━━━━━━━\n`;
+  }
+  if(!picks.length)report+="این بار توکنی با حداقل نقدینگی و حجم تعیین‌شده پیدا نشد.\n";
+  report+="\n⚠️ این فهرست غربالگری است، نه توصیه قطعی خرید. DexScreener امنیت قرارداد، قفل نقدینگی، مالیات فروش یا امکان فروش را تضمین نمی‌کند؛ پیش از خرید بررسی مستقل لازم است.";
+  return {report,picks,checked:unique.length};
+}
+async function runDexScreenerForChat(env,chatId){
+  if(!(await isApproved(chatId,env))){await sendMessage(env,chatId,"⛔ دسترسی شما فعال نیست.");return;}
+  await sendMessage(env,chatId,"🔍 در حال بررسی توکن‌های تازه DexScreener بر اساس مارکت‌کپ، نقدینگی و حجم معاملات...");
+  try{
+    const result=await runDexScreenerScan();
+    await sendLongMessage(env,chatId,result.report);
+    if(env.WATCHLIST_KV)await env.WATCHLIST_KV.put("last_dex_scan",JSON.stringify({timestamp:Date.now(),checked:result.checked,picks:result.picks.map(x=>({chainId:x.profile.chainId,tokenAddress:x.profile.tokenAddress,fdv:x.fdv,liquidity:x.liq,volume:x.vol,score:x.score,url:x.p.url}))}));
+    await sendMessage(env,chatId,"پایان بررسی DexScreener.",MAIN_MENU);
+  }catch(e){await sendMessage(env,chatId,"❌ خطا در دریافت داده DexScreener:\n"+String(e.message||e).slice(0,700),MAIN_MENU);}
+}
 
 async function showMenu(env, chatId) {
   const menu = JSON.parse(JSON.stringify(MAIN_MENU));
@@ -674,8 +758,18 @@ async function handleCallback(query, env) {
     return;
   }
 
-  if (action.startsWith("approve:") || action.startsWith("reject:")) {
-    await handleAdminMembershipCallback(query, env);
+  if (action.startsWith("approve:") || action.startsWith("reject:") ||
+      action.startsWith("members:") || action.startsWith("mprof:") ||
+      action.startsWith("mrev:") || action.startsWith("mall:")) {
+    if (!isOwner(chatId,env) || String(query.from?.id)!==String(env.OWNER_ID)) {
+      await answerCallback(env,query.id,"⛔ دسترسی غیرمجاز"); return;
+    }
+    await answerCallback(env,query.id);
+    if(action.startsWith("approve:")||action.startsWith("reject:")) await handleAdminMembershipCallback(query,env);
+    else if(action.startsWith("members:")) await showMemberList(env,chatId,action.slice(8));
+    else if(action.startsWith("mprof:")) await showMemberProfile(env,chatId,action.slice(6));
+    else if(action.startsWith("mrev:")) await changeMemberAccess(env,chatId,action.slice(5),false);
+    else if(action.startsWith("mall:")) await changeMemberAccess(env,chatId,action.slice(5),true);
     return;
   }
 
