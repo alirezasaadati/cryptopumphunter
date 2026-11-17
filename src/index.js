@@ -1,6 +1,5 @@
 import { analyzePriceAction } from "./price-action-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
-import { evaluateTradeManagement, formatManagementAlert } from "./futures-management.js";
 
 const CONFIG = {
   VERSION: "4.5.0",
@@ -24,7 +23,7 @@ const seenUpdates = new Set();
 
 const ABOUT_TEXT =
   "🤖 تریدیار | دستیار معامله‌گر فیوچرز\n\n" +
-  "طراحی و توسعه: علیرضا سعادتی\n\n" +
+  "Developer: Alireza Saadati\n\n" +
   "© تمامی حقوق مادی و معنوی این ربات محفوظ است.\n\n" +
   "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه از صاحب اثر مجاز نیست.";
 
@@ -1979,16 +1978,6 @@ async function handleTradeAction(action,chatId,env) {
     await writeTradeList(env,FUTURES_OPEN_KEY,open);
     return sendMessage(env,chatId,"✅ حد ضرر در دفتر پیگیری به نقطه ورود منتقل شد. این تغییر را باید دستی در صرافی هم انجام داده باشی.");
   }
-  if(op==="stop") {
-    const open=await readTradeList(env,FUTURES_OPEN_KEY);
-    const t=open.find(x=>x.id===id&&String(x.chatId)===String(chatId));
-    if(!t)return sendMessage(env,chatId,"معامله باز پیدا نشد.");
-    const suggested=Number(t.lastSuggestedStop);
-    if(!Number.isFinite(suggested)||suggested<=0)return sendMessage(env,chatId,"قیمت حد ضرر پیشنهادی پیدا نشد.");
-    t.currentStop=suggested;t.stopConfirmedAt=new Date().toISOString();
-    await writeTradeList(env,FUTURES_OPEN_KEY,open);
-    return sendMessage(env,chatId,"✅ تأیید شد. حد ضرر جدید در دفتر پیگیری ثبت شد؛ مطمئن شو همین قیمت را دستی در صرافی هم اعمال کرده‌ای.");
-  }
   const pending=await readTradeList(env,FUTURES_PENDING_KEY);
   const signal=pending.find(x=>x.id===id);
   if(!signal||signal.expiresAt<=Date.now())return sendMessage(env,chatId,"⏳ سیگنال پیدا نشد یا اعتبار ورود آن تمام شده است.");
@@ -2013,7 +2002,7 @@ async function handleFillCommand(env,chatId,message) {
     strategyId:signal.strategyId||"legacy",strategyName:signal.strategyName||"نامشخص",reason:signal.reason||"",
     plannedEntry:signal.entry,actualEntry:entry,initialStop:signal.stop,currentStop:signal.stop,
     target1:signal.target1,target2:signal.target2,target3:signal.target3,initialRisk:risk,
-    tpHits:[],managementStages:[],breakEvenConfirmed:false,status:"OPEN",createdAt:new Date().toISOString(),lastPrice:entry});
+    tpHits:[],breakEvenConfirmed:false,status:"OPEN",createdAt:new Date().toISOString(),lastPrice:entry});
   await writeTradeList(env,FUTURES_OPEN_KEY,open.slice(0,100));
   return sendMessage(env,chatId,`✅ معامله در دفتر پیگیری ثبت شد.\n${signal.symbol} | ${signal.side}\nورود واقعی: ${formatPrice(entry)}\nحد ضرر: ${formatPrice(signal.stop)}\nاهداف: ${formatPrice(signal.target1)} / ${formatPrice(signal.target2)} / ${formatPrice(signal.target3)}\n\n⚠️ فقط پایش تحلیلی است؛ سفارش واقعی ثبت نمی‌شود.`);
 }
@@ -2031,17 +2020,11 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
       await sendMessage(env,chatId,`🛑 ${t.symbol} به حد ضرر فعلی رسید. نتیجه نظری: ${t.outcomeR.toFixed(2)}R | اهداف لمس‌شده: ${t.tpHits.join(",")||"هیچ‌کدام"}`);
       continue;
     }
-    const management = evaluateTradeManagement(t, price, { leverage: 10 });
-    if (management.alert) {
-      const message = formatManagementAlert(t, management, formatPrice);
-      if (message) {
-        await sendMessage(env, chatId, message, {
-          inline_keyboard: [[{ text: "✅ حد ضرر جدید را در صرافی اعمال کردم", callback_data: `trade:stop:${t.id}` }]]
-        });
-        t.managementStages = [...new Set([...(t.managementStages || []), management.stageId])];
-        t.lastManagementAlertAt = new Date().toISOString();
-        t.lastSuggestedStop = management.recommendedStop;
-      }
+    const favorableR=tradeDir(t.side)*(price-t.actualEntry)/t.initialRisk;
+    if(favorableR>=0.75&&!t.protectionAlerted&&!t.breakEvenConfirmed) {
+      t.protectionAlerted=true;
+      await sendMessage(env,chatId,`🛡️ قیمت ${t.symbol} به +0.75R رسیده؛ یعنی نصف مسیر هدف اول. برای جلوگیری از تبدیل سود شناور به زیان، انتقال حد ضرر باقی‌مانده به نقطه ورود را بررسی کن. اگر واقعاً در صرافی انجامش دادی، تأیید کن.`,
+        {inline_keyboard:[[{text:"✅ حد ضرر را به ورود منتقل کردم",callback_data:`trade:be:${t.id}`}]]});
     }
     const levels=[["TP1",t.target1],["TP2",t.target2],["TP3",t.target3]],hits=[];
     for(const [key,target] of levels)if(!t.tpHits.includes(key)&&targetReached(t.side,price,target)){t.tpHits.push(key);hits.push(key);}
@@ -2069,7 +2052,7 @@ async function showOpenFuturesTrades(env,chatId) {
   const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));
   if(!list.length)return sendMessage(env,chatId,"📭 معامله بازی در دفتر پیگیری ثبت نشده است.",BACK_MENU);
   const body=list.slice(0,15).map(t=>`${t.side} ${t.symbol} | ${t.exchange||"Kraken"} | ${t.strategyName||"استراتژی ثبت‌نشده"}\nورود واقعی: ${formatPrice(t.actualEntry)} | قیمت آخر: ${formatPrice(t.lastPrice)}\nحد ضرر: ${formatPrice(t.currentStop)}\nاهداف: ${formatPrice(t.target1)} / ${formatPrice(t.target2)} / ${formatPrice(t.target3)}\nاهداف لمس‌شده: ${t.tpHits.join(",")||"—"}`).join("\n\n");
-  return sendLongMessage(env,chatId,"📌 معاملات باز\n━━━━━━━━━━━━━━━━━━\n"+body+"\n\n⚠️ پایش دوره‌ای است؛ حد ضرر و سفارش‌ها را باید دستی در صرافی تغییر بدهی.");
+  return sendLongMessage(env,chatId,"📌 معاملات باز\n━━━━━━━━━━━━━━━━━━\n"+body+"\n\n⚠️ فقط هنگام اسکن دستی به‌روزرسانی می‌شوند؛ سفارش واقعی ثبت نمی‌شود.");
 }
 async function showFuturesTradeHistory(env,chatId) {
   const list=(await readTradeList(env,FUTURES_CLOSED_KEY)).filter(t=>String(t.chatId)===String(chatId)).slice(0,15);
@@ -2092,6 +2075,7 @@ async function runAutomaticFuturesAlertScan(env) {
     const fresh = selectUnnotifiedFuturesSignals(result.signals || [], queuedFingerprints);
     queue = [...queue, ...fresh.map(item => ({ ...item, queuedAt: Date.now() }))].slice(-100);
     if (queue.length) await env.APP_KV.put(queueKey, JSON.stringify(queue), { expirationTtl: 86400 });
+    if (!queue.length) return { scanned: true, newSignals: 0, recipients: 0 };
 
     await migrateLegacyMembership(env);
     const recipients = new Set();
@@ -2107,17 +2091,7 @@ async function runAutomaticFuturesAlertScan(env) {
       cursor = page.list_complete === false ? page.cursor : null;
     } while (cursor);
 
-    let delivered = 0, failed = 0, monitored = 0;
-    // Trade records share one KV list; update recipients sequentially to avoid
-    // concurrent read/modify/write races and lost open-trade state.
-    for (const chatId of recipients) {
-      try {
-        await refreshOpenFuturesTrades(env, chatId, result.tickers || []);
-        monitored++;
-      } catch (error) {
-        console.error("Automatic futures trade monitoring failed", chatId, String(error?.message || error));
-      }
-    }
+    let delivered = 0, failed = 0;
     await mapLimit([...recipients], 4, async chatId => {
       const pending = [];
       for (const item of queue) {
@@ -2138,7 +2112,7 @@ async function runAutomaticFuturesAlertScan(env) {
       }
     });
     if (failed === 0 && recipients.size > 0) await env.APP_KV.delete(queueKey);
-    return { scanned: true, newSignals: fresh.length, queuedSignals: queue.length, recipients: recipients.size, delivered, failed, monitored };
+    return { scanned: true, newSignals: fresh.length, queuedSignals: queue.length, recipients: recipients.size, delivered, failed };
   } finally {
     await env.APP_KV.delete(lockKey);
   }
