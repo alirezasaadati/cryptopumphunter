@@ -55,7 +55,7 @@ function reprice(plan, nextOpen) {
   if (ratios.some(r => !(r > 0) || !Number.isFinite(r))) return null;
   return { side:plan.side, entry, stop, targets:ratios.map(r=>entry+dir*oldRisk*r), risk:oldRisk };
 }
-function simulate(plan, candles, start) {
+export function simulate(plan, candles, start) {
   const dir = plan.side === "LONG" ? 1 : -1;
   const targets = [...plan.targets];
   const p = { remaining:1, netR:0, hits:0, exitTime:null, reason:null };
