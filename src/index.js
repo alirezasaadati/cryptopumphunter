@@ -1,3 +1,4 @@
+import { runSpotScan } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 
 const CONFIG = {
@@ -834,7 +835,7 @@ async function handleCallback(query, env) {
       return;
     }
     if (action === "market_scan") {
-      await runFuturesSignalsForChat(env, chatId);
+      await runSpotMarketScanForChat(env, chatId);
       return;
     }
     if (action === "market_analysis") {
@@ -870,43 +871,42 @@ async function handleCallback(query, env) {
   }
 }
 
+async function runSpotMarketScanForChat(env, chatId) {
+  if (!env.APP_KV) {
+    await sendMessage(env, chatId, "⚠️ اتصال ذخیره‌سازی گزارش بازار در دسترس نیست. Binding مربوط به APP_KV را بررسی کن.", menuForChat(env, chatId));
+    return;
+  }
+  await sendMessage(env, chatId, "🔎 اسکن هوشمند بازار اسپات شروع شد...\nدر حال دریافت اطلاعات CoinLore و بررسی کندل‌های Kraken.");
+  try {
+    const result = await runSpotScan(env);
+    await sendLongMessage(env, chatId, result.report);
+    await sendMessage(env, chatId, "✅ عملیات اسکن بازار اسپات به پایان رسید.", menuForChat(env, chatId));
+  } catch (error) {
+    console.error("Spot market scan failed:", String(error?.stack || error));
+    await sendMessage(env, chatId, "❌ اجرای اسکن بازار اسپات ناموفق بود:\n" + String(error?.message || error).slice(0, 900), menuForChat(env, chatId));
+  }
+}
+
 async function showLatestMarketAnalysis(env, chatId) {
   if (!env.APP_KV) {
-    await sendMessage(env, chatId, "⚠️ ذخیره‌سازی گزارش اسکن در دسترس نیست.", BACK_MENU);
+    await sendMessage(env, chatId, "⚠️ ذخیره‌سازی گزارش اسکن بازار اسپات در دسترس نیست.", menuForChat(env, chatId));
     return;
   }
-
   let saved;
   try {
-    saved = await env.APP_KV.get("last_futures_scan", "json");
+    saved = await env.APP_KV.get("last_scan", "json");
   } catch (error) {
-    console.error("Could not load latest futures scan:", String(error?.message || error));
-    await sendMessage(env, chatId, "⚠️ دریافت آخرین تحلیل بازار ممکن نشد. کمی بعد دوباره تلاش کن.", BACK_MENU);
+    console.error("Could not load latest spot scan:", String(error?.message || error));
+    await sendMessage(env, chatId, "⚠️ دریافت آخرین تحلیل بازار اسپات ممکن نشد. کمی بعد دوباره تلاش کن.", menuForChat(env, chatId));
     return;
   }
-
-  if (!saved?.timestamp) {
-    await sendMessage(env, chatId, "هنوز گزارشی از اسکن بازار ثبت نشده است. ابتدا «اسکن بازار» را اجرا کن.", BACK_MENU);
+  if (!saved?.timestamp || !saved?.report) {
+    await sendMessage(env, chatId, "هنوز گزارشی از بازار اسپات ذخیره نشده است. ابتدا «اسکن بازار» را اجرا کن.", menuForChat(env, chatId));
     return;
   }
-
-  const signals = Array.isArray(saved.signals) ? saved.signals : [];
   const scannedAt = new Date(saved.timestamp).toLocaleString("fa-IR", { timeZone: "UTC" }) + " UTC";
-  let report = "📊 آخرین تحلیل بازار فیوچرز\n━━━━━━━━━━━━━━━━━━\n" +
-    "🏦 بازار: Kraken Derivatives Perpetual\n" +
-    "🧠 موتور تحلیل: Futures 3.8.2\n" +
-    `🕒 زمان آخرین اسکن: ${scannedAt}\n` +
-    `🎯 فرصت‌های شناسایی‌شده: ${signals.length}\n\n`;
-
-  if (!signals.length) {
-    report += "در آخرین اسکن، فرصت معتبری شناسایی نشد.";
-  } else {
-    report += signals.slice(0, 8).map((signal, index) =>
-      formatFuturesSignal(signal, index + 1)
-    ).join("\n━━━━━━━━━━━━━━━━━━\n\n");
-  }
-
-  await sendMessage(env, chatId, report, BACK_MENU);
+  await sendLongMessage(env, chatId, "📊 آخرین تحلیل بازار اسپات\n🕒 زمان اسکن: " + scannedAt + "\n━━━━━━━━━━━━━━━━━━\n\n" + saved.report);
+  await sendMessage(env, chatId, "پایان آخرین گزارش بازار اسپات.", menuForChat(env, chatId));
 }
 
 async function showStatus(env, chatId) {
