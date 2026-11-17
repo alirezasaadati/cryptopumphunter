@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { simulateTrade } from "./backtest-kraken.mjs";
+import { simulateTrade, repriceSignalForExecution } from "./backtest-kraken.mjs";
 import {
   FUTURES_CONFIG,
   FUTURES_PROVIDER_ORDER,
@@ -12,6 +12,8 @@ import {
   analyzeFuturesSymbol,
   getFuturesUniverse,
   tradeResultR,
+  calculateTradeEconomics,
+  qualifyTradeEconomics,
 } from "../src/index.js";
 
 function makeCandles({ count = 120, slope = 0.015, base = 100, volume = 100 } = {}) {
@@ -42,7 +44,7 @@ function makeValidSetup() {
   set1h(20,{open:100,high:100.8,low:99.9,close:100.3});
   set1h(25,{open:99.9,high:100.1,low:99.2,close:100});
   set1h(30,{open:100,high:101.2,low:99.9,close:100.5});
-  set1h(35,{open:99.9,high:100.1,low:99.4,close:100});
+  set1h(35,{open:99.9,high:100.1,low:99.6,close:100});
   set1h(38,{open:100.8,high:101.1,low:100.6,close:101});
   set1h(39,{open:101,high:101.5,low:100.9,close:101.4});
   const fourHour=Array.from({length:40},(_,i)=>({
@@ -67,6 +69,10 @@ test("Futures provider order is Kraken only", () => {
   assert.equal(FUTURES_CONFIG.CONCURRENCY, 2);
   assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME, 3_000_000);
   assert.equal(FUTURES_CONFIG.PREFERRED_MIN_QUOTE_VOLUME, 5_000_000);
+  assert.equal(FUTURES_CONFIG.REFERENCE_MARGIN_USD, 10);
+  assert.equal(FUTURES_CONFIG.REFERENCE_LEVERAGE, 10);
+  assert.equal(FUTURES_CONFIG.MIN_PROJECTED_PROFIT_USD, 2);
+  assert.equal(FUTURES_CONFIG.MAX_STOP_LOSS_USD, 2);
 });
 
 test("Kraken Futures accepts liquid perpetual contracts and normalizes XBT", () => {
@@ -135,6 +141,16 @@ test("strong aligned 1h/4h setup produces a bounded LONG plan", () => {
   assert.equal(result.rewardRisk, 1.5);
 });
 
+test("direction modes can isolate LONG-only and SHORT-only candidates", () => {
+  const { ticker, oneHour, fourHour, fifteenMin } = makeValidSetup();
+  const longOnly = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMin, { directionMode: "LONG_ONLY" });
+  const shortOnly = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMin, { directionMode: "SHORT_ONLY" });
+  assert.equal(longOnly.side, "LONG");
+  assert.equal(longOnly.eligible, true);
+  assert.notEqual(shortOnly.eligible, true);
+  assert.ok(shortOnly.diagnostics.some(x => x.status === "direction_filter"));
+});
+
 test("strategy diagnostics expose all four strategies without changing signal eligibility", () => {
   const { ticker, oneHour, fourHour, fifteenMin } = makeValidSetup();
   const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMin);
@@ -154,7 +170,7 @@ test("insufficient candle history is rejected", () => {
   assert.ok(result.rejected);
 });
 
-test("backtest trade simulation scales out 40/35/25 at the three targets", () => {
+test("backtest trade simulation scales out 20/20/60 at the three targets", () => {
   const candles = [
     { time: 1, open: 100, high: 101.6, low: 100.1, close: 101.4 },
     { time: 2, open: 101.4, high: 102.3, low: 101.2, close: 102.2 },
@@ -166,7 +182,7 @@ test("backtest trade simulation scales out 40/35/25 at the three targets", () =>
   });
   assert.equal(trade.targetHits, 3);
   assert.equal(trade.exitReason, "TARGETS");
-  assert.ok(Math.abs(trade.netR - 2.12) < 1e-9);
+  assert.ok(Math.abs(trade.netR - 2.54) < 1e-9);
 });
 
 test("backtest trade simulation resolves same-candle stop and target as stop first", () => {
@@ -201,3 +217,44 @@ test("full 40/35/25 target plan matches the 2.12R backtest model", () => {
 });
 
 
+
+test("new staged exits use 20/20/60 and realize 2.54R at all targets", () => {
+  const trade = { side:"LONG", actualEntry:100, initialRisk:10, currentStop:100,
+    tpHits:["TP1","TP2","TP3"], exitWeights:[.20,.20,.60] };
+  assert.ok(Math.abs(tradeResultR(trade,false)-2.54)<1e-9);
+});
+
+test("ETH example is rejected because $10 margin at 10x projects less than $2 net profit after estimated costs", () => {
+  const signal = { side:"LONG", entry:1823.30, stop:1812.52,
+    target1:1839.48, target2:1847.02, target3:1855.65 };
+  const economics = calculateTradeEconomics(signal);
+  assert.ok(Math.abs(economics.maxLossUsd-0.7512)<0.002);
+  assert.ok(Math.abs(economics.projectedProfitUsd-1.3427)<0.003);
+  assert.equal(qualifyTradeEconomics(economics).eligible,false);
+});
+
+test("economics filter accepts a sufficiently attractive trade and caps dollar stop risk", () => {
+  const economics = calculateTradeEconomics({side:"LONG",entry:100,stop:99,target1:101.5,target2:102.2,target3:103});
+  assert.equal(qualifyTradeEconomics(economics).eligible,true);
+  assert.ok(economics.maxLossUsd<=2);
+  assert.ok(economics.projectedProfitUsd>=2);
+});
+
+test("backtest reprices LONG and SHORT entries at executable fills and preserves target R multiples", () => {
+  const long = repriceSignalForExecution({
+    side:"LONG",entry:100,stop:99,target1:101.5,target2:102.2,target3:103
+  },100.1);
+  assert.ok(Math.abs(long.entry-100.1)<1e-9);
+  assert.ok(Math.abs(long.target1-101.75)<1e-9);
+  assert.ok(Math.abs(long.target2-102.52)<1e-9);
+  assert.ok(Math.abs(long.target3-103.4)<1e-9);
+
+  const short = repriceSignalForExecution({
+    side:"SHORT",entry:100,stop:101,target1:98.5,target2:97.8,target3:97
+  },99.9);
+  assert.ok(Math.abs(short.entry-99.9)<1e-9);
+  assert.ok(Math.abs(short.target1-98.25)<1e-9);
+  assert.ok(Math.abs(short.target2-97.48)<1e-9);
+  assert.ok(Math.abs(short.target3-96.6)<1e-9);
+  assert.equal(repriceSignalForExecution({side:"LONG",entry:100,stop:99,target1:101.5,target2:102.2,target3:103},98.9),null);
+});

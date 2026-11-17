@@ -38,8 +38,9 @@ export function formatFuturesSignalAlert(signal, index = 1) {
     `🛑 حد ضرر: ${formatSignalPrice(signal?.stop)}\n` +
     `🎯 تارگت ۱: ${formatSignalPrice(signal?.target1)}\n` +
     `🎯 تارگت ۲: ${formatSignalPrice(signal?.target2)}\n` +
-    `🎯 تارگت ۳: ${formatSignalPrice(signal?.target3)}\n\n` +
-    "⚠️ سیگنال تحلیلی است؛ سفارش واقعی ثبت نمی‌شود.";
+    `🎯 تارگت ۳: ${formatSignalPrice(signal?.target3)}\n` +
+    (signal?.economics ? `💵 سود خالص تخمینی خروج ۲۰/۲۰/۶۰: ${Number(signal.economics.projectedProfitUsd).toFixed(2)} به‌ازای ${signal.economics.referenceMarginUsd} مارجین با لوریج ${signal.economics.leverage}x\n🛑 ضرر تخمینی تا استاپ با هزینه: ${Number(signal.economics.maxLossUsd).toFixed(2)}\n` : "") +
+    "\n⚠️ برآورد پس از کارمزد و لغزش فرضی است؛ فاندینگ متغیر لحاظ نشده و سفارش واقعی ثبت نمی‌شود.";
 }
 
 function formatFuturesSymbol(symbol) {
