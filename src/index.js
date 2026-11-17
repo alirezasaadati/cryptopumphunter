@@ -1469,7 +1469,7 @@ async function runFuturesSignalScan(env, options = {}) {
   const generatedSignals = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score).slice(0, 8)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
   const signals = await savePendingFuturesSignals(env, generatedSignals);
-  if (signals.length && env.APP_KV) {
+  if (env.APP_KV) {
     try {
       await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
     } catch (error) {
