@@ -88,7 +88,11 @@ test("legacy 1h/4h strategy can generate a SHORT",()=>{
 test("risk distance outside the original 0.2%-8% band is rejected",()=>{
   const {ticker,oneHour,fourHour}=makeSetup("LONG");
   const altered=oneHour.map(x=>({...x}));
-  for(let i=altered.length-7;i<altered.length;i++) altered[i].low=altered.at(-1).close-0.01;
+  // Widen the last 14 true ranges enough to exceed the original 8% risk ceiling.
+  for(let i=altered.length-14;i<altered.length;i++) {
+    altered[i].high=altered[i].close+10;
+    altered[i].low=altered[i].close-10;
+  }
   const result=analyzeFuturesSymbol(ticker,altered,fourHour);
   assert.ok(result.rejected || result.eligible===false);
 });
