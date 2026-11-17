@@ -21,6 +21,10 @@ const MAIN_MENU = {
       { text: "📈 سیگنال فیوچرز", callback_data: "futures" }
     ],
     [
+      { text: "🔎 اسکن بازار", callback_data: "market_scan" },
+      { text: "📊 تحلیل بازار", callback_data: "market_analysis" }
+    ],
+    [
       { text: "📌 معاملات باز", callback_data: "open_trades" },
       { text: "📚 تاریخچه معاملات", callback_data: "trade_history" }
     ],
@@ -829,6 +833,14 @@ async function handleCallback(query, env) {
       await runFuturesSignalsForChat(env, chatId);
       return;
     }
+    if (action === "market_scan") {
+      await runFuturesSignalsForChat(env, chatId);
+      return;
+    }
+    if (action === "market_analysis") {
+      await showLatestMarketAnalysis(env, chatId);
+      return;
+    }
     if (action === "open_trades") return showOpenFuturesTrades(env, chatId);
     if (action === "trade_history") return showFuturesTradeHistory(env, chatId);
     if (action.startsWith("trade:")) return handleTradeAction(action, chatId, env);
@@ -856,6 +868,45 @@ async function handleCallback(query, env) {
       menuForChat(env, chatId)
     );
   }
+}
+
+async function showLatestMarketAnalysis(env, chatId) {
+  if (!env.APP_KV) {
+    await sendMessage(env, chatId, "⚠️ ذخیره‌سازی گزارش اسکن در دسترس نیست.", BACK_MENU);
+    return;
+  }
+
+  let saved;
+  try {
+    saved = await env.APP_KV.get("last_futures_scan", "json");
+  } catch (error) {
+    console.error("Could not load latest futures scan:", String(error?.message || error));
+    await sendMessage(env, chatId, "⚠️ دریافت آخرین تحلیل بازار ممکن نشد. کمی بعد دوباره تلاش کن.", BACK_MENU);
+    return;
+  }
+
+  if (!saved?.timestamp) {
+    await sendMessage(env, chatId, "هنوز گزارشی از اسکن بازار ثبت نشده است. ابتدا «اسکن بازار» را اجرا کن.", BACK_MENU);
+    return;
+  }
+
+  const signals = Array.isArray(saved.signals) ? saved.signals : [];
+  const scannedAt = new Date(saved.timestamp).toLocaleString("fa-IR", { timeZone: "UTC" }) + " UTC";
+  let report = "📊 آخرین تحلیل بازار فیوچرز\n━━━━━━━━━━━━━━━━━━\n" +
+    "🏦 بازار: Kraken Derivatives Perpetual\n" +
+    "🧠 موتور تحلیل: Futures 3.8.2\n" +
+    `🕒 زمان آخرین اسکن: ${scannedAt}\n` +
+    `🎯 فرصت‌های شناسایی‌شده: ${signals.length}\n\n`;
+
+  if (!signals.length) {
+    report += "در آخرین اسکن، فرصت معتبری شناسایی نشد.";
+  } else {
+    report += signals.slice(0, 8).map((signal, index) =>
+      formatFuturesSignal(signal, index + 1)
+    ).join("\n━━━━━━━━━━━━━━━━━━\n\n");
+  }
+
+  await sendMessage(env, chatId, report, BACK_MENU);
 }
 
 async function showStatus(env, chatId) {
