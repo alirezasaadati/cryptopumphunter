@@ -5,8 +5,8 @@ const BASE = "https://futures.kraken.com";
 const HOUR = 60 * 60 * 1000;
 const FOUR_HOURS = 4 * HOUR;
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
-const DAYS = Math.max(15, Math.min(90, Number(process.env.BACKTEST_DAYS || 30)));
-const SYMBOL_LIMIT = Math.max(1, Math.min(5, Number(process.env.BACKTEST_SYMBOLS || 3)));
+const DAYS = Math.max(15, Math.min(90, Number(process.env.BACKTEST_DAYS || 90)));
+const SYMBOL_LIMIT = Math.max(1, Math.min(10, Number(process.env.BACKTEST_SYMBOLS || 5)));
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
 const SLIPPAGE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_SLIPPAGE || 0.0003));
 const MAX_HOLD_HOURS = 72;
@@ -155,8 +155,8 @@ function summarize(trades) {
 
 async function backtestSymbol(ticker, fromMs, toMs, testStartMs) {
   const [oneHour,fourHour,fifteenMin] = await Promise.all([
-    fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs,HOUR),
-    fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS),
+    fetchHistoricalCandlesInChunks(ticker.symbol,"1h",fromMs,toMs,HOUR),
+    fetchHistoricalCandlesInChunks(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS),
     fetchHistoricalCandlesInChunks(ticker.symbol,"15m",fromMs,toMs,FIFTEEN_MINUTES)
   ]);
   if (oneHour.length < FUTURES_CONFIG.MIN_CANDLES || fourHour.length < FUTURES_CONFIG.MIN_CANDLES ||
