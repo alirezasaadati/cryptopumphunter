@@ -12,6 +12,8 @@ import {
   analyzeFuturesSymbol,
   getFuturesUniverse,
   tradeResultR,
+  calculateTradeEconomics,
+  qualifyTradeEconomics,
 } from "../src/index.js";
 
 function makeCandles({ count = 120, slope = 0.015, base = 100, volume = 100 } = {}) {
@@ -166,7 +168,7 @@ test("backtest trade simulation scales out 40/35/25 at the three targets", () =>
   });
   assert.equal(trade.targetHits, 3);
   assert.equal(trade.exitReason, "TARGETS");
-  assert.ok(Math.abs(trade.netR - 2.12) < 1e-9);
+  assert.ok(Math.abs(trade.netR - 2.54) < 1e-9);
 });
 
 test("backtest trade simulation resolves same-candle stop and target as stop first", () => {
@@ -201,3 +203,25 @@ test("full 40/35/25 target plan matches the 2.12R backtest model", () => {
 });
 
 
+
+test("new staged exits use 20/20/60 and realize 2.54R at all targets", () => {
+  const trade = { side:"LONG", actualEntry:100, initialRisk:10, currentStop:100,
+    tpHits:["TP1","TP2","TP3"], exitWeights:[.20,.20,.60] };
+  assert.ok(Math.abs(tradeResultR(trade,false)-2.54)<1e-9);
+});
+
+test("ETH example is rejected because $10 margin at 10x projects less than $2 gross profit", () => {
+  const signal = { side:"LONG", entry:1823.30, stop:1812.52,
+    target1:1839.48, target2:1847.02, target3:1855.65 };
+  const economics = calculateTradeEconomics(signal);
+  assert.ok(Math.abs(economics.maxLossUsd-0.5912)<0.002);
+  assert.ok(Math.abs(economics.projectedProfitUsd-1.5027)<0.003);
+  assert.equal(qualifyTradeEconomics(economics).eligible,false);
+});
+
+test("economics filter accepts a sufficiently attractive trade and caps dollar stop risk", () => {
+  const economics = calculateTradeEconomics({side:"LONG",entry:100,stop:99,target1:101.5,target2:102.2,target3:103});
+  assert.equal(qualifyTradeEconomics(economics).eligible,true);
+  assert.ok(economics.maxLossUsd<=2);
+  assert.ok(economics.projectedProfitUsd>=2);
+});
