@@ -1,5 +1,6 @@
 import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
 import { mkdir, writeFile } from "node:fs/promises";
+import { simulateManagedTrade, summarizeManagementComparison } from "../src/futures-management-backtest.js";
 
 const BASE = "https://futures.kraken.com";
 const HOUR = 60 * 60 * 1000;
@@ -129,7 +130,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS)
   ]);
   if (oneHour.length < 100 || fourHour.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error(ticker.symbol + ": insufficient historical candles (1h=" + oneHour.length + ", 4h=" + fourHour.length + ")");
-  const trades = [];
+  const trades = [], managedTrades = [];
   let nextAvailableIndex = 60;
   for (let i=60;i<oneHour.length-1;i++) {
     if (i<nextAvailableIndex) continue;
@@ -149,17 +150,21 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (!confirmed?.eligible) continue;
     const entryIndex=i+1;
     const tradeCandles=oneHour.slice(entryIndex,Math.min(oneHour.length,entryIndex+MAX_HOLD_HOURS+1));
-    const trade=simulateTrade({
+    const setup = {
       side:confirmed.side,entry:confirmed.entry,stop:confirmed.stop,
       targets:[confirmed.target1,confirmed.target2,confirmed.target3],
       candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
-    });
+    };
+    const trade=simulateTrade({...setup,targets:[...setup.targets]});
+    const managed=simulateManagedTrade({...setup,targets:[...setup.targets]});
     trade.symbol=ticker.symbol; trade.score=confirmed.score; trade.signalTime=signalBar.time;
-    trades.push(trade);
-    const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
+    managed.symbol=ticker.symbol; managed.score=confirmed.score; managed.signalTime=signalBar.time;
+    trades.push(trade); managedTrades.push(managed);
+    const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime || c.time===managed.exitTime);
+
     nextAvailableIndex=Math.max(entryIndex+1,exitIndex+1);
   }
-  return {symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,trades,metrics:summarize(trades)};
+  return {symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,trades,managedTrades,metrics:summarize(trades),managementMetrics:summarizeManagementComparison(managedTrades)};
 }
 
 async function main() {
@@ -177,6 +182,7 @@ async function main() {
     catch(error) { results.push({symbol:ticker.symbol,error:error.message,trades:[],metrics:summarize([])}); }
   }
   const allTrades=results.flatMap(r=>r.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const allManagedTrades=results.flatMap(r=>r.managedTrades||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS},
@@ -186,11 +192,14 @@ async function main() {
       maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
       sameCandleStopTargetRule:"stop first (conservative)",
       entryRule:"next 1h candle open, adverse slippage applied",
-      funding:"excluded (historical funding series not included)",
+      funding:"excluded (historical funding series not included)",\n      comparison:"Both exit models use identical signals and entries; managed model retains the same 40/35/25 targets and adds conservative staged stops.",
       signalUses:"historical 1h/4h closed candles; 24h change derived from historical bars; no current funding or future candle data"
     },
-    overall:summarize(allTrades),
-    symbols:results.map(({trades,...rest})=>rest),trades:allTrades
+    baseline:{name:"Current 40/35/25 target exits",metrics:summarize(allTrades)},
+    stagedManagement:{name:"40/35/25 targets plus staged protective stops",metrics:summarizeManagementComparison(allManagedTrades)},
+    symbols:results.map(({trades,managedTrades,...rest})=>rest),
+    trades:allTrades,
+    managedTrades:allManagedTrades
   };
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/kraken-futures-backtest.json",JSON.stringify(report,null,2));
@@ -198,18 +207,15 @@ async function main() {
     "# Kraken Futures v3.9.0 — Historical Backtest","",
     "Period: "+report.period.from+" to "+report.period.to+" ("+DAYS+" days)",
     "Symbols successfully tested: "+report.settings.symbolsTested+"/"+SYMBOL_LIMIT,
-    "Trades: "+report.overall.trades,
-    "Win rate: "+report.overall.winRatePct.toFixed(2)+"%",
-    "Net result: "+report.overall.netR.toFixed(2)+"R",
-    "Expectancy: "+report.overall.expectancyR.toFixed(3)+"R/trade",
-    "Profit factor: "+(report.overall.profitFactor===null?"n/a":report.overall.profitFactor.toFixed(2)),
-    "Max drawdown: "+report.overall.maxDrawdownR.toFixed(2)+"R","",
+    "COMPARISON — same entries and same historical candles",
+    "Baseline: "+JSON.stringify(report.baseline.metrics),
+    "Staged management: "+JSON.stringify(report.stagedManagement.metrics),"",
     "Costs assumed: "+(FEE_PER_SIDE*100).toFixed(3)+"% fee + "+(SLIPPAGE_PER_SIDE*100).toFixed(3)+"% slippage per side.",
     "Partial exits: 40% at 1.5R, 35% at 2.2R, 25% at 3R. Same-candle stop/target ambiguity is resolved as stop first.",
     "Historical funding is excluded. Simplified price-based simulation; not a live-fill or profitability guarantee.","",
-    "| Symbol | 1h candles | 4h candles | Trades | Win rate | Net R | Expectancy | Max DD | Error |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---|",
-    ...results.map(r=>"| "+r.symbol+" | "+(r.candles1h||0)+" | "+(r.candles4h||0)+" | "+r.metrics.trades+" | "+r.metrics.winRatePct.toFixed(1)+"% | "+r.metrics.netR.toFixed(2)+" | "+r.metrics.expectancyR.toFixed(3)+" | "+r.metrics.maxDrawdownR.toFixed(2)+" | "+(r.error||"").replaceAll("|","/")+" |")
+    "| Symbol | Trades | Baseline Net R | Managed Net R | Baseline DD | Managed DD | Error |",
+    "|---|---:|---:|---:|---:|---:|---|",
+    ...results.map(r=>"| "+r.symbol+" | "+r.metrics.trades+" | "+r.metrics.netR.toFixed(2)+" | "+r.managementMetrics.netR.toFixed(2)+" | "+r.metrics.maxDrawdownR.toFixed(2)+" | "+r.managementMetrics.maxDrawdownR.toFixed(2)+" | "+(r.error||"").replaceAll("|","/")+" |")
   ];
   await writeFile("artifacts/kraken-futures-backtest.md",lines.join("\n"));
   console.log(JSON.stringify({ok:true,overall:report.overall,symbols:report.symbols,artifacts:["artifacts/kraken-futures-backtest.json","artifacts/kraken-futures-backtest.md"]},null,2));
