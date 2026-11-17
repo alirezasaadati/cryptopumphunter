@@ -1,0 +1,55 @@
+name: Futures Engine Experimental Validation
+
+on:
+  push:
+    branches:
+      - experimental/futures-engine-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+        with:
+          ref: experimental/futures-engine-v2
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+      - name: Syntax check and unit tests
+        run: npm test
+
+  historical-backtest:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    timeout-minutes: 20
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+        with:
+          ref: experimental/futures-engine-v2
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 30-day Kraken historical comparison
+        env:
+          BACKTEST_DAYS: 30
+          BACKTEST_SYMBOLS: 3
+          BACKTEST_FEE: 0.0005
+          BACKTEST_SLIPPAGE: 0.0003
+        run: node scripts/backtest-kraken.mjs
+      - name: Upload backtest reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-management-backtest
+          path: artifacts/
+          if-no-files-found: error
