@@ -259,7 +259,7 @@ async function main() {
     "Staged management: "+JSON.stringify(report.stagedManagement.metrics),"",
     "Costs assumed: "+(FEE_PER_SIDE*100).toFixed(3)+"% fee + "+(SLIPPAGE_PER_SIDE*100).toFixed(3)+"% slippage per side.",
     "Partial exits: 40% at 1.5R, 35% at 2.2R, 25% at 3R. Same-candle stop/target ambiguity is resolved as stop first.",
-    "Historical funding is excluded. Simplified price-based simulation; not a live-fill or profitability guarantee.",",
+    "Historical funding is excluded. Simplified price-based simulation; not a live-fill or profitability guarantee.",
     "Filter experiments: each score/risk threshold is selected on the first 2/3 only; final 1/3 is chronological holdout.",
     ...filterExperiments.map(x=>"score >= "+x.minScore+", risk >= "+x.minRiskPct.toFixed(2)+"% | train n="+x.train.baseline.trades+" netR="+x.train.baseline.netR.toFixed(2)+" PF="+x.train.baseline.profitFactor.toFixed(2)+" | holdout n="+x.holdout.baseline.trades+" netR="+x.holdout.baseline.netR.toFixed(2)+" PF="+x.holdout.baseline.profitFactor.toFixed(2)),
     "",
