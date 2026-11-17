@@ -183,8 +183,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     };
     const trade=simulateTrade({...setup,targets:[...setup.targets]});
     const managed=simulateManagedTrade({...setup,targets:[...setup.targets]});
-    trade.symbol=ticker.symbol; trade.score=confirmed.score; trade.signalTime=signalBar.time;
-    managed.symbol=ticker.symbol; managed.score=confirmed.score; managed.signalTime=signalBar.time;
+    trade.symbol=ticker.symbol; trade.score=confirmed.score; trade.strategyId=confirmed.strategyId; trade.signalTime=signalBar.time;
+    managed.symbol=ticker.symbol; managed.score=confirmed.score; managed.strategyId=confirmed.strategyId; managed.signalTime=signalBar.time;
     trades.push(trade); managedTrades.push(managed);
     const exitTime=trade.exitTime;
     const exitIndex=oneHour.findIndex(c=>c.time<=exitTime && c.time+HOUR>exitTime);
