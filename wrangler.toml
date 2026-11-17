@@ -1,9 +1,17 @@
 name = "cryptopumphunter"
 main = "src/index.js"
-compatibility_date = "2026-11-15"
+compatibility_date = "2026-11-16"
+
+[vars]
+APP_MODE = "manual"
+MIN_SIGNAL_SCORE = "72"
+SIGNAL_TTL_MINUTES = "60"
+MAX_ENTRY_DRIFT_PCT = "0.35"
+MAX_SCAN_SYMBOLS = "8"
 
 [[kv_namespaces]]
-binding = "WATCHLIST_KV"
+binding = "APP_KV"
 id = "dab441cdffc0460faeb497cee6edd314"
 
-# No scheduled trigger: the worker runs only when requested.
+[triggers]
+crons = ["*/5 * * * *"]

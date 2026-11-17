@@ -1,0 +1,42 @@
+name: One-time deploy automatic futures alerts
+# Trigger this verified one-time production deployment after compact alert changes are merged.
+# Production deployment also includes the one-line Telegram signal layout.
+# Re-run for the pre-Start profile description and menu-only /start behavior.
+# Refresh profile text and first-start menu presentation.
+# Deployment trigger commit must contain the workflow's expected phrase.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-futures-alerts-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: contains(github.event.head_commit.message, 'One-time deploy automatic futures alerts')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Deploy production Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy

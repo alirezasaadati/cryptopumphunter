@@ -3,10 +3,15 @@ import assert from "node:assert/strict";
 import { simulateTrade } from "./backtest-kraken.mjs";
 import {
   FUTURES_CONFIG,
-  isKrakenPerpetualTicker,
+  FUTURES_PROVIDER_ORDER,
+  isKrakenFuturesPerpetual,
+  normalizeKrakenFuturesUnderlying,
+  getKrakenFuturesUniverse,
+  getKrakenFuturesCandles,
   calculateAtr,
   analyzeFuturesSymbol,
-  getKrakenFuturesCandles,
+  getFuturesUniverse,
+  tradeResultR,
 } from "../src/index.js";
 
 function makeCandles({ count = 120, slope = 0.015, base = 100, volume = 100 } = {}) {
@@ -28,31 +33,88 @@ function makeCandles({ count = 120, slope = 0.015, base = 100, volume = 100 } = 
 }
 
 function makeValidSetup() {
-  const oneHour = makeCandles();
-  const fourHour = makeCandles({ slope: 0.04, base: 100 });
+  const oneHour = Array.from({length:40},(_,i)=>({
+    time:i*3600000,open:100,high:100.2,low:99.8,close:100,volume:100
+  }));
+  const set1h=(i,c)=>{oneHour[i]={time:i*3600000,volume:100,...c};};
+  set1h(10,{open:100,high:101,low:99.9,close:100.4});
+  set1h(15,{open:99.8,high:100.1,low:99,close:100});
+  set1h(20,{open:100,high:100.8,low:99.9,close:100.3});
+  set1h(25,{open:99.9,high:100.1,low:99.2,close:100});
+  set1h(30,{open:100,high:101.2,low:99.9,close:100.5});
+  set1h(35,{open:99.9,high:100.1,low:99.4,close:100});
+  set1h(38,{open:100.8,high:101.1,low:100.6,close:101});
+  set1h(39,{open:101,high:101.5,low:100.9,close:101.4});
+  const fourHour=Array.from({length:40},(_,i)=>({
+    time:i*14400000,open:100,high:100.2,low:99.8,close:100,volume:100
+  }));
+  const fifteenMin=Array.from({length:40},(_,i)=>({
+    time:i*900000,open:100,high:100.2,low:99.8,close:100,volume:100
+  }));
+  fifteenMin[38]={time:38*900000,open:100,high:100.1,low:99.9,close:100,volume:100};
+  fifteenMin[39]={time:39*900000,open:101.1,high:101.6,low:101,close:101.4,volume:100};
   const ticker = {
-    symbol: "PF_TESTUSD",
-    last: oneHour.at(-1).close + 0.02,
-    quoteVolume: 12_000_000,
-    priceChangePercent: 2,
+    symbol: "PF_TESTUSD", last: 101.4,
+    quoteVolume: 12_000_000, priceChangePercent: 2,
     premium: { lastFundingRate: 0.0001 }
   };
-  return { ticker, oneHour, fourHour };
+  return { ticker, oneHour, fourHour, fifteenMin };
 }
 
-test("Kraken perpetual filter accepts liquid PI/PF USD perpetuals only", () => {
-  assert.equal(isKrakenPerpetualTicker({
-    tag: "perpetual", symbol: "PF_XBTUSD", volumeQuote: 8_000_000, last: 50_000
-  }), true);
-  assert.equal(isKrakenPerpetualTicker({
-    tag: "futures", symbol: "PF_XBTUSD", volumeQuote: 8_000_000, last: 50_000
-  }), false);
-  assert.equal(isKrakenPerpetualTicker({
-    tag: "perpetual", symbol: "BTC/USD", volumeQuote: 8_000_000, last: 50_000
-  }), false);
-  assert.equal(isKrakenPerpetualTicker({
-    tag: "perpetual", symbol: "PF_XBTUSD", volumeQuote: 1_000, last: 50_000
-  }), false);
+test("Futures provider order is Kraken only", () => {
+  assert.deepEqual(FUTURES_PROVIDER_ORDER, ["Kraken"]);
+  assert.equal(FUTURES_CONFIG.MAX_SYMBOLS, 32);
+  assert.equal(FUTURES_CONFIG.CONCURRENCY, 2);
+  assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME, 3_000_000);
+  assert.equal(FUTURES_CONFIG.PREFERRED_MIN_QUOTE_VOLUME, 5_000_000);
+});
+
+test("Kraken Futures accepts liquid perpetual contracts and normalizes XBT", () => {
+  assert.equal(isKrakenFuturesPerpetual({ symbol: "PF_XBTUSD", tag: "perpetual", volumeQuote: 8_000_000, last: 67000 }), true);
+  assert.equal(isKrakenFuturesPerpetual({ symbol: "PF_XBTUSD", tag: "month", volumeQuote: 8_000_000, last: 67000 }), false);
+  assert.equal(isKrakenFuturesPerpetual({ symbol: "PF_XBTUSD", tag: "perpetual", volumeQuote: 100, last: 67000 }), false);
+  for (const symbol of ["PF_NVDAXUSD", "PF_AAPLXUSD", "PF_TSLAXUSD", "PF_SPYXUSD", "PF_AMZNXUSD"]) {
+    assert.equal(isKrakenFuturesPerpetual({ symbol, tag: "perpetual", volumeQuote: 8_000_000, last: 100 }), false, symbol);
+  }
+  assert.equal(isKrakenFuturesPerpetual({ symbol: "PF_APEXUSD", tag: "perpetual", volumeQuote: 8_000_000, last: 100 }), true);
+  assert.equal(normalizeKrakenFuturesUnderlying("PF_XBTUSD"), "BTC");
+  assert.equal(normalizeKrakenFuturesUnderlying("PI_ETHUSD"), "ETH");
+});
+
+test("Kraken Futures universe uses public Derivatives tickers", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    assert.match(String(url), /futures\.kraken\.com\/derivatives\/api\/v3\/tickers/);
+    return new Response(JSON.stringify({ result: "success", tickers: [
+      { symbol: "PF_XBTUSD", tag: "perpetual", volumeQuote: 12_000_000, last: 67000, fundingRate: 0.0001 },
+      { symbol: "PF_ETHUSD", tag: "perpetual", volumeQuote: 8_000_000, last: 3500 }
+    ] }), { status: 200 });
+  };
+  try {
+    const tickers = await getKrakenFuturesUniverse();
+    assert.equal(tickers.length, 2);
+    assert.equal(tickers[0].exchange, "Kraken");
+    assert.equal(tickers[0].underlying, "BTC");
+    assert.equal(tickers[0].last, 67000);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Kraken Futures candles normalize chart data and exclude the forming candle", async () => {
+  const originalFetch = globalThis.fetch;
+  const now = Date.now(), interval = 60 * 60 * 1000;
+  globalThis.fetch = async url => {
+    assert.match(String(url), /api\/charts\/v1\/trade\/PF_XBTUSD\/1h\?count=/);
+    return new Response(JSON.stringify({ candles: [
+      { time: now - 3 * interval, open: 100, high: 102, low: 99, close: 101, volume: 20 },
+      { time: now - 2 * interval, open: 101, high: 103, low: 100, close: 102, volume: 30 },
+      { time: now - interval / 2, open: 102, high: 104, low: 101, close: 103, volume: 40 }
+    ] }), { status: 200 });
+  };
+  try {
+    const candles = await getKrakenFuturesCandles("PF_XBTUSD", "1h");
+    assert.deepEqual(candles.map(c => c.close), [101, 102]);
+    assert.equal(candles[0].volume, 20);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("ATR rejects insufficient candles and calculates positive volatility", () => {
@@ -61,8 +123,8 @@ test("ATR rejects insufficient candles and calculates positive volatility", () =
 });
 
 test("strong aligned 1h/4h setup produces a bounded LONG plan", () => {
-  const { ticker, oneHour, fourHour } = makeValidSetup();
-  const result = analyzeFuturesSymbol(ticker, oneHour, fourHour);
+  const { ticker, oneHour, fourHour, fifteenMin } = makeValidSetup();
+  const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMin);
   assert.equal(result.side, "LONG");
   assert.equal(result.eligible, true);
   assert.ok(result.score >= FUTURES_CONFIG.MIN_SCORE);
@@ -73,38 +135,23 @@ test("strong aligned 1h/4h setup produces a bounded LONG plan", () => {
   assert.equal(result.rewardRisk, 1.5);
 });
 
-test("insufficient candle history is rejected", () => {
-  const { ticker, oneHour, fourHour } = makeValidSetup();
-  assert.throws(
-    () => analyzeFuturesSymbol(ticker, oneHour.slice(0, 30), fourHour),
-    /تعداد کندل بسته‌شده/
+test("strategy diagnostics expose all four strategies without changing signal eligibility", () => {
+  const { ticker, oneHour, fourHour, fifteenMin } = makeValidSetup();
+  const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMin);
+  assert.equal(result.eligible, true);
+  assert.equal(result.diagnostics.length, 4);
+  assert.deepEqual(
+    result.diagnostics.map(x => x.strategyId).sort(),
+    ["breakout_retest", "candlestick", "market_structure", "sr_rejection"].sort()
   );
+  assert.ok(result.diagnostics.every(x => x.status && x.statusLabel && x.reason));
+  assert.ok(result.diagnostics.some(x => x.status === "accepted"));
 });
 
-test("chart loader sorts candles, filters malformed rows and excludes the forming candle", async () => {
-  const originalFetch = globalThis.fetch;
-  const now = Date.now();
-  const validOld = {
-    time: now - 3 * 60 * 60 * 1000,
-    open: 100, high: 102, low: 99, close: 101, volume: 20
-  };
-  const validRecent = {
-    time: now - 2 * 60 * 60 * 1000,
-    open: 101, high: 103, low: 100, close: 102, volume: 30
-  };
-  const forming = {
-    time: now - 30 * 60 * 1000,
-    open: 102, high: 104, low: 101, close: 103, volume: 40
-  };
-  globalThis.fetch = async () => new Response(JSON.stringify({
-    candles: [validRecent, { ...validOld, close: "bad" }, forming, validOld]
-  }), { status: 200, headers: { "Content-Type": "application/json" } });
-  try {
-    const candles = await getKrakenFuturesCandles("PF_TESTUSD", "1h");
-    assert.deepEqual(candles.map(c => c.close), [101, 102]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+test("insufficient candle history is rejected", () => {
+  const { ticker, oneHour, fourHour, fifteenMin } = makeValidSetup();
+  const result = analyzeFuturesSymbol(ticker, oneHour.slice(0, 30), fourHour, fifteenMin);
+  assert.ok(result.rejected);
 });
 
 test("backtest trade simulation scales out 40/35/25 at the three targets", () => {
@@ -132,4 +179,25 @@ test("backtest trade simulation resolves same-candle stop and target as stop fir
   assert.equal(trade.exitReason, "STOP");
   assert.equal(trade.netR, -1);
 });
+
+
+test("late entry is rejected when live price has moved beyond the allowed band", () => {
+  const { ticker, oneHour, fourHour, fifteenMin } = makeValidSetup();
+  ticker.last = oneHour.at(-1).close * 1.01;
+  const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMin);
+  assert.match(result.rejected, /ورود دیرهنگام/);
+});
+
+test("partial TP1 locks 0.6R if break-even is confirmed, but not before", () => {
+  const trade = { side: "LONG", actualEntry: 100, initialRisk: 10, currentStop: 100, tpHits: ["TP1"] };
+  assert.ok(Math.abs(tradeResultR(trade, true) - 0.6) < 1e-9);
+  trade.currentStop = 90;
+  assert.ok(Math.abs(tradeResultR(trade, true)) < 1e-9);
+});
+
+test("full 40/35/25 target plan matches the 2.12R backtest model", () => {
+  const trade = { side: "LONG", actualEntry: 100, initialRisk: 10, currentStop: 100, tpHits: ["TP1", "TP2", "TP3"] };
+  assert.ok(Math.abs(tradeResultR(trade, false) - 2.12) < 1e-9);
+});
+
 
