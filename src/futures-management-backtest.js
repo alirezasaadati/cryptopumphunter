@@ -44,6 +44,28 @@ export function simulateManagedTrade({
       break;
     }
 
+    // Activate a protective stage from the candle's favorable extreme.
+    // If both the new stop and a target are touched in the same OHLC candle,
+    // resolve the ambiguity against the strategy: stop first, no target credit.
+    const favorableExtreme = direction === 1 ? bar.high : bar.low;
+    const favorableR = direction * (favorableExtreme - entry) / risk;
+    const reached = stages.filter(s => favorableR >= s.triggerR && !position.stagesHit.includes(s.id))
+      .sort((a,b) => b.triggerR - a.triggerR);
+    if (reached.length) {
+      const stage = reached[0];
+      const proposed = entry + direction * stage.lockR * risk;
+      const improves = direction === 1 ? proposed > position.currentStop : proposed < position.currentStop;
+      position.stagesHit.push(stage.id);
+      if (improves) {
+        position.currentStop = proposed;
+        const newStopHit = direction === 1 ? bar.low <= proposed : bar.high >= proposed;
+        if (newStopHit) {
+          closeR(position, proposed, "MANAGEMENT_STOP", bar.time, fee, slippage);
+          break;
+        }
+      }
+    }
+
     // Preserve the baseline 40/35/25 partial take-profit plan.
     for (let t = 0; t < targetLevels.length && position.remaining > 1e-9; t++) {
       const target = targetLevels[t];
@@ -62,28 +84,6 @@ export function simulateManagedTrade({
     if (position.remaining <= 1e-9) {
       position.remaining = 0; position.exitReason = "TARGETS"; position.exitTime = bar.time;
       break;
-    }
-
-    // Activate the highest newly reached stage based on the candle's favorable extreme.
-    const favorableExtreme = direction === 1 ? bar.high : bar.low;
-    const favorableR = direction * (favorableExtreme - entry) / risk;
-    const reached = stages.filter(s => favorableR >= s.triggerR && !position.stagesHit.includes(s.id))
-      .sort((a,b) => b.triggerR - a.triggerR);
-    if (reached.length) {
-      const stage = reached[0];
-      const proposed = entry + direction * stage.lockR * risk;
-      const improves = direction === 1 ? proposed > position.currentStop : proposed < position.currentStop;
-      position.stagesHit.push(stage.id);
-      if (improves) {
-        position.currentStop = proposed;
-        // OHLC cannot reveal whether the new stop was crossed before or after the high/low.
-        // Use the conservative assumption: if crossed, the stop executes in this candle.
-        const newStopHit = direction === 1 ? bar.low <= proposed : bar.high >= proposed;
-        if (newStopHit) {
-          closeR(position, proposed, "MANAGEMENT_STOP", bar.time, fee, slippage);
-          break;
-        }
-      }
     }
 
     if (i === endIndex) closeR(position, bar.close, "TIME_EXIT", bar.time, fee, slippage);
