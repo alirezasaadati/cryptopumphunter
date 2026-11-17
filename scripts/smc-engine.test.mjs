@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { simulate } from "./backtest-smc-comparison.mjs";
+import { simulate, getBacktestWindow } from "./backtest-smc-comparison.mjs";
 import {
   SMC_CONFIG, validateSMCCandles, findConfirmedSMCSwings,
   detectLiquiditySweep, findFairValueGaps, findOrderBlock,
@@ -115,4 +115,16 @@ test("backtest simulator executes each partial target only once",()=>{
   assert.equal(trade.targetHits,1);
   assert.equal(trade.exitReason,"TIME_EXIT");
   assert.ok(trade.netR>0.9 && trade.netR<1.2);
+});
+
+
+test("backtest evaluation excludes warmup and splits exactly 70/30",()=>{
+  const now=Date.UTC(2026,10,17);
+  const window=getBacktestWindow(now,90,20);
+  const day=24*3600000;
+  assert.equal(window.evaluationEnd,now);
+  assert.equal(window.evaluationStart,now-90*day);
+  assert.equal(window.from,now-110*day);
+  assert.equal(window.splitTime,now-27*day);
+  assert.equal(window.evaluationStart-window.from,20*day);
 });
