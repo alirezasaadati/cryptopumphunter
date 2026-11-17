@@ -40,13 +40,23 @@ function normalizeCandles(rows, intervalMs) {
 }
 
 async function fetchHistoricalCandles(symbol, resolution, fromMs, toMs, intervalMs) {
-  const url = new URL(BASE + "/api/charts/v1/trade/" + encodeURIComponent(symbol) + "/" + resolution);
-  url.searchParams.set("from", String(Math.floor(fromMs / 1000)));
-  url.searchParams.set("to", String(Math.floor(toMs / 1000)));
-  url.searchParams.set("count", "2000");
-  const data = await getJson(url);
-  if (data.more_candles === true) throw new Error(symbol + " " + resolution + ": Kraken reports more candles than requested; shorten backtest window.");
-  return normalizeCandles(data.candles, intervalMs);
+  // Kraken's chart endpoint caps practical responses around 2,000 candles.
+  // Fetch bounded, overlapping chunks so 90-day 1h history is complete.
+  const chunkSpan = 1800 * intervalMs;
+  const rows = [];
+  for (let cursor = fromMs; cursor < toMs; cursor += chunkSpan) {
+    const chunkEnd = Math.min(toMs, cursor + chunkSpan);
+    const url = new URL(BASE + "/api/charts/v1/trade/" + encodeURIComponent(symbol) + "/" + resolution);
+    url.searchParams.set("from", String(Math.floor(cursor / 1000)));
+    url.searchParams.set("to", String(Math.floor(chunkEnd / 1000)));
+    url.searchParams.set("count", "2000");
+    const data = await getJson(url);
+    if (data.more_candles === true) {
+      throw new Error(symbol + " " + resolution + ": Kraken returned more than 2,000 candles for a chunk.");
+    }
+    if (Array.isArray(data.candles)) rows.push(...data.candles);
+  }
+  return normalizeCandles(rows, intervalMs);
 }
 
 function historicalChange(candles, index) {
