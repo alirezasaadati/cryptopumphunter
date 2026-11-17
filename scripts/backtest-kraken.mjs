@@ -156,34 +156,40 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (closed4h.length<30 || closed15m.length<40) continue;
     const nextBar=oneHour[i+1];
     const historical1h=oneHour.slice(Math.max(0,i+1-120),i+1);
+    const entry15mIndex=lastClosed15mIndex;
+    const entry15mBar=fifteenMin[entry15mIndex];
+    // The signal is evaluated only after the 1h, 4h and final 15m candles close.
+    // Entry is the first 15m candle opening at that signal-close timestamp.
+    if (!entry15mBar || entry15mBar.time !== signalCloseTime) continue;
     const tickerAtSignal={
-      symbol:ticker.symbol,last:nextBar.open,quoteVolume:Number(ticker.volumeQuote)||0,
+      symbol:ticker.symbol,last:entry15mBar.open,quoteVolume:Number(ticker.volumeQuote)||0,
       priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}
     };
     const first=analyzeFuturesSymbol(tickerAtSignal,historical1h,closed4h,closed15m);
     if (!first?.eligible) continue;
     const direction=first.side==="LONG"?1:-1;
-    tickerAtSignal.last=nextBar.open*(1+direction*SLIPPAGE_PER_SIDE);
+    tickerAtSignal.last=entry15mBar.open*(1+direction*SLIPPAGE_PER_SIDE);
     const confirmed=analyzeFuturesSymbol(tickerAtSignal,historical1h,closed4h,closed15m);
     if (!confirmed?.eligible) continue;
-    const entryIndex=i+1;
-    const tradeCandles=oneHour.slice(entryIndex,Math.min(oneHour.length,entryIndex+MAX_HOLD_HOURS+1));
-    // The signal is formed from closed candles; the simulated fill is the
-    // next 1h open with adverse entry slippage, not the earlier 15m signal close.
-    const executionEntry = nextBar.open * (1 + direction * SLIPPAGE_PER_SIDE);
+    const executionEntry = entry15mBar.open * (1 + direction * SLIPPAGE_PER_SIDE);
+    const executionStop = confirmed.stop;
+    const executionRisk = direction===1 ? executionEntry-executionStop : executionStop-executionEntry;
+    if (!(executionRisk>0)) continue;
+    const targets=[1.5,2.2,3].map(r=>executionEntry+direction*executionRisk*r);
+    const tradeCandles=fifteenMin.slice(entry15mIndex,Math.min(fifteenMin.length,entry15mIndex+MAX_HOLD_HOURS*4+1));
     const setup = {
-      side:confirmed.side,entry:executionEntry,stop:confirmed.stop,
-      targets:[confirmed.target1,confirmed.target2,confirmed.target3],
-      candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
+      side:confirmed.side,entry:executionEntry,stop:executionStop,
+      targets,candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS*4
     };
     const trade=simulateTrade({...setup,targets:[...setup.targets]});
     const managed=simulateManagedTrade({...setup,targets:[...setup.targets]});
     trade.symbol=ticker.symbol; trade.score=confirmed.score; trade.signalTime=signalBar.time;
     managed.symbol=ticker.symbol; managed.score=confirmed.score; managed.signalTime=signalBar.time;
     trades.push(trade); managedTrades.push(managed);
-    const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
+    const exitTime=trade.exitTime;
+    const exitIndex=oneHour.findIndex(c=>c.time<=exitTime && c.time+HOUR>exitTime);
 
-    nextAvailableIndex=Math.max(entryIndex+1,exitIndex+1);
+    nextAvailableIndex=Math.max(i+2,exitIndex+1);
   }
   return {symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,trades,managedTrades,metrics:summarize(trades),managementMetrics:summarizeManagementComparison(managedTrades)};
 }
@@ -210,12 +216,12 @@ async function main() {
     settings:{
       symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,
       feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
-      maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
+      maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],executionTimeframe:"15m",
       sameCandleStopTargetRule:"stop first (conservative)",
-      entryRule:"next 1h candle open, adverse slippage applied",
+      entryRule:"first 15m candle open after confirmed 1h/4h/15m close, adverse slippage applied",
       funding:"excluded (historical funding series not included)",
       comparison:"Both exit models use identical signals and entries; managed model retains the same 40/35/25 targets and adds conservative staged stops.",
-      signalUses:"historical 1h/4h closed candles; 24h change derived from historical bars; no current funding or future candle data"
+      signalUses:"historical 1h/4h/15m closed candles; 24h change derived from historical bars; 15m execution and exits; no current funding or future candle data"
     },
     baseline:{name:"Current 40/35/25 target exits",metrics:summarize(allTrades)},
     stagedManagement:{name:"40/35/25 targets plus staged protective stops",metrics:summarizeManagementComparison(allManagedTrades)},
