@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { simulateTrade } from "./backtest-kraken.mjs";
+import { simulateTrade, repriceSignalForExecution } from "./backtest-kraken.mjs";
 import {
   FUTURES_CONFIG,
   FUTURES_PROVIDER_ORDER,
@@ -228,4 +228,23 @@ test("economics filter accepts a sufficiently attractive trade and caps dollar s
   assert.equal(qualifyTradeEconomics(economics).eligible,true);
   assert.ok(economics.maxLossUsd<=2);
   assert.ok(economics.projectedProfitUsd>=2);
+});
+
+test("backtest reprices LONG and SHORT entries at executable fills and preserves target R multiples", () => {
+  const long = repriceSignalForExecution({
+    side:"LONG",entry:100,stop:99,target1:101.5,target2:102.2,target3:103
+  },100.1);
+  assert.ok(Math.abs(long.entry-100.1)<1e-9);
+  assert.ok(Math.abs(long.target1-101.75)<1e-9);
+  assert.ok(Math.abs(long.target2-102.3)<1e-9);
+  assert.ok(Math.abs(long.target3-103.4)<1e-9);
+
+  const short = repriceSignalForExecution({
+    side:"SHORT",entry:100,stop:101,target1:98.5,target2:97.8,target3:97
+  },99.9);
+  assert.ok(Math.abs(short.entry-99.9)<1e-9);
+  assert.ok(Math.abs(short.target1-98.4)<1e-9);
+  assert.ok(Math.abs(short.target2-97.7)<1e-9);
+  assert.ok(Math.abs(short.target3-96.9)<1e-9);
+  assert.equal(repriceSignalForExecution({side:"LONG",entry:100,stop:99,target1:101.5,target2:102.2,target3:103},98.9),null);
 });
