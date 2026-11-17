@@ -2108,13 +2108,17 @@ async function runAutomaticFuturesAlertScan(env) {
     } while (cursor);
 
     let delivered = 0, failed = 0, monitored = 0;
-    await mapLimit([...recipients], 4, async chatId => {
+    // Trade records share one KV list; update recipients sequentially to avoid
+    // concurrent read/modify/write races and lost open-trade state.
+    for (const chatId of recipients) {
       try {
         await refreshOpenFuturesTrades(env, chatId, result.tickers || []);
         monitored++;
       } catch (error) {
         console.error("Automatic futures trade monitoring failed", chatId, String(error?.message || error));
       }
+    }
+    await mapLimit([...recipients], 4, async chatId => {
       const pending = [];
       for (const item of queue) {
         const key = futuresAlertStorageKey(chatId, item.fingerprint);
