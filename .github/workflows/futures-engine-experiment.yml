@@ -52,3 +52,30 @@ jobs:
           name: futures-management-backtest
           path: artifacts/
           if-no-files-found: error
+
+  frictionless-sanity-check:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    timeout-minutes: 20
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+        with:
+          ref: experimental/futures-engine-v2
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 90-day no-cost diagnostic comparison
+        env:
+          BACKTEST_DAYS: 90
+          BACKTEST_SYMBOLS: 5
+          BACKTEST_FEE: 0
+          BACKTEST_SLIPPAGE: 0
+        run: node scripts/backtest-kraken.mjs
+      - name: Upload frictionless diagnostic report
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-management-frictionless-diagnostic
+          path: artifacts/
+          if-no-files-found: error
