@@ -57,6 +57,7 @@ function reprice(plan, nextOpen) {
 }
 function simulate(plan, candles, start) {
   const dir = plan.side === "LONG" ? 1 : -1;
+  const targets = [...plan.targets];
   const p = { remaining:1, netR:0, hits:0, exitTime:null, reason:null };
   const end = Math.min(candles.length-1, start+MAX_HOLD_BARS);
   for (let i=start;i<=end && p.remaining>1e-9;i++) {
@@ -70,12 +71,13 @@ function simulate(plan, candles, start) {
       p.remaining=0; p.exitTime=c.time; p.reason="STOP"; break;
     }
     for(let t=0;t<3 && p.remaining>1e-9;t++) {
-      const target=plan.targets[t];
+      const target=targets[t];
+      if(target==null) continue;
       const touched=dir===1?c.high>=target:c.low<=target;
       if(!touched) break;
       const fill=target*(1-dir*SLIPPAGE);
       p.netR += WEIGHTS[t]*(dir*(fill-plan.entry)/plan.risk - FEE*(plan.entry+fill)/plan.risk);
-      p.remaining-=WEIGHTS[t]; p.hits++;
+      p.remaining-=WEIGHTS[t]; p.hits++; targets[t]=null;
     }
     if(p.remaining<=1e-9){p.remaining=0;p.exitTime=c.time;p.reason="TARGETS";break;}
     if(i===end){
