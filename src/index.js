@@ -3,7 +3,7 @@ import { FUTURES_ECONOMICS, calculateTradeEconomics, qualifyTradeEconomics } fro
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 
 const CONFIG = {
-  VERSION: "4.5.0",
+  VERSION: "4.6.0",
   MIN_MARKET_CAP: 1_000_000,
   MAX_MARKET_CAP: 500_000_000,
   MIN_DAILY_VOLUME: 250_000,
@@ -1901,9 +1901,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m) {
   }).filter(signal => signal.eligible);
   if (!economicallyQualified.length) {
     const rejected = result.signals.map(signal => qualifyTradeEconomics(calculateTradeEconomics(signal)).reason).filter(Boolean);
+    const reason = rejected[0]||"بازده اقتصادی معامله با معیارهای مدیریت سرمایه سازگار نیست.";
+    const diagnostics = (result.diagnostics||[]).map(d => d.status==="accepted" ? {...d,status:"economic_rejection",statusLabel:"رد به‌دلیل بازده/ریسک دلاری",reason} : d);
     return { symbol:ticker.symbol, exchange:ticker.exchange||"Kraken", analysisCompleted:true, eligible:false,
-      economicsRejected:true, rejected:rejected[0]||"بازده اقتصادی معامله با معیارهای مدیریت سرمایه سازگار نیست.",
-      diagnostics:result.diagnostics||[] };
+      economicsRejected:true, rejected:reason, diagnostics };
   }
   const best = economicallyQualified[0];
   return {
@@ -2219,6 +2220,7 @@ async function runFuturesSignalScan(env) {
     "━━━━━━━━━━━━━━━━━━\n" +
     `🏦 بازار: ${activeExchange} USDT Perpetual\n` +
     "⏱ تایم‌فریم: زمینه 4H | ساختار 1H | تأیید ورود 15M (Price Action)\n" +
+    "💰 فیلتر اقتصادی: مارجین مرجع $10، لوریج 10x، سود ناخالص حداقل $2، ریسک استاپ حداکثر $2، خروج ۲۰/۲۰/۶۰\n" +
     `📥 نمادهای بررسی‌شده: ${universe.length} (سقف ${FUTURES_CONFIG.MAX_SYMBOLS})\n` +
     `💧 نمادهای با حجم روزانه بالای ۵ میلیون دلار: ${highLiquidityCount}\n` +
     `📊 تحلیل‌های موفق با داده کامل: ${validData}\n` +
@@ -2246,7 +2248,8 @@ async function runFuturesSignalScan(env) {
     return counts;
   }, {});
   const statusOrder = [
-    ["accepted", "تأیید نهایی"],
+    ["accepted", "تأیید فنی"],
+    ["economic_rejection", "رد بازده/ریسک دلاری"],
     ["late_entry", "فاصله زیاد قیمت از ورود"],
     ["conflict", "تعارض جهت"],
     ["below_score", "امتیاز ناکافی"],
