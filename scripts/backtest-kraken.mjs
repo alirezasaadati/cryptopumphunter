@@ -160,7 +160,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     trade.symbol=ticker.symbol; trade.score=confirmed.score; trade.signalTime=signalBar.time;
     managed.symbol=ticker.symbol; managed.score=confirmed.score; managed.signalTime=signalBar.time;
     trades.push(trade); managedTrades.push(managed);
-    const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime || c.time===managed.exitTime);
+    const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
 
     nextAvailableIndex=Math.max(entryIndex+1,exitIndex+1);
   }
@@ -179,7 +179,7 @@ async function main() {
   const results=[];
   for (const ticker of universe) {
     try { results.push(await backtestSymbol(ticker,fromMs,endMs)); }
-    catch(error) { results.push({symbol:ticker.symbol,error:error.message,trades:[],metrics:summarize([])}); }
+    catch(error) { results.push({symbol:ticker.symbol,error:error.message,trades:[],managedTrades:[],metrics:summarize([]),managementMetrics:summarizeManagementComparison([])}); }
   }
   const allTrades=results.flatMap(r=>r.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const allManagedTrades=results.flatMap(r=>r.managedTrades||[]).sort((a,b)=>a.entryTime-b.entryTime);
