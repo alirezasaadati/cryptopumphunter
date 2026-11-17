@@ -1,4 +1,4 @@
-import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
+import { analyzeFuturesSymbol, FUTURES_CONFIG, calculateTradeEconomics, qualifyTradeEconomics } from "../src/index.js";
 import { mkdir, writeFile } from "node:fs/promises";
 
 const BASE = "https://futures.kraken.com";
@@ -147,7 +147,9 @@ function summarize(trades) {
     netR: trades.reduce((s,t)=>s+t.netR,0),
     expectancyR: trades.length ? trades.reduce((s,t)=>s+t.netR,0)/trades.length : 0,
     profitFactor: grossLoss ? grossWin/grossLoss : grossWin ? null : 0,
-    maxDrawdownR: maxDrawdown, targetHits: trades.reduce((s,t)=>s+t.targetHits,0)
+    maxDrawdownR: maxDrawdown,
+    averageDurationHours: trades.length ? trades.reduce((s,t)=>s+Math.max(0,t.exitTime-t.entryTime)/HOUR,0)/trades.length : 0,
+    targetHits: trades.reduce((s,t)=>s+t.targetHits,0)
   };
 }
 
@@ -189,8 +191,11 @@ async function backtestSymbol(ticker, fromMs, toMs, testStartMs) {
       const nextBar=fifteenMin[i+1];
       const direction=signal.side==="LONG"?1:-1;
       const fillPrice=nextBar.open*(1+direction*SLIPPAGE_PER_SIDE);
+      if (Math.abs(fillPrice-signal.entry)/signal.entry*100 > FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT) continue;
       const executable=repriceSignalForExecution(signal,fillPrice);
       if (!executable) continue;
+      const executionEconomics=calculateTradeEconomics(executable);
+      if (!qualifyTradeEconomics(executionEconomics).eligible) continue;
 
       const tradeCandles=fifteenMin.slice(i+1,Math.min(fifteenMin.length,i+1+MAX_HOLD_BARS+1));
       if (!tradeCandles.length) continue;
@@ -259,7 +264,8 @@ async function main() {
       "Net result: "+directionalSummary[mode].netR.toFixed(2)+"R",
       "Expectancy: "+directionalSummary[mode].expectancyR.toFixed(3)+"R/trade",
       "Profit factor: "+(directionalSummary[mode].profitFactor===null?"n/a":directionalSummary[mode].profitFactor.toFixed(2)),
-      "Max drawdown: "+directionalSummary[mode].maxDrawdownR.toFixed(2)+"R",""
+      "Max drawdown: "+directionalSummary[mode].maxDrawdownR.toFixed(2)+"R",
+      "Average duration: "+directionalSummary[mode].averageDurationHours.toFixed(2)+" hours",""
     ]),
     "Period: "+report.period.from+" to "+report.period.to+" ("+DAYS+" days)",
     "Symbols successfully tested: "+report.settings.symbolsTested+"/"+SYMBOL_LIMIT,
@@ -268,7 +274,8 @@ async function main() {
     "Net result: "+report.overall.netR.toFixed(2)+"R",
     "Expectancy: "+report.overall.expectancyR.toFixed(3)+"R/trade",
     "Profit factor: "+(report.overall.profitFactor===null?"n/a":report.overall.profitFactor.toFixed(2)),
-    "Max drawdown: "+report.overall.maxDrawdownR.toFixed(2)+"R","",
+    "Max drawdown: "+report.overall.maxDrawdownR.toFixed(2)+"R",
+    "Average duration: "+report.overall.averageDurationHours.toFixed(2)+" hours","",
     "Costs assumed: "+(FEE_PER_SIDE*100).toFixed(3)+"% fee + "+(SLIPPAGE_PER_SIDE*100).toFixed(3)+"% slippage per side.",
     "Partial exits: 20% at 1.5R, 20% at 2.2R, 60% at 3R. Same-candle stop/target ambiguity is resolved as stop first.",
     "Signal scan approximation: 15m close then next 15m open; production cron runs every 5m.",
