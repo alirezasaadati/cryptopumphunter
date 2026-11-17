@@ -194,7 +194,7 @@ export function analyzeSMC({symbol,oneHour,fourHour,fifteenMin,livePrice}) {
     if (!choch) continue;
 
     const gaps = findFairValueGaps(fifteenMin.slice(sweep.index+1),side);
-    const gap = [...gaps].reverse().find(x=>x.index>=2 && intersects(last,x));
+    const lastLocalIndex = fifteenMin.length-sweep.index-2;\n    const gap = [...gaps].reverse().find(x=>x.index>=2 && x.index<lastLocalIndex && intersects(last,x));
     if (!gap) continue;
 
     const range = calculatePremiumDiscount(fifteenMin,price);
@@ -202,7 +202,7 @@ export function analyzeSMC({symbol,oneHour,fourHour,fifteenMin,livePrice}) {
     if (structure4h.bias!=="NEUTRAL" &&
         ((side==="LONG" && structure4h.bias==="BEARISH") || (side==="SHORT" && structure4h.bias==="BULLISH"))) continue;
 
-    const orderBlock = findOrderBlock(fifteenMin,side,last?fifteenMin.length-1:fifteenMin.length);
+    const postSweepBars = fifteenMin.slice(sweep.index+1,-1);\n    const orderBlock = postSweepBars.length>=2 ? findOrderBlock(postSweepBars,side,postSweepBars.length) : null;
     const stop = side==="LONG"
       ? Math.min(sweep.extreme,orderBlock?.low??sweep.extreme)-price*0.0005
       : Math.max(sweep.extreme,orderBlock?.high??sweep.extreme)+price*0.0005;
