@@ -5,6 +5,7 @@ import { simulateManagedTrade, summarizeManagementComparison } from "../src/futu
 const BASE = "https://futures.kraken.com";
 const HOUR = 60 * 60 * 1000;
 const FOUR_HOURS = 4 * HOUR;
+const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const DAYS = Math.max(15, Math.min(90, Number(process.env.BACKTEST_DAYS || 30)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(5, Number(process.env.BACKTEST_SYMBOLS || 3)));
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
@@ -135,28 +136,35 @@ function summarize(trades) {
 }
 
 async function backtestSymbol(ticker, fromMs, toMs) {
-  const [oneHour,fourHour] = await Promise.all([
+  const [oneHour,fourHour,fifteenMin] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs,HOUR),
-    fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS)
+    fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS),
+    fetchHistoricalCandles(ticker.symbol,"15m",fromMs,toMs,FIFTEEN_MINUTES)
   ]);
-  if (oneHour.length < 100 || fourHour.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error(ticker.symbol + ": insufficient historical candles (1h=" + oneHour.length + ", 4h=" + fourHour.length + ")");
+  if (oneHour.length < 100 || fourHour.length < 30 || fifteenMin.length < 40) {
+    throw new Error(ticker.symbol + ": insufficient historical candles (1h=" + oneHour.length + ", 4h=" + fourHour.length + ", 15m=" + fifteenMin.length + ")");
+  }
   const trades = [], managedTrades = [];
-  let nextAvailableIndex = 60;
+  let nextAvailableIndex = 60, lastClosed15mIndex = 0;
   for (let i=60;i<oneHour.length-1;i++) {
     if (i<nextAvailableIndex) continue;
     const signalBar=oneHour[i], signalCloseTime=signalBar.time+HOUR;
-    const closed4h=fourHour.filter(c=>c.time+FOUR_HOURS<=signalCloseTime);
-    if (closed4h.length<FUTURES_CONFIG.MIN_CANDLES) continue;
+    const closed4h=fourHour.filter(c=>c.time+FOUR_HOURS<=signalCloseTime).slice(-120);
+    while (lastClosed15mIndex < fifteenMin.length &&
+      fifteenMin[lastClosed15mIndex].time + FIFTEEN_MINUTES <= signalCloseTime) lastClosed15mIndex++;
+    const closed15m=fifteenMin.slice(Math.max(0,lastClosed15mIndex-120),lastClosed15mIndex);
+    if (closed4h.length<30 || closed15m.length<40) continue;
     const nextBar=oneHour[i+1];
+    const historical1h=oneHour.slice(Math.max(0,i+1-120),i+1);
     const tickerAtSignal={
       symbol:ticker.symbol,last:nextBar.open,quoteVolume:Number(ticker.volumeQuote)||0,
       priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}
     };
-    const first=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
+    const first=analyzeFuturesSymbol(tickerAtSignal,historical1h,closed4h,closed15m);
     if (!first?.eligible) continue;
     const direction=first.side==="LONG"?1:-1;
     tickerAtSignal.last=nextBar.open*(1+direction*SLIPPAGE_PER_SIDE);
-    const confirmed=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
+    const confirmed=analyzeFuturesSymbol(tickerAtSignal,historical1h,closed4h,closed15m);
     if (!confirmed?.eligible) continue;
     const entryIndex=i+1;
     const tradeCandles=oneHour.slice(entryIndex,Math.min(oneHour.length,entryIndex+MAX_HOLD_HOURS+1));
