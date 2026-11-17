@@ -73,14 +73,14 @@ export function detectLiquiditySweep(candles, side, lookback = SMC_CONFIG.SWEEP_
   const lastIndex = candles.length - 1;
   const start = Math.max(0,lastIndex-lookback);
   if (side === "LONG") {
-    const levels = swings.lows.filter(x => x.index < lastIndex-1);
+    const levels = swings.lows.filter(x => x.index + SMC_CONFIG.PIVOT_RIGHT < lastIndex-1);
     for (let i = lastIndex-1; i >= start; i--) {
       const c = candles[i];
       const level = [...levels].reverse().find(x => x.index < i && c.low < x.price*(1-SMC_CONFIG.SWEEP_TOLERANCE_PCT) && c.close > x.price);
       if (level) return { side, index:i, time:c.time, level:level.price, extreme:c.low, reclaimed:true };
     }
   } else if (side === "SHORT") {
-    const levels = swings.highs.filter(x => x.index < lastIndex-1);
+    const levels = swings.highs.filter(x => x.index + SMC_CONFIG.PIVOT_RIGHT < lastIndex-1);
     for (let i = lastIndex-1; i >= start; i--) {
       const c = candles[i];
       const level = [...levels].reverse().find(x => x.index < i && c.high > x.price*(1+SMC_CONFIG.SWEEP_TOLERANCE_PCT) && c.close < x.price);
