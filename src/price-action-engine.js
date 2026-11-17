@@ -10,7 +10,7 @@ export const PA_CONFIG = Object.freeze({
   MAX_RISK_PCT: 0.06,
   MIN_REWARD_RISK: 1.5,
   TARGET_R_MULTIPLES: [1.5, 2.2, 3],
-  MIN_SCORE: 70
+  MIN_SCORE: 80
 });
 
 const finite = n => Number.isFinite(Number(n));
@@ -95,7 +95,7 @@ function bestSwing(swings, side, beforeIndex=Infinity) {
   return [...list].reverse().find(x=>x.index<beforeIndex) || null;
 }
 function lastClosed(candles) { return candles[candles.length-1]; }
-function scoreBase(...checks) { return Math.min(98, 72+checks.filter(Boolean).length*6); }
+function scoreBase(...checks) { return Math.min(98, 60+checks.filter(Boolean).length*10); }
 
 function structureStrategy({symbol, oneHour, fourHour, fifteenMin}) {
   const s1=describeStructure(oneHour), s4=describeStructure(fourHour);
@@ -176,6 +176,7 @@ const STRATEGY_STATUS_LABELS = Object.freeze({
   late_entry:"رد به‌دلیل فاصله قیمت از ورود",
   conflict:"رد به‌دلیل تعارض جهت",
   accepted:"تأیید نهایی",
+  direction_conflict:"رد به‌دلیل تعارض روند تایم‌فریم‌ها",
   strategy_error:"خطای داخلی استراتژی",
   invalid_data:"داده کندلی نامعتبر/ناکافی"
 });
@@ -199,6 +200,33 @@ export function resolvePriceActionSignals(results, livePrice) {
   };
   return {signals:valid.sort((a,b)=>b.score-a.score),conflict:false};
 }
+function sideMatchesStructure(direction, side) {
+  return (side==="LONG" && direction==="BULLISH") ||
+    (side==="SHORT" && direction==="BEARISH");
+}
+
+function directionalRejection(candidate, oneHourStructure, fourHourStructure) {
+  const oneHourAligned=sideMatchesStructure(oneHourStructure,candidate.side);
+  const fourHourAligned=sideMatchesStructure(fourHourStructure,candidate.side);
+  const fourHourOpposes=sideMatchesStructure(fourHourStructure,candidate.side==="LONG"?"SHORT":"LONG");
+  // A setup must be supported by the 1H structure or by the 4H trend.
+  if (!oneHourAligned && !fourHourAligned) {
+    return "ساختار 1H و روند 4H هیچ‌کدام جهت این معامله را تأیید نمی‌کنند.";
+  }
+  // Counter-trend entries are reserved for strong, confirmed reversal patterns.
+  if (fourHourOpposes) {
+    const reversalSetup=["sr_rejection","candlestick"].includes(candidate.strategyId);
+    if (!oneHourAligned || !reversalSetup || candidate.score<90) {
+      return "روند 4H مخالف است؛ فقط برگشت قوی با تأیید ساختار 1H و امتیاز حداقل 90 پذیرفته می‌شود.";
+    }
+  }
+  // Do not take a lower-timeframe signal directly against a confirmed 1H structure.
+  if (!oneHourAligned && sideMatchesStructure(oneHourStructure,candidate.side==="LONG"?"SHORT":"LONG")) {
+    return "جهت سیگنال با ساختار تأییدشده 1H مخالف است.";
+  }
+  return null;
+}
+
 export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, livePrice}) {
   if (!validateCandles(oneHour,PA_CONFIG.MIN_CANDLES_1H) ||
       !validateCandles(fourHour,PA_CONFIG.MIN_CANDLES_4H) ||
@@ -226,11 +254,13 @@ export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, liveP
       return {strategy,candidate:null,error:String(error?.message||error||"خطای ناشناخته")};
     }
   });
-  const candidates=evaluated
-    .filter(x=>x.candidate)
-    .map(x=>x.candidate);
+  const candidates=evaluated.filter(x=>x.candidate).map(x=>x.candidate);
   const qualified=candidates.filter(x=>x.score>=PA_CONFIG.MIN_SCORE);
-  const resolution=resolvePriceActionSignals(qualified,livePrice);
+  const directionalChecks=new Map(qualified.map(candidate=>[
+    candidate,directionalRejection(candidate,oneHourStructure,fourHourStructure)
+  ]));
+  const directionallyValid=qualified.filter(candidate=>!directionalChecks.get(candidate));
+  const resolution=resolvePriceActionSignals(directionallyValid,livePrice);
   const diagnostics=evaluated.map(({strategy,candidate,error})=>{
     let status="no_setup",reason="شرایط لازم این استراتژی در کندل‌های بررسی‌شده هم‌زمان برقرار نبود.";
     if(error) {
@@ -240,12 +270,12 @@ export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, liveP
       if(candidate.score<PA_CONFIG.MIN_SCORE) {
         status="below_score";
         reason += ` | امتیاز ${candidate.score} کمتر از حداقل ${PA_CONFIG.MIN_SCORE}`;
+      } else if(directionalChecks.has(candidate) && directionalChecks.get(candidate)) {
+        status="direction_conflict";reason=directionalChecks.get(candidate);
       } else if(resolution.conflict && (resolution.candidates||[]).includes(candidate)) {
-        status="conflict";
-        reason=resolution.rejected;
+        status="conflict";reason=resolution.rejected;
       } else if(resolution.rejected?.startsWith("ورود دیرهنگام")) {
-        status="late_entry";
-        reason=resolution.rejected;
+        status="late_entry";reason=resolution.rejected;
       } else if(resolution.signals?.includes(candidate)) {
         status="accepted";
       } else {
@@ -253,14 +283,15 @@ export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, liveP
       }
     }
     return {
-      strategyId:strategy.id,
-      strategyName:strategy.name,
-      status,
+      strategyId:strategy.id,strategyName:strategy.name,status,
       statusLabel:STRATEGY_STATUS_LABELS[status],
-      score:candidate?.score ?? null,
-      side:candidate?.side ?? null,
-      reason
+      score:candidate?.score ?? null,side:candidate?.side ?? null,reason
     };
   });
-  return {...resolution,diagnostics};
+  const rejectedDirection=diagnostics.find(x=>x.status==="direction_conflict");
+  return {
+    ...resolution,
+    rejected:resolution.rejected || (rejectedDirection ? rejectedDirection.reason : undefined),
+    diagnostics
+  };
 }

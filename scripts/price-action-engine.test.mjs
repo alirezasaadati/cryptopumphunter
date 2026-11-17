@@ -109,7 +109,7 @@ test("rejects entries that have drifted beyond the configured late-entry limit",
   const fifteenMin=triggerCandles({open:101.1,high:101.6,low:101,close:101.4});
   const result=analyzePriceAction({symbol:"PF_TESTUSD",oneHour,fourHour,fifteenMin,livePrice:102});
   assert.deepEqual(result.signals,[]);
-  assert.equal(PA_CONFIG.MIN_SCORE,70);
+  assert.equal(PA_CONFIG.MIN_SCORE,80);
 });
 
 test("every emitted plan has correctly ordered risk and reward levels",()=>{
@@ -171,12 +171,24 @@ test("rejects candles whose timestamps are duplicated or out of order",()=>{
   assert.equal(validateCandles(reversed),false);
 });
 
-test("4H context does not veto a valid 1H market-structure signal",()=>{
+test("blocks a continuation signal against a confirmed opposing 4H trend",()=>{
   const oneHour=structuralCandles();
   const fifteenMin=triggerCandles({open:101.1,high:101.6,low:101,close:101.4});
   const bearishFourHour=mirrorCandles(structuralCandles());
   const result=analyzePriceAction({symbol:"PF_TESTUSD",oneHour,fourHour:bearishFourHour,fifteenMin,livePrice:101.4});
-  assert.ok(result.signals.some(s=>s.strategyId==="market_structure"&&s.side==="LONG"),JSON.stringify(result));
+  assert.deepEqual(result.signals,[]);
+  assert.ok(result.diagnostics.some(x=>x.status==="direction_conflict"),JSON.stringify(result));
+});
+
+test("allows a strong 1H-confirmed support reversal against the 4H trend",()=>{
+  const oneHour=structuralCandles();
+  const fifteenMin=triggerCandles(
+    {open:99.8,high:100.05,low:99.4,close:99.9},
+    {open:99.9,high:100.05,low:99.8,close:100}
+  );
+  const bearishFourHour=mirrorCandles(structuralCandles());
+  const result=analyzePriceAction({symbol:"PF_TESTUSD",oneHour,fourHour:bearishFourHour,fifteenMin,livePrice:99.9});
+  assert.ok(result.signals.some(s=>s.strategyId==="sr_rejection"&&s.side==="LONG"&&s.score>=90),JSON.stringify(result));
 });
 
 test("suppresses a symbol when qualified LONG and SHORT strategies conflict",()=>{
