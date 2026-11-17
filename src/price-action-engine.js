@@ -175,6 +175,7 @@ const STRATEGY_STATUS_LABELS = Object.freeze({
   below_score:"رد به‌دلیل امتیاز ناکافی",
   late_entry:"رد به‌دلیل فاصله قیمت از ورود",
   conflict:"رد به‌دلیل تعارض جهت",
+  direction_filter:"رد به‌دلیل فیلتر جهت آزمایشی",
   accepted:"تأیید نهایی",
   direction_conflict:"رد به‌دلیل تعارض روند تایم‌فریم‌ها",
   strategy_error:"خطای داخلی استراتژی",
@@ -227,7 +228,7 @@ function directionalRejection(candidate, oneHourStructure, fourHourStructure) {
   return null;
 }
 
-export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, livePrice}) {
+export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, livePrice, directionMode="BOTH"}) {
   if (!validateCandles(oneHour,PA_CONFIG.MIN_CANDLES_1H) ||
       !validateCandles(fourHour,PA_CONFIG.MIN_CANDLES_4H) ||
       !validateCandles(fifteenMin,PA_CONFIG.MIN_CANDLES_15M)) {
@@ -260,7 +261,11 @@ export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, liveP
     candidate,directionalRejection(candidate,oneHourStructure,fourHourStructure)
   ]));
   const directionallyValid=qualified.filter(candidate=>!directionalChecks.get(candidate));
-  const resolution=resolvePriceActionSignals(directionallyValid,livePrice);
+  const directionFiltered=directionallyValid.filter(candidate =>
+    directionMode==="LONG_ONLY" ? candidate.side==="LONG" :
+    directionMode==="SHORT_ONLY" ? candidate.side==="SHORT" : true
+  );
+  const resolution=resolvePriceActionSignals(directionFiltered,livePrice);
   const diagnostics=evaluated.map(({strategy,candidate,error})=>{
     let status="no_setup",reason="شرایط لازم این استراتژی در کندل‌های بررسی‌شده هم‌زمان برقرار نبود.";
     if(error) {
@@ -272,6 +277,8 @@ export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, liveP
         reason += ` | امتیاز ${candidate.score} کمتر از حداقل ${PA_CONFIG.MIN_SCORE}`;
       } else if(directionalChecks.has(candidate) && directionalChecks.get(candidate)) {
         status="direction_conflict";reason=directionalChecks.get(candidate);
+      } else if(directionallyValid.includes(candidate) && !directionFiltered.includes(candidate)) {
+        status="direction_filter";reason="این ستاپ در حالت آزمایشیِ جهت انتخاب‌شده فیلتر شده است.";
       } else if(resolution.conflict && (resolution.candidates||[]).includes(candidate)) {
         status="conflict";reason=resolution.rejected;
       } else if(resolution.rejected?.startsWith("ورود دیرهنگام")) {
