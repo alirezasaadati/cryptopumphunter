@@ -24,7 +24,7 @@ jobs:
       - run: npm install
       - name: Run historical comparison
         env:
-          SMC_BACKTEST_DAYS: "30"
+          SMC_BACKTEST_DAYS: "90"
           SMC_BACKTEST_SYMBOLS: "3"
           BACKTEST_FEE: "0.0005"
           BACKTEST_SLIPPAGE: "0.0003"
