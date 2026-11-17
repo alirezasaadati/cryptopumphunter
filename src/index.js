@@ -1875,13 +1875,14 @@ function calculateAtr(candles, period = 14) {
   return recent.length === period ? average(recent) : null;
 }
 
-function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m) {
+function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
   const result = analyzePriceAction({
     symbol: ticker.symbol,
     oneHour: candles1h,
     fourHour: candles4h,
     fifteenMin: candles15m,
-    livePrice: Number(ticker.last)
+    livePrice: Number(ticker.last),
+    directionMode: options.directionMode || "BOTH"
   });
   if (!result.signals?.length) {
     return {
@@ -1935,8 +1936,8 @@ function formatFuturesSignal(item, index = 1) {
     `🎯 تارگت ۱: ${formatPrice(item.target1)}\n` +
     `🎯 تارگت ۲: ${formatPrice(item.target2)}\n` +
     `🎯 تارگت ۳: ${formatPrice(item.target3)}\n` +
-    (item.economics ? `💵 سود تخمینی خروج ۲۰/۲۰/۶۰: ${item.economics.projectedProfitUsd.toFixed(2)} به‌ازای ${item.economics.referenceMarginUsd} مارجین با لوریج ${item.economics.leverage}x\n🛑 ضرر تخمینی تا استاپ: ${item.economics.maxLossUsd.toFixed(2)}\n` : "") +
-    "\n⚠️ محاسبات ناخالص‌اند و کارمزد، فاندینگ و لغزش قیمت را شامل نمی‌شوند؛ سفارش واقعی ثبت نمی‌شود.";
+    (item.economics ? `💵 سود خالص تخمینی خروج ۲۰/۲۰/۶۰: ${item.economics.projectedProfitUsd.toFixed(2)} به‌ازای ${item.economics.referenceMarginUsd} مارجین با لوریج ${item.economics.leverage}x\n🛑 ضرر تخمینی تا استاپ با هزینه: ${item.economics.maxLossUsd.toFixed(2)}\n` : "") +
+    "\n⚠️ برآورد پس از کارمزد و لغزش فرضی است؛ فاندینگ متغیر لحاظ نشده و سفارش واقعی ثبت نمی‌شود.";
 }
 
 function formatFuturesSymbol(symbol) {
@@ -2220,7 +2221,7 @@ async function runFuturesSignalScan(env) {
     "━━━━━━━━━━━━━━━━━━\n" +
     `🏦 بازار: ${activeExchange} USDT Perpetual\n` +
     "⏱ تایم‌فریم: زمینه 4H | ساختار 1H | تأیید ورود 15M (Price Action)\n" +
-    "💰 فیلتر اقتصادی: مارجین مرجع $10، لوریج 10x، سود ناخالص حداقل $2، ریسک استاپ حداکثر $2، خروج ۲۰/۲۰/۶۰\n" +
+    "💰 فیلتر اقتصادی: مارجین مرجع $10، لوریج 10x، سود خالص برآوردی حداقل $2، ریسک استاپ با هزینه حداکثر $2، خروج ۲۰/۲۰/۶۰\n" +
     `📥 نمادهای بررسی‌شده: ${universe.length} (سقف ${FUTURES_CONFIG.MAX_SYMBOLS})\n` +
     `💧 نمادهای با حجم روزانه بالای ۵ میلیون دلار: ${highLiquidityCount}\n` +
     `📊 تحلیل‌های موفق با داده کامل: ${validData}\n` +
