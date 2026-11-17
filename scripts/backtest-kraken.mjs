@@ -148,7 +148,7 @@ function summarize(trades) {
     expectancyR: trades.length ? trades.reduce((s,t)=>s+t.netR,0)/trades.length : 0,
     profitFactor: grossLoss ? grossWin/grossLoss : grossWin ? null : 0,
     maxDrawdownR: maxDrawdown,
-    averageDurationHours: trades.length ? trades.reduce((s,t)=>s+Math.max(0,t.exitTime-t.entryTime)/HOUR,0)/trades.length : 0,
+    averageDurationHours: trades.length ? trades.reduce((s,t)=>s+Math.max(0,t.exitTime-t.entryTime+FIFTEEN_MINUTES)/HOUR,0)/trades.length : 0,
     targetHits: trades.reduce((s,t)=>s+t.targetHits,0)
   };
 }
