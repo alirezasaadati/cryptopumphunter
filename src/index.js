@@ -1,5 +1,6 @@
 import { analyzePriceAction } from "./price-action-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
+import { evaluateTradeManagement, formatManagementAlert } from "./futures-management.js";
 
 const CONFIG = {
   VERSION: "4.5.0",
@@ -2002,7 +2003,7 @@ async function handleFillCommand(env,chatId,message) {
     strategyId:signal.strategyId||"legacy",strategyName:signal.strategyName||"نامشخص",reason:signal.reason||"",
     plannedEntry:signal.entry,actualEntry:entry,initialStop:signal.stop,currentStop:signal.stop,
     target1:signal.target1,target2:signal.target2,target3:signal.target3,initialRisk:risk,
-    tpHits:[],breakEvenConfirmed:false,status:"OPEN",createdAt:new Date().toISOString(),lastPrice:entry});
+    tpHits:[],managementStages:[],breakEvenConfirmed:false,status:"OPEN",createdAt:new Date().toISOString(),lastPrice:entry});
   await writeTradeList(env,FUTURES_OPEN_KEY,open.slice(0,100));
   return sendMessage(env,chatId,`✅ معامله در دفتر پیگیری ثبت شد.\n${signal.symbol} | ${signal.side}\nورود واقعی: ${formatPrice(entry)}\nحد ضرر: ${formatPrice(signal.stop)}\nاهداف: ${formatPrice(signal.target1)} / ${formatPrice(signal.target2)} / ${formatPrice(signal.target3)}\n\n⚠️ فقط پایش تحلیلی است؛ سفارش واقعی ثبت نمی‌شود.`);
 }
@@ -2020,11 +2021,15 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
       await sendMessage(env,chatId,`🛑 ${t.symbol} به حد ضرر فعلی رسید. نتیجه نظری: ${t.outcomeR.toFixed(2)}R | اهداف لمس‌شده: ${t.tpHits.join(",")||"هیچ‌کدام"}`);
       continue;
     }
-    const favorableR=tradeDir(t.side)*(price-t.actualEntry)/t.initialRisk;
-    if(favorableR>=0.75&&!t.protectionAlerted&&!t.breakEvenConfirmed) {
-      t.protectionAlerted=true;
-      await sendMessage(env,chatId,`🛡️ قیمت ${t.symbol} به +0.75R رسیده؛ یعنی نصف مسیر هدف اول. برای جلوگیری از تبدیل سود شناور به زیان، انتقال حد ضرر باقی‌مانده به نقطه ورود را بررسی کن. اگر واقعاً در صرافی انجامش دادی، تأیید کن.`,
-        {inline_keyboard:[[{text:"✅ حد ضرر را به ورود منتقل کردم",callback_data:`trade:be:${t.id}`}]]});
+    const management = evaluateTradeManagement(t, price, { leverage: 10 });
+    if (management.alert) {
+      const message = formatManagementAlert(t, management, formatPrice);
+      if (message) {
+        await sendMessage(env, chatId, message);
+        t.managementStages = [...new Set([...(t.managementStages || []), management.stageId])];
+        t.lastManagementAlertAt = new Date().toISOString();
+        t.lastSuggestedStop = management.recommendedStop;
+      }
     }
     const levels=[["TP1",t.target1],["TP2",t.target2],["TP3",t.target3]],hits=[];
     for(const [key,target] of levels)if(!t.tpHits.includes(key)&&targetReached(t.side,price,target)){t.tpHits.push(key);hits.push(key);}
@@ -2075,7 +2080,6 @@ async function runAutomaticFuturesAlertScan(env) {
     const fresh = selectUnnotifiedFuturesSignals(result.signals || [], queuedFingerprints);
     queue = [...queue, ...fresh.map(item => ({ ...item, queuedAt: Date.now() }))].slice(-100);
     if (queue.length) await env.APP_KV.put(queueKey, JSON.stringify(queue), { expirationTtl: 86400 });
-    if (!queue.length) return { scanned: true, newSignals: 0, recipients: 0 };
 
     await migrateLegacyMembership(env);
     const recipients = new Set();
@@ -2091,8 +2095,14 @@ async function runAutomaticFuturesAlertScan(env) {
       cursor = page.list_complete === false ? page.cursor : null;
     } while (cursor);
 
-    let delivered = 0, failed = 0;
+    let delivered = 0, failed = 0, monitored = 0;
     await mapLimit([...recipients], 4, async chatId => {
+      try {
+        await refreshOpenFuturesTrades(env, chatId, result.tickers || []);
+        monitored++;
+      } catch (error) {
+        console.error("Automatic futures trade monitoring failed", chatId, String(error?.message || error));
+      }
       const pending = [];
       for (const item of queue) {
         const key = futuresAlertStorageKey(chatId, item.fingerprint);
@@ -2112,7 +2122,7 @@ async function runAutomaticFuturesAlertScan(env) {
       }
     });
     if (failed === 0 && recipients.size > 0) await env.APP_KV.delete(queueKey);
-    return { scanned: true, newSignals: fresh.length, queuedSignals: queue.length, recipients: recipients.size, delivered, failed };
+    return { scanned: true, newSignals: fresh.length, queuedSignals: queue.length, recipients: recipients.size, delivered, failed, monitored };
   } finally {
     await env.APP_KV.delete(lockKey);
   }
@@ -2288,7 +2298,7 @@ async function runFuturesSignalsForChat(env, chatId) {
     await refreshOpenFuturesTrades(env, chatId, result.tickers || []);
     const signals = result.signals || [];
     if (!signals.length) {
-      await sendMessage(env, chatId, "📊 فعلاً سیگنال جدیدی وجود ندارد.\nبازار همچنان به‌صورت خودکار بررسی می‌شود.", menuForChat(env, chatId));
+      await sendMessage(env, chatId, "در حال حاضر سیگنال معتبری وجود ندارد.", menuForChat(env, chatId));
       return;
     }
     for (let i = 0; i < signals.length; i++) {
