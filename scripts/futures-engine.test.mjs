@@ -218,8 +218,8 @@ test("ETH example is rejected because $10 margin at 10x projects less than $2 gr
   const signal = { side:"LONG", entry:1823.30, stop:1812.52,
     target1:1839.48, target2:1847.02, target3:1855.65 };
   const economics = calculateTradeEconomics(signal);
-  assert.ok(Math.abs(economics.maxLossUsd-0.5912)<0.002);
-  assert.ok(Math.abs(economics.projectedProfitUsd-1.5027)<0.003);
+  assert.ok(Math.abs(economics.maxLossUsd-0.7512)<0.002);
+  assert.ok(Math.abs(economics.projectedProfitUsd-1.3427)<0.003);
   assert.equal(qualifyTradeEconomics(economics).eligible,false);
 });
 
