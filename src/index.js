@@ -1767,8 +1767,13 @@ const FUTURES_CONFIG = {
   MIN_CANDLES: 60,
   MIN_SCORE: 72,
   INTERVAL: "1h",
-  CONFIRM_INTERVAL: "4h"
+  CONFIRM_INTERVAL: "4h",
+  // Notification/manual-fill settings only; they do not alter the v3.8.2 signal rules.
+  SIGNAL_TTL_MINUTES: 60,
+  MAX_ENTRY_DRIFT_PCT: 0.35
 };
+
+const FUTURES_PROVIDER_ORDER = ["Kraken"];
 
 async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -1842,6 +1847,21 @@ async function getKrakenFuturesCandles(symbol, interval) {
   const intervalMs = interval === "4h" ? 4 * 60 * 60 * 1000 : 60 * 60 * 1000;
   const now = Date.now();
   return candles.filter(c => c.time + intervalMs <= now);
+}
+
+
+function normalizeKrakenFuturesUnderlying(symbol) {
+  const raw = String(symbol || "").toUpperCase().replace(/^(PI|PF)_/, "").replace(/USD$/, "");
+  return raw === "XBT" ? "BTC" : raw;
+}
+
+async function getFuturesUniverse() {
+  return { exchange: "Kraken", tickers: await getKrakenFuturesUniverse(), fallbackReason: null };
+}
+
+async function getFuturesCandles(exchange, symbol, interval) {
+  if (exchange !== "Kraken") throw new Error(`منبع داده ناشناخته: ${exchange}`);
+  return getKrakenFuturesCandles(symbol, interval);
 }
 
 function calculateAtr(candles, period = 14) {
@@ -2301,4 +2321,4 @@ async function mapLimit(items, limit, callback) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, FUTURES_PROVIDER_ORDER, isKrakenFuturesPerpetual, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR };
+export { FUTURES_CONFIG, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR };
