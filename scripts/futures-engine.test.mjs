@@ -69,6 +69,10 @@ test("Futures provider order is Kraken only", () => {
   assert.equal(FUTURES_CONFIG.CONCURRENCY, 2);
   assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME, 3_000_000);
   assert.equal(FUTURES_CONFIG.PREFERRED_MIN_QUOTE_VOLUME, 5_000_000);
+  assert.equal(FUTURES_CONFIG.REFERENCE_MARGIN_USD, 10);
+  assert.equal(FUTURES_CONFIG.REFERENCE_LEVERAGE, 10);
+  assert.equal(FUTURES_CONFIG.MIN_PROJECTED_PROFIT_USD, 2);
+  assert.equal(FUTURES_CONFIG.MAX_STOP_LOSS_USD, 2);
 });
 
 test("Kraken Futures accepts liquid perpetual contracts and normalizes XBT", () => {
@@ -156,7 +160,7 @@ test("insufficient candle history is rejected", () => {
   assert.ok(result.rejected);
 });
 
-test("backtest trade simulation scales out 40/35/25 at the three targets", () => {
+test("backtest trade simulation scales out 20/20/60 at the three targets", () => {
   const candles = [
     { time: 1, open: 100, high: 101.6, low: 100.1, close: 101.4 },
     { time: 2, open: 101.4, high: 102.3, low: 101.2, close: 102.2 },
