@@ -1,4 +1,3 @@
-import { analyzePriceAction } from "./price-action-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 
 const CONFIG = {
@@ -1759,103 +1758,90 @@ function formatCoin(item, isSignal) {
 // ---------------- MULTI-EXCHANGE USDT-M PERPETUAL FUTURES DATA ----------------
 // Public market data only. No private credentials and no order endpoints are used.
 const FUTURES_CONFIG = {
-  MAX_SYMBOLS: 32, // Match the working first bot's Kraken Futures universe.
-  CONCURRENCY: 2,
-  MIN_QUOTE_VOLUME: 3_000_000,
-  PREFERRED_MIN_QUOTE_VOLUME: 5_000_000,
+  BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
+  CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
+  MAX_SYMBOLS: 24,
+  CONCURRENCY: 3,
+  MIN_QUOTE_VOLUME: 5_000_000,
   KLINE_LIMIT: 120,
   MIN_CANDLES: 60,
-  MIN_SCORE: 70,
-  MAX_ENTRY_DRIFT_PCT: 0.35,
-  SIGNAL_TTL_MINUTES: 60,
+  MIN_SCORE: 72,
   INTERVAL: "1h",
-  CONFIRM_INTERVAL: "4h",
-  ENTRY_INTERVAL: "15m"
+  CONFIRM_INTERVAL: "4h"
 };
 
-const FUTURES_PROVIDER_ORDER = ["Kraken"];
-
-// ---------------- KRAKEN DERIVATIVES FUTURES ----------------
-const KRAKEN_FUTURES_CONFIG = {
-  BASE_URL: "https://futures.kraken.com",
-  MIN_QUOTE_VOLUME: FUTURES_CONFIG.MIN_QUOTE_VOLUME,
-  MAX_SYMBOLS: FUTURES_CONFIG.MAX_SYMBOLS
-};
-
-async function krakenFuturesJson(url, label) {
-  const response = await fetch(url, { headers: { Accept: "application/json", "User-Agent": `CryptoPumpHunter/${CONFIG.VERSION}` } });
+async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: { Accept: "application/json" }
+  });
   const body = await response.text();
-  if (!response.ok) throw new Error(`${label}: HTTP ${response.status}${body ? " | " + body.slice(0, 180).replace(/\s+/g, " ") : ""}`);
   let data;
-  try { data = JSON.parse(body); } catch { throw new Error(`${label}: پاسخ JSON معتبر نیست.`); }
-  if (data?.result && data.result !== "success") throw new Error(`${label}: ${data?.error || data?.result}`);
+  try {
+    data = JSON.parse(body);
+  } catch {
+    throw new Error(`${label}: پاسخ JSON معتبر نیست؛ HTTP ${response.status}`);
+  }
+  if (!response.ok) {
+    throw new Error(`${label}: HTTP ${response.status}`);
+  }
+  if (data?.result === "error" || (Array.isArray(data?.errors) && data.errors.length)) {
+    throw new Error(`${label}: ${(data.errors || []).join(", ") || data.error || "خطای Kraken"}`);
+  }
   return data;
 }
 
-function normalizeKrakenFuturesUnderlying(symbol) {
-  const raw = String(symbol || "").toUpperCase().replace(/^(PI|PF)_/, "").replace(/USD$/, "");
-  return raw === "XBT" ? "BTC" : raw;
-}
-
-// Kraken's xStocks perpetuals are tokenized equities, not crypto assets.
-const KRAKEN_TOKENIZED_EQUITY_UNDERLYINGS = new Set([
-  "AAPLX", "AMZNX", "COINX", "CRCLX", "GLDX", "GOOGLX", "HOODX",
-  "METAX", "MSTRX", "NVDAX", "QQQX", "SPCX", "SPYX", "TSLAX"
-]);
-
-function isKrakenFuturesPerpetual(ticker) {
-  const symbol = String(ticker?.symbol || "").toUpperCase();
-  const underlying = normalizeKrakenFuturesUnderlying(symbol);
-  return Boolean(ticker && ticker.tag === "perpetual" &&
-    /^(PI|PF)_[A-Z0-9]+USD$/.test(symbol) &&
-    !KRAKEN_TOKENIZED_EQUITY_UNDERLYINGS.has(underlying) &&
-    Number(ticker.volumeQuote) >= KRAKEN_FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
-    Number(ticker.last) > 0);
+function isKrakenPerpetualTicker(item) {
+  if (!item || item.tag !== "perpetual" || item.suspended === true) return false;
+  const symbol = String(item.symbol || "").toUpperCase();
+  // Kraken perpetual contracts use PI_ (inverse) or PF_ (multi-collateral) symbols.
+  if (!/^(PI|PF)_[A-Z0-9]+USD$/.test(symbol)) return false;
+  const quoteVolume = Number(item.volumeQuote);
+  const last = Number(item.last);
+  return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
+    Number.isFinite(last) && last > 0;
 }
 
 async function getKrakenFuturesUniverse() {
-  const payload = await krakenFuturesJson(`${KRAKEN_FUTURES_CONFIG.BASE_URL}/derivatives/api/v3/tickers`, "Kraken Futures tickers");
-  if (!Array.isArray(payload?.tickers) || !payload.tickers.length) throw new Error("Kraken Futures فهرست تیکرها را برنگرداند.");
-  const tickers = payload.tickers.filter(isKrakenFuturesPerpetual)
+  const data = await krakenFuturesJson("/tickers", "Kraken Futures tickers");
+  if (!Array.isArray(data?.tickers)) {
+    throw new Error("فهرست نمادهای Kraken Futures معتبر نیست.");
+  }
+  return data.tickers
+    .filter(isKrakenPerpetualTicker)
     .sort((a, b) => Number(b.volumeQuote) - Number(a.volumeQuote))
-    .slice(0, KRAKEN_FUTURES_CONFIG.MAX_SYMBOLS)
-    .map(item => ({
-      symbol: String(item.symbol), underlying: normalizeKrakenFuturesUnderlying(item.symbol),
-      exchange: "Kraken", last: Number(item.last), quoteVolume: Number(item.volumeQuote) || 0,
-      priceChangePercent: Number(item.change24h) * 100 || 0,
-      premium: { lastFundingRate: Number(item.fundingRate) || null }
+    .slice(0, FUTURES_CONFIG.MAX_SYMBOLS)
+    .map(t => ({
+      ...t,
+      priceChangePercent: Number(t.change24h) || 0,
+      quoteVolume: Number(t.volumeQuote) || 0,
+      premium: { lastFundingRate: Number(t.fundingRate) }
     }));
-  if (!tickers.length) throw new Error("هیچ قرارداد Perpetual با حجم کافی در Kraken پیدا نشد.");
-  return tickers;
 }
 
 async function getKrakenFuturesCandles(symbol, interval) {
-  if (!["15m", "1h", "4h"].includes(interval)) throw new Error(`بازه زمانی Kraken Futures پشتیبانی نمی‌شود: ${interval}`);
-  const url = `${KRAKEN_FUTURES_CONFIG.BASE_URL}/api/charts/v1/trade/${encodeURIComponent(symbol)}/${interval}?count=${FUTURES_CONFIG.KLINE_LIMIT}`;
-  const payload = await krakenFuturesJson(url, `Kraken Futures ${symbol} ${interval}`);
-  if (!Array.isArray(payload?.candles)) throw new Error(`ساختار کندل‌های Kraken Futures برای ${symbol} معتبر نیست.`);
-  const intervalMs = interval === "4h" ? 14400000 : interval === "15m" ? 900000 : 3600000;
-  return payload.candles.map(row => {
-    let time = Number(row.time);
-    if (time > 0 && time < 1e12) time *= 1000;
-    return { time, open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), volume: Number(row.volume) };
-  }).filter(x => Number.isFinite(x.time) && Number.isFinite(x.open) && Number.isFinite(x.close) && x.close > 0 &&
-    Number.isFinite(x.high) && Number.isFinite(x.low) && x.high >= x.low && x.low > 0 &&
-    Number.isFinite(x.volume) && x.volume >= 0)
-    .sort((a, b) => a.time - b.time).filter(x => x.time + intervalMs <= Date.now());
-}
+  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}`;
+  const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
+    `Kraken ${symbol} ${interval}`, FUTURES_CONFIG.CHARTS_URL);
+  if (!Array.isArray(data?.candles)) {
+    throw new Error(`ساختار کندل‌های Kraken برای ${symbol} معتبر نیست.`);
+  }
+  const candles = data.candles.map(row => ({
+    time: Number(row.time) < 1e12 ? Number(row.time) * 1000 : Number(row.time),
+    open: Number(row.open),
+    high: Number(row.high),
+    low: Number(row.low),
+    close: Number(row.close),
+    volume: Number(row.volume)
+  })).filter(c =>
+    Number.isFinite(c.time) && Number.isFinite(c.close) && c.close > 0 &&
+    Number.isFinite(c.high) && Number.isFinite(c.low) && c.high >= c.low && c.low > 0 &&
+    Number.isFinite(c.volume) && c.volume >= 0
+  ).sort((a, b) => a.time - b.time);
 
-const FUTURES_PROVIDER_LOADERS = { Kraken: getKrakenFuturesUniverse };
-
-async function getFuturesUniverse() {
-  const tickers = await getKrakenFuturesUniverse();
-  if (!Array.isArray(tickers) || !tickers.length) throw new Error("Kraken Futures قرارداد Perpetual با حجم کافی برنگرداند.");
-  return { exchange: "Kraken", tickers, fallbackReason: null };
-}
-
-async function getFuturesCandles(exchange, symbol, interval) {
-  if (exchange !== "Kraken") throw new Error(`منبع داده ناشناخته: ${exchange}`);
-  return getKrakenFuturesCandles(symbol, interval);
+  // Exclude the currently forming candle. Kraken chart responses may include it.
+  const intervalMs = interval === "4h" ? 4 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  const now = Date.now();
+  return candles.filter(c => c.time + intervalMs <= now);
 }
 
 function calculateAtr(candles, period = 14) {
@@ -1870,41 +1856,107 @@ function calculateAtr(candles, period = 14) {
   return recent.length === period ? average(recent) : null;
 }
 
-function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m) {
-  const result = analyzePriceAction({
-    symbol: ticker.symbol,
-    oneHour: candles1h,
-    fourHour: candles4h,
-    fifteenMin: candles15m,
-    livePrice: Number(ticker.last)
-  });
-  if (!result.signals?.length) {
-    return {
-      symbol: ticker.symbol,
-      exchange: ticker.exchange || "Kraken",
-      analysisCompleted: true,
-      rejected: result.rejected || "هیچ‌یک از چهار ستاپ مستقل Price Action تأیید نشد.",
-      conflict: Boolean(result.conflict),
-      diagnostics: result.diagnostics || []
-    };
+function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
+  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
+    throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   }
-  // Keep one best qualified setup per symbol; opposite-side conflicts are
-  // already removed by the engine before this selection.
-  const best = result.signals[0];
+  const closes1h = candles1h.map(c => c.close);
+  const closes4h = candles4h.map(c => c.close);
+  const last = candles1h[candles1h.length - 1];
+  const price = last.close;
+  const e20 = ema(closes1h, 20);
+  const e50 = ema(closes1h, 50);
+  const e20_4h = ema(closes4h, 20);
+  const e50_4h = ema(closes4h, 50);
+  const rsiValue = rsi(closes1h, 14);
+  const atr = calculateAtr(candles1h, 14);
+  if ([e20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) {
+    throw new Error("محاسبه اندیکاتورها معتبر نیست.");
+  }
+
+  const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume));
+  const volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
+  const up1h = e20 > e50 && price > e20;
+  const down1h = e20 < e50 && price < e20;
+  const up4h = e20_4h > e50_4h;
+  const down4h = e20_4h < e50_4h;
+  let side = null;
+  let score = 0;
+  const reasons = [];
+
+  if (up1h && up4h && rsiValue >= 48 && rsiValue <= 69) {
+    side = "LONG";
+    score = 45;
+    reasons.push("روند ۱ساعته و ۴ساعته صعودی است", "قیمت بالای EMA20 قرار دارد");
+    score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
+  } else if (down1h && down4h && rsiValue >= 31 && rsiValue <= 52) {
+    side = "SHORT";
+    score = 45;
+    reasons.push("روند ۱ساعته و ۴ساعته نزولی است", "قیمت زیر EMA20 قرار دارد");
+    score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
+  } else {
+    return { symbol: ticker.symbol, rejected: "هم‌جهتی روند ۱ساعته و ۴ساعته یا محدوده RSI تأیید نشد" };
+  }
+
+  if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
+  else if (volumeRatio >= 1.0) { score += 12; reasons.push("حجم نزدیک یا بالاتر از میانگین است"); }
+  else { score += 4; reasons.push("حجم کمتر از میانگین است"); }
+
+  const change = Number(ticker.priceChangePercent) || 0;
+  if ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) score += 8;
+  else score += 3;
+
+  const funding = Number(ticker.premium?.lastFundingRate);
+  if (Number.isFinite(funding)) {
+    if (side === "LONG" && funding > 0.001) { score -= 5; reasons.push("فاندینگ مثبت و نسبتاً بالا؛ ریسک ازدحام لانگ"); }
+    else if (side === "SHORT" && funding < -0.001) { score -= 5; reasons.push("فاندینگ منفی و نسبتاً پایین؛ ریسک ازدحام شورت"); }
+    else reasons.push("فاندینگ در محدوده افراطی نیست");
+  } else {
+    reasons.push("داده فاندینگ در دسترس نبود");
+  }
+
+  const swing = candles1h.slice(-8, -1);
+  const swingLow = Math.min(...swing.map(c => c.low));
+  const swingHigh = Math.max(...swing.map(c => c.high));
+  const entry = price;
+  let stop = side === "LONG"
+    ? Math.min(swingLow, entry - atr * 1.5)
+    : Math.max(swingHigh, entry + atr * 1.5);
+  // Enforce a positive, bounded risk distance; reject malformed levels.
+  const risk = side === "LONG" ? entry - stop : stop - entry;
+  const riskPct = risk / entry;
+  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
+    return { symbol: ticker.symbol, rejected: "فاصله حد ضرر غیرمنطقی است؛ سیگنال صادر نشد" };
+  }
+
+  const direction = side === "LONG" ? 1 : -1;
+  const target1 = entry + direction * risk * 1.5;
+  const target2 = entry + direction * risk * 2.5;
+  const target3 = entry + direction * risk * 3.5;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const eligible = score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
   return {
-    ...best,
-    exchange: ticker.exchange || "Kraken",
-    analysisCompleted: true,
-    score: best.score,
-    price: candles1h.at(-1).close,
-    entry: best.entry,
-    candleTime: best.setupTime,
-    reasons: [best.reason],
+    symbol: ticker.symbol,
+    side,
+    score,
+    price,
+    entry,
+    stop,
+    target1,
+    target2,
+    target3,
+    rewardRisk: 1.5,
+    rsi: rsiValue,
+    ema20: e20,
+    ema50: e50,
+    atr,
+    volumeRatio,
+    funding: Number.isFinite(funding) ? funding : null,
     quoteVolume: Number(ticker.quoteVolume) || 0,
-    change24h: Number(ticker.priceChangePercent) || 0,
-    eligible: true,
-    conflict: false,
-    diagnostics: result.diagnostics || []
+    change24h: change,
+    candleTime: last.time,
+    reasons,
+    eligible
   };
 }
 
@@ -2119,150 +2171,53 @@ async function runAutomaticFuturesAlertScan(env) {
 
 async function runFuturesSignalScan(env) {
   const started = Date.now();
-  const failoverReasons = [];
-  let universeResult = null;
-  let universe = [];
-  let activeExchange = "";
-  let universeMs = 0;
-  let candleFetchMs = 0;
-  let analysisMs = 0;
-  let analyzed = [];
-  let nextProviderIndex = 0;
-
-  while (nextProviderIndex < FUTURES_PROVIDER_ORDER.length) {
-    const universeStarted = Date.now();
-    try {
-      universeResult = await getFuturesUniverse(nextProviderIndex);
-    } catch (error) {
-      failoverReasons.push(String(error.message || error));
-      break;
-    }
-    universeMs += Date.now() - universeStarted;
-    universe = universeResult.tickers;
-    activeExchange = universeResult.exchange;
-    if (universeResult.fallbackReason) failoverReasons.push(universeResult.fallbackReason);
-    const activeIndex = FUTURES_PROVIDER_ORDER.indexOf(activeExchange);
-    nextProviderIndex = activeIndex + 1;
-
-    let attemptCandleFetchMs = 0;
-    let attemptAnalysisMs = 0;
-    analyzed = await mapLimit(universe, FUTURES_CONFIG.CONCURRENCY, async ticker => {
-      try {
-        const fetchStarted = Date.now();
-        const [oneHour, fourHour, fifteenMin] = await Promise.all([
-          getFuturesCandles(activeExchange, ticker.symbol, FUTURES_CONFIG.INTERVAL),
-          getFuturesCandles(activeExchange, ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL),
-          getFuturesCandles(activeExchange, ticker.symbol, FUTURES_CONFIG.ENTRY_INTERVAL)
-        ]);
-        const dataFetchMs = Date.now() - fetchStarted;
-        attemptCandleFetchMs += dataFetchMs;
-        const analysisStarted = Date.now();
-        const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMin);
-        const symbolAnalysisMs = Date.now() - analysisStarted;
-        attemptAnalysisMs += symbolAnalysisMs;
-        return { ...result, timing: { dataFetchMs, analysisMs: symbolAnalysisMs } };
-      } catch (error) {
-        return {
-          symbol: ticker.symbol, exchange: activeExchange,
-          analysisCompleted: false, rejected: error.message || "خطای تحلیل"
-        };
-      }
-    });
-    candleFetchMs += attemptCandleFetchMs;
-    analysisMs += attemptAnalysisMs;
-
-    const failedSymbols = analyzed.filter(x => x?.analysisCompleted === false);
-    if (!failedSymbols.length) break;
-
-    failoverReasons.push(
-      `${activeExchange}: دریافت کندل برای ${failedSymbols.length} نماد از ${universe.length} نماد ناموفق بود؛ ${nextProviderIndex < FUTURES_PROVIDER_ORDER.length ? "اسکن کامل بدون ترکیب داده به منبع بعدی منتقل می‌شود." : "منبع جایگزین دیگری باقی نمانده است."} نمونه: ${failedSymbols.slice(0, 3).map(x => x.symbol + " (" + x.rejected + ")").join("; ")}`
-    );
-    if (nextProviderIndex >= FUTURES_PROVIDER_ORDER.length) break;
-    universeResult = null;
-  }
-
-  if (!universeResult || !universe.length) {
-    throw new Error(`هیچ منبع Futures نتوانست داده معتبر فراهم کند. ${failoverReasons.join(" | ")}`);
-  }
-  universeResult.fallbackReason = failoverReasons.length ? failoverReasons.join(" | ") : null;
+  const universe = await getKrakenFuturesUniverse();
   if (!universe.length) {
-    return { report: "⚠️ قرارداد دائمی USDT با حجم کافی پیدا نشد.", signals: [] };
+    return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [] };
   }
+  const analyzed = await mapLimit(universe, FUTURES_CONFIG.CONCURRENCY, async ticker => {
+    try {
+      const [oneHour, fourHour] = await Promise.all([
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.INTERVAL),
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL)
+      ]);
+      return analyzeFuturesSymbol(ticker, oneHour, fourHour);
+    } catch (error) {
+      return { symbol: ticker.symbol, rejected: error.message || "خطای تحلیل" };
+    }
+  });
   const createdAt = Date.now();
-  const generatedSignals = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score).slice(0, 10)
+  const generatedSignals = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score).slice(0, 8)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
   const signals = await savePendingFuturesSignals(env, generatedSignals);
-  const validData = analyzed.filter(x => x?.analysisCompleted === true).length;
-  const dataErrors = analyzed.filter(x => x?.analysisCompleted === false).length;
-  const setupRejected = analyzed.filter(x => x?.analysisCompleted === true && !x?.eligible).length;
-  const highLiquidityCount = universe.filter(x => x.quoteVolume >= FUTURES_CONFIG.PREFERRED_MIN_QUOTE_VOLUME).length;
+  const validData = analyzed.filter(x => x && x.score !== undefined).length;
   const rejected = analyzed.filter(x => x?.rejected).slice(0, 8);
   let report = `📈 CRYPTO PUMP HUNTER V${CONFIG.VERSION} — KRAKEN FUTURES\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
-    `🏦 بازار: ${activeExchange} USDT Perpetual\n` +
-    "⏱ تایم‌فریم: زمینه 4H | ساختار 1H | تأیید ورود 15M (Price Action)\n" +
-    `📥 نمادهای بررسی‌شده: ${universe.length} (سقف ${FUTURES_CONFIG.MAX_SYMBOLS})\n` +
-    `💧 نمادهای با حجم روزانه بالای ۵ میلیون دلار: ${highLiquidityCount}\n` +
-    `📊 تحلیل‌های موفق با داده کامل: ${validData}\n` +
-    `⛔ رد به‌دلیل نبود ستاپ/تعارض: ${setupRejected}\n` +
-    `⚠️ خطای دریافت داده: ${dataErrors}\n` +
+    "🏦 بازار: Kraken Derivatives Perpetual\n" +
+    "⏱ تایم‌فریم: 1h با تأیید روند 4h\n" +
+    `📥 نمادهای پرحجم بررسی‌شده: ${universe.length}\n` +
+    `📊 تحلیل‌های معتبر: ${validData}\n` +
     `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n\n`;
   if (signals.length) {
     report += "🎯 سیگنال‌های فعلی\n━━━━━━━━━━━━━━━━━━\n\n";
     for (const item of signals) report += formatFuturesSignal(item) + "\n━━━━━━━━━━━━━━━━━━\n\n";
   } else {
-    report += "⚠️ در این بررسی هیچ‌یک از چهار ستاپ Price Action به تأیید نهایی نرسید یا تعارض جهت وجود داشت.\n\n";
-  }
-  if (universeResult.fallbackReason) {
-    report += `🔁 منبع اصلی/قبلی در دسترس نبود؛ اسکن کامل با ${activeExchange} انجام شد. علت: ${universeResult.fallbackReason}\n\n`;
+    report += "⚠️ در این بررسی سیگنالی به حداقل امتیاز و شرایط ورود نرسید. برای جلوگیری از سیگنال ضعیف، موردی صادر نشد.\n\n";
   }
   if (rejected.length) {
     report += "🧪 نمونه دلایل رد نمادها\n";
     for (const item of rejected) report += `• ${item.symbol}: ${item.rejected}\n`;
   }
-  const strategyDiagnostics = analyzed.flatMap(item =>
-    (item.diagnostics || []).map(d => ({ symbol: item.symbol, ...d }))
-  );
-  const statusCounts = strategyDiagnostics.reduce((counts, d) => {
-    counts[d.status] = (counts[d.status] || 0) + 1;
-    return counts;
-  }, {});
-  const statusOrder = [
-    ["accepted", "تأیید نهایی"],
-    ["late_entry", "فاصله زیاد قیمت از ورود"],
-    ["conflict", "تعارض جهت"],
-    ["below_score", "امتیاز ناکافی"],
-    ["no_setup", "بدون ستاپ"],
-    ["strategy_error", "خطای استراتژی"],
-    ["invalid_data", "داده ناکافی"]
-  ];
-  report += "\n🔬 گزارش تشخیصی چهار استراتژی\n";
-  report += statusOrder
-    .filter(([key]) => statusCounts[key])
-    .map(([key, label]) => `• ${label}: ${statusCounts[key]} مورد`)
-    .join("\n") + "\n\n";
-  for (const item of analyzed) {
-    if (!item.diagnostics?.length) continue;
-    report += `📍 ${item.symbol}\n`;
-    for (const d of item.diagnostics) {
-      report += `  • ${d.strategyName}: ${d.statusLabel}`;
-      if (d.score !== null && d.score !== undefined) report += ` | امتیاز ${d.score}`;
-      if (d.side) report += ` | ${d.side}`;
-      if (d.reason) report += ` | ${d.reason}`;
-      report += "\n";
-    }
-    if (item.timing) report += `  ⏱ دریافت داده: ${item.timing.dataFetchMs}ms | تحلیل: ${item.timing.analysisMs}ms\n`;
-  }
   report += `\n🕒 زمان تهیه گزارش: ${new Date().toISOString()}\n` +
-    `⏱ مدت کل بررسی: ${((Date.now() - started) / 1000).toFixed(2)} ثانیه\n` +
-    `⏱ جزئیات زمان: فهرست نمادها ${universeMs}ms | مجموع دریافت کندل‌ها ${candleFetchMs}ms | مجموع تحلیل‌ها ${analysisMs}ms\n` +
-    `📡 منبع داده: API عمومی Kraken Derivatives Futures\n` +
+    `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} ثانیه\n` +
+    "📡 منبع داده: API عمومی Kraken Derivatives Futures\n" +
     "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست. قیمت ممکن است پس از بسته‌شدن کندل تغییر کند.";
 
   if (env.APP_KV) {
     try {
       await env.APP_KV.put("last_futures_scan", JSON.stringify({
-        version: CONFIG.VERSION,
+        version: "3.8.2-engine",
         timestamp: Date.now(),
         report,
         signals: signals.map(x => ({
@@ -2274,7 +2229,7 @@ async function runFuturesSignalScan(env) {
       report += `\n⚠️ ذخیره گزارش فیوچرز ناموفق بود: ${String(error.message || "KV error")}`;
     }
   }
-  return { report, signals, tickers: universe, exchange: activeExchange, fallbackReason: universeResult.fallbackReason };
+  return { report, signals };
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
