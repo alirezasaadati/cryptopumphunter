@@ -168,8 +168,11 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (!confirmed?.eligible) continue;
     const entryIndex=i+1;
     const tradeCandles=oneHour.slice(entryIndex,Math.min(oneHour.length,entryIndex+MAX_HOLD_HOURS+1));
+    // The signal is formed from closed candles; the simulated fill is the
+    // next 1h open with adverse entry slippage, not the earlier 15m signal close.
+    const executionEntry = nextBar.open * (1 + direction * SLIPPAGE_PER_SIDE);
     const setup = {
-      side:confirmed.side,entry:confirmed.entry,stop:confirmed.stop,
+      side:confirmed.side,entry:executionEntry,stop:confirmed.stop,
       targets:[confirmed.target1,confirmed.target2,confirmed.target3],
       candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
     };
