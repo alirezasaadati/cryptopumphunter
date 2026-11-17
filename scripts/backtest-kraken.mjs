@@ -151,7 +151,7 @@ function summarize(trades) {
   };
 }
 
-async function backtestSymbol(ticker, fromMs, toMs) {
+async function backtestSymbol(ticker, fromMs, toMs, testStartMs) {
   const [oneHour,fourHour,fifteenMin] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs,HOUR),
     fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS),
@@ -170,6 +170,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     for (let i=0;i<fifteenMin.length-1;i++) {
       if (i<nextAvailableIndex) continue;
       const signalBar=fifteenMin[i], signalCloseTime=signalBar.time+FIFTEEN_MINUTES;
+      if (signalCloseTime < testStartMs) continue;
       const closed1h=oneHour.filter(c=>c.time+HOUR<=signalCloseTime);
       const closed4h=fourHour.filter(c=>c.time+FOUR_HOURS<=signalCloseTime);
       const closed15m=fifteenMin.slice(0,i+1);
@@ -223,7 +224,7 @@ async function main() {
   if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
   const results=[];
   for (const ticker of universe) {
-    try { results.push(await backtestSymbol(ticker,fromMs,endMs)); }
+    try { results.push(await backtestSymbol(ticker,fromMs,endMs,startMs)); }
     catch(error) { results.push({symbol:ticker.symbol,error:error.message,trades:[],metrics:summarize([])}); }
   }
   const combinedTrades=results.flatMap(r=>r.strategyTrades?.BOTH?.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
