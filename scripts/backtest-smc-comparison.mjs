@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 const BASE = "https://futures.kraken.com";
 const M15 = 15 * 60 * 1000, HOUR = 4 * M15, H4 = 16 * M15;
-const DAYS = Math.max(15, Math.min(60, Number(process.env.SMC_BACKTEST_DAYS || 30)));
+const DAYS = Math.max(30, Math.min(120, Number(process.env.SMC_BACKTEST_DAYS || 90)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(5, Number(process.env.SMC_BACKTEST_SYMBOLS || 3)));
 const FEE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
 const SLIPPAGE = Math.max(0, Number(process.env.BACKTEST_SLIPPAGE || 0.0003));
@@ -112,6 +112,7 @@ async function testSymbol(ticker, from, to, splitTime) {
   const modes=["BOTH","LONG","SHORT"];
   const systems=["SMC","PRICE_ACTION"];
   const trades=Object.fromEntries(systems.flatMap(s=>modes.map(m=>[s+"_"+m,[]])));
+  const smcStageCounts={noSweep:0,sweep:0,noPostSweepSwing:0,noChoch:0,noFvgRetest:0,wrongPremiumDiscount:0,fourHourConflict:0,invalidPlan:0,accepted:0};
   let busyUntil=-1;
   for(let i=159;i<m15.length-1;i++){
     if(i<busyUntil) continue;
@@ -122,6 +123,7 @@ async function testSymbol(ticker, from, to, splitTime) {
     if(c1.length<40||c4.length<30) continue;
     const pa=analyzePriceAction({symbol:ticker.symbol,oneHour:c1,fourHour:c4,fifteenMin:c15,livePrice:m15[i].close});
     const smc=analyzeSMC({symbol:ticker.symbol,oneHour:c1,fourHour:c4,fifteenMin:c15,livePrice:m15[i].close});
+    for(const [key,value] of Object.entries(smc.stageCounts||{})) smcStageCounts[key]=(smcStageCounts[key]||0)+value;
     const next=m15[i+1];
     const candidates=[
       ...modes.map(mode=>({key:"SMC_"+mode,plan:smc.signals?.find(x=>allowed(x,mode))})),
@@ -140,7 +142,7 @@ async function testSymbol(ticker, from, to, splitTime) {
       trades[clockKey]=Math.max(i+2,m15.findIndex(c=>c.time===trade.exitTime)+1);
     }
   }
-  const out={symbol:ticker.symbol,candles:{m15:m15.length,h1:h1.length,h4:h4.length},metrics:{}};
+  const out={symbol:ticker.symbol,candles:{m15:m15.length,h1:h1.length,h4:h4.length},smcStageCounts,metrics:{}};
   for(const key of Object.keys(trades).filter(k=>!k.endsWith("__busy"))){
     const all=trades[key];
     out.metrics[key]={all:metrics(all),inSample:metrics(all.filter(t=>t.entryTime<splitTime)),outOfSample:metrics(all.filter(t=>t.entryTime>=splitTime))};
@@ -163,7 +165,7 @@ async function main(){
     }catch(e){results.push({symbol:ticker.symbol,error:String(e.message||e),metrics:{}});}
   }
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public OHLC candles",
-    periodDays:DAYS,split:"last 30% of requested period is out-of-sample",
+    periodDays:DAYS,split:"first 70% in-sample; final 30% out-of-sample",
     settings:{symbols:universe.map(x=>x.symbol),feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,
       maxHoldHours:72,partialExitWeightsPct:[40,35,25],sameCandleRule:"stop first",
       entry:"next 15m open with adverse entry slippage; stop/targets repriced preserving original R distances",
