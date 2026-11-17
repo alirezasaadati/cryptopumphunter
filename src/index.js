@@ -1,4 +1,5 @@
 import { analyzePriceAction } from "./price-action-engine.js";
+import { FUTURES_ECONOMICS, calculateTradeEconomics, qualifyTradeEconomics } from "./futures-economics.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 
 const CONFIG = {
@@ -1770,7 +1771,11 @@ const FUTURES_CONFIG = {
   SIGNAL_TTL_MINUTES: 60,
   INTERVAL: "1h",
   CONFIRM_INTERVAL: "4h",
-  ENTRY_INTERVAL: "15m"
+  ENTRY_INTERVAL: "15m",
+  REFERENCE_MARGIN_USD: FUTURES_ECONOMICS.REFERENCE_MARGIN_USD,
+  REFERENCE_LEVERAGE: FUTURES_ECONOMICS.LEVERAGE,
+  MIN_PROJECTED_PROFIT_USD: FUTURES_ECONOMICS.MIN_PROJECTED_PROFIT_USD,
+  MAX_STOP_LOSS_USD: FUTURES_ECONOMICS.MAX_STOP_LOSS_USD
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
@@ -1888,9 +1893,19 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m) {
       diagnostics: result.diagnostics || []
     };
   }
-  // Keep one best qualified setup per symbol; opposite-side conflicts are
-  // already removed by the engine before this selection.
-  const best = result.signals[0];
+  // Apply dollar-risk and staged-profit filters before a signal can be sent.
+  const economicallyQualified = result.signals.map(signal => {
+    const economics = calculateTradeEconomics(signal);
+    const qualification = qualifyTradeEconomics(economics);
+    return { ...signal, economics, economicsRejection: qualification.reason, eligible: qualification.eligible };
+  }).filter(signal => signal.eligible);
+  if (!economicallyQualified.length) {
+    const rejected = result.signals.map(signal => qualifyTradeEconomics(calculateTradeEconomics(signal)).reason).filter(Boolean);
+    return { symbol:ticker.symbol, exchange:ticker.exchange||"Kraken", analysisCompleted:true, eligible:false,
+      economicsRejected:true, rejected:rejected[0]||"بازده اقتصادی معامله با معیارهای مدیریت سرمایه سازگار نیست.",
+      diagnostics:result.diagnostics||[] };
+  }
+  const best = economicallyQualified[0];
   return {
     ...best,
     exchange: ticker.exchange || "Kraken",
@@ -1918,8 +1933,9 @@ function formatFuturesSignal(item, index = 1) {
     `🛑 حد ضرر: ${formatPrice(item.stop)}\n` +
     `🎯 تارگت ۱: ${formatPrice(item.target1)}\n` +
     `🎯 تارگت ۲: ${formatPrice(item.target2)}\n` +
-    `🎯 تارگت ۳: ${formatPrice(item.target3)}\n\n` +
-    "⚠️ سیگنال تحلیلی است؛ سفارش واقعی ثبت نمی‌شود.";
+    `🎯 تارگت ۳: ${formatPrice(item.target3)}\n` +
+    (item.economics ? `💵 سود تخمینی خروج ۲۰/۲۰/۶۰: ${item.economics.projectedProfitUsd.toFixed(2)} به‌ازای ${item.economics.referenceMarginUsd} مارجین با لوریج ${item.economics.leverage}x\n🛑 ضرر تخمینی تا استاپ: ${item.economics.maxLossUsd.toFixed(2)}\n` : "") +
+    "\n⚠️ محاسبات ناخالص‌اند و کارمزد، فاندینگ و لغزش قیمت را شامل نمی‌شوند؛ سفارش واقعی ثبت نمی‌شود.";
 }
 
 function formatFuturesSymbol(symbol) {
@@ -1961,7 +1977,8 @@ const tradeDir=side=>side==="LONG"?1:-1;
 const targetReached=(side,p,t)=>side==="LONG"?p>=t:p<=t;
 const stopReached=(side,p,t)=>side==="LONG"?p<=t:p>=t;
 function tradeResultR(t,includeRemainder) {
-  const levels=[["TP1",.40,1.5],["TP2",.35,2.2],["TP3",.25,3.0]];
+  const weights = Array.isArray(t.exitWeights) && t.exitWeights.length===3 ? t.exitWeights : [.40,.35,.25];
+  const levels=[["TP1",weights[0],1.5],["TP2",weights[1],2.2],["TP3",weights[2],3.0]];
   let r=0,weight=0;
   for(const [k,w,m] of levels)if((t.tpHits||[]).includes(k)){r+=w*m;weight+=w;}
   if(includeRemainder)r+=(1-weight)*tradeDir(t.side)*(t.currentStop-t.actualEntry)/t.initialRisk;
@@ -2002,7 +2019,7 @@ async function handleFillCommand(env,chatId,message) {
     strategyId:signal.strategyId||"legacy",strategyName:signal.strategyName||"نامشخص",reason:signal.reason||"",
     plannedEntry:signal.entry,actualEntry:entry,initialStop:signal.stop,currentStop:signal.stop,
     target1:signal.target1,target2:signal.target2,target3:signal.target3,initialRisk:risk,
-    tpHits:[],breakEvenConfirmed:false,status:"OPEN",createdAt:new Date().toISOString(),lastPrice:entry});
+    exitWeights:[.20,.20,.60],tpHits:[],breakEvenConfirmed:false,status:"OPEN",createdAt:new Date().toISOString(),lastPrice:entry});
   await writeTradeList(env,FUTURES_OPEN_KEY,open.slice(0,100));
   return sendMessage(env,chatId,`✅ معامله در دفتر پیگیری ثبت شد.\n${signal.symbol} | ${signal.side}\nورود واقعی: ${formatPrice(entry)}\nحد ضرر: ${formatPrice(signal.stop)}\nاهداف: ${formatPrice(signal.target1)} / ${formatPrice(signal.target2)} / ${formatPrice(signal.target3)}\n\n⚠️ فقط پایش تحلیلی است؛ سفارش واقعی ثبت نمی‌شود.`);
 }
@@ -2029,9 +2046,9 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
     const levels=[["TP1",t.target1],["TP2",t.target2],["TP3",t.target3]],hits=[];
     for(const [key,target] of levels)if(!t.tpHits.includes(key)&&targetReached(t.side,price,target)){t.tpHits.push(key);hits.push(key);}
     for(const hit of hits) {
-      if(hit==="TP1")await sendMessage(env,chatId,`🎯 هدف اول ${t.symbol} لمس شد. ۴۰٪ حجم در مدل ثبت شد. اگر واقعاً بخشی از معامله را بسته‌ای، حد ضرر باقی‌مانده را در صرافی به نقطه ورود منتقل کن و سپس تأیید کن.`,
+      if(hit==="TP1")await sendMessage(env,chatId,`🎯 هدف اول ${t.symbol} لمس شد. ۲۰٪ حجم در مدل ثبت شد. اگر واقعاً بخشی از معامله را بسته‌ای، حد ضرر باقی‌مانده را در صرافی به نقطه ورود منتقل کن و سپس تأیید کن.`,
         {inline_keyboard:[[{text:"✅ حد ضرر را به ورود منتقل کردم",callback_data:`trade:be:${t.id}`}]]});
-      if(hit==="TP2")await sendMessage(env,chatId,`🥈 هدف دوم ${t.symbol} لمس شد؛ ۳۵٪ دیگر در مدل ثبت شد.`);
+      if(hit==="TP2")await sendMessage(env,chatId,`🥈 هدف دوم ${t.symbol} لمس شد؛ ۲۰٪ دیگر در مدل ثبت شد. ۶۰٪ باقی‌مانده برای هدف سوم است.`);
     }
     if(t.tpHits.includes("TP3")) {
       t.status="CLOSED_TARGETS";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,false);
@@ -2348,4 +2365,4 @@ async function mapLimit(items, limit, callback) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, FUTURES_PROVIDER_ORDER, isKrakenFuturesPerpetual, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR };
+export { FUTURES_CONFIG, FUTURES_PROVIDER_ORDER, isKrakenFuturesPerpetual, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getFuturesCandles, calculateAtr, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, calculateTradeEconomics, qualifyTradeEconomics };
