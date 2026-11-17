@@ -78,6 +78,20 @@ function closeTrade(position, rawPrice, reason, time, config) {
   return position;
 }
 
+export function repriceSignalForExecution(signal, fillPrice) {
+  const direction = signal?.side === "LONG" ? 1 : signal?.side === "SHORT" ? -1 : 0;
+  const originalRisk = direction === 1 ? signal.entry - signal.stop : signal.stop - signal.entry;
+  const executionRisk = direction === 1 ? fillPrice - signal.stop : signal.stop - fillPrice;
+  if (!direction || !(originalRisk > 0) || !(executionRisk > 0) || !Number.isFinite(fillPrice)) return null;
+  const oldTargets = [signal.target1, signal.target2, signal.target3];
+  const multiples = oldTargets.map((target, index) =>
+    Number.isFinite(target) ? direction * (target - signal.entry) / originalRisk : [1.5, 2.2, 3][index]
+  );
+  if (multiples.some(r => !Number.isFinite(r) || r <= 0)) return null;
+  const targets = multiples.map(r => fillPrice + direction * executionRisk * r);
+  return { ...signal, entry: fillPrice, target1: targets[0], target2: targets[1], target3: targets[2] };
+}
+
 export function simulateTrade({ side, entry, stop, targets, candles, startIndex, fee = 0.0005, slippage = 0.0003, maxHoldHours = 72 }) {
   const direction = side === "LONG" ? 1 : -1;
   const risk = direction === 1 ? entry - stop : stop - entry;
@@ -162,10 +176,15 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const confirmed=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m);
     if (!confirmed?.eligible) continue;
     const entryIndex=i+1;
+    const executable = repriceSignalForExecution(
+      confirmed,
+      nextBar.open * (1 + (confirmed.side === "LONG" ? 1 : -1) * SLIPPAGE_PER_SIDE)
+    );
+    if (!executable) continue;
     const tradeCandles=oneHour.slice(entryIndex,Math.min(oneHour.length,entryIndex+MAX_HOLD_HOURS+1));
     const trade=simulateTrade({
-      side:confirmed.side,entry:confirmed.entry,stop:confirmed.stop,
-      targets:[confirmed.target1,confirmed.target2,confirmed.target3],
+      side:executable.side,entry:executable.entry,stop:executable.stop,
+      targets:[executable.target1,executable.target2,executable.target3],
       candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
     });
     trade.symbol=ticker.symbol; trade.score=confirmed.score; trade.signalTime=signalBar.time;
@@ -199,7 +218,7 @@ async function main() {
       feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
       maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[20,20,60],
       sameCandleStopTargetRule:"stop first (conservative)",
-      entryRule:"next 1h candle open, adverse slippage applied",
+      entryRule:"next 1h candle open with adverse entry slippage; stop and targets recalculated from executable fill",
       funding:"excluded (historical funding series not included)",
       signalUses:"historical 4h/1h/15m closed candles; 24h change derived from historical bars; no current funding or future candle data"
     },
