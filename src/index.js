@@ -1386,64 +1386,69 @@ async function showFuturesTradeHistory(env,chatId) {
   return sendLongMessage(env,chatId,"📚 تاریخچه معاملات\n━━━━━━━━━━━━━━━━━━\n"+body);
 }
 
+async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
+  if (!env.APP_KV) throw new Error("APP_KV binding is required for automatic alerts.");
+  const queueKey = "futures:auto-alerts:pending-broadcasts";
+  let queue = await env.APP_KV.get(queueKey, "json") || [];
+  if (!Array.isArray(queue)) queue = [];
+  const queuedFingerprints = new Set(queue.map(item => item.fingerprint));
+  const fresh = selectUnnotifiedFuturesSignals(signals || [], queuedFingerprints);
+  queue = [...queue, ...fresh.map(item => ({ ...item, queuedAt: Date.now() }))].slice(-100);
+  if (queue.length) await env.APP_KV.put(queueKey, JSON.stringify(queue), { expirationTtl: 86400 });
+  if (!queue.length) return { newSignals: 0, recipients: 0, delivered: 0, failed: 0 };
+
+  await migrateLegacyMembership(env);
+  const recipients = new Set();
+  if (env.OWNER_TELEGRAM_ID || env.OWNER_ID) recipients.add(String(env.OWNER_TELEGRAM_ID || env.OWNER_ID));
+  let cursor;
+  do {
+    const page = await env.APP_KV.list({ prefix: "member:", limit: 1000, ...(cursor ? { cursor } : {}) });
+    for (const item of page.keys || []) {
+      const chatId = item.name.slice("member:".length);
+      const member = await env.APP_KV.get(item.name, "json");
+      if (member && member.approved !== false && member.revoked !== true) recipients.add(String(chatId));
+    }
+    cursor = page.list_complete === false ? page.cursor : null;
+  } while (cursor);
+
+  let delivered = 0, failed = 0;
+  await mapLimit([...recipients].filter(id => excludeChatId == null || String(id) !== String(excludeChatId)), 4, async chatId => {
+    const pending = [];
+    for (const item of queue) {
+      const key = futuresAlertStorageKey(chatId, item.fingerprint);
+      if (!(await env.APP_KV.get(key))) pending.push({ ...item, key });
+    }
+    if (!pending.length) return;
+    try {
+      for (let i = 0; i < pending.length; i++) {
+        const item = pending[i];
+        await sendMessage(env, chatId, formatFuturesSignalAlert(item.signal, i + 1));
+        await env.APP_KV.put(item.key, "sent", { expirationTtl: ALERT_TTL_SECONDS });
+      }
+      delivered++;
+    } catch (error) {
+      failed++;
+      console.error("Immediate futures alert delivery failed", chatId, String(error?.message || error));
+    }
+  });
+  if (failed === 0 && recipients.size > 0) await env.APP_KV.delete(queueKey);
+  return { newSignals: fresh.length, queuedSignals: queue.length, recipients: recipients.size, delivered, failed };
+}
+
 async function runAutomaticFuturesAlertScan(env) {
   if (!env.APP_KV) throw new Error("APP_KV binding is required for automatic alerts.");
   const lockKey = "futures:auto-alerts:scan-lock";
-  const queueKey = "futures:auto-alerts:pending-broadcasts";
   if (await env.APP_KV.get(lockKey)) return { skipped: true, reason: "scan already running" };
   await env.APP_KV.put(lockKey, String(Date.now()), { expirationTtl: 240 });
   try {
     const result = await runFuturesSignalScan(env);
-    let queue = await env.APP_KV.get(queueKey, "json") || [];
-    if (!Array.isArray(queue)) queue = [];
-    const queuedFingerprints = new Set(queue.map(item => item.fingerprint));
-    const fresh = selectUnnotifiedFuturesSignals(result.signals || [], queuedFingerprints);
-    queue = [...queue, ...fresh.map(item => ({ ...item, queuedAt: Date.now() }))].slice(-100);
-    if (queue.length) await env.APP_KV.put(queueKey, JSON.stringify(queue), { expirationTtl: 86400 });
-    if (!queue.length) return { scanned: true, newSignals: 0, recipients: 0 };
-
-    await migrateLegacyMembership(env);
-    const recipients = new Set();
-    if ((env.OWNER_TELEGRAM_ID || env.OWNER_ID)) recipients.add(String((env.OWNER_TELEGRAM_ID || env.OWNER_ID)));
-    let cursor;
-    do {
-      const page = await env.APP_KV.list({ prefix: "member:", limit: 1000, ...(cursor ? { cursor } : {}) });
-      for (const item of page.keys || []) {
-        const chatId = item.name.slice("member:".length);
-        const member = await env.APP_KV.get(item.name, "json");
-        if (member && member.approved !== false && member.revoked !== true) recipients.add(String(chatId));
-      }
-      cursor = page.list_complete === false ? page.cursor : null;
-    } while (cursor);
-
-    let delivered = 0, failed = 0;
-    await mapLimit([...recipients], 4, async chatId => {
-      const pending = [];
-      for (const item of queue) {
-        const key = futuresAlertStorageKey(chatId, item.fingerprint);
-        if (!(await env.APP_KV.get(key))) pending.push({ ...item, key });
-      }
-      if (!pending.length) return;
-      try {
-        for (let i = 0; i < pending.length; i++) {
-          const item = pending[i];
-          await sendMessage(env, chatId, formatFuturesSignalAlert(item.signal, i + 1, pending.length));
-          await env.APP_KV.put(item.key, "sent", { expirationTtl: ALERT_TTL_SECONDS });
-        }
-        delivered++;
-      } catch (error) {
-        failed++;
-        console.error("Automatic futures alert delivery failed", chatId, String(error?.message || error));
-      }
-    });
-    if (failed === 0 && recipients.size > 0) await env.APP_KV.delete(queueKey);
-    return { scanned: true, newSignals: fresh.length, queuedSignals: queue.length, recipients: recipients.size, delivered, failed };
+    return { scanned: true, signals: (result.signals || []).length };
   } finally {
     await env.APP_KV.delete(lockKey);
   }
 }
 
-async function runFuturesSignalScan(env) {
+async function runFuturesSignalScan(env, options = {}) {
   const started = Date.now();
   const universe = await getKrakenFuturesUniverse();
   if (!universe.length) {
@@ -1464,6 +1469,13 @@ async function runFuturesSignalScan(env) {
   const generatedSignals = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score).slice(0, 8)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
   const signals = await savePendingFuturesSignals(env, generatedSignals);
+  if (signals.length && env.APP_KV) {
+    try {
+      await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
+    } catch (error) {
+      console.error("Immediate futures alert dispatch failed:", String(error?.stack || error?.message || error));
+    }
+  }
   const validData = analyzed.filter(x => x && x.score !== undefined).length;
   const rejected = analyzed.filter(x => x?.rejected).slice(0, 8);
   let report = `📈 CRYPTO PUMP HUNTER V${CONFIG.VERSION} — KRAKEN FUTURES\n` +
@@ -1512,7 +1524,7 @@ async function runFuturesSignalsForChat(env, chatId) {
     return;
   }
   try {
-    const result = await runFuturesSignalScan(env);
+    const result = await runFuturesSignalScan(env, { excludeChatId: chatId });
     const signals = result.signals || [];
     if (!signals.length) {
       await sendMessage(env, chatId, "در حال حاضر سیگنال معتبری وجود ندارد.", menuForChat(env, chatId));
