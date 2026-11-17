@@ -187,17 +187,25 @@ export function analyzeSMC({symbol,oneHour,fourHour,fifteenMin,livePrice}) {
     if (!sweep || sweep.index >= fifteenMin.length-1) { stageCounts.noSweep++; continue; }
     stageCounts.sweep++;
 
+    // CHoCH breaks the last opposing swing that was already confirmed before the sweep.
     const opposingSwings = side === "LONG" ? swings.highs : swings.lows;
-    const breakLevel = [...opposingSwings].reverse().find(x=>x.index>sweep.index);
+    const breakLevel = [...opposingSwings].reverse().find(x=>x.index + SMC_CONFIG.PIVOT_RIGHT < sweep.index);
     if (!breakLevel) { stageCounts.noPostSweepSwing++; continue; }
-    const choch = side === "LONG"
-      ? last.close > breakLevel.price && previousBars.at(-1).close <= breakLevel.price
-      : last.close < breakLevel.price && previousBars.at(-1).close >= breakLevel.price;
-    if (!choch) { stageCounts.noChoch++; continue; }
+    let chochIndex = -1;
+    for (let i=sweep.index+1; i<previousBars.length; i++) {
+      const crossed = side === "LONG"
+        ? previousBars[i].close > breakLevel.price && previousBars[i-1].close <= breakLevel.price
+        : previousBars[i].close < breakLevel.price && previousBars[i-1].close >= breakLevel.price;
+      if (crossed) { chochIndex=i; break; }
+    }
+    if (chochIndex<0) { stageCounts.noChoch++; continue; }
 
-    const gaps = findFairValueGaps(fifteenMin.slice(sweep.index+1),side);
-    const lastLocalIndex = fifteenMin.length-sweep.index-2;
-    const gap = [...gaps].reverse().find(x=>x.index>=2 && x.index<lastLocalIndex && intersects(last,x));
+    const postSweep = fifteenMin.slice(sweep.index+1);
+    const gaps = findFairValueGaps(postSweep,side);
+    const gap = [...gaps].reverse().find(x=>{
+      const globalIndex=sweep.index+1+x.index;
+      return globalIndex>=chochIndex && globalIndex<fifteenMin.length-1 && intersects(last,x);
+    });
     if (!gap) { stageCounts.noFvgRetest++; continue; }
 
     // Premium/discount is measured against the broader 4H dealing range, not a short 15m micro-range.
@@ -206,7 +214,7 @@ export function analyzeSMC({symbol,oneHour,fourHour,fifteenMin,livePrice}) {
     if (structure4h.bias!=="NEUTRAL" &&
         ((side==="LONG" && structure4h.bias==="BEARISH") || (side==="SHORT" && structure4h.bias==="BULLISH"))) { stageCounts.fourHourConflict++; continue; }
 
-    const postSweepBars = fifteenMin.slice(sweep.index+1,-1);
+    const postSweepBars = fifteenMin.slice(sweep.index+1,chochIndex);
     const orderBlock = postSweepBars.length>=2 ? findOrderBlock(postSweepBars,side,postSweepBars.length) : null;
     const stop = side==="LONG"
       ? Math.min(sweep.extreme,orderBlock?.low??sweep.extreme)-price*0.0005
