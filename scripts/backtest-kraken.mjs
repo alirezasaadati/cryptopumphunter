@@ -9,7 +9,7 @@ const SYMBOL_LIMIT = Math.max(1, Math.min(5, Number(process.env.BACKTEST_SYMBOLS
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
 const SLIPPAGE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_SLIPPAGE || 0.0003));
 const MAX_HOLD_HOURS = 72;
-const TARGET_WEIGHTS = [0.40, 0.35, 0.25];
+const TARGET_WEIGHTS = [0.20, 0.20, 0.60];
 
 async function getJson(url) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(25000) });
@@ -86,7 +86,7 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
       if (target == null) continue;
       const touched = direction === 1 ? bar.high >= target : bar.low <= target;
       if (!touched) break;
-      const weight = [0.40, 0.35, 0.25][t];
+      const weight = TARGET_WEIGHTS[t];
       const exitFill = target * (1 - direction * slippage);
       const grossR = direction * (exitFill - entry) / risk;
       const feeR = fee * (entry + exitFill) / risk;
@@ -183,7 +183,7 @@ async function main() {
     settings:{
       symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,
       feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
-      maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
+      maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[20,20,60],
       sameCandleStopTargetRule:"stop first (conservative)",
       entryRule:"next 1h candle open, adverse slippage applied",
       funding:"excluded (historical funding series not included)",
@@ -205,7 +205,7 @@ async function main() {
     "Profit factor: "+(report.overall.profitFactor===null?"n/a":report.overall.profitFactor.toFixed(2)),
     "Max drawdown: "+report.overall.maxDrawdownR.toFixed(2)+"R","",
     "Costs assumed: "+(FEE_PER_SIDE*100).toFixed(3)+"% fee + "+(SLIPPAGE_PER_SIDE*100).toFixed(3)+"% slippage per side.",
-    "Partial exits: 40% at 1.5R, 35% at 2.2R, 25% at 3R. Same-candle stop/target ambiguity is resolved as stop first.",
+    "Partial exits: 20% at 1.5R, 20% at 2.2R, 60% at 3R. Same-candle stop/target ambiguity is resolved as stop first.",
     "Historical funding is excluded. Simplified price-based simulation; not a live-fill or profitability guarantee.","",
     "| Symbol | 1h candles | 4h candles | Trades | Win rate | Net R | Expectancy | Max DD | Error |",
     "|---|---:|---:|---:|---:|---:|---:|---:|---|",
