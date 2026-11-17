@@ -141,6 +141,16 @@ test("strong aligned 1h/4h setup produces a bounded LONG plan", () => {
   assert.equal(result.rewardRisk, 1.5);
 });
 
+test("direction modes can isolate LONG-only and SHORT-only candidates", () => {
+  const { ticker, oneHour, fourHour, fifteenMin } = makeValidSetup();
+  const longOnly = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMin, { directionMode: "LONG_ONLY" });
+  const shortOnly = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMin, { directionMode: "SHORT_ONLY" });
+  assert.equal(longOnly.side, "LONG");
+  assert.equal(longOnly.eligible, true);
+  assert.notEqual(shortOnly.eligible, true);
+  assert.ok(shortOnly.diagnostics.some(x => x.status === "direction_filter"));
+});
+
 test("strategy diagnostics expose all four strategies without changing signal eligibility", () => {
   const { ticker, oneHour, fourHour, fifteenMin } = makeValidSetup();
   const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMin);
