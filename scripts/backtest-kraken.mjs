@@ -242,7 +242,8 @@ async function main() {
       signalUses:"historical 1h/4h/15m closed candles; 24h change derived from historical bars; 15m execution and exits; no current funding or future candle data"
     },
     baseline:{name:"Current 40/35/25 target exits",metrics:summarize(allTrades)},
-    stagedManagement:{name:"40/35/25 targets plus staged protective stops",metrics:summarizeManagementComparison(allManagedTrades)},\n    filterExperiments,
+    stagedManagement:{name:"40/35/25 targets plus staged protective stops",metrics:summarizeManagementComparison(allManagedTrades)},
+    filterExperiments,
     symbols:results.map(({trades,managedTrades,...rest})=>rest),
     trades:allTrades,
     managedTrades:allManagedTrades
