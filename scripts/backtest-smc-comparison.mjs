@@ -113,10 +113,10 @@ async function testSymbol(ticker, from, to, splitTime) {
   const systems=["SMC","PRICE_ACTION"];
   const trades=Object.fromEntries(systems.flatMap(s=>modes.map(m=>[s+"_"+m,[]])));
   const smcStageCounts={noSweep:0,sweep:0,noPostSweepSwing:0,noChoch:0,noFvgRetest:0,wrongPremiumDiscount:0,fourHourConflict:0,invalidPlan:0,accepted:0};
-  let busyUntil=-1;
   for(let i=159;i<m15.length-1;i++){
-    if(i<busyUntil) continue;
     const closeTime=m15[i].time+M15;
+    // Warmup candles build structure history but are never counted as trades.
+    if(closeTime<evaluationStart) continue;
     const c15=m15.slice(0,i+1);
     const c1=h1.filter(c=>c.time+HOUR<=closeTime);
     const c4=h4.filter(c=>c.time+H4<=closeTime);
@@ -149,8 +149,20 @@ async function testSymbol(ticker, from, to, splitTime) {
   }
   return {out,trades:Object.fromEntries(Object.keys(trades).filter(k=>!k.endsWith("__busy")).map(k=>[k,trades[k]]))};
 }
+export function getBacktestWindow(now=Date.now(), days=DAYS, warmupDays=20) {
+  const dayMs=24*3600000;
+  const evaluationEnd=now;
+  const evaluationStart=evaluationEnd-days*dayMs;
+  return {
+    from:evaluationStart-warmupDays*dayMs,
+    evaluationStart,
+    evaluationEnd,
+    splitTime:evaluationStart+days*dayMs*0.7
+  };
+}
 async function main(){
-  const now=Date.now(), from=now-DAYS*24*3600000-20*24*3600000, to=now;
+  const window=getBacktestWindow();
+  const {from,evaluationStart,evaluationEnd:to,splitTime}=window;
   const tickers=await getJson(BASE+"/derivatives/api/v3/tickers");
   const universe=(tickers.tickers||[]).filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&/^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&Number(t.volumeQuote)>0)
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
@@ -165,8 +177,9 @@ async function main(){
     }catch(e){results.push({symbol:ticker.symbol,error:String(e.message||e),metrics:{}});}
   }
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public OHLC candles",
-    periodDays:DAYS,split:"first 70% in-sample; final 30% out-of-sample",
-    settings:{symbols:universe.map(x=>x.symbol),feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,
+    periodDays:DAYS,evaluationStart:new Date(evaluationStart).toISOString(),evaluationEnd:new Date(to).toISOString(),
+    split:"first 70% of evaluation window in-sample; final 30% out-of-sample",
+    settings:{symbols:universe.map(x=>x.symbol),warmupDays:20,feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,
       maxHoldHours:72,partialExitWeightsPct:[40,35,25],sameCandleRule:"stop first",
       entry:"next 15m open with adverse entry slippage; stop/targets repriced preserving original R distances",
       funding:"excluded; verify funding separately before paper trading",
@@ -177,7 +190,7 @@ async function main(){
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/smc-comparison.json",JSON.stringify(report,null,2));
   const rows=Object.entries(report.overall).map(([k,v])=>"| "+k+" | "+v.all.trades+" | "+v.all.winRatePct.toFixed(1)+"% | "+v.all.netR.toFixed(2)+"R | "+v.all.expectancyR.toFixed(3)+"R | "+(v.all.profitFactor===null?"n/a":v.all.profitFactor.toFixed(2))+" | "+v.all.maxDrawdownR.toFixed(2)+"R | "+v.outOfSample.trades+" | "+v.outOfSample.expectancyR.toFixed(3)+"R |");
-  const md=["# SMC vs Price Action — Kraken Futures","", "Period: "+DAYS+" days; last 30% out-of-sample.",
+  const md=["# SMC vs Price Action — Kraken Futures","", "Evaluation period: "+new Date(evaluationStart).toISOString()+" to "+new Date(to).toISOString()+" ("+DAYS+" days); 20-day warmup excluded from trade evaluation; final 30% out-of-sample.",
     "Costs: "+(FEE*100).toFixed(3)+"% fee and "+(SLIPPAGE*100).toFixed(3)+"% slippage per side. Funding excluded.",
     "Next 15m open entries; conservative stop-first rule if stop and target touch in the same candle.",
     "All systems use the same symbols, candles, cost assumptions, 40/35/25 exits and 72h max hold.",
