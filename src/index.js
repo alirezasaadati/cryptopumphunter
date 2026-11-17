@@ -889,12 +889,10 @@ async function showStatus(env, chatId) {
 async function showConnectionTest(env, chatId) {
   await sendMessage(env, chatId, "🔌 در حال بررسی اتصال منابع داده...");
   const result = await testDataSources();
-  const coinLore = result.coinlore.ok ? `✅ CoinLore: متصل (${result.coinlore.assets} ارز نمونه)` : `❌ CoinLore: ${result.coinlore.error}`;
-  const kraken = result.kraken.ok ? `✅ Kraken Spot: متصل (${result.kraken.pairs} جفت معاملاتی)` : `❌ Kraken Spot: ${result.kraken.error}`;
   const futures = result.krakenFutures?.ok
     ? `✅ Kraken Futures: متصل (${result.krakenFutures.symbols} قرارداد | نمونه ${result.krakenFutures.sample} | ${result.krakenFutures.candles} کندل 1H)`
     : `❌ Kraken Futures: ${result.krakenFutures?.error || "نامشخص"}`;
-  await sendMessage(env, chatId, "🔌 نتیجه تست اتصال\n\n" + coinLore + "\n\n" + kraken + "\n\n" + futures + "\n\n" + `نسخه ربات: V${CONFIG.VERSION}`, menuForChat(env, chatId));
+  await sendMessage(env, chatId, "🔌 نتیجه تست اتصال\n\n" + futures + "\n\n" + `نسخه ربات: V${CONFIG.VERSION}`, menuForChat(env, chatId));
 }
 async function registerWebhook(request, env) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) {
@@ -936,14 +934,6 @@ async function registerWebhook(request, env) {
 }
 
 // ---------------- DATA SOURCES ----------------
-
-function extractCoinLoreAssets(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.data)) return payload.data;
-  if (Array.isArray(payload?.coins)) return payload.coins;
-  if (Array.isArray(payload?.data?.coins)) return payload.data.coins;
-  return [];
-}
 
 async function testDataSources() {
   const result = { version: CONFIG.VERSION, krakenFutures: { ok: false } };
@@ -1253,7 +1243,7 @@ function formatFuturesSymbol(symbol) {
 }
 
 
-// V4 migration: legacy spot/futures features plus isolated, user-confirmed trade tracking.
+// V4 migration: futures-only signal engine plus isolated, user-confirmed trade tracking.
 // ---------------- INDEPENDENT FUTURES TRADE LIFECYCLE ----------------
 const FUTURES_PENDING_KEY = "futures_pending_signals";
 const FUTURES_OPEN_KEY = "futures_open_trades";
