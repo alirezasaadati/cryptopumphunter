@@ -88,14 +88,15 @@ function simulate(plan, candles, start) {
     holdHours:(p.exitTime-candles[start].time)/3600000};
 }
 function metrics(trades) {
-  const wins=trades.filter(t=>t.netR>0), losses=trades.filter(t=>t.netR<0);
+  const ordered=[...trades].sort((a,b)=>a.entryTime-b.entryTime);
+  const wins=ordered.filter(t=>t.netR>0), losses=ordered.filter(t=>t.netR<0);
   const gw=wins.reduce((s,t)=>s+t.netR,0), gl=Math.abs(losses.reduce((s,t)=>s+t.netR,0));
   let equity=0,peak=0,dd=0,streak=0,maxStreak=0;
-  for(const t of trades){equity+=t.netR;peak=Math.max(peak,equity);dd=Math.max(dd,peak-equity);streak=t.netR<0?streak+1:0;maxStreak=Math.max(maxStreak,streak);}
-  return {trades:trades.length,winRatePct:trades.length?100*wins.length/trades.length:0,
-    netR:trades.reduce((s,t)=>s+t.netR,0),expectancyR:trades.length?trades.reduce((s,t)=>s+t.netR,0)/trades.length:0,
+  for(const t of ordered){equity+=t.netR;peak=Math.max(peak,equity);dd=Math.max(dd,peak-equity);streak=t.netR<0?streak+1:0;maxStreak=Math.max(maxStreak,streak);}
+  return {trades:ordered.length,winRatePct:ordered.length?100*wins.length/ordered.length:0,
+    netR:ordered.reduce((s,t)=>s+t.netR,0),expectancyR:ordered.length?ordered.reduce((s,t)=>s+t.netR,0)/ordered.length:0,
     profitFactor:gl?gw/gl:gw?null:0,maxDrawdownR:dd,maxConsecutiveLosses:maxStreak,
-    avgHoldHours:trades.length?trades.reduce((s,t)=>s+t.holdHours,0)/trades.length:0};
+    avgHoldHours:ordered.length?ordered.reduce((s,t)=>s+t.holdHours,0)/ordered.length:0};
 }
 function allowed(plan, mode) { return plan && (mode==="BOTH" || plan.side===mode); }
 
