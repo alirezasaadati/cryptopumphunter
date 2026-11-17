@@ -1495,6 +1495,40 @@ async function runAutomaticFuturesAlertScan(env) {
   }
 }
 
+async function filterActiveDuplicateFuturesSignals(env, candidates) {
+  const now = Date.now();
+  const [pending, open] = await Promise.all([
+    readTradeList(env, FUTURES_PENDING_KEY),
+    readTradeList(env, FUTURES_OPEN_KEY)
+  ]);
+  const activeKeys = new Set();
+
+  // A pending signal blocks another signal for the same contract and direction
+  // until its entry window expires, regardless of the candle fingerprint.
+  for (const signal of pending) {
+    if (signal?.expiresAt > now && signal?.symbol && ['LONG', 'SHORT'].includes(signal?.side)) {
+      activeKeys.add(String(signal.symbol).trim().toUpperCase() + '|' + signal.side);
+    }
+  }
+
+  // An accepted/open paper trade continues to block repeats even after
+  // the original signal's entry window has expired.
+  for (const trade of open) {
+    if (trade?.status === 'OPEN' && trade?.symbol && ['LONG', 'SHORT'].includes(trade?.side)) {
+      activeKeys.add(String(trade.symbol).trim().toUpperCase() + '|' + trade.side);
+    }
+  }
+
+  const seenThisScan = new Set();
+  return (Array.isArray(candidates) ? candidates : []).filter(signal => {
+    if (!signal?.symbol || !['LONG', 'SHORT'].includes(signal?.side)) return false;
+    const key = String(signal.symbol).trim().toUpperCase() + '|' + signal.side;
+    if (activeKeys.has(key) || seenThisScan.has(key)) return false;
+    seenThisScan.add(key);
+    return true;
+  });
+}
+
 async function runFuturesSignalScan(env, options = {}) {
   const started = Date.now();
   const universe = await getKrakenFuturesUniverse();
@@ -1513,7 +1547,9 @@ async function runFuturesSignalScan(env, options = {}) {
     }
   });
   const createdAt = Date.now();
-  const generatedSignals = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score).slice(0, 8)
+  const eligibleCandidates = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score);
+  const nonDuplicateCandidates = await filterActiveDuplicateFuturesSignals(env, eligibleCandidates);
+  const generatedSignals = nonDuplicateCandidates.slice(0, 8)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
   const signals = await savePendingFuturesSignals(env, generatedSignals);
   if (env.APP_KV) {
