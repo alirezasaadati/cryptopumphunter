@@ -1,0 +1,33 @@
+name: Price Action Engine Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/price-action-engine.test.mjs"
+      - "src/price-action-engine.js"
+      - "src/index.js"
+      - "wrangler.toml"
+      - "package.json"
+      - ".github/workflows/price-action-tests.yml"
+  pull_request:
+    paths:
+      - "scripts/price-action-engine.test.mjs"
+      - "src/price-action-engine.js"
+      - "package.json"
+      - ".github/workflows/price-action-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm test
