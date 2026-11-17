@@ -2069,7 +2069,7 @@ async function showOpenFuturesTrades(env,chatId) {
   const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));
   if(!list.length)return sendMessage(env,chatId,"📭 معامله بازی در دفتر پیگیری ثبت نشده است.",BACK_MENU);
   const body=list.slice(0,15).map(t=>`${t.side} ${t.symbol} | ${t.exchange||"Kraken"} | ${t.strategyName||"استراتژی ثبت‌نشده"}\nورود واقعی: ${formatPrice(t.actualEntry)} | قیمت آخر: ${formatPrice(t.lastPrice)}\nحد ضرر: ${formatPrice(t.currentStop)}\nاهداف: ${formatPrice(t.target1)} / ${formatPrice(t.target2)} / ${formatPrice(t.target3)}\nاهداف لمس‌شده: ${t.tpHits.join(",")||"—"}`).join("\n\n");
-  return sendLongMessage(env,chatId,"📌 معاملات باز\n━━━━━━━━━━━━━━━━━━\n"+body+"\n\n⚠️ فقط هنگام اسکن دستی به‌روزرسانی می‌شوند؛ سفارش واقعی ثبت نمی‌شود.");
+  return sendLongMessage(env,chatId,"📌 معاملات باز\n━━━━━━━━━━━━━━━━━━\n"+body+"\n\n⚠️ پایش دوره‌ای است؛ حد ضرر و سفارش‌ها را باید دستی در صرافی تغییر بدهی.");
 }
 async function showFuturesTradeHistory(env,chatId) {
   const list=(await readTradeList(env,FUTURES_CLOSED_KEY)).filter(t=>String(t.chatId)===String(chatId)).slice(0,15);
