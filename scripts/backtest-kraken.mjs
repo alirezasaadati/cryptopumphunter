@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 const BASE = "https://futures.kraken.com";
 const HOUR = 60 * 60 * 1000;
 const FOUR_HOURS = 4 * HOUR;
+const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const DAYS = Math.max(15, Math.min(90, Number(process.env.BACKTEST_DAYS || 30)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(5, Number(process.env.BACKTEST_SYMBOLS || 3)));
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
@@ -124,24 +125,26 @@ function summarize(trades) {
 }
 
 async function backtestSymbol(ticker, fromMs, toMs) {
-  const [oneHour,fourHour] = await Promise.all([
+  const [oneHour,fourHour,fifteenMin] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs,HOUR),
-    fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS)
+    fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS),
+    fetchHistoricalCandles(ticker.symbol,"15m",fromMs,toMs,FIFTEEN_MINUTES)
   ]);
-  if (oneHour.length < 100 || fourHour.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error(ticker.symbol + ": insufficient historical candles (1h=" + oneHour.length + ", 4h=" + fourHour.length + ")");
+  if (oneHour.length < 100 || fourHour.length < FUTURES_CONFIG.MIN_CANDLES || fifteenMin.length < 4 * FUTURES_CONFIG.MIN_CANDLES) throw new Error(ticker.symbol + ": insufficient historical candles (1h=" + oneHour.length + ", 4h=" + fourHour.length + ", 15m=" + fifteenMin.length + ")");
   const trades = [];
   let nextAvailableIndex = 60;
   for (let i=60;i<oneHour.length-1;i++) {
     if (i<nextAvailableIndex) continue;
     const signalBar=oneHour[i], signalCloseTime=signalBar.time+HOUR;
     const closed4h=fourHour.filter(c=>c.time+FOUR_HOURS<=signalCloseTime);
-    if (closed4h.length<FUTURES_CONFIG.MIN_CANDLES) continue;
+    const closed15m=fifteenMin.filter(c=>c.time+FIFTEEN_MINUTES<=signalCloseTime);
+    if (closed4h.length<FUTURES_CONFIG.MIN_CANDLES || closed15m.length<4*FUTURES_CONFIG.MIN_CANDLES) continue;
     const nextBar=oneHour[i+1];
     const tickerAtSignal={
       symbol:ticker.symbol,last:nextBar.open,quoteVolume:Number(ticker.volumeQuote)||0,
       priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}
     };
-    const first=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
+    const first=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m);
     if (!first?.eligible) continue;
     const direction=first.side==="LONG"?1:-1;
     tickerAtSignal.last=nextBar.open*(1+direction*SLIPPAGE_PER_SIDE);
@@ -159,7 +162,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
     nextAvailableIndex=Math.max(entryIndex+1,exitIndex+1);
   }
-  return {symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,trades,metrics:summarize(trades)};
+  return {symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,candles15m:fifteenMin.length,trades,metrics:summarize(trades)};
 }
 
 async function main() {
@@ -187,7 +190,7 @@ async function main() {
       sameCandleStopTargetRule:"stop first (conservative)",
       entryRule:"next 1h candle open, adverse slippage applied",
       funding:"excluded (historical funding series not included)",
-      signalUses:"historical 1h/4h closed candles; 24h change derived from historical bars; no current funding or future candle data"
+      signalUses:"historical 4h/1h/15m closed candles; 24h change derived from historical bars; no current funding or future candle data"
     },
     overall:summarize(allTrades),
     symbols:results.map(({trades,...rest})=>rest),trades:allTrades
