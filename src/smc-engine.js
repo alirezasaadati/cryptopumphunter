@@ -180,28 +180,31 @@ export function analyzeSMC({symbol,oneHour,fourHour,fifteenMin,livePrice}) {
   const structure4h = describeSMCStructure(fourHour);
   const structure1h = describeSMCStructure(oneHour);
   const candidates = [];
+  const stageCounts = { noSweep:0, sweep:0, noPostSweepSwing:0, noChoch:0, noFvgRetest:0, wrongPremiumDiscount:0, fourHourConflict:0, invalidPlan:0, accepted:0 };
 
   for (const side of ["LONG","SHORT"]) {
     const sweep = detectLiquiditySweep(fifteenMin,side);
-    if (!sweep || sweep.index >= fifteenMin.length-1) continue;
+    if (!sweep || sweep.index >= fifteenMin.length-1) { stageCounts.noSweep++; continue; }
+    stageCounts.sweep++;
 
     const opposingSwings = side === "LONG" ? swings.highs : swings.lows;
     const breakLevel = [...opposingSwings].reverse().find(x=>x.index>sweep.index);
-    if (!breakLevel) continue;
+    if (!breakLevel) { stageCounts.noPostSweepSwing++; continue; }
     const choch = side === "LONG"
       ? last.close > breakLevel.price && previousBars.at(-1).close <= breakLevel.price
       : last.close < breakLevel.price && previousBars.at(-1).close >= breakLevel.price;
-    if (!choch) continue;
+    if (!choch) { stageCounts.noChoch++; continue; }
 
     const gaps = findFairValueGaps(fifteenMin.slice(sweep.index+1),side);
     const lastLocalIndex = fifteenMin.length-sweep.index-2;
     const gap = [...gaps].reverse().find(x=>x.index>=2 && x.index<lastLocalIndex && intersects(last,x));
-    if (!gap) continue;
+    if (!gap) { stageCounts.noFvgRetest++; continue; }
 
-    const range = calculatePremiumDiscount(fifteenMin,price);
-    if (!range || (side==="LONG" && range.zone!=="DISCOUNT") || (side==="SHORT" && range.zone!=="PREMIUM")) continue;
+    // Premium/discount is measured against the broader 4H dealing range, not a short 15m micro-range.
+    const range = calculatePremiumDiscount(fourHour,price);
+    if (!range || (side==="LONG" && range.zone!=="DISCOUNT") || (side==="SHORT" && range.zone!=="PREMIUM")) { stageCounts.wrongPremiumDiscount++; continue; }
     if (structure4h.bias!=="NEUTRAL" &&
-        ((side==="LONG" && structure4h.bias==="BEARISH") || (side==="SHORT" && structure4h.bias==="BULLISH"))) continue;
+        ((side==="LONG" && structure4h.bias==="BEARISH") || (side==="SHORT" && structure4h.bias==="BULLISH"))) { stageCounts.fourHourConflict++; continue; }
 
     const postSweepBars = fifteenMin.slice(sweep.index+1,-1);
     const orderBlock = postSweepBars.length>=2 ? findOrderBlock(postSweepBars,side,postSweepBars.length) : null;
@@ -215,16 +218,17 @@ export function analyzeSMC({symbol,oneHour,fourHour,fifteenMin,livePrice}) {
       reason:"جمع‌آوری نقدینگی، تغییر ساختار CHoCH، بازگشت به FVG و ورود در ناحیه "+range.zone,
       sweep,fvg:gap,orderBlock,range
     });
-    if (plan && score>=SMC_CONFIG.MIN_SCORE) candidates.push(plan);
+    if (plan && score>=SMC_CONFIG.MIN_SCORE) { candidates.push(plan); stageCounts.accepted++; } else stageCounts.invalidPlan++;
   }
 
   const sides = new Set(candidates.map(x=>x.side));
-  if (sides.size>1) return {signals:[],conflict:true,rejected:"تعارض جهت در ستاپ‌های SMC؛ سیگنال صادر نشد.",diagnostics:[]};
+  if (sides.size>1) return {signals:[],conflict:true,rejected:"تعارض جهت در ستاپ‌های SMC؛ سیگنال صادر نشد.",diagnostics:[],stageCounts};
   const valid = candidates.filter(x=>Math.abs(price-x.entry)/x.entry*100<=0.35);
   return {
     signals:valid.sort((a,b)=>b.score-a.score),
     conflict:false,
     rejected:valid.length?undefined:"تمام شروط ساختاری SMC هم‌زمان برقرار نبودند.",
+    stageCounts,
     diagnostics:[{
       strategyId:"smc_liquidity_choch_fvg",
       strategyName:"Smart Money Concepts",
