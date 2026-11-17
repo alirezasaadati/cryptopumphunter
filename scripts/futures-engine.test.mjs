@@ -44,7 +44,7 @@ function makeValidSetup() {
   set1h(20,{open:100,high:100.8,low:99.9,close:100.3});
   set1h(25,{open:99.9,high:100.1,low:99.2,close:100});
   set1h(30,{open:100,high:101.2,low:99.9,close:100.5});
-  set1h(35,{open:99.9,high:100.1,low:99.4,close:100});
+  set1h(35,{open:99.9,high:100.1,low:99.6,close:100});
   set1h(38,{open:100.8,high:101.1,low:100.6,close:101});
   set1h(39,{open:101,high:101.5,low:100.9,close:101.4});
   const fourHour=Array.from({length:40},(_,i)=>({
