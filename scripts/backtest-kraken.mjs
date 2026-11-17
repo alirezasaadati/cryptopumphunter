@@ -212,15 +212,15 @@ async function main() {
   const allManagedTrades=results.flatMap(r=>r.managedTrades||[]).sort((a,b)=>a.entryTime-b.entryTime);
   // Exploratory filter grid; select on the first two-thirds and report the final
   // third separately as an untouched chronological holdout.
-  const validationStart=startMs + (toMs-startMs)*2/3;
+  const validationStart=startMs + (endMs-startMs)*2/3;
   const filterExperiments=[];
   for (const minScore of [80,90]) for (const minRiskPct of [0,0.30,0.40,0.50,0.60,0.75,1.00]) {
     const keep=t=>t.score>=minScore && (t.risk/t.entry*100)>=minRiskPct;
     const split=(rows,from,to)=>rows.filter(t=>t.entryTime>=from && t.entryTime<to && keep(t));
     const trainBase=split(allTrades,startMs,validationStart);
-    const testBase=split(allTrades,validationStart,toMs);
+    const testBase=split(allTrades,validationStart,endMs);
     const trainManaged=split(allManagedTrades,startMs,validationStart);
-    const testManaged=split(allManagedTrades,validationStart,toMs);
+    const testManaged=split(allManagedTrades,validationStart,endMs);
     filterExperiments.push({
       minScore,minRiskPct,
       train:{baseline:summarize(trainBase),managed:summarizeManagementComparison(trainManaged)},
