@@ -1979,6 +1979,16 @@ async function handleTradeAction(action,chatId,env) {
     await writeTradeList(env,FUTURES_OPEN_KEY,open);
     return sendMessage(env,chatId,"✅ حد ضرر در دفتر پیگیری به نقطه ورود منتقل شد. این تغییر را باید دستی در صرافی هم انجام داده باشی.");
   }
+  if(op==="stop") {
+    const open=await readTradeList(env,FUTURES_OPEN_KEY);
+    const t=open.find(x=>x.id===id&&String(x.chatId)===String(chatId));
+    if(!t)return sendMessage(env,chatId,"معامله باز پیدا نشد.");
+    const suggested=Number(t.lastSuggestedStop);
+    if(!Number.isFinite(suggested)||suggested<=0)return sendMessage(env,chatId,"قیمت حد ضرر پیشنهادی پیدا نشد.");
+    t.currentStop=suggested;t.stopConfirmedAt=new Date().toISOString();
+    await writeTradeList(env,FUTURES_OPEN_KEY,open);
+    return sendMessage(env,chatId,"✅ تأیید شد. حد ضرر جدید در دفتر پیگیری ثبت شد؛ مطمئن شو همین قیمت را دستی در صرافی هم اعمال کرده‌ای.");
+  }
   const pending=await readTradeList(env,FUTURES_PENDING_KEY);
   const signal=pending.find(x=>x.id===id);
   if(!signal||signal.expiresAt<=Date.now())return sendMessage(env,chatId,"⏳ سیگنال پیدا نشد یا اعتبار ورود آن تمام شده است.");
@@ -2025,7 +2035,9 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
     if (management.alert) {
       const message = formatManagementAlert(t, management, formatPrice);
       if (message) {
-        await sendMessage(env, chatId, message);
+        await sendMessage(env, chatId, message, {
+          inline_keyboard: [[{ text: "✅ حد ضرر جدید را در صرافی اعمال کردم", callback_data: `trade:stop:${t.id}` }]]
+        });
         t.managementStages = [...new Set([...(t.managementStages || []), management.stageId])];
         t.lastManagementAlertAt = new Date().toISOString();
         t.lastSuggestedStop = management.recommendedStop;
