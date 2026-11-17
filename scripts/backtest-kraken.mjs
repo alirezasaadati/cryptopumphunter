@@ -6,7 +6,7 @@ const BASE = "https://futures.kraken.com";
 const HOUR = 60 * 60 * 1000;
 const FOUR_HOURS = 4 * HOUR;
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
-const DAYS = Math.max(15, Math.min(90, Number(process.env.BACKTEST_DAYS || 30)));
+const DAYS = Math.max(15, Math.min(180, Number(process.env.BACKTEST_DAYS || 30)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(5, Number(process.env.BACKTEST_SYMBOLS || 3)));
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
 const SLIPPAGE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_SLIPPAGE || 0.0003));
@@ -210,6 +210,23 @@ async function main() {
   }
   const allTrades=results.flatMap(r=>r.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const allManagedTrades=results.flatMap(r=>r.managedTrades||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  // Exploratory filter grid; select on the first two-thirds and report the final
+  // third separately as an untouched chronological holdout.
+  const validationStart=startMs + (toMs-startMs)*2/3;
+  const filterExperiments=[];
+  for (const minScore of [80,90]) for (const minRiskPct of [0,0.30,0.40,0.50,0.60,0.75,1.00]) {
+    const keep=t=>t.score>=minScore && (t.risk/t.entry*100)>=minRiskPct;
+    const split=(rows,from,to)=>rows.filter(t=>t.entryTime>=from && t.entryTime<to && keep(t));
+    const trainBase=split(allTrades,startMs,validationStart);
+    const testBase=split(allTrades,validationStart,toMs);
+    const trainManaged=split(allManagedTrades,startMs,validationStart);
+    const testManaged=split(allManagedTrades,validationStart,toMs);
+    filterExperiments.push({
+      minScore,minRiskPct,
+      train:{baseline:summarize(trainBase),managed:summarizeManagementComparison(trainManaged)},
+      holdout:{baseline:summarize(testBase),managed:summarizeManagementComparison(testManaged)}
+    });
+  }
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS},
@@ -217,14 +234,14 @@ async function main() {
       symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,
       feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
       maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],executionTimeframe:"15m",
-      sameCandleStopTargetRule:"stop first (conservative)",
+      sameCandleStopTargetRule:"stop first (conservative)",\n      chronologicalSplit:"first 2/3 exploratory; final 1/3 holdout",
       entryRule:"first 15m candle open after confirmed 1h/4h/15m close, adverse slippage applied",
       funding:"excluded (historical funding series not included)",
       comparison:"Both exit models use identical signals and entries; managed model retains the same 40/35/25 targets and adds conservative staged stops.",
       signalUses:"historical 1h/4h/15m closed candles; 24h change derived from historical bars; 15m execution and exits; no current funding or future candle data"
     },
     baseline:{name:"Current 40/35/25 target exits",metrics:summarize(allTrades)},
-    stagedManagement:{name:"40/35/25 targets plus staged protective stops",metrics:summarizeManagementComparison(allManagedTrades)},
+    stagedManagement:{name:"40/35/25 targets plus staged protective stops",metrics:summarizeManagementComparison(allManagedTrades)},\n    filterExperiments,
     symbols:results.map(({trades,managedTrades,...rest})=>rest),
     trades:allTrades,
     managedTrades:allManagedTrades
@@ -240,7 +257,7 @@ async function main() {
     "Staged management: "+JSON.stringify(report.stagedManagement.metrics),"",
     "Costs assumed: "+(FEE_PER_SIDE*100).toFixed(3)+"% fee + "+(SLIPPAGE_PER_SIDE*100).toFixed(3)+"% slippage per side.",
     "Partial exits: 40% at 1.5R, 35% at 2.2R, 25% at 3R. Same-candle stop/target ambiguity is resolved as stop first.",
-    "Historical funding is excluded. Simplified price-based simulation; not a live-fill or profitability guarantee.","",
+    "Historical funding is excluded. Simplified price-based simulation; not a live-fill or profitability guarantee.","",\n    "Filter experiments: each score/risk threshold is selected on the first 2/3 only; final 1/3 is chronological holdout.",\n    ...filterExperiments.map(x=>"score >= "+x.minScore+", risk >= "+x.minRiskPct.toFixed(2)+"% | train n="+x.train.baseline.trades+" netR="+x.train.baseline.netR.toFixed(2)+" PF="+x.train.baseline.profitFactor.toFixed(2)+" | holdout n="+x.holdout.baseline.trades+" netR="+x.holdout.baseline.netR.toFixed(2)+" PF="+x.holdout.baseline.profitFactor.toFixed(2)),\n    "",
     "| Symbol | Trades | Baseline Net R | Managed Net R | Baseline DD | Managed DD | Error |",
     "|---|---:|---:|---:|---:|---:|---|",
     ...results.map(r=>"| "+r.symbol+" | "+r.metrics.trades+" | "+r.metrics.netR.toFixed(2)+" | "+r.managementMetrics.netR.toFixed(2)+" | "+r.metrics.maxDrawdownR.toFixed(2)+" | "+r.managementMetrics.maxDrawdownR.toFixed(2)+" | "+(r.error||"").replaceAll("|","/")+" |")
