@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { simulate } from "./backtest-smc-comparison.mjs";
 import {
   SMC_CONFIG, validateSMCCandles, findConfirmedSMCSwings,
   detectLiquiditySweep, findFairValueGaps, findOrderBlock,
@@ -103,4 +104,15 @@ test("SMC configuration uses structure/liquidity/FVG logic and fixed staged R ta
   assert.equal(SMC_CONFIG.MIN_SCORE,80);
   assert.deepEqual(SMC_CONFIG.TARGET_R_MULTIPLES,[1.5,2.2,3]);
   assert.equal(SMC_CONFIG.SWEEP_LOOKBACK,8);
+});
+
+
+test("backtest simulator executes each partial target only once",()=>{
+  const trade=simulate({side:"LONG",entry:100,stop:99,risk:1,targets:[101.5,102.2,103]},[
+    {time:900000,open:100,high:101.6,low:99.8,close:101.4},
+    {time:1800000,open:101.4,high:101.6,low:100.5,close:101}
+  ],0);
+  assert.equal(trade.targetHits,1);
+  assert.equal(trade.exitReason,"TIME_EXIT");
+  assert.ok(trade.netR>0.9 && trade.netR<1.2);
 });
