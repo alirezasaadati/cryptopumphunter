@@ -25,7 +25,6 @@ export function calculateTradeEconomics(signal, overrides = {}) {
   if (!(riskFraction > 0) || targetFractions.some(x => !(x > 0))) return null;
 
   const notionalUsd = config.REFERENCE_MARGIN_USD * config.LEVERAGE;
-  const maxLossUsd = riskFraction * notionalUsd;
   const grossProjectedProfitUsd = targetFractions.reduce(
     (sum, fraction, i) => sum + fraction * notionalUsd * config.EXIT_WEIGHTS[i], 0
   );
@@ -55,7 +54,7 @@ export function qualifyTradeEconomics(economics, overrides = {}) {
     return { eligible: false, reason: `ضرر تخمینی تا استاپ ${economics.maxLossUsd.toFixed(2)} دلار است و از سقف ${config.MAX_STOP_LOSS_USD.toFixed(2)} دلار بیشتر است.` };
   }
   if (economics.projectedProfitUsd < config.MIN_PROJECTED_PROFIT_USD) {
-    return { eligible: false, reason: `سود ناخالص تخمینی با خروج پله‌ای فقط ${economics.projectedProfitUsd.toFixed(2)} دلار است؛ حداقل قابل قبول ${config.MIN_PROJECTED_PROFIT_USD.toFixed(2)} دلار به ازای ${config.REFERENCE_MARGIN_USD} دلار مارجین و لوریج ${config.LEVERAGE} است.` };
+    return { eligible: false, reason: `سود خالص تخمینی پس از هزینه‌های فرضی با خروج پله‌ای فقط ${economics.projectedProfitUsd.toFixed(2)} دلار است؛ حداقل قابل قبول ${config.MIN_PROJECTED_PROFIT_USD.toFixed(2)} دلار به ازای ${config.REFERENCE_MARGIN_USD} دلار مارجین و لوریج ${config.LEVERAGE} است.` };
   }
   if (economics.weightedRewardRisk < config.MIN_WEIGHTED_REWARD_RISK) {
     return { eligible: false, reason: `نسبت سود وزنی به ریسک ${economics.weightedRewardRisk.toFixed(2)}R کمتر از حداقل ${config.MIN_WEIGHTED_REWARD_RISK}R است.` };
