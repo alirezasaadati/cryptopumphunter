@@ -224,7 +224,7 @@ test("new staged exits use 20/20/60 and realize 2.54R at all targets", () => {
   assert.ok(Math.abs(tradeResultR(trade,false)-2.54)<1e-9);
 });
 
-test("ETH example is rejected because $10 margin at 10x projects less than $2 gross profit", () => {
+test("ETH example is rejected because $10 margin at 10x projects less than $2 net profit after estimated costs", () => {
   const signal = { side:"LONG", entry:1823.30, stop:1812.52,
     target1:1839.48, target2:1847.02, target3:1855.65 };
   const economics = calculateTradeEconomics(signal);
