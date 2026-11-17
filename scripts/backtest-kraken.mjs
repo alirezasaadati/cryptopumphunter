@@ -159,7 +159,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (!first?.eligible) continue;
     const direction=first.side==="LONG"?1:-1;
     tickerAtSignal.last=nextBar.open*(1+direction*SLIPPAGE_PER_SIDE);
-    const confirmed=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
+    const confirmed=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m);
     if (!confirmed?.eligible) continue;
     const entryIndex=i+1;
     const tradeCandles=oneHour.slice(entryIndex,Math.min(oneHour.length,entryIndex+MAX_HOLD_HOURS+1));
