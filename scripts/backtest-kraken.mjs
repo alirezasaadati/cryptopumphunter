@@ -49,6 +49,17 @@ async function fetchHistoricalCandles(symbol, resolution, fromMs, toMs, interval
   return normalizeCandles(data.candles, intervalMs);
 }
 
+async function fetchHistoricalCandlesInChunks(symbol, resolution, fromMs, toMs, intervalMs) {
+  const chunkMs = intervalMs * 1800;
+  const batches = [];
+  for (let start = fromMs; start < toMs; start += chunkMs) {
+    batches.push(await fetchHistoricalCandles(symbol, resolution, start, Math.min(toMs, start + chunkMs), intervalMs));
+  }
+  const byTime = new Map();
+  for (const candle of batches.flat()) byTime.set(candle.time, candle);
+  return [...byTime.values()].sort((a,b)=>a.time-b.time);
+}
+
 function historicalChange(candles, index) {
   const old = candles[index - 24], now = candles[index];
   if (!old || old.close <= 0) return 0;
@@ -128,7 +139,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   const [oneHour,fourHour,fifteenMin] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs,HOUR),
     fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS),
-    fetchHistoricalCandles(ticker.symbol,"15m",fromMs,toMs,FIFTEEN_MINUTES)
+    fetchHistoricalCandlesInChunks(ticker.symbol,"15m",fromMs,toMs,FIFTEEN_MINUTES)
   ]);
   if (oneHour.length < 100 || fourHour.length < FUTURES_CONFIG.MIN_CANDLES || fifteenMin.length < 4 * FUTURES_CONFIG.MIN_CANDLES) throw new Error(ticker.symbol + ": insufficient historical candles (1h=" + oneHour.length + ", 4h=" + fourHour.length + ", 15m=" + fifteenMin.length + ")");
   const trades = [];
