@@ -1224,6 +1224,12 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
   };
 }
 
+function formatPrice(value) {
+  const price = Number(value);
+  if (!Number.isFinite(price)) return "—";
+  return price.toLocaleString("en-US", { maximumFractionDigits: 8 });
+}
+
 function formatFuturesSignal(item, index = 1) {
   const sideLabel = item.side === "LONG" ? "🟢 لانگ" : "🔴 شورت";
   return `🎯 سیگنال ${Number(index).toLocaleString("fa-IR")}\n` +
