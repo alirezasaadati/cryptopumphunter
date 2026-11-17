@@ -26,6 +26,12 @@ test("different candle, side, symbol or strategy creates a distinct signal ident
   assert.notEqual(first, futuresSignalFingerprint({...base, strategyId:"sr_rejection"}));
 });
 
+test("Kraken Futures engine signals without strategy metadata receive a stable fingerprint", () => {
+  const engineSignal = { symbol: "XRPUSDT", side: "LONG", candleTime: "2026-11-17T09:15:00.000Z" };
+  assert.ok(futuresSignalFingerprint(engineSignal));
+  assert.equal(futuresSignalFingerprint(engineSignal), futuresSignalFingerprint({...engineSignal, id: "new-generated-id"}));
+});
+
 test("invalid signal identity is rejected", () => {
   assert.equal(futuresSignalFingerprint({...base, candleTime:null}), null);
   assert.equal(futuresSignalFingerprint({...base, side:"BUY"}), null);

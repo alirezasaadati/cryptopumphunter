@@ -4,7 +4,7 @@ export function futuresSignalFingerprint(signal) {
   if (!signal || typeof signal !== "object") return null;
   const symbol = String(signal.symbol || "").trim().toUpperCase();
   const side = String(signal.side || "").trim().toUpperCase();
-  const strategy = String(signal.strategyId || signal.strategyName || "").trim().toLowerCase();
+  const strategy = String(signal.strategyId || signal.strategyName || "kraken-futures-engine").trim().toLowerCase();
   const rawTime = signal.candleTime ?? signal.setupTime;
   const numericTime = Number(rawTime);
   const time = rawTime instanceof Date ? rawTime.getTime()
