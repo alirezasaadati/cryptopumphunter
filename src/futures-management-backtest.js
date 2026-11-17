@@ -29,7 +29,7 @@ export function simulateManagedTrade({
   if (!direction || !(risk > 0) || !Number.isFinite(risk)) throw new Error("Invalid trade setup");
   const position = {
     side, entry, initialStop: stop, currentStop: stop, risk, direction,
-    remaining: 1, netR: 0, targetHits: 0, stagesHit: [],
+    remaining: 1, netR: 0, targetHits: 0, stagesHit: [], currentStopIsManagement: false,
     exitTime: null, exitReason: null
   };
   const endIndex = Math.min(candles.length - 1, startIndex + maxHoldHours);
@@ -40,7 +40,7 @@ export function simulateManagedTrade({
     const gap = direction === 1 ? bar.open <= position.currentStop : bar.open >= position.currentStop;
     const stopHit = direction === 1 ? bar.low <= position.currentStop : bar.high >= position.currentStop;
     if (gap || stopHit) {
-      closeR(position, gap ? bar.open : position.currentStop, "STOP", bar.time, fee, slippage);
+      closeR(position, gap ? bar.open : position.currentStop, position.currentStopIsManagement ? "MANAGEMENT_STOP" : "STOP", bar.time, fee, slippage);
       break;
     }
 
@@ -58,6 +58,7 @@ export function simulateManagedTrade({
       position.stagesHit.push(stage.id);
       if (improves) {
         position.currentStop = proposed;
+        position.currentStopIsManagement = true;
         const newStopHit = direction === 1 ? bar.low <= proposed : bar.high >= proposed;
         if (newStopHit) {
           closeR(position, proposed, "MANAGEMENT_STOP", bar.time, fee, slippage);
