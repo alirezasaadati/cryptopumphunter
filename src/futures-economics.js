@@ -4,6 +4,8 @@ export const FUTURES_ECONOMICS = Object.freeze({
   MIN_PROJECTED_PROFIT_USD: 2,
   MAX_STOP_LOSS_USD: 2,
   MIN_WEIGHTED_REWARD_RISK: 2,
+  FEE_PER_SIDE: 0.0005,
+  SLIPPAGE_PER_SIDE: 0.0003,
   EXIT_WEIGHTS: Object.freeze([0.20, 0.20, 0.60])
 });
 
@@ -24,15 +26,21 @@ export function calculateTradeEconomics(signal, overrides = {}) {
 
   const notionalUsd = config.REFERENCE_MARGIN_USD * config.LEVERAGE;
   const maxLossUsd = riskFraction * notionalUsd;
-  const projectedProfitUsd = targetFractions.reduce(
+  const grossProjectedProfitUsd = targetFractions.reduce(
     (sum, fraction, i) => sum + fraction * notionalUsd * config.EXIT_WEIGHTS[i], 0
   );
+  const estimatedRoundTripCostsUsd = notionalUsd * 2 *
+    (Number(config.FEE_PER_SIDE || 0) + Number(config.SLIPPAGE_PER_SIDE || 0));
+  const projectedProfitUsd = grossProjectedProfitUsd - estimatedRoundTripCostsUsd;
+  const maxLossUsd = riskFraction * notionalUsd + estimatedRoundTripCostsUsd;
   const weightedRewardRisk = projectedProfitUsd / maxLossUsd;
   return {
     referenceMarginUsd: config.REFERENCE_MARGIN_USD,
     leverage: config.LEVERAGE,
     notionalUsd,
     maxLossUsd,
+    grossProjectedProfitUsd,
+    estimatedRoundTripCostsUsd,
     projectedProfitUsd,
     weightedRewardRisk,
     profitOnMarginPct: projectedProfitUsd / config.REFERENCE_MARGIN_USD * 100,
