@@ -102,7 +102,7 @@ function metrics(trades) {
 }
 function allowed(plan, mode) { return plan && (mode==="BOTH" || plan.side===mode); }
 
-async function testSymbol(ticker, from, to, splitTime) {
+async function testSymbol(ticker, from, to, evaluationStart, splitTime) {
   const [m15,h1,h4]=await Promise.all([
     fetchCandles(ticker.symbol,"15m",from,to,M15),
     fetchCandles(ticker.symbol,"1h",from,to,HOUR),
@@ -167,11 +167,10 @@ async function main(){
   const universe=(tickers.tickers||[]).filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&/^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&Number(t.volumeQuote)>0)
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if(!universe.length) throw new Error("No eligible perpetual contracts");
-  const splitTime=now-DAYS*24*3600000*0.3;
   const results=[],combined={};
   for(const ticker of universe){
     try{
-      const result=await testSymbol(ticker,from,to,splitTime);
+      const result=await testSymbol(ticker,from,to,evaluationStart,splitTime);
       results.push(result.out);
       for(const [key,list] of Object.entries(result.trades)) (combined[key]??=[]).push(...list);
     }catch(e){results.push({symbol:ticker.symbol,error:String(e.message||e),metrics:{}});}
