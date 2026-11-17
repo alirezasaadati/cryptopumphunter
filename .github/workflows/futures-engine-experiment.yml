@@ -79,3 +79,29 @@ jobs:
           name: futures-management-frictionless-diagnostic
           path: artifacts/
           if-no-files-found: error
+
+  reduced-friction-sanity-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+        with:
+          ref: experimental/futures-engine-v2
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 180-day lower-cost sensitivity test
+        env:
+          BACKTEST_DAYS: 180
+          BACKTEST_SYMBOLS: 5
+          BACKTEST_FEE: 0.0002
+          BACKTEST_SLIPPAGE: 0.0001
+        run: node scripts/backtest-kraken.mjs
+      - name: Upload lower-cost sensitivity report
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-management-reduced-friction
+          path: artifacts/
+          if-no-files-found: error
