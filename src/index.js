@@ -2045,7 +2045,6 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
 async function showOpenFuturesTrades(env,chatId) {
   try {
     const tickers=(await getFuturesUniverse()).tickers;
-    await refreshOpenFuturesTrades(env,chatId,tickers);
   } catch (error) {
     console.error("Open trade refresh failed:",error);
   }
@@ -2285,7 +2284,6 @@ async function runFuturesSignalsForChat(env, chatId) {
   }
   try {
     const result = await runFuturesSignalScan(env);
-    await refreshOpenFuturesTrades(env, chatId, result.tickers || []);
     const signals = result.signals || [];
     if (!signals.length) {
       await sendMessage(env, chatId, "در حال حاضر سیگنال معتبری وجود ندارد.", menuForChat(env, chatId));
