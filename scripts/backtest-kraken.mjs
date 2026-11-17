@@ -192,7 +192,8 @@ async function main() {
       maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
       sameCandleStopTargetRule:"stop first (conservative)",
       entryRule:"next 1h candle open, adverse slippage applied",
-      funding:"excluded (historical funding series not included)",\n      comparison:"Both exit models use identical signals and entries; managed model retains the same 40/35/25 targets and adds conservative staged stops.",
+      funding:"excluded (historical funding series not included)",
+      comparison:"Both exit models use identical signals and entries; managed model retains the same 40/35/25 targets and adds conservative staged stops.",
       signalUses:"historical 1h/4h closed candles; 24h change derived from historical bars; no current funding or future candle data"
     },
     baseline:{name:"Current 40/35/25 target exits",metrics:summarize(allTrades)},
