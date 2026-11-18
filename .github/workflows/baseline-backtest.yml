@@ -1,0 +1,41 @@
+name: Baseline Futures Backtest
+
+on:
+  push:
+    branches:
+      - experiment/baseline-backtest-entry-fix
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate source and tests
+        run: |
+          node --check src/index.js
+          node --check scripts/backtest-kraken.mjs
+          node --test scripts/*.test.mjs
+      - name: Run 30-day baseline
+        env:
+          BACKTEST_DAYS: "30"
+          BACKTEST_SYMBOLS: "8"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+        run: node scripts/backtest-kraken.mjs
+      - name: Upload baseline report
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-futures-backtest-30d
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
