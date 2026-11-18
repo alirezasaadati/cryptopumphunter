@@ -1452,9 +1452,14 @@ async function handleSignalArchiveAction(action,env,chatId){
   const parts=action.split(":");
   const view=parts[1];
   const symbol=decodeURIComponent(parts[2]||"");
+  const pageNumber=Math.max(0,Number(parts[3])||0);
   if(!["archive","open","history"].includes(view)||!symbol) return showMenu(env,chatId);
-  const result=await listArchivedSignals(env,chatId,symbol,view,15);
+  const cursorKey=(page)=>`signals:v1:ui-cursor:${String(chatId)}:${view}:${encodeURIComponent(symbol)}:${page}`;
+  const cursor=pageNumber>0?await env.APP_KV.get(cursorKey(pageNumber)):undefined;
+  if(pageNumber>0&&!cursor) return sendMessage(env,chatId,"این صفحه دیگر در دسترس نیست؛ نماد را دوباره انتخاب کن.",{inline_keyboard:[[{text:"⬅️ بازگشت به نمادها",callback_data:view==="archive"?"signal_archive":view==="open"?"open_trades":"trade_history"}]]});
+  const result=await listArchivedSignals(env,chatId,symbol,view,15,cursor||undefined);
   if(!result.records.length) return sendMessage(env,chatId,"برای این نماد موردی در این بخش ثبت نشده است.",{inline_keyboard:[[{text:"⬅️ بازگشت به نمادها",callback_data:view==="archive"?"signal_archive":view==="open"?"open_trades":"trade_history"}],...BACK_MENU.inline_keyboard]});
+  if(result.cursor) await env.APP_KV.put(cursorKey(pageNumber+1),result.cursor,{expirationTtl:86400});
   const title=view==="archive"?"🗂 آرشیو سیگنال‌های "+symbol:view==="open"?"📌 معاملات باز "+symbol:"📚 تاریخچه معاملات "+symbol;
   const body=result.records.map(r=>{
     const s=r.signal||{};
@@ -1464,7 +1469,12 @@ async function handleSignalArchiveAction(action,env,chatId){
     return `🪙 ${r.symbol} | ${r.side==="LONG"?"لانگ":"شورت"}\n🕒 ${date}\nورود: ${formatPrice(s.entry)} | استاپ: ${formatPrice(s.stop)}\nاهداف: ${formatPrice(s.target1)} / ${formatPrice(s.target2)} / ${formatPrice(s.target3)}\nوضعیت: ${resultLabel} | اهداف لمس‌شده: ${milestones}`;
   }).join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
   const back=view==="archive"?"signal_archive":view==="open"?"open_trades":"trade_history";
-  return sendLongMessage(env,chatId,title+"\n━━━━━━━━━━━━━━━━━━\n"+body+"\n\n⚠️ نتایج بر اساس پیگیری قیمت سیگنال هستند، نه اجرای سفارش واقعی.");
+  const keyboard=[];
+  if(pageNumber>0) keyboard.push([{text:"⬅️ صفحه قبل",callback_data:`sigv:${view}:${encodeURIComponent(symbol)}:${pageNumber-1}`}]);
+  if(result.cursor) keyboard.push([{text:"صفحه بعد ➡️",callback_data:`sigv:${view}:${encodeURIComponent(symbol)}:${pageNumber+1}`}]);
+  keyboard.push([{text:"↩️ بازگشت به نمادها",callback_data:back},{text:"🏠 منوی اصلی",callback_data:"menu"}]);
+  await sendLongMessage(env,chatId,title+" | صفحه "+(pageNumber+1)+"\n━━━━━━━━━━━━━━━━━━\n"+body+"\n\n⚠️ نتایج بر اساس پیگیری قیمت سیگنال هستند، نه اجرای سفارش واقعی.");
+  return sendMessage(env,chatId,"صفحه "+(pageNumber+1),{inline_keyboard:keyboard});
 }
 async function runAutomaticFuturesAlertScan(env) {
   if (!env.APP_KV) throw new Error("APP_KV binding is required for automatic alerts.");
