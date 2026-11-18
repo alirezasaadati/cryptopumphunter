@@ -74,6 +74,30 @@ const ABOUT_TEXT =
   "© تمامی حقوق مادی و معنوی این ربات محفوظ است.\n\n" +
   "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه از صاحب اثر مجاز نیست.";
 
+const CAPITAL_MANAGEMENT_TEXT =
+  "🚨 <b>نکات مهم مدیریت سرمایه</b> 🚨\n\n" +
+  "لطفاً پیش از ورود به هر سیگنال، این موارد را مطالعه کنید.\n\n" +
+  "<b>1️⃣ مدیریت سرمایه</b>\n\n" +
+  "🔹 در هر سیگنال حداکثر <b>۱٪ از کل سرمایه ولت</b> را به‌عنوان ریسک معامله در نظر بگیرید.\n\n" +
+  "🔹 از افزایش حجم بیش از این مقدار خودداری کنید.\n\n" +
+  "<b>2️⃣ مسئولیت ورود به معاملات</b>\n\n" +
+  "🔹 مسئولیت تصمیم‌گیری و ورود به سیگنال‌ها بر عهده شماست.\n\n" +
+  "🔹 هرگز با سرمایه موردنیاز زندگی وارد معاملات نشوید.\n\n" +
+  "🔹 در صورت نداشتن دانش و تجربه کافی، از ورود به معاملات خودداری کنید.\n\n" +
+  "🔹 هیچ سیگنالی قطعی یا بدون ریسک نیست؛ احتمال ضرر وجود دارد.\n\n" +
+  "<b>3️⃣ اهرم و نحوه انجام معامله</b>\n\n" +
+  "🔹 از اهرم متناسب با ریسک و فاصله حد ضرر استفاده کنید.\n\n" +
+  "🔹 حالت <b>Isolated</b> و اهرم پایین‌تر معمولاً ریسک لیکویید شدن را کاهش می‌دهد.\n\n" +
+  "🔹 استفاده از اهرم ۱۰ به‌معنای جلوگیری از لیکویید شدن نیست.\n\n" +
+  "<b>4️⃣ ورود بعد از تارگت اول</b>\n\n" +
+  "🔹 اگر قیمت به تارگت اول رسیده است، از ورود دیرهنگام به همان سیگنال خودداری کنید.\n\n" +
+  "<b>5️⃣ سیو سود و مدیریت حد ضرر</b>\n\n" +
+  "🔹 در تارگت‌ها بخشی از حجم معامله را ببندید و سود را ذخیره کنید.\n\n" +
+  "🔹 برای تارگت اول، می‌توانید بخش قابل‌توجهی از حجم را خارج کنید و باقی‌مانده را برای اهداف بعدی نگه دارید.\n\n" +
+  "🔹 پس از حرکت قیمت در جهت معامله، حد ضرر را متناسب با شرایط به نقطه ورود یا محدوده‌ای محافظت‌شده منتقل کنید.\n\n" +
+  "🔹 میزان خروج در هر تارگت باید طوری تنظیم شود که مجموع حجم‌های بسته‌شده از ۱۰۰٪ بیشتر نشود.\n\n" +
+  "⚠️ <b>حفظ سرمایه مهم‌تر از کسب سود است.</b> هیچ‌گاه برای جبران ضرر، حجم معاملات را افزایش ندهید.";
+
 const MAIN_MENU = {
   inline_keyboard: [
     [
@@ -88,6 +112,7 @@ const MAIN_MENU = {
       { text: "📚 تاریخچه معاملات", callback_data: "trade_history" },
       { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" }
     ],
+    [{ text: "🛡️ راهنمای مدیریت سرمایه", callback_data: "capital_guide" }],
     [{ text: "📡 وضعیت ربات", callback_data: "status" }],
     [
       { text: "🔌 تست اتصال", callback_data: "test" }
@@ -929,6 +954,16 @@ async function handleCallback(query, env) {
     if (action.startsWith("ledger:a:")) return showIssuedSignalDetails(env, chatId, action.slice(9), "archive");
     if (action.startsWith("ledger:h:")) return showIssuedSignalDetails(env, chatId, action.slice(9), "history");
     if (action.startsWith("trade:")) return handleTradeAction(action, chatId, env);
+    if (action === "capital_guide") {
+      await telegram("sendMessage", env, {
+        chat_id: chatId,
+        text: CAPITAL_MANAGEMENT_TEXT,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        reply_markup: BACK_MENU
+      });
+      return;
+    }
     if (action === "status") {
       await showStatus(env, chatId);
       return;
