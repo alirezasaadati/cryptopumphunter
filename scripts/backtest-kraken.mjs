@@ -147,31 +147,34 @@ async function backtestSymbol(ticker, fromMs, toMs, variant) {
     if (closed4h.length<FUTURES_CONFIG.MIN_CANDLES) continue;
     const nextBar=oneHour[i+1];
     const tickerAtSignal={
-      symbol:ticker.symbol,last:nextBar.open,quoteVolume:Number(ticker.volumeQuote)||0,
+      symbol:ticker.symbol,last:signalBar.close,quoteVolume:Number(ticker.volumeQuote)||0,
       priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}
     };
-    const first=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
-    if (!first?.eligible) continue;
-    if (!passesVolumeThreshold(first.volumeRatio, variant.minVolumeRatio)) continue;
+    const signal=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
+    if (!signal?.eligible) continue;
+    if (!passesVolumeThreshold(signal.volumeRatio, variant.minVolumeRatio)) continue;
     const signalCandles = oneHour.slice(0,i+1);
     if (variant.avoidLate && isLateEntry({
-      side:first.side,entry:first.entry,ema20:first.ema20,atr:first.atr
+      side:signal.side,entry:signal.entry,ema20:signal.ema20,atr:signal.atr
     })) continue;
     if (variant.requireSetup && !hasPullbackOrBreakout({
-      side:first.side,candles:signalCandles,ema20:first.ema20,atr:first.atr,lookback:20
+      side:signal.side,candles:signalCandles,ema20:signal.ema20,atr:signal.atr,lookback:20
     })) continue;
-    const direction=first.side==="LONG"?1:-1;
-    tickerAtSignal.last=nextBar.open*(1+direction*SLIPPAGE_PER_SIDE);
-    const confirmed=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
-    if (!confirmed?.eligible) continue;
+    const direction=signal.side==="LONG"?1:-1;
+    const actualEntry=nextBar.open*(1+direction*SLIPPAGE_PER_SIDE);
+    const validFillGeometry=signal.side==="LONG"
+      ? signal.stop<actualEntry&&actualEntry<signal.target1
+      : signal.stop>actualEntry&&actualEntry>signal.target1;
+    if (!validFillGeometry) continue;
     const entryIndex=i+1;
     const tradeCandles=oneHour.slice(entryIndex,Math.min(oneHour.length,entryIndex+MAX_HOLD_HOURS+1));
     const trade=simulateTrade({
-      side:confirmed.side,entry:confirmed.entry,stop:confirmed.stop,
-      targets:[confirmed.target1,confirmed.target2,confirmed.target3],
+      side:signal.side,entry:actualEntry,stop:signal.stop,
+      targets:[signal.target1,signal.target2,signal.target3],
       candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
     });
-    trade.symbol=ticker.symbol; trade.score=confirmed.score; trade.signalTime=signalBar.time;
+    trade.symbol=ticker.symbol; trade.score=signal.score; trade.signalTime=signalBar.time;
+    trade.signalEntry=signal.entry; trade.entryGapPct=(actualEntry-signal.entry)/signal.entry*100;
     trades.push(trade);
     const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
     nextAvailableIndex=Math.max(entryIndex+1,exitIndex+1);
@@ -213,7 +216,7 @@ async function main() {
       feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
       maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
       sameCandleStopTargetRule:"stop first (conservative)",
-      entryRule:"next 1h candle open, adverse slippage applied",
+      entryRule:"next 1h candle open plus adverse slippage; original signal stop/target prices remain unchanged",
       exitLogic:"unchanged existing stop, target levels, weights and stop-first ambiguity handling",
       funding:"excluded (historical funding series not included)",
       signalUses:"historical 1h/4h closed candles; 24h change derived from historical bars; no current funding or future candle data",
