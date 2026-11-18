@@ -1,7 +1,7 @@
 import { analyzeFuturesSymbol } from "../src/index.js";
 import { passesCompression, passesAtrCap, passesBreakoutBody } from "../src/futures-filter-experiments.js";
 import { passesVolumeThreshold, isLateEntry, hasPullbackOrBreakout, passesEntryFreshness } from "../src/futures-entry-experiments.js";
-import { detectOneHourBOS, buildPriceActionSignal } from "./btcusdt-price-action.mjs";
+import { detectOneHourBOS, buildPriceActionSignal, detectFourHourTrend, detectLiquiditySweep15m } from "./btcusdt-price-action.mjs";
 import { mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -123,7 +123,7 @@ async function main(){
  if(h1.length<1000||h4.length<250||m15.length<5000)throw new Error("Insufficient history: "+JSON.stringify({h1:h1.length,h4:h4.length,m15:m15.length}));
  const split=periodStart+120*DAY;
  const state=Object.fromEntries(VARIANTS.map(v=>[v.id,{pending:null,open:null,trades:[]}]));
- let hi=0,qi=0;
+ let hi=0,qi=0; const paDiagnostics={trendLong:0,trendShort:0,trendNeutral:0,bosLong:0,bosShort:0,sweepLong:0,sweepShort:0,sweepAny:0,sweepDirectionMatch:0,paSignalAccepted:0,paRiskRejected:0,entryFreshnessRejected:0};
  for(let j=0;j<m15.length-1;j++){
   const bar=m15[j],next=m15[j+1];
   while(hi<h1.length&&h1[hi].closeTime<=bar.closeTime){
@@ -137,7 +137,9 @@ async function main(){
     for(const v of VARIANTS){
      const s=state[v.id];
      if(v.priceAction){
+      const trend=detectFourHourTrend(h4prefix); paDiagnostics[trend==="LONG"?"trendLong":trend==="SHORT"?"trendShort":"trendNeutral"]++;
       const direction=detectOneHourBOS(h4prefix,h1prefix);
+      if(direction)paDiagnostics[direction.side==="LONG"?"bosLong":"bosShort"]++;
       s.pending=direction?{...direction,createdAt:hb.closeTime,expiresAt:hb.closeTime+4*15*60000,variant:v.id}:null;
      }else{
       s.pending=candidate?.eligible&&filterPasses(v,candidate,h1prefix,hi)
@@ -160,10 +162,13 @@ async function main(){
      let sig=null;
      if(v.priceAction){
       const hist=m15.slice(Math.max(0,j-12),j+1);
-      sig=buildPriceActionSignal(s.pending,hist,8);
+      const sweep=detectLiquiditySweep15m(hist,8); if(sweep){paDiagnostics.sweepAny++;paDiagnostics[sweep.side==="LONG"?"sweepLong":"sweepShort"]++;if(sweep.side===s.pending.side)paDiagnostics.sweepDirectionMatch++;}
+      if(sweep&&sweep.side===s.pending.side){const risk=sweep.side==="LONG"?sweep.entry-sweep.stop:sweep.stop-sweep.entry;if(risk/sweep.entry>.02)paDiagnostics.paRiskRejected++;}
+      sig=buildPriceActionSignal(s.pending,hist,8); if(sig)paDiagnostics.paSignalAccepted++;
      }else if(confirm15m(s.pending.side,bar,m15.slice(Math.max(0,j-40),j+1)))sig=s.pending;
      if(sig){
       const tradeSignal=v.priceAction?{...sig,candleTime:bar.time}:sig;
+      const fresh=passesEntryFreshness(tradeSignal.entry,next.open,.35); if(!fresh)paDiagnostics.entryFreshnessRejected++;
       s.open=startTrade(tradeSignal.side,tradeSignal,next);
       s.pending=null;
      }
@@ -176,7 +181,7 @@ async function main(){
   const s=state[v.id];
   variants[v.id]={label:v.label,...summarizeTrades(s.trades,split,s.open?1:0),pendingAtEnd:Boolean(s.pending)};
  }
- const report={generatedAt:new Date().toISOString(),exchange:"Binance USD-M Futures",symbol:SYMBOL,period:{from:new Date(periodStart).toISOString(),to:new Date(now).toISOString(),days:DAYS},split:{inSampleDays:120,outOfSampleDays:60,outOfSampleFrom:new Date(split).toISOString()},data:{oneHourCandles:h1.length,fourHourCandles:h4.length,fifteenMinuteCandles:m15.length,warmupDays:WARMUP_DAYS},execution:{entry:"next 15m open",feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,partialExitsPct:[40,35,25],maxHoldHours:72,stopTargetSameCandle:"stop first",funding:"excluded"},method:"Chronological 15m simulation. A-C use the current analyzer, the same filter definitions and closed-15m EMA20 confirmation. D uses the independent pure-PA 4H/1H/15m logic. One open position per model; overlapping signals while a position is open are ignored.",variants};
+ const report={generatedAt:new Date().toISOString(),exchange:"Binance USD-M Futures",symbol:SYMBOL,period:{from:new Date(periodStart).toISOString(),to:new Date(now).toISOString(),days:DAYS},split:{inSampleDays:120,outOfSampleDays:60,outOfSampleFrom:new Date(split).toISOString()},data:{oneHourCandles:h1.length,fourHourCandles:h4.length,fifteenMinuteCandles:m15.length,warmupDays:WARMUP_DAYS},paDiagnostics,execution:{entry:"next 15m open",feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,partialExitsPct:[40,35,25],maxHoldHours:72,stopTargetSameCandle:"stop first",funding:"excluded"},method:"Chronological 15m simulation. A-C use the current analyzer, the same filter definitions and closed-15m EMA20 confirmation. D uses the independent pure-PA 4H/1H/15m logic. One open position per model; overlapping signals while a position is open are ignored.",variants};
  await mkdir("artifacts",{recursive:true});
  await writeFile("artifacts/btcusdt-four-engine-historical-180d.json",JSON.stringify(report,null,2));
  const rows=VARIANTS.map(v=>{const x=variants[v.id],o=x.outOfSample;return`| ${v.id} | ${x.overall.trades} | ${x.overall.netR.toFixed(2)} | ${x.overall.profitFactor===null?"n/a":x.overall.profitFactor.toFixed(2)} | ${o.trades} | ${o.winRatePct.toFixed(1)}% | ${o.netR.toFixed(2)} | ${o.profitFactor===null?"n/a":o.profitFactor.toFixed(2)} | ${o.maxDrawdownR.toFixed(2)} |`;});
