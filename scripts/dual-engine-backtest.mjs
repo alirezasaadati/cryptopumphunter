@@ -43,7 +43,7 @@ const report = {
     intrabar: "Stop-first; ambiguous Entry 2 versus TP1 resolves TP1-first/cancel Entry 2 and is recorded."
   },
   data: [],
-  engines: {A:{trades:[],summary:null},B:{trades:[],summary:null}},
+  engines: {A:{trades:[],skipped:[],summary:null},B:{trades:[],skipped:[],summary:null}},
   warnings: [
     "This is an exploratory strategy backtest, not proof of future performance.",
     "Liquidity filter is disabled because historical quote turnover and contract multipliers are not yet validated.",
@@ -81,8 +81,8 @@ async function fetchCandles(symbol){
   return [...byTime.values()].sort((a,b)=>a.time-b.time);
 }
 
-function summarize(trades){
-  const closed=trades.filter(t=>t.status==="closed");
+function summarize(trades,skipped){
+  const closed=trades.filter(t=>t.status==="closed").sort((a,b)=>(a.closedAt??0)-(b.closedAt??0));
   const wins=closed.filter(t=>t.netPnl>0);
   const losses=closed.filter(t=>t.netPnl<0);
   const grossProfit=wins.reduce((s,t)=>s+t.netPnl,0);
@@ -93,7 +93,7 @@ function summarize(trades){
     maxDrawdown=Math.max(maxDrawdown,peak-equity);
   }
   return {
-    signals:trades.length,closed:closed.length,open:trades.filter(t=>t.status==="open").length,
+    signals:trades.length+skipped,executed:trades.length,skipped,closed:closed.length,open:trades.filter(t=>t.status==="open").length,
     wins:wins.length,losses:losses.length,
     winRatePct:closed.length?Number((wins.length/closed.length*100).toFixed(2)):null,
     netPnlUsd:Number(trades.reduce((s,t)=>s+t.netPnl,0).toFixed(6)),
@@ -140,13 +140,13 @@ for(const symbol of SYMBOLS){
           targetWeights:weights,feeRate:FEE_RATE,slippageBps:SLIPPAGE_BPS,maxEntryDriftPct:0.35,maxBars:MAX_HOLD_BARS
         });
         if(["invalid_input","invalid_data","no_future_candles","not_filled"].includes(result.status)){
-          trades.push({symbol,side:signal.side,candleTime:signal.candleTime,score:signal.score,
-            status:result.status,netPnl:0,fees:0,ambiguousEvents:[]});
+          report.engines[engine].skipped.push({symbol,side:signal.side,candleTime:signal.candleTime,
+            score:signal.score,status:result.status,reason:result.reason??null});
           i++;continue;
         }
         trades.push({symbol,side:signal.side,candleTime:signal.candleTime,score:signal.score,
           entry:signal.entry,entry2:signal.entry2??null,stop:signal.stop,targets:signal.targets,
-          status:result.status,netPnl:result.netPnl,fees:result.fees,funding:result.funding,
+          status:result.status,netPnl:result.netPnl,fees:result.fees,funding:result.funding,closedAt:result.exits.at(-1)?.time??null,
           returnPct:result.returnPct,barsObserved:result.barsObserved,entry2Filled:result.entry2Filled,
           ambiguousEvents:result.ambiguousEvents,exits:result.exits});
         i += result.barsObserved + 1;
@@ -158,8 +158,8 @@ for(const symbol of SYMBOLS){
     console.log(`failed ${symbol}: ${String(error?.message??error)}`);
   }
 }
-report.engines.A.summary=summarize(report.engines.A.trades);
-report.engines.B.summary=summarize(report.engines.B.trades);
+report.engines.A.summary=summarize(report.engines.A.trades,report.engines.A.skipped.length);
+report.engines.B.summary=summarize(report.engines.B.trades,report.engines.B.skipped.length);
 await fs.mkdir("artifacts",{recursive:true});
 await fs.writeFile("artifacts/dual-engine-backtest.json",JSON.stringify(report,null,2));
 console.log(JSON.stringify({
