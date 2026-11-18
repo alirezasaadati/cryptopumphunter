@@ -127,9 +127,9 @@ function timing(base,fast) {
       const d=f.signalTime-b.signalTime;
       if(Math.abs(d)<=DAY&&Math.abs(d)<distance){best=i;distance=Math.abs(d);}
     });
-    if(best>=0){used.add(best);leads.push((base.length?base[0].signalTime:0, (base.length?fast[best].signalTime:0)-b.signalTime));}
+    if(best>=0){used.add(best);leads.push(fast[best].signalTime-b.signalTime);}
   }
-  const minutes=leads.map(x=>x[1]/60000);
+  const minutes=leads.map(x=>x/60000);
   return {matched:minutes.length,baselineSignals:base.length,averageLeadMinutes:minutes.length?avg(minutes):null,earlySignals:minutes.filter(x=>x<0).length,lateSignals:minutes.filter(x=>x>0).length};
 }
 
