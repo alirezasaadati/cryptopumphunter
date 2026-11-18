@@ -60,7 +60,7 @@ export function withQuotaAwareKV(env) {
       return typeof value === "function" ? value.bind(target) : value;
     }
   });
-  return { ...env, APP_KV: guarded };
+  const wrappedEnv = Object.create(env);\n  Object.defineProperty(wrappedEnv, "APP_KV", { value: guarded, enumerable: true });\n  return wrappedEnv;
 }
 
 const ABOUT_TEXT =
