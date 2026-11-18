@@ -1,7 +1,10 @@
 import { analyzeFuturesSymbol } from "../src/index.js";
 import { passesCompression, passesAtrCap, passesBreakoutBody } from "../src/futures-filter-experiments.js";
 import { passesVolumeThreshold, isLateEntry, hasPullbackOrBreakout } from "../src/futures-entry-experiments.js";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 const BASE="https://fapi.binance.com", SYMBOL="BTCUSDT", HOUR=3600000, FOUR_HOURS=14400000;
 const DAYS=90,WARMUP_DAYS=20,MAX_HOLD_HOURS=72,FEE=.0005,SLIPPAGE=.0003;
 const VARIANTS=[
@@ -19,6 +22,16 @@ const VARIANTS=[
 {id:"combined_1_2x_quality",label:"Volume 1.2x + entry quality",minVolumeRatio:1.2,requireSetup:true,avoidLate:true}
 ];
 async function getJson(url){const r=await fetch(url,{headers:{accept:"application/json"},signal:AbortSignal.timeout(25000)});const body=await r.text();if(!r.ok)throw new Error("Binance HTTP "+r.status+": "+body.slice(0,200));const d=JSON.parse(body);if(!Array.isArray(d))throw new Error("Unexpected Binance kline response");return d;}
+function parseCsvCandles(csv,interval){
+ const rows=[];
+ for(const line of csv.split(/\r?\n/)){
+  if(!line||!/^\d+,/.test(line))continue;
+  const x=line.split(",");if(x.length<7)continue;
+  const c={time:+x[0],open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+x[5],closeTime:+x[6]};
+  if([c.time,c.open,c.high,c.low,c.close,c.volume,c.closeTime].every(Number.isFinite)&&c.open>0&&c.low>0&&c.high>=c.low&&c.close>0&&c.volume>=0&&c.closeTime<Date.now())rows.push(c);
+ }
+ return rows;
+}
 async function fetchKlines(interval,fromMs,toMs){
  const dir=await mkdtemp(join(tmpdir(),"btc-klines-")),all=[];
  try{
