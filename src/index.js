@@ -1567,6 +1567,7 @@ async function runFuturesSignalScan(env, options = {}) {
       try {
         await sendMessage(env, ownerId, formatExperimentalFuturesSignal(signal));
         await registerTrackedSignal(env, ownerId, signal);
+        await archivePublishedSignal(env, ownerId, signal, null, new Date().toISOString());
         await env.APP_KV.put(key, "sent", { expirationTtl: 3600 });
         experimentalSent++;
       } catch (error) {
