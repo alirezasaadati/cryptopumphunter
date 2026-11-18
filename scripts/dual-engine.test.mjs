@@ -180,3 +180,24 @@ test("paper simulator rounds filled quantity down to exchange precision",()=>{
   assert.equal(result.fills[0].quantity,33.3);
   assert.ok(Math.abs(result.deployedNotional-99.9)<1e-9);
 });
+
+test("optional breakeven stop activates only after TP1 and applies on the next candle",()=>{
+  const signal=paperSignal({entry2:null,context:{}});
+  const result=simulatePaperTrade(paperArgs(signal,[
+    bar(2000,{open:100,high:103,low:99.5,close:102}),
+    bar(29000,{open:101,high:101.5,low:99.5,close:100.5})
+  ],{moveStopToBreakevenAfterTarget1:true}));
+  assert.equal(result.stopMovedToBreakeven,true);
+  assert.equal(result.exits[0].reason,"target_1");
+  assert.equal(result.exits[1].reason,"breakeven_stop");
+  assert.equal(result.status,"closed");
+});
+
+test("breakeven option does not move stop before TP1",()=>{
+  const signal=paperSignal({entry2:null,context:{}});
+  const result=simulatePaperTrade(paperArgs(signal,[
+    bar(2000,{open:100,high:100.5,low:99.5,close:100})
+  ],{moveStopToBreakevenAfterTarget1:true}));
+  assert.equal(result.stopMovedToBreakeven,false);
+  assert.equal(result.activeStop,signal.stop);
+});
