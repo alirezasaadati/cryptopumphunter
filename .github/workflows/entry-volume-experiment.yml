@@ -1,9 +1,10 @@
-name: Entry and Volume Experiments
+name: Faster 15m Entry Experiment
 
 on:
   push:
     branches:
       - experiment/volume-entry-freshness
+      - experiment/fast-15m-entry
   pull_request:
     branches:
       - main
@@ -12,7 +13,7 @@ on:
 jobs:
   validate-and-backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,19 +23,20 @@ jobs:
         run: |
           node --check src/index.js
           node --check scripts/backtest-kraken.mjs
+          node --check scripts/backtest-fast-15m.mjs
           node --test scripts/*.test.mjs
-      - name: Run 30-day entry and volume comparison
+      - name: Run 90-day current-vs-fast entry comparison
         env:
-          BACKTEST_DAYS: 30
+          BACKTEST_DAYS: 90
           BACKTEST_SYMBOLS: 5
           BACKTEST_FEE: 0.0005
           BACKTEST_SLIPPAGE: 0.0003
-        run: node scripts/backtest-kraken.mjs
+        run: node scripts/backtest-fast-15m.mjs
       - name: Upload experiment reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kraken-entry-volume-experiments
-          path: artifacts/kraken-entry-volume-experiments.*
+          name: kraken-fast-15m-entry-90d
+          path: artifacts/kraken-fast-15m-entry.*
           if-no-files-found: warn
           retention-days: 30
