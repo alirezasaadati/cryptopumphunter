@@ -1,0 +1,32 @@
+name: BTCUSDT four-engine historical backtest (isolated)
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/btcusdt-four-engine-historical-backtest
+permissions:
+  contents: read
+jobs:
+  historical-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Repository tests
+        run: npm test
+      - name: Validate historical runner
+        run: node --check scripts/btcusdt-four-engine-historical-180d.mjs
+      - name: Run 180-day four-engine historical comparison
+        run: node scripts/btcusdt-four-engine-historical-180d.mjs
+      - name: Upload historical comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: btcusdt-four-engine-historical-180d
+          path: artifacts/btcusdt-four-engine-historical-180d.*
+          if-no-files-found: warn
+          retention-days: 30
