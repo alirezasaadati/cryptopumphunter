@@ -31,7 +31,9 @@ jobs:
       - name: Validate paper runner syntax
         run: node --check scripts/btcusdt-paper-variants.mjs
       - name: Run BTCUSDT paper comparison (up to 5h 40m)
-        run: timeout 340m node scripts/btcusdt-paper-variants.mjs --watch
+        run: |
+          timeout 340m node scripts/btcusdt-paper-variants.mjs --watch || code=$?
+          if [ "${code:-0}" -ne 0 ] && [ "$code" -ne 124 ]; then exit "$code"; fi
       - name: Upload paper ledger
         if: always()
         uses: actions/upload-artifact@v4
