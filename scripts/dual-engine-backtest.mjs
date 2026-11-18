@@ -178,7 +178,8 @@ for(const symbol of SYMBOLS){
         fundingSettlements++;
       }
     }
-    if(symbol==="PF_XBTUSD") btcCandles=valid;\n    const gaps=[];
+    if(symbol==="PF_XBTUSD") btcCandles=valid;
+    const gaps=[];
     for(let i=1;i<valid.length;i++){
       const delta=valid[i].time-valid[i-1].time;
       if(delta>INTERVAL_MS) gaps.push({from:valid[i-1].time,to:valid[i].time,count:Math.round(delta/INTERVAL_MS)-1});
@@ -187,8 +188,8 @@ for(const symbol of SYMBOLS){
       gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0,
       fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError,
       tickSize,quantityPrecision,contractSize:instrument.contractSize,contractType:instrument.type});
-    for(const engine of ["A","A_BE","B"]){
-      const analyze=engine==="B"?analyzeEngineB:analyzeEngineA;
+    for(const engine of ["A","A_BE","B","B_BTC_FILTER"]){
+      const analyze=(engine==="B"||engine==="B_BTC_FILTER")?analyzeEngineB:analyzeEngineA;
       const weights=(engine==="B"||engine==="B_BTC_FILTER")?B_WEIGHTS:A_WEIGHTS;
       const trades=report.engines[engine].trades;
       let i=79;
@@ -196,6 +197,20 @@ for(const symbol of SYMBOLS){
         const history=valid.slice(0,i+1);
         const signal=analyze({symbol,candles:history,skipLiquidityCheck:true});
         if(!signal){i++;continue;}
+        if(engine==="B_BTC_FILTER"){
+          const signalTime=history.at(-1).time;
+          let lo=0,hi=btcCandles.length;
+          while(lo<hi){const mid=(lo+hi)>>1;if(btcCandles[mid].time<=signalTime)lo=mid+1;else hi=mid;}
+          const btcHistory=btcCandles.slice(0,lo);
+          const btcCloses=btcHistory.map(c=>c.close);
+          const btcFast=ema(btcCloses,20),btcSlow=ema(btcCloses,50),btcClose=btcHistory.at(-1)?.close;
+          const allowed=Number.isFinite(btcFast)&&Number.isFinite(btcSlow)&&Number.isFinite(btcClose)&&
+            (signal.side==="LONG"?(btcClose>btcSlow&&btcFast>btcSlow):(btcClose<btcSlow&&btcFast<btcSlow));
+          if(!allowed){
+            report.engines[engine].skipped.push({symbol,side:signal.side,candleTime:signal.candleTime,score:signal.score,status:"btc_regime_rejected",reason:"BTC 15m EMA20/EMA50 regime not aligned"});
+            i++;continue;
+          }
+        }
         const executableSignal=normalizeSignal(signal,tickSize);
         const result=simulatePaperTrade({
           signal:executableSignal,candles:valid.slice(i+1),entryNotional:ENTRY_NOTIONAL,
@@ -221,7 +236,7 @@ for(const symbol of SYMBOLS){
     console.log(`failed ${symbol}: ${String(error?.message??error)}`);
   }
 }
-for(const engine of ["A","A_BE","B"]){
+for(const engine of ["A","A_BE","B","B_BTC_FILTER"]){
   const item=report.engines[engine];
   item.summary=summarize(item.trades,item.skipped.length);
   item.summary.periods={
@@ -234,6 +249,6 @@ await fs.mkdir("artifacts",{recursive:true});
 await fs.writeFile("artifacts/dual-engine-backtest.json",JSON.stringify(report,null,2));
 console.log(JSON.stringify({
   data:report.data.map(({symbol,candles,gapCount,missingIntervals,error})=>({symbol,candles,gapCount,missingIntervals,error})),
-  A:report.engines.A.summary,A_BE:report.engines.A_BE.summary,B:report.engines.B.summary
+  A:report.engines.A.summary,A_BE:report.engines.A_BE.summary,B:report.engines.B.summary,B_BTC_FILTER:report.engines.B_BTC_FILTER.summary
 },null,2));
 if(!report.data.some(d=>d.candles>=80)) process.exitCode=1;
