@@ -2,7 +2,7 @@ import { runSpotScan } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 
 const CONFIG = {
-  VERSION: "4.6.0",
+  VERSION: "4.7.0",
   PENDING_TTL: 604800
 };
 
@@ -1287,18 +1287,30 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
   let score = 0;
   const reasons = [];
 
-  if (up1h && up4h && rsiValue >= 48 && rsiValue <= 69) {
+  const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
+  const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
+  const relaxedLong = up1h && !down4h && rsiValue >= 40 && rsiValue <= 75;
+  const relaxedShort = down1h && !up4h && rsiValue >= 25 && rsiValue <= 60;
+  const strictSetup = strictLong || strictShort;
+
+  if (strictLong || (!strictSetup && relaxedLong)) {
     side = "LONG";
-    score = 45;
-    reasons.push("روند ۱ساعته و ۴ساعته صعودی است", "قیمت بالای EMA20 قرار دارد");
+    score = strictSetup ? 45 : 40;
+    reasons.push(strictSetup
+      ? "روند ۱ساعته و ۴ساعته صعودی است"
+      : "ستاپ آزمایشی: روند ۱ساعته صعودی و روند ۴ساعته مخالف نیست",
+      "قیمت بالای EMA20 قرار دارد");
     score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
-  } else if (down1h && down4h && rsiValue >= 31 && rsiValue <= 52) {
+  } else if (strictShort || (!strictSetup && relaxedShort)) {
     side = "SHORT";
-    score = 45;
-    reasons.push("روند ۱ساعته و ۴ساعته نزولی است", "قیمت زیر EMA20 قرار دارد");
+    score = strictSetup ? 45 : 40;
+    reasons.push(strictSetup
+      ? "روند ۱ساعته و ۴ساعته نزولی است"
+      : "ستاپ آزمایشی: روند ۱ساعته نزولی و روند ۴ساعته مخالف نیست",
+      "قیمت زیر EMA20 قرار دارد");
     score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
   } else {
-    return { symbol: ticker.symbol, rejected: "هم‌جهتی روند ۱ساعته و ۴ساعته یا محدوده RSI تأیید نشد" };
+    return { symbol: ticker.symbol, rejected: "حتی شرایط منعطف آزمایشی روند و RSI نیز تأیید نشد" };
   }
 
   if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
@@ -1337,11 +1349,13 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
   const target2 = entry + direction * risk * 2.5;
   const target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
-  const eligible = score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
+  const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
+  const experimentalEligible = !eligible && !strictSetup && score >= 55 && volumeRatio >= 0.5;
   return {
     symbol: ticker.symbol,
     side,
     score,
+    experimentalEligible,
     price,
     entry,
     stop,
@@ -1404,14 +1418,14 @@ function tradeOutcomePercent(t,exitPrice){const e=Number(t.actualEntry);if(!Numb
 function getNewClosedFuturesCandles(candles,lastCheckedCandleTime=0){return(Array.isArray(candles)?candles:[]).filter(c=>Number(c.time)>Number(lastCheckedCandleTime||0)).sort((a,b)=>a.time-b.time)}
 function ensureTradeTrackingCheckpoint(trade,now=Date.now()){if(!Number.isFinite(Number(trade?.lastCheckedCandleTime))||Number(trade.lastCheckedCandleTime)<=0){trade.lastCheckedCandleTime=Math.floor(now/60000)*60000;trade.trackingMode=trade.trackingMode||"LEGACY_CONTINUED";return true}return false}
 function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),targets=[Number(signal?.target1),Number(signal?.target2),Number(signal?.target3)];if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,...targets].every(Number.isFinite)||![entry,stop,...targets].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<targets[0]&&targets[0]<targets[1]&&targets[1]<targets[2]:stop>entry&&entry>targets[0]&&targets[0]>targets[1]&&targets[1]>targets[2]}
-function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
+function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:signal.tier==="EXPERIMENTAL"?"EXPERIMENTAL":"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
 async function registerTrackedSignal(env,chatId,signal){if(!env.APP_KV||!signal?.id)return false;const open=await readTradeList(env,FUTURES_OPEN_KEY),closed=await readTradeList(env,FUTURES_CLOSED_KEY);if([...open,...closed].some(t=>String(t.signalId)===String(signal.id)&&String(t.chatId)===String(chatId)))return false;const trade=createTrackedFuturesTrade(signal,chatId);if(!trade)return false;open.unshift(trade);await writeTradeList(env,FUTURES_OPEN_KEY,open.slice(0,300));return true}
 async function refreshTrackedFuturesTrades(env,chatId=null){const open=await readTradeList(env,FUTURES_OPEN_KEY);if(!open.length)return{checked:0,closed:0};const targets=open.filter(t=>chatId==null||String(t.chatId)===String(chatId));if(!targets.length)return{checked:0,closed:0};const closed=await readTradeList(env,FUTURES_CLOSED_KEY),remaining=open.slice();let checked=0,closedCount=0;const checkpointNow=Date.now();for(const trade of targets)ensureTradeTrackingCheckpoint(trade,checkpointNow);const results=await mapLimit(targets,3,async trade=>{try{const candles=await getKrakenFuturesCandles(trade.symbol,"1m");const recent=getNewClosedFuturesCandles(candles,trade.lastCheckedCandleTime);let event=null,eventPrice=null,eventCandleTime=null;for(const candle of recent.sort((a,b)=>a.time-b.time)){const hi=Number(candle.high),lo=Number(candle.low);const stopHit=stopReached(trade.side,hi,trade.currentStop)||stopReached(trade.side,lo,trade.currentStop);const hits=[["TP1",Number(trade.target1)],["TP2",Number(trade.target2)],["TP3",Number(trade.target3)]].filter(([,target])=>Number.isFinite(target)&&(targetReached(trade.side,hi,target)||targetReached(trade.side,lo,target)));if(stopHit){event="STOP";eventPrice=trade.currentStop;eventCandleTime=candle.time;break}for(const[k,target]of hits)if(!trade.tpHits.includes(k)){trade.tpHits.push(k);await notifyTradeMilestone(env,trade,k,target)}if(trade.tpHits.includes("TP3")){event="TP3";eventPrice=trade.target3;eventCandleTime=candle.time;break}}const latest=recent[recent.length-1];if(latest){trade.lastPrice=Number(latest.close);trade.lastCheckedAt=new Date().toISOString();trade.lastCheckedCandleTime=Number(latest.time)}checked++;if(event){trade.closedAt=new Date().toISOString();trade.exitPrice=Number(eventPrice);trade.outcomeR=tradeResultR(trade,event==="STOP");trade.outcomePercent=tradeOutcomePercent(trade,eventPrice);trade.closeReason=event==="STOP"?"STOP_LOSS":"TP3";trade.status=event==="STOP"?"CLOSED_STOP":"CLOSED_TARGETS";trade.resolutionCandleTime=eventCandleTime;return{trade,closed:true}}return{trade,closed:false}}catch(error){console.error("Tracked futures trade refresh failed:",trade.symbol,String(error?.message||error));return{trade,closed:false}}});const closedIds=new Set();for(const x of results){const i=remaining.findIndex(t=>t.id===x.trade.id);if(i>=0){remaining[i]=x.trade;if(x.closed){closedIds.add(x.trade.id);closed.unshift(x.trade);closedCount++}}}await writeTradeList(env,FUTURES_OPEN_KEY,remaining.filter(t=>!closedIds.has(t.id)).slice(0,300));await writeTradeList(env,FUTURES_CLOSED_KEY,closed.slice(0,500));for(const x of results.filter(v=>v.closed)){const t=x.trade,o=Number(t.outcomePercent),label=o>0?"سود":o<0?"ضرر":"سر‌به‌سر";await sendMessage(env,t.chatId,`📚 نتیجه سیگنال ${t.symbol}\n━━━━━━━━━━━━━━━━━━\nجهت: ${t.side==="LONG"?"LONG 🟢":"SHORT 🔴"}\nورود سیگنال: ${formatPrice(t.actualEntry)}\nخروج ثبت‌شده: ${formatPrice(t.exitPrice)}\nنتیجه: ${label} ${Number.isFinite(o)?(o>=0?"+":"")+o.toFixed(2)+"%":"—"}\nR: ${Number.isFinite(t.outcomeR)?(t.outcomeR>=0?"+":"")+t.outcomeR.toFixed(2):"—"}\nTPهای لمس‌شده: ${t.tpHits.join(", ")||"هیچ‌کدام"}\nدلیل بسته‌شدن: ${t.closeReason==="STOP_LOSS"?"حد ضرر":"TP3"}`)}return{checked,closed:closedCount}}
 async function notifyTradeMilestone(env,trade,key,target){const p=priceChangePercent(trade.side,trade.actualEntry,target),labels={TP1:"🥇 هدف اول",TP2:"🥈 هدف دوم",TP3:"🥉 هدف سوم"},weight={TP1:"۴۰٪",TP2:"۳۵٪",TP3:"۲۵٪"};await sendMessage(env,trade.chatId,`${labels[key]||key} ${trade.symbol} لمس شد.\nقیمت هدف: ${formatPrice(target)}\nبازده قیمتی تا این هدف: ${p>=0?"+":""}${Number(p).toFixed(2)}%\nسهم مدل: ${weight[key]||"—"}\nمعامله هنوز باز است و حد ضرر اولیه دست‌نخورده باقی می‌ماند.`)}
 async function handleTradeAction(action,chatId,env){const[,op]=action.split(":");if(op==="be")return sendMessage(env,chatId,"ℹ️ در نسخه جدید حد ضرر سیگنال خودکار جابه‌جا نمی‌شود؛ برای ارزیابی منصفانه حد ضرر اولیه ثابت می‌ماند.");if(op==="skip"||op==="enter")return sendMessage(env,chatId,"ℹ️ این نسخه هر سیگنال صادرشده را خودکار در دفتر ارزیابی ثبت می‌کند؛ ثبت دستی لازم نیست.")}
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت دستی معامله در نسخه جدید غیرفعال است؛ سیگنال‌های صادرشده خودکار در دفتر ارزیابی ثبت می‌شوند.")}
-async function showOpenFuturesTrades(env,chatId){try{await refreshTrackedFuturesTrades(env,chatId)}catch(error){console.error("Open trade refresh failed:",String(error?.stack||error))}const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));if(!list.length)return sendMessage(env,chatId,"📭 معامله بازی در دفتر پیگیری ثبت نشده است.",BACK_MENU);const body=list.slice(0,15).map(t=>{const p=priceChangePercent(t.side,t.actualEntry,t.lastPrice);return`${t.side==="LONG"?"🟢 LONG":"🔴 SHORT"} ${t.symbol} | ${t.exchange||"Kraken"}\nورود سیگنال: ${formatPrice(t.actualEntry)} | قیمت آخر: ${formatPrice(t.lastPrice)}\nبازده فعلی قیمتی: ${Number.isFinite(p)?(p>=0?"+":"")+p.toFixed(2)+"%":"—"}\nحد ضرر: ${formatPrice(t.currentStop)}\nاهداف: ${formatPrice(t.target1)} / ${formatPrice(t.target2)} / ${formatPrice(t.target3)}\nاهداف لمس‌شده: ${t.tpHits.join(", ")||"—"}`}).join("\n\n");return sendLongMessage(env,chatId,"📌 معاملات باز / سیگنال‌های در حال ارزیابی\n━━━━━━━━━━━━━━━━━━\n"+body+"\n\n⚠️ این دفتر ارزیابی است؛ سفارش واقعی ثبت نمی‌شود.")}
-async function showFuturesTradeHistory(env,chatId){const list=(await readTradeList(env,FUTURES_CLOSED_KEY)).filter(t=>String(t.chatId)===String(chatId)).slice(0,50);if(!list.length)return sendMessage(env,chatId,"📚 هنوز معامله بسته‌شده‌ای ثبت نشده است.",BACK_MENU);const wins=list.filter(t=>Number(t.outcomePercent)>0).length,losses=list.filter(t=>Number(t.outcomePercent)<0).length,breakeven=list.length-wins-losses,winRate=list.length?wins/list.length*100:0,tp1=list.filter(t=>t.tpHits?.includes("TP1")).length,tp2=list.filter(t=>t.tpHits?.includes("TP2")).length,tp3=list.filter(t=>t.tpHits?.includes("TP3")).length,avg=list.reduce((s,t)=>s+Number(t.outcomePercent||0),0)/list.length,total=list.reduce((s,t)=>s+Number(t.outcomePercent||0),0);const summary=`📊 آمار عملکرد سیگنال‌ها\n━━━━━━━━━━━━━━━━━━\nکل سیگنال‌های بسته‌شده: ${list.length}\nبرد: ${wins} | باخت: ${losses} | سر‌به‌سر: ${breakeven}\n🏆 Win Rate: ${winRate.toFixed(1)}%\n📈 میانگین نتیجه هر سیگنال: ${avg>=0?"+":""}${avg.toFixed(2)}%\n💰 مجموع نتیجه قیمتی مدل: ${total>=0?"+":""}${total.toFixed(2)}%\n🎯 رسیدن به TP1: ${tp1} | TP2: ${tp2} | TP3: ${tp3}\n\n`;const body=list.slice(0,15).map(t=>`${t.symbol} | ${t.side}\nورود: ${formatPrice(t.actualEntry)} | خروج: ${formatPrice(t.exitPrice)}\nنتیجه: ${Number(t.outcomePercent)>=0?"+":""}${Number(t.outcomePercent).toFixed(2)}% | ${Number(t.outcomeR).toFixed(2)}R\nTPها: ${t.tpHits.join(", ")||"—"} | ${t.closeReason==="STOP_LOSS"?"استاپ":"TP3"}`).join("\n\n");return sendLongMessage(env,chatId,summary+"📚 تاریخچه معاملات\n━━━━━━━━━━━━━━━━━━\n"+body)}
+async function showOpenFuturesTrades(env,chatId){try{await refreshTrackedFuturesTrades(env,chatId)}catch(error){console.error("Open trade refresh failed:",String(error?.stack||error))}const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));if(!list.length)return sendMessage(env,chatId,"📭 معامله بازی در دفتر پیگیری ثبت نشده است.",BACK_MENU);const body=list.slice(0,15).map(t=>{const p=priceChangePercent(t.side,t.actualEntry,t.lastPrice);return`${t.tier==="EXPERIMENTAL"?"🧪 آزمایشی | ":""}${t.side==="LONG"?"🟢 LONG":"🔴 SHORT"} ${t.symbol} | ${t.exchange||"Kraken"}\nورود سیگنال: ${formatPrice(t.actualEntry)} | قیمت آخر: ${formatPrice(t.lastPrice)}\nبازده فعلی قیمتی: ${Number.isFinite(p)?(p>=0?"+":"")+p.toFixed(2)+"%":"—"}\nحد ضرر: ${formatPrice(t.currentStop)}\nاهداف: ${formatPrice(t.target1)} / ${formatPrice(t.target2)} / ${formatPrice(t.target3)}\nاهداف لمس‌شده: ${t.tpHits.join(", ")||"—"}`}).join("\n\n");return sendLongMessage(env,chatId,"📌 معاملات باز / سیگنال‌های در حال ارزیابی\n━━━━━━━━━━━━━━━━━━\n"+body+"\n\n⚠️ این دفتر ارزیابی است؛ سفارش واقعی ثبت نمی‌شود.")}
+async function showFuturesTradeHistory(env,chatId){const list=(await readTradeList(env,FUTURES_CLOSED_KEY)).filter(t=>String(t.chatId)===String(chatId)).slice(0,50);if(!list.length)return sendMessage(env,chatId,"📚 هنوز معامله بسته‌شده‌ای ثبت نشده است.",BACK_MENU);const wins=list.filter(t=>Number(t.outcomePercent)>0).length,losses=list.filter(t=>Number(t.outcomePercent)<0).length,breakeven=list.length-wins-losses,winRate=list.length?wins/list.length*100:0,tp1=list.filter(t=>t.tpHits?.includes("TP1")).length,tp2=list.filter(t=>t.tpHits?.includes("TP2")).length,tp3=list.filter(t=>t.tpHits?.includes("TP3")).length,avg=list.reduce((s,t)=>s+Number(t.outcomePercent||0),0)/list.length,total=list.reduce((s,t)=>s+Number(t.outcomePercent||0),0);const summary=`📊 آمار عملکرد سیگنال‌ها\n━━━━━━━━━━━━━━━━━━\nکل سیگنال‌های بسته‌شده: ${list.length}\nبرد: ${wins} | باخت: ${losses} | سر‌به‌سر: ${breakeven}\n🏆 Win Rate: ${winRate.toFixed(1)}%\n📈 میانگین نتیجه هر سیگنال: ${avg>=0?"+":""}${avg.toFixed(2)}%\n💰 مجموع نتیجه قیمتی مدل: ${total>=0?"+":""}${total.toFixed(2)}%\n🎯 رسیدن به TP1: ${tp1} | TP2: ${tp2} | TP3: ${tp3}\n\n`;const body=list.slice(0,15).map(t=>`${t.tier==="EXPERIMENTAL"?"🧪 آزمایشی | ":""}${t.symbol} | ${t.side}\nورود: ${formatPrice(t.actualEntry)} | خروج: ${formatPrice(t.exitPrice)}\nنتیجه: ${Number(t.outcomePercent)>=0?"+":""}${Number(t.outcomePercent).toFixed(2)}% | ${Number(t.outcomeR).toFixed(2)}R\nTPها: ${t.tpHits.join(", ")||"—"} | ${t.closeReason==="STOP_LOSS"?"استاپ":"TP3"}`).join("\n\n");return sendLongMessage(env,chatId,summary+"📚 تاریخچه معاملات\n━━━━━━━━━━━━━━━━━━\n"+body)}
 async function runAutomaticFuturesAlertScan(env) {
   if (!env.APP_KV) throw new Error("APP_KV binding is required for automatic alerts.");
   const lockKey = "futures:auto-alerts:scan-lock";
@@ -1420,7 +1434,7 @@ async function runAutomaticFuturesAlertScan(env) {
   try {
     const tracking = await refreshTrackedFuturesTrades(env);
     const result = await runFuturesSignalScan(env);
-    return { scanned: true, signals: (result.signals || []).length, checkedTrades: tracking.checked, closedTrades: tracking.closed };
+    return { scanned: true, signals: (result.signals || []).length, experimentalSignals: result.experimentalSent || 0, checkedTrades: tracking.checked, closedTrades: tracking.closed };
   } finally {
     await env.APP_KV.delete(lockKey);
   }
@@ -1445,7 +1459,7 @@ async function filterActiveDuplicateFuturesSignals(env, candidates) {
   // An accepted/open paper trade continues to block repeats even after
   // the original signal's entry window has expired.
   for (const trade of open) {
-    if (trade?.status === 'OPEN' && trade?.symbol && ['LONG', 'SHORT'].includes(trade?.side)) {
+    if (trade?.tier !== "EXPERIMENTAL" && trade?.status === 'OPEN' && trade?.symbol && ['LONG', 'SHORT'].includes(trade?.side)) {
       activeKeys.add(String(trade.symbol).trim().toUpperCase() + '|' + trade.side);
     }
   }
@@ -1479,10 +1493,36 @@ async function runFuturesSignalScan(env, options = {}) {
   });
   const createdAt = Date.now();
   const eligibleCandidates = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score);
+  const experimentalCandidates = analyzed.filter(x => x?.experimentalEligible)
+    .sort((a, b) => b.score - a.score).slice(0, 3);
   const nonDuplicateCandidates = await filterActiveDuplicateFuturesSignals(env, eligibleCandidates);
   const generatedSignals = nonDuplicateCandidates.slice(0, 8)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
   const signals = await savePendingFuturesSignals(env, generatedSignals);
+
+  // Experimental candidates are delivered only to the owner, clearly labelled,
+  // and rate-limited per symbol/direction. They never enter the production signal queue.
+  const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
+  let experimentalSent = 0;
+  if (env.APP_KV && ownerId) {
+    for (const candidate of experimentalCandidates) {
+      const key = `futures:experimental:sent:${candidate.symbol}:${candidate.side}`;
+      if (await env.APP_KV.get(key)) continue;
+      const signal = {
+        ...candidate, id: crypto.randomUUID(), tier: "EXPERIMENTAL",
+        createdAt: Date.now(), expiresAt: Date.now() + 60 * 60 * 1000
+      };
+      try {
+        await sendMessage(env, ownerId, formatExperimentalFuturesSignal(signal));
+        await registerTrackedSignal(env, ownerId, signal);
+        await env.APP_KV.put(key, "sent", { expirationTtl: 3600 });
+        experimentalSent++;
+      } catch (error) {
+        console.error("Experimental futures alert failed:", signal.symbol, String(error?.message || error));
+      }
+    }
+  }
+
   if (env.APP_KV) {
     try {
       await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
@@ -1529,7 +1569,20 @@ async function runFuturesSignalScan(env, options = {}) {
       report += `\n⚠️ ذخیره گزارش فیوچرز ناموفق بود: ${String(error.message || "KV error")}`;
     }
   }
-  return { report, signals };
+  return { report, signals, experimentalSent };
+}
+
+function formatExperimentalFuturesSignal(item) {
+  const sideLabel = item.side === "LONG" ? "🟢 لانگ" : "🔴 شورت";
+  return "🧪 سیگنال آزمایشی فیوچرز — فقط Paper Trading\n" +
+    "━━━━━━━━━━━━━━━━━━\n" +
+    `🪙 نماد: ${formatFuturesSymbol(item.symbol)}\n` +
+    `🧭 جهت: ${sideLabel}\n` +
+    `⭐ امتیاز: ${item.score}/100\n` +
+    `📍 ورود فرضی: ${formatPrice(item.entry)}\n` +
+    `🛑 حد ضرر: ${formatPrice(item.stop)}\n` +
+    `🎯 اهداف: ${formatPrice(item.target1)} / ${formatPrice(item.target2)} / ${formatPrice(item.target3)}\n\n` +
+    "این مورد از فیلتر آزمایشی عبور کرده، نه فیلتر اصلی؛ برای معامله واقعی استفاده نکن.";
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
