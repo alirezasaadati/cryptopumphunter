@@ -69,6 +69,14 @@ function closedCount(candles, closeTime, intervalMs) {
   return lo;
 }
 
+function ema(values, period) {
+  if (values.length < period) return NaN;
+  const k = 2 / (period + 1);
+  let value = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < values.length; i++) value = values[i] * k + value * (1 - k);
+  return value;
+}
+
 function targetTrigger(entryFill, side) {
   const q = TARGET_MARGIN_ROI / LEVERAGE;
   if (side === "LONG") {
@@ -159,10 +167,13 @@ async function main() {
   const active = new Map();
   const experimentalActive = new Map();
   const tier2Active = new Map();
+  const noVolumeActive = new Map();
+  const noVolumeClosed = [];
   const closed = [];
   let issued = 0, skippedDuplicate = 0, skippedByEightLimit = 0, ambiguousBars = 0;
   let experimentalIssued = 0, experimentalSkippedDuplicate = 0, experimentalSkippedByEightLimit = 0;
   let tier2Issued = 0, tier2SkippedDuplicate = 0, tier2SkippedByEightLimit = 0;
+  let noVolumeIssued = 0, noVolumeSkippedDuplicate = 0, noVolumeSkippedByEightLimit = 0;
 
   for (const time of timeline) {
     // First settle positions using the just-closed hourly candle. Stop wins
@@ -201,6 +212,28 @@ async function main() {
       if (stopHit || targetHit) experimentalActive.delete(key);
     }
 
+    // Settle the no-volume-threshold comparison independently.
+    for (const [key, trade] of [...noVolumeActive.entries()]) {
+      const data = series.get(trade.symbol);
+      const bar = data.h1.find(c => c.time + H1 === time);
+      if (!bar) continue;
+      const d = trade.side === "LONG" ? 1 : -1;
+      const stopGap = d === 1 ? bar.open <= trade.signal.stop : bar.open >= trade.signal.stop;
+      const targetGap = d === 1 ? bar.open >= trade.targetTrigger : bar.open <= trade.targetTrigger;
+      const stopHit = stopGap || (d === 1 ? bar.low <= trade.signal.stop : bar.high >= trade.signal.stop);
+      const targetHit = targetGap || (d === 1 ? bar.high >= trade.targetTrigger : bar.low <= trade.targetTrigger);
+      if (stopHit && targetHit) ambiguousBars++;
+      if (stopHit) {
+        const px = stopGap ? bar.open : trade.signal.stop;
+        noVolumeClosed.push(settle({ ...trade, exitTime: time }, px, "STOP", stopGap));
+        noVolumeActive.delete(key);
+      } else if (targetHit) {
+        const px = targetGap ? bar.open : trade.targetTrigger;
+        noVolumeClosed.push(settle({ ...trade, exitTime: time }, px, "TARGET_25_MARGIN", false));
+        noVolumeActive.delete(key);
+      }
+    }
+
     // Release tier-2 positions using the same stop and target assumptions.
     for (const [key, trade] of [...tier2Active.entries()]) {
       const data = series.get(trade.symbol);
@@ -218,6 +251,7 @@ async function main() {
     const candidates = [];
     const experimentalCandidates = [];
     const tier2Candidates = [];
+    const noVolumeCandidates = [];
     for (const [symbol, data] of series.entries()) {
       const n1 = closedCount(data.h1, time, H1);
       const n4 = closedCount(data.h4, time, H4);
@@ -235,6 +269,13 @@ async function main() {
       };
       const signal = analyzeFuturesSymbol(ticker, h1, h4);
       if (signal?.eligible) candidates.push(signal);
+      const closes1h = h1.map(c => c.close);
+      const closes4h = h4.map(c => c.close);
+      const e20_1h = ema(closes1h, 20), e50_1h = ema(closes1h, 50);
+      const e20_4h = ema(closes4h, 20), e50_4h = ema(closes4h, 50);
+      const strictLong = e20_1h > e50_1h && last.close > e20_1h && e20_4h > e50_4h && signal?.side === "LONG" && signal.rsi >= 48 && signal.rsi <= 69;
+      const strictShort = e20_1h < e50_1h && last.close < e20_1h && e20_4h < e50_4h && signal?.side === "SHORT" && signal.rsi >= 31 && signal.rsi <= 52;
+      if ((strictLong || strictShort) && signal.score >= 72) noVolumeCandidates.push(signal);
       const relaxedEligible = signal?.eligible ||
         (signal?.experimentalEligible && signal.score >= 60 && signal.volumeRatio >= 0.5);
       if (relaxedEligible) experimentalCandidates.push(signal);
@@ -245,6 +286,7 @@ async function main() {
     candidates.sort((a, b) => b.score - a.score);
     experimentalCandidates.sort((a, b) => b.score - a.score);
     tier2Candidates.sort((a, b) => b.score - a.score);
+    noVolumeCandidates.sort((a, b) => b.score - a.score);
 
     let selected = 0;
     for (const signal of candidates) {
@@ -279,6 +321,22 @@ async function main() {
       });
       experimentalIssued++;
       experimentalSelected++;
+    }
+
+    let noVolumeSelected = 0;
+    for (const signal of noVolumeCandidates) {
+      const key = `${signal.symbol}|${signal.side}`;
+      if (noVolumeActive.has(key)) { noVolumeSkippedDuplicate++; continue; }
+      if (noVolumeSelected >= 8) { noVolumeSkippedByEightLimit++; continue; }
+      const d = signal.side === "LONG" ? 1 : -1;
+      const entryFill = signal.entry * (1 + d * SLIPPAGE);
+      noVolumeActive.set(key, {
+        symbol: signal.symbol, side: signal.side, score: signal.score,
+        signalTime: time, signal, entryFill,
+        targetTrigger: targetTrigger(entryFill, signal.side)
+      });
+      noVolumeIssued++;
+      noVolumeSelected++;
     }
 
     let tier2Selected = 0;
@@ -335,6 +393,20 @@ async function main() {
     },
     signalCount: issued,
     averageSignalsPerDay: issued / DAYS,
+    withoutVolumeThreshold: {
+      rules: "same strict production setup and score >= 72; removes only the hard volumeRatio >= 0.75 eligibility gate; volume still contributes its existing score points",
+      signalCount: noVolumeIssued,
+      averageSignalsPerDay: noVolumeIssued / DAYS,
+      additionalSignals: noVolumeIssued - issued,
+      increasePct: issued ? (noVolumeIssued / issued - 1) * 100 : null,
+      openAtEndCount: noVolumeActive.size,
+      skippedDuplicate: noVolumeSkippedDuplicate,
+      skippedByEightLimit: noVolumeSkippedByEightLimit,
+      closed: summarize(noVolumeClosed),
+      perSymbol: [...new Set(noVolumeClosed.map(t => t.symbol))].map(symbol => ({
+        symbol, ...summarize(noVolumeClosed.filter(t => t.symbol === symbol))
+      }))
+    },
     tier1Experimental: {
       rules: "standard signals plus relaxed signals where the 1H trend is valid, 4H is not opposing, RSI is within the relaxed band, score >= 60, and volumeRatio >= 0.50",
       signalCount: experimentalIssued,
