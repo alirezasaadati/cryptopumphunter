@@ -30,7 +30,7 @@ const isEntry2Touched = (bar, side, entry2) =>
  */
 export function simulatePaperTrade({
   signal, candles, entryNotional, targetWeights,
-  feeRate = 0.0005, slippageBps = 2, maxBars = 500
+  feeRate = 0.0005, slippageBps = 2, maxEntryDriftPct = 0.35, maxBars = 500
 }) {
   if (!signal || !["LONG","SHORT"].includes(signal.side) ||
     !finite(signal.entry) || signal.entry <= 0 ||
@@ -45,6 +45,7 @@ export function simulatePaperTrade({
     !finite(entryNotional) || entryNotional <= 0 ||
     !finite(feeRate) || feeRate < 0 ||
     !finite(slippageBps) || slippageBps < 0 ||
+    !finite(maxEntryDriftPct) || maxEntryDriftPct < 0 ||
     !Number.isInteger(maxBars) || maxBars < 1 ||
     !Array.isArray(candles)) return {status:"invalid_input"};
 
@@ -88,6 +89,11 @@ export function simulatePaperTrade({
     if (!validBar(bar)) return {status:"invalid_data",fills,exits,events,ambiguousEvents};
     if (!entry1Filled) {
       // A signal is known only after its candle closes; no same-candle fill.
+      const driftPct = Math.abs(bar.open-signal.entry)/signal.entry*100;
+      if (driftPct > maxEntryDriftPct) {
+        return {status:"not_filled",reason:"entry_drift_exceeded",driftPct,barsObserved:barsProcessed,
+          fills,exits,events,ambiguousEvents};
+      }
       const price = adversePrice(bar.open,side,"entry",slippageBps);
       const quantity = entryNotional / price;
       fills.push({leg:1,time:bar.time,price,quantity});
