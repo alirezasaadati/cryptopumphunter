@@ -18,3 +18,12 @@ crons = ["*/5 * * * *"]
 
 [secrets]
 required = ["OWNER_TELEGRAM_ID"]
+
+
+[[durable_objects.bindings]]
+name = "SIGNAL_DELIVERY"
+class_name = "SignalDeliveryCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SignalDeliveryCoordinator"]
