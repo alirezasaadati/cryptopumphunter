@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { analyzeEngineA } from "../src/engines/engine-a.js";
 import { analyzeEngineB } from "../src/engines/engine-b.js";
 import { simulatePaperTrade } from "../src/engines/paper-simulator.js";
+import { ema } from "../src/engines/engine-utils.js";
 
 const BASE = "https://futures.kraken.com/api/charts/v1";
 const SYMBOLS = [
@@ -46,10 +47,11 @@ const report = {
     portfolio: "Trades are sequential per engine/symbol; cross-symbol portfolio exposure, correlation, and concurrent capital constraints are not modeled.",
     drawdown: "Max drawdown is a closed-trade equity-curve proxy sorted by exit timestamp, not a true portfolio drawdown because cross-symbol overlap and capital allocation are not modeled.",
     walkForward: "Fixed parameters are evaluated separately on the first two-thirds development window and final one-third holdout window; no tuning is performed on the holdout.",
+    btcRegimeFilter: "B_BTC_FILTER is a separate Engine B variant. LONG signals are allowed only when BTC 15m close > EMA50 and EMA20 > EMA50; SHORT signals only when close < EMA50 and EMA20 < EMA50. BTC data is limited to candles closed at or before each signal candle; neutral/opposed regimes reject the candidate. This is a simple diagnostic filter, not a tuned rule.",
     intrabar: "Stop-first; ambiguous Entry 2 versus TP1 resolves TP1-first/cancel Entry 2 and is recorded."
   },
   data: [],
-  engines: {A:{trades:[],skipped:[],summary:null},A_BE:{trades:[],skipped:[],summary:null},B:{trades:[],skipped:[],summary:null}},
+  engines: {A:{trades:[],skipped:[],summary:null},A_BE:{trades:[],skipped:[],summary:null},B:{trades:[],skipped:[],summary:null},B_BTC_FILTER:{trades:[],skipped:[],summary:null}},
   warnings: [
     "This is an exploratory strategy backtest, not proof of future performance.",
     "Liquidity filter is disabled because historical quote turnover and contract multipliers are not yet validated.",
@@ -176,7 +178,7 @@ for(const symbol of SYMBOLS){
         fundingSettlements++;
       }
     }
-    const gaps=[];
+    if(symbol==="PF_XBTUSD") btcCandles=valid;\n    const gaps=[];
     for(let i=1;i<valid.length;i++){
       const delta=valid[i].time-valid[i-1].time;
       if(delta>INTERVAL_MS) gaps.push({from:valid[i-1].time,to:valid[i].time,count:Math.round(delta/INTERVAL_MS)-1});
@@ -187,7 +189,7 @@ for(const symbol of SYMBOLS){
       tickSize,quantityPrecision,contractSize:instrument.contractSize,contractType:instrument.type});
     for(const engine of ["A","A_BE","B"]){
       const analyze=engine==="B"?analyzeEngineB:analyzeEngineA;
-      const weights=engine==="B"?B_WEIGHTS:A_WEIGHTS;
+      const weights=(engine==="B"||engine==="B_BTC_FILTER")?B_WEIGHTS:A_WEIGHTS;
       const trades=report.engines[engine].trades;
       let i=79;
       while(i<valid.length-1){
