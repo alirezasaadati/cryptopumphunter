@@ -2,6 +2,7 @@ import { runSpotScan } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals, issuedSignalSymbols } from "./signal-ledger.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
+import { createSerialExecutor } from "./serial-executor.js";
 
 const CONFIG = {
   VERSION: "4.7.0",
@@ -1446,7 +1447,7 @@ async function registerTrackedSignal(env,chatId,signal){
   await writeTradeList(env,FUTURES_OPEN_KEY,open.slice(0,300));
   return true
 }
-async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMarkup=null){
+async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText,replyMarkup=null){
   if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
   if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
   if(!env.APP_KV)throw new Error("APP_KV is required for durable signal delivery.");
@@ -1480,6 +1481,48 @@ async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMa
   await env.APP_KV.put(key,JSON.stringify(record));
   return{delivered:true,duplicate:false};
 }
+
+async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMarkup=null){
+  if(!signal?.id)throw new Error("Signal id is required for coordinated delivery.");
+  if(!env.SIGNAL_DELIVERY)throw new Error("SIGNAL_DELIVERY Durable Object binding is required; refusing an uncoordinated send.");
+  const key=signalOutboxKey(chatId,signal.id);
+  const id=env.SIGNAL_DELIVERY.idFromName(key);
+  const stub=env.SIGNAL_DELIVERY.get(id);
+  const response=await stub.fetch("https://signal-delivery.internal/deliver",{
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body:JSON.stringify({chatId:String(chatId),signal,messageText,replyMarkup})
+  });
+  let payload;
+  try{payload=await response.json()}catch{throw new Error("Signal delivery coordinator returned an unreadable response.");}
+  if(!response.ok||!payload?.ok)throw new Error(payload?.error||"Signal delivery coordinator failed.");
+  return payload.result;
+}
+
+export class SignalDeliveryCoordinator {
+  constructor(ctx,env){
+    this.ctx=ctx;
+    this.env=env;
+    this.serial=createSerialExecutor();
+  }
+  async fetch(request){
+    const url=new URL(request.url);
+    if(request.method!=="POST"||url.pathname!=="/deliver")return new Response("Not found",{status:404});
+    let payload;
+    try{payload=await request.json()}catch{return Response.json({ok:false,error:"Invalid JSON payload."},{status:400});}
+    return this.serial(async()=>{
+      try{
+        const result=await sendAndArchiveFuturesSignalUnlocked(
+          this.env,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null
+        );
+        return Response.json({ok:true,result});
+      }catch(error){
+        return Response.json({ok:false,error:String(error?.message||error).slice(0,500)},{status:500});
+      }
+    });
+  }
+}
+
 
 async function refreshTrackedFuturesTrades(env,chatId=null){const open=await readTradeList(env,FUTURES_OPEN_KEY);if(!open.length)return{checked:0,closed:0};const targets=open.filter(t=>chatId==null||String(t.chatId)===String(chatId));if(!targets.length)return{checked:0,closed:0};const closed=await readTradeList(env,FUTURES_CLOSED_KEY),remaining=open.slice();let checked=0,closedCount=0;const checkpointNow=Date.now();for(const trade of targets)ensureTradeTrackingCheckpoint(trade,checkpointNow);const results=await mapLimit(targets,3,async trade=>{try{const candles=await getKrakenFuturesCandles(trade.symbol,"1m");const recent=getNewClosedFuturesCandles(candles,trade.lastCheckedCandleTime);let event=null,eventPrice=null,eventCandleTime=null;for(const candle of recent.sort((a,b)=>a.time-b.time)){const hi=Number(candle.high),lo=Number(candle.low);const stopHit=stopReached(trade.side,hi,trade.currentStop)||stopReached(trade.side,lo,trade.currentStop);const hits=[["TP1",Number(trade.target1)],["TP2",Number(trade.target2)],["TP3",Number(trade.target3)]].filter(([,target])=>Number.isFinite(target)&&(targetReached(trade.side,hi,target)||targetReached(trade.side,lo,target)));if(stopHit){event="STOP";eventPrice=trade.currentStop;eventCandleTime=candle.time;break}for(const[k,target]of hits)if(!trade.tpHits.includes(k)){trade.tpHits.push(k);await notifyTradeMilestone(env,trade,k,target)}if(trade.tpHits.includes("TP3")){event="TP3";eventPrice=trade.target3;eventCandleTime=candle.time;break}}const latest=recent[recent.length-1];if(latest){trade.lastPrice=Number(latest.close);trade.lastCheckedAt=new Date().toISOString();trade.lastCheckedCandleTime=Number(latest.time)}checked++;if(event){trade.closedAt=new Date().toISOString();trade.exitPrice=Number(eventPrice);trade.outcomeR=tradeResultR(trade,event==="STOP");trade.outcomePercent=tradeOutcomePercent(trade,eventPrice);trade.closeReason=event==="STOP"?"STOP_LOSS":"TP3";trade.status=event==="STOP"?"CLOSED_STOP":"CLOSED_TARGETS";trade.resolutionCandleTime=eventCandleTime;return{trade,closed:true}}return{trade,closed:false}}catch(error){console.error("Tracked futures trade refresh failed:",trade.symbol,String(error?.message||error));return{trade,closed:false}}});const closedIds=new Set();for(const x of results){const i=remaining.findIndex(t=>t.id===x.trade.id);if(i>=0){remaining[i]=x.trade;if(x.closed){closedIds.add(x.trade.id);closed.unshift(x.trade);closedCount++}}}for(const item of results) await updateIssuedSignal(env.APP_KV,item.trade.chatId,item.trade);await writeTradeList(env,FUTURES_OPEN_KEY,remaining.filter(t=>!closedIds.has(t.id)).slice(0,300));await writeTradeList(env,FUTURES_CLOSED_KEY,closed.slice(0,500));for(const x of results.filter(v=>v.closed)){const t=x.trade,o=Number(t.outcomePercent),label=o>0?"سود":o<0?"ضرر":"سر‌به‌سر";await sendMessage(env,t.chatId,`📚 نتیجه سیگنال ${t.symbol}\n━━━━━━━━━━━━━━━━━━\nجهت: ${t.side==="LONG"?"LONG 🟢":"SHORT 🔴"}\nورود سیگنال: ${formatPrice(t.actualEntry)}\nخروج ثبت‌شده: ${formatPrice(t.exitPrice)}\nنتیجه: ${label} ${Number.isFinite(o)?(o>=0?"+":"")+o.toFixed(2)+"%":"—"}\nR: ${Number.isFinite(t.outcomeR)?(t.outcomeR>=0?"+":"")+t.outcomeR.toFixed(2):"—"}\nTPهای لمس‌شده: ${t.tpHits.join(", ")||"هیچ‌کدام"}\nدلیل بسته‌شدن: ${t.closeReason==="STOP_LOSS"?"حد ضرر":"TP3"}`)}return{checked,closed:closedCount}}
 async function notifyTradeMilestone(env,trade,key,target){const p=priceChangePercent(trade.side,trade.actualEntry,target),labels={TP1:"🥇 هدف اول",TP2:"🥈 هدف دوم",TP3:"🥉 هدف سوم"},weight={TP1:"۴۰٪",TP2:"۳۵٪",TP3:"۲۵٪"};await sendMessage(env,trade.chatId,`${labels[key]||key} ${trade.symbol} لمس شد.\nقیمت هدف: ${formatPrice(target)}\nبازده قیمتی تا این هدف: ${p>=0?"+":""}${Number(p).toFixed(2)}%\nسهم مدل: ${weight[key]||"—"}\nمعامله هنوز باز است و حد ضرر اولیه دست‌نخورده باقی می‌ماند.`)}
