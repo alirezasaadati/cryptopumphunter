@@ -10,7 +10,7 @@ function safePart(value) {
 
 function timestampPart(value) {
   const time = new Date(value || Date.now()).toISOString();
-  return time.replace(/[-:.]/g, "").replace("T", "").replace("Z", "");
+  return String(9999999999999 - Date.parse(time)).padStart(13, "0");
 }
 
 function recordKey(chatId, signalId) {
