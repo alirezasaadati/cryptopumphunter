@@ -844,7 +844,7 @@ async function handleCallback(query, env) {
       return;
     }
     if (action === "open_trades") return showOpenFuturesTrades(env, chatId);
-    if (action === "trade_history") return showFuturesTradeHistory(env, chatId);
+    if (action === "trade_history") return showIssuedSignalSymbols(env, chatId, "history");
     if (action === "issued_signals") return showIssuedSignalSymbols(env, chatId, "archive");
     if (action === "ledger:archive") return showIssuedSignalSymbols(env, chatId, "archive");
     if (action === "ledger:history") return showIssuedSignalSymbols(env, chatId, "history");
