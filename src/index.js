@@ -1,6 +1,7 @@
 import { runSpotScan } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals, issuedSignalSymbols } from "./signal-ledger.js";
+import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 
 const CONFIG = {
   VERSION: "4.7.0",
@@ -1446,17 +1447,18 @@ async function registerTrackedSignal(env,chatId,signal){
 }
 async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMarkup=null){
   if(!env.APP_KV)throw new Error("APP_KV is required for durable signal delivery.");
-  const key=`futures:signal-outbox:v1:${String(chatId)}:${String(signal.id)}`;
+  const key=signalOutboxKey(chatId,signal.id);
   let record=await env.APP_KV.get(key,"json");
-  if(record?.status==="ARCHIVED")return{delivered:true,duplicate:true};
-  if(record?.status==="SENDING"||record?.status==="UNCERTAIN"){
+  const action=signalOutboxAction(record);
+  if(action==="done")return{delivered:true,duplicate:true};
+  if(action==="reconcile"){
     throw new Error(`Signal delivery requires reconciliation (${record.status}): ${signal.symbol} ${signal.id}`);
   }
   if(!record){
     record={version:1,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,status:"QUEUED",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     await env.APP_KV.put(key,JSON.stringify(record));
   }
-  if(record.status!=="SENT"){
+  if(signalOutboxAction(record)==="send"){
     record={...record,status:"SENDING",attemptedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     await env.APP_KV.put(key,JSON.stringify(record));
     try{
