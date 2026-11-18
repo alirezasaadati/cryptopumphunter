@@ -241,7 +241,7 @@ for(const symbol of SYMBOLS){
     console.log(`failed ${symbol}: ${String(error?.message??error)}`);
   }
 }
-for(const engine of ["A","A_BE","B","B_BTC_FILTER"]){
+for(const engine of ["A","A_BE","B","B_BTC_FILTER","B_SHORT_ONLY"]){
   const item=report.engines[engine];
   item.summary=summarize(item.trades,item.skipped.length);
   item.summary.periods={
@@ -254,6 +254,6 @@ await fs.mkdir("artifacts",{recursive:true});
 await fs.writeFile("artifacts/dual-engine-backtest.json",JSON.stringify(report,null,2));
 console.log(JSON.stringify({
   data:report.data.map(({symbol,candles,gapCount,missingIntervals,error})=>({symbol,candles,gapCount,missingIntervals,error})),
-  A:report.engines.A.summary,A_BE:report.engines.A_BE.summary,B:report.engines.B.summary,B_BTC_FILTER:report.engines.B_BTC_FILTER.summary,B_SHORT_ONLY:report.engines.B_SHORT_ONLY.summary
+  A:report.engines.A.summary,A_BE:report.engines.A_BE.summary,B:report.engines.B.summary,B_BTC_FILTER:report.engines.B_BTC_FILTER.summary,B_SHORT_ONLY:report.engines.B_SHORT_ONLY.summary,B_SHORT_ONLY:report.engines.B_SHORT_ONLY.summary
 },null,2));
 if(!report.data.some(d=>d.candles>=80)) process.exitCode=1;
