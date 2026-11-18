@@ -43,7 +43,7 @@ function setupFromLastThree(pivots,opts){
     if(wave1<=0||c.price>=a.price||wave1/a.price<opts.minWave1Pct||wave1/a.price>opts.maxWave1Pct||
       retrace<opts.minRetracement||retrace>opts.maxRetracement)return null;
     return {side:"SHORT",wave1Start:a.price,wave1End:b.price,wave2End:c.price,trigger:b.price,stop:c.price,
-      wave1Pct:wave1/a.price,retracement,setupPivotIndex:c.index,confirmedAt:c.confirmedAt};
+      wave1Pct:wave1/a.price,retracement:retrace,setupPivotIndex:c.index,confirmedAt:c.confirmedAt};
   }
   return null;
 }
