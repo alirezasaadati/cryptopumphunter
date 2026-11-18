@@ -1,0 +1,41 @@
+name: Deploy Crypto Pump Hunter Staging
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cryptopumphunter-staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  test-and-deploy-staging:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/permanent-signal-ledger
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Validate staging Worker configuration
+        run: npx wrangler deploy --config wrangler.staging.toml --dry-run --outdir /tmp/staging-worker
+
+      - name: Deploy staging Worker only
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.staging.toml
