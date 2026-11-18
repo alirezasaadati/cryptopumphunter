@@ -148,8 +148,7 @@ for(const symbol of SYMBOLS){
           status:result.status,netPnl:result.netPnl,fees:result.fees,funding:result.funding,
           returnPct:result.returnPct,barsObserved:result.barsObserved,entry2Filled:result.entry2Filled,
           ambiguousEvents:result.ambiguousEvents,exits:result.exits});
-        const lastObserved=valid.findIndex(c=>c.time===valid[Math.min(valid.length-1,i+1+result.barsObserved-1)]?.time);
-        i=Math.max(i+1,lastObserved+1);
+        i += result.barsObserved + 1;
       }
     }
     console.log(`completed ${symbol}: ${valid.length} candles`);
