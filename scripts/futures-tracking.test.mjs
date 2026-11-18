@@ -90,15 +90,15 @@ test("tracking does not fall back to an old candle when no new candle exists", (
 
 test("R accounting matches staged exits and stop remainder", () => {
   const base = { side: "LONG", actualEntry: 100, initialRisk: 5, currentStop: 95 };
-  assert.equal(tradeResultR({ ...base, tpHits: [] }, true), -1);
-  assert.equal(tradeResultR({ ...base, tpHits: ["TP1"] }, true), 0);
-  assert.equal(tradeResultR({ ...base, tpHits: ["TP1", "TP2"] }, true), 1.12);
-  assert.equal(tradeResultR({ ...base, tpHits: ["TP1", "TP2", "TP3"] }, false), 2.12);
+  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: [] }, true) - (-1)) < 1e-9);
+  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1"] }, true)) < 1e-9);
+  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1", "TP2"] }, true) - 1.12) < 1e-9);
+  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1", "TP2", "TP3"] }, false) - 2.12) < 1e-9);
 });
 
 test("R accounting is directionally correct for SHORT stop-outs", () => {
   const trade = { side: "SHORT", actualEntry: 100, initialRisk: 5, currentStop: 105, tpHits: ["TP1"] };
-  assert.equal(tradeResultR(trade, true), 0);
+  assert.ok(Math.abs(tradeResultR(trade, true)) < 1e-9);
 });
 
 test("a candle spanning both stop and target is identifiable as ambiguous", () => {
