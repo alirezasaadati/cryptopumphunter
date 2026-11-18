@@ -38,6 +38,7 @@ const report = {
     funding: "Kraken historical relativeFundingRate is applied at settlement boundaries to positions carried into that timestamp; settlement price uses the 15m candle open.",
     exits: {
       engineA: {weights:A_WEIGHTS, note:"Equal allocation across five targets is an explicit provisional research assumption."},
+      engineA_BE: {weights:A_WEIGHTS, stopPolicy:"Move stop to weighted average entry only after TP1; separate variant."},
       engineB: {weights:B_WEIGHTS, note:"40/35/25 provisional allocation."}
     },
     entryNotionalPerLegUsd: ENTRY_NOTIONAL,
@@ -48,7 +49,7 @@ const report = {
     intrabar: "Stop-first; ambiguous Entry 2 versus TP1 resolves TP1-first/cancel Entry 2 and is recorded."
   },
   data: [],
-  engines: {A:{trades:[],skipped:[],summary:null},B:{trades:[],skipped:[],summary:null}},
+  engines: {A:{trades:[],skipped:[],summary:null},A_BE:{trades:[],skipped:[],summary:null},B:{trades:[],skipped:[],summary:null}},
   warnings: [
     "This is an exploratory strategy backtest, not proof of future performance.",
     "Liquidity filter is disabled because historical quote turnover and contract multipliers are not yet validated.",
@@ -184,9 +185,9 @@ for(const symbol of SYMBOLS){
       gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0,
       fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError,
       tickSize,quantityPrecision,contractSize:instrument.contractSize,contractType:instrument.type});
-    for(const engine of ["A","B"]){
-      const analyze=engine==="A"?analyzeEngineA:analyzeEngineB;
-      const weights=engine==="A"?A_WEIGHTS:B_WEIGHTS;
+    for(const engine of ["A","A_BE","B"]){
+      const analyze=engine==="B"?analyzeEngineB:analyzeEngineA;
+      const weights=engine==="B"?B_WEIGHTS:A_WEIGHTS;
       const trades=report.engines[engine].trades;
       let i=79;
       while(i<valid.length-1){
@@ -197,7 +198,7 @@ for(const symbol of SYMBOLS){
         const result=simulatePaperTrade({
           signal:executableSignal,candles:valid.slice(i+1),entryNotional:ENTRY_NOTIONAL,
           targetWeights:weights,feeRate:FEE_RATE,slippageBps:SLIPPAGE_BPS,maxEntryDriftPct:0.35,
-          quantityPrecision,maxBars:MAX_HOLD_BARS
+          quantityPrecision,moveStopToBreakevenAfterTarget1:engine==="A_BE",maxBars:MAX_HOLD_BARS
         });
         if(["invalid_input","invalid_data","no_future_candles","not_filled"].includes(result.status)){
           report.engines[engine].skipped.push({symbol,side:signal.side,candleTime:signal.candleTime,
@@ -208,7 +209,7 @@ for(const symbol of SYMBOLS){
           entry:executableSignal.entry,entry2:executableSignal.entry2??null,stop:executableSignal.stop,targets:executableSignal.targets,
           status:result.status,netPnl:result.netPnl,fees:result.fees,funding:result.funding,closedAt:result.exits.at(-1)?.time??null,
           returnPct:result.returnPct,barsObserved:result.barsObserved,entry2Filled:result.entry2Filled,
-          ambiguousEvents:result.ambiguousEvents,exits:result.exits});
+          stopMovedToBreakeven:result.stopMovedToBreakeven,ambiguousEvents:result.ambiguousEvents,exits:result.exits});
         i += result.barsObserved + 1;
       }
     }
@@ -231,6 +232,6 @@ await fs.mkdir("artifacts",{recursive:true});
 await fs.writeFile("artifacts/dual-engine-backtest.json",JSON.stringify(report,null,2));
 console.log(JSON.stringify({
   data:report.data.map(({symbol,candles,gapCount,missingIntervals,error})=>({symbol,candles,gapCount,missingIntervals,error})),
-  A:report.engines.A.summary,B:report.engines.B.summary
+  A:report.engines.A.summary,A_BE:report.engines.A_BE.summary,B:report.engines.B.summary
 },null,2));
 if(!report.data.some(d=>d.candles>=80)) process.exitCode=1;
