@@ -1,4 +1,5 @@
 import { runSpotScan } from "./spot-engine.js";
+import { entryDriftPercent, passesEntryFreshness } from "./futures-entry-experiments.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals, issuedSignalSymbols } from "./signal-ledger.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
@@ -1219,6 +1220,21 @@ async function getKrakenFuturesUniverse() {
     }));
 }
 
+async function getFreshKrakenFuturesPrices(symbols) {
+  const wanted = new Set((Array.isArray(symbols) ? symbols : []).map(x => String(x).toUpperCase()));
+  const data = await krakenFuturesJson("/tickers", "Kraken Futures live entry validation");
+  if (!Array.isArray(data?.tickers)) throw new Error("فهرست قیمت لحظه‌ای Kraken معتبر نیست.");
+  const prices = new Map();
+  for (const ticker of data.tickers) {
+    const symbol = String(ticker?.symbol || "").toUpperCase();
+    const bid = Number(ticker?.bid);
+    const ask = Number(ticker?.ask);
+    if (wanted.has(symbol) && Number.isFinite(bid) && bid > 0 &&
+        Number.isFinite(ask) && ask >= bid) prices.set(symbol, { bid, ask });
+  }
+  return prices;
+}
+
 async function getKrakenFuturesCandles(symbol, interval) {
   const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}`;
   const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
@@ -1273,7 +1289,7 @@ function calculateAtr(candles, period = 14) {
   return recent.length === period ? average(recent) : null;
 }
 
-function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
+function analyzeFuturesSymbol(ticker, candles1h, candles4h, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   }
@@ -1303,8 +1319,9 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
 
   const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
   const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
-  const relaxedLong = up1h && !down4h && rsiValue >= 40 && rsiValue <= 75;
-  const relaxedShort = down1h && !up4h && rsiValue >= 25 && rsiValue <= 60;
+  const allowCounterTrend4h = options.allowCounterTrend4h === true;
+  const relaxedLong = up1h && (allowCounterTrend4h || !down4h) && rsiValue >= 40 && rsiValue <= 75;
+  const relaxedShort = down1h && (allowCounterTrend4h || !up4h) && rsiValue >= 25 && rsiValue <= 60;
   const strictSetup = strictLong || strictShort;
 
   if (strictLong || (!strictSetup && relaxedLong)) {
@@ -1325,6 +1342,11 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
     score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
   } else {
     return { symbol: ticker.symbol, rejected: "حتی شرایط منعطف آزمایشی روند و RSI نیز تأیید نشد" };
+  }
+
+  if (allowCounterTrend4h && ((side === "LONG" && down4h) || (side === "SHORT" && up4h))) {
+    score -= 8;
+    reasons.push("روند ۴ساعته مخالف است؛ جریمه امتیاز اعمال شد");
   }
 
   if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
@@ -1404,6 +1426,7 @@ function formatFuturesSignal(item, index = 1) {
     `🪙 نماد: ${formatFuturesSymbol(item.symbol)}\n` +
     `🧭 جهت معامله: ${sideLabel}\n` +
     `📍 ورود: ${formatPrice(item.entry)}\n` +
+    (Number.isFinite(Number(item.livePrice)) ? `📡 قیمت سمت اجرا (${item.livePriceType || "BID/ASK"}): ${formatPrice(item.livePrice)} | اختلاف: ${Number(item.entryDriftPct).toFixed(3)}%\n` : "") +
     `🛑 حد ضرر: ${formatPrice(item.stop)}\n` +
     `🎯 تارگت ۱: ${formatPrice(item.target1)}\n` +
     `🎯 تارگت ۲: ${formatPrice(item.target2)}\n` +
@@ -1717,7 +1740,33 @@ async function runFuturesSignalScan(env, options = {}) {
   const nonDuplicateCandidates = await filterActiveDuplicateFuturesSignals(env, eligibleCandidates);
   const generatedSignals = nonDuplicateCandidates.slice(0, 8)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
-  const signals = await savePendingFuturesSignals(env, generatedSignals);
+  let publishableSignals = generatedSignals;
+  if (generatedSignals.length) {
+    try {
+      const livePrices = await getFreshKrakenFuturesPrices(generatedSignals.map(x => x.symbol));
+      const checkedAt = Date.now();
+      const maxDriftPct = 0.20;
+      publishableSignals = generatedSignals.filter(signal => {
+        const quote = livePrices.get(String(signal.symbol).toUpperCase());
+        const livePrice = quote ? (signal.side === "LONG" ? quote.ask : quote.bid) : null;
+        const driftPct = entryDriftPercent(signal.entry, livePrice);
+        if (!passesEntryFreshness(signal.entry, livePrice, maxDriftPct)) {
+          console.warn("Futures signal rejected: stale entry price", signal.symbol,
+            "entry=", signal.entry, "live=", livePrice, "driftPct=", driftPct);
+          return false;
+        }
+        signal.livePrice = livePrice;
+        signal.livePriceType = signal.side === "LONG" ? "ASK" : "BID";
+        signal.entryDriftPct = driftPct;
+        signal.livePriceCheckedAt = new Date(checkedAt).toISOString();
+        return true;
+      });
+    } catch (error) {
+      console.error("Live entry-price validation failed; signals withheld:", String(error?.message || error));
+      publishableSignals = [];
+    }
+  }
+  const signals = await savePendingFuturesSignals(env, publishableSignals);
 
   // Experimental candidates are delivered only to the owner, clearly labelled,
   // and rate-limited per symbol/direction. They never enter the production signal queue.
