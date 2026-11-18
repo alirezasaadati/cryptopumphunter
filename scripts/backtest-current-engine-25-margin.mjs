@@ -158,9 +158,11 @@ async function main() {
   const timeline = [...times].sort((a, b) => a - b);
   const active = new Map();
   const experimentalActive = new Map();
+  const tier2Active = new Map();
   const closed = [];
   let issued = 0, skippedDuplicate = 0, skippedByEightLimit = 0, ambiguousBars = 0;
   let experimentalIssued = 0, experimentalSkippedDuplicate = 0, experimentalSkippedByEightLimit = 0;
+  let tier2Issued = 0, tier2SkippedDuplicate = 0, tier2SkippedByEightLimit = 0;
 
   for (const time of timeline) {
     // First settle positions using the just-closed hourly candle. Stop wins
@@ -199,9 +201,23 @@ async function main() {
       if (stopHit || targetHit) experimentalActive.delete(key);
     }
 
+    // Release tier-2 positions using the same stop and target assumptions.
+    for (const [key, trade] of [...tier2Active.entries()]) {
+      const data = series.get(trade.symbol);
+      const bar = data.h1.find(c => c.time + H1 === time);
+      if (!bar) continue;
+      const d = trade.side === "LONG" ? 1 : -1;
+      const stopGap = d === 1 ? bar.open <= trade.signal.stop : bar.open >= trade.signal.stop;
+      const targetGap = d === 1 ? bar.open >= trade.targetTrigger : bar.open <= trade.targetTrigger;
+      const stopHit = stopGap || (d === 1 ? bar.low <= trade.signal.stop : bar.high >= trade.signal.stop);
+      const targetHit = targetGap || (d === 1 ? bar.high >= trade.targetTrigger : bar.low <= trade.targetTrigger);
+      if (stopHit || targetHit) tier2Active.delete(key);
+    }
+
     // Run the same analyzer once, then independently count standard and relaxed eligibility.
     const candidates = [];
     const experimentalCandidates = [];
+    const tier2Candidates = [];
     for (const [symbol, data] of series.entries()) {
       const n1 = closedCount(data.h1, time, H1);
       const n4 = closedCount(data.h4, time, H4);
@@ -222,9 +238,13 @@ async function main() {
       const relaxedEligible = signal?.eligible ||
         (signal?.experimentalEligible && signal.score >= 60 && signal.volumeRatio >= 0.5);
       if (relaxedEligible) experimentalCandidates.push(signal);
+      const tier2Eligible = signal?.eligible ||
+        (signal?.experimentalEligible && signal.score >= 55 && signal.volumeRatio >= 0.35);
+      if (tier2Eligible) tier2Candidates.push(signal);
     }
     candidates.sort((a, b) => b.score - a.score);
     experimentalCandidates.sort((a, b) => b.score - a.score);
+    tier2Candidates.sort((a, b) => b.score - a.score);
 
     let selected = 0;
     for (const signal of candidates) {
@@ -259,6 +279,23 @@ async function main() {
       });
       experimentalIssued++;
       experimentalSelected++;
+    }
+
+    let tier2Selected = 0;
+    for (const signal of tier2Candidates) {
+      const key = `${signal.symbol}|${signal.side}`;
+      if (tier2Active.has(key)) { tier2SkippedDuplicate++; continue; }
+      if (tier2Selected >= 8) { tier2SkippedByEightLimit++; continue; }
+      const entry = signal.entry;
+      const d = signal.side === "LONG" ? 1 : -1;
+      const entryFill = entry * (1 + d * SLIPPAGE);
+      tier2Active.set(key, {
+        symbol: signal.symbol, side: signal.side, score: signal.score,
+        signalTime: time, signal, entryFill,
+        targetTrigger: targetTrigger(entryFill, signal.side)
+      });
+      tier2Issued++;
+      tier2Selected++;
     }
   }
 
@@ -298,7 +335,7 @@ async function main() {
     },
     signalCount: issued,
     averageSignalsPerDay: issued / DAYS,
-    experimental: {
+    tier1Experimental: {
       rules: "standard signals plus relaxed signals where the 1H trend is valid, 4H is not opposing, RSI is within the relaxed band, score >= 60, and volumeRatio >= 0.50",
       signalCount: experimentalIssued,
       averageSignalsPerDay: experimentalIssued / DAYS,
@@ -307,6 +344,16 @@ async function main() {
       openAtEndCount: experimentalActive.size,
       skippedDuplicate: experimentalSkippedDuplicate,
       skippedByEightLimit: experimentalSkippedByEightLimit
+    },
+    tier2Experimental: {
+      rules: "standard signals plus experimentalEligible signals with score >= 55 and volumeRatio >= 0.35; 1H trend valid and 4H not opposing",
+      signalCount: tier2Issued,
+      averageSignalsPerDay: tier2Issued / DAYS,
+      additionalSignals: tier2Issued - issued,
+      increasePct: issued ? (tier2Issued / issued - 1) * 100 : null,
+      openAtEndCount: tier2Active.size,
+      skippedDuplicate: tier2SkippedDuplicate,
+      skippedByEightLimit: tier2SkippedByEightLimit
     },
     skippedDuplicate,
     skippedByEightLimit,
