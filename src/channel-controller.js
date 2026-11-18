@@ -36,7 +36,7 @@ export function createChannelPosition(signal, allocation = "front_loaded", optio
     targets: targetPcts.map(p => entry * (1 + dir * p)),
     weights: [...weights], remaining: 1, realizedPnl: 0, realizedQty: 0,
     targetHits: [], entry2Cancelled: false, status: "OPEN",
-    entryTime: signal.entryTime ?? null, exitReason: null, exitTime: null,
+    entryTime: signal.entryTime ?? null, exitReason: null, exitTime: null,\n    fills: [{ kind: "ENTRY", price: entry, qty: 1 }],
     moveStopToBreakeven: options.moveStopToBreakeven === true,
   };
 }
@@ -49,7 +49,7 @@ export function processChannelCandle(position, candle) {
   const entry2Hit = p.entry2 === null && !p.entry2Cancelled &&
     (dir === 1 ? low <= p.entry2Trigger : high >= p.entry2Trigger);
   if (stopHit) {
-    p.realizedPnl += p.remaining * dir * (p.stop - p.averageEntry);
+    p.realizedPnl += p.remaining * dir * (p.stop - p.averageEntry);\n    p.fills.push({ kind: "EXIT", price: p.stop, qty: p.remaining, reason: "STOP" });
     p.realizedQty += p.remaining;
     p.remaining = 0; p.status = "CLOSED"; p.exitReason = "STOP"; p.exitTime = candle.time;
     return p;
@@ -66,7 +66,7 @@ export function processChannelCandle(position, candle) {
     const hit = dir === 1 ? high >= p.targets[i] : low <= p.targets[i];
     if (!hit) break;
     const qty = Math.min(p.remaining, (p.entry2 === null ? 1 : 2) * p.weights[i]);
-    p.realizedPnl += qty * dir * (p.targets[i] - p.averageEntry);
+    p.realizedPnl += qty * dir * (p.targets[i] - p.averageEntry);\n    p.fills.push({ kind: "EXIT", price: p.targets[i], qty, reason: "TP" + (i + 1) });
     p.realizedQty += qty; p.remaining -= qty; p.targetHits.push(i + 1);
     if (i === 0 && p.entry2 === null) p.entry2Cancelled = true;
     if (i === 0 && p.moveStopToBreakeven) p.stop = p.averageEntry;
@@ -80,7 +80,7 @@ export function processChannelCandle(position, candle) {
 export function closeChannelPosition(position, price, time, reason = "TIME_EXIT") {
   if (position.status !== "OPEN") return position;
   const px = Number(price);
-  position.realizedPnl += position.remaining * position.dir * (px - position.averageEntry);
+  position.realizedPnl += position.remaining * position.dir * (px - position.averageEntry);\n  position.fills.push({ kind: "EXIT", price: px, qty: position.remaining, reason });
   position.realizedQty += position.remaining; position.remaining = 0;
   position.status = "CLOSED"; position.exitReason = reason; position.exitTime = time;
   return position;
