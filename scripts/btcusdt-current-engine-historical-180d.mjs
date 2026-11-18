@@ -68,8 +68,9 @@ function startTrade(side,signal,nextBar){
  if(!nextBar||!(nextBar.open>0))return null;
  const dir=side==="LONG"?1:-1;
  if(!passesEntryFreshness(signal.entry,nextBar.open,.35))return null;
- const entry=nextBar.open*(1+dir*SLIPPAGE),shift=entry-signal.entry;
- const stop=signal.stop+shift,targets=[signal.target1+shift,signal.target2+shift,signal.target3+shift];
+ // The production signal's stop is an absolute price level; execution slippage must not move it.
+ const entry=nextBar.open*(1+dir*SLIPPAGE),stop=Number(signal.stop);
+ const targets=[signal.target1,signal.target2,signal.target3];
  const risk=dir===1?entry-stop:stop-entry;
  if(!(risk>0)||!finite(entry,stop,...targets))return null;
  return{side,entry,stop,targets,risk,openedAt:new Date(nextBar.time).toISOString(),entryTime:nextBar.time,remaining:1,netR:0,targetHits:[],barsHeld:0,signalTime:signal.candleTime??signal.bosTime??nextBar.time};
@@ -143,6 +144,11 @@ async function main(){
       const tradeSignal={...sig,candleTime:bar.time};
       s.open=startTrade(tradeSignal.side,tradeSignal,next);
       s.pending=null;
+      // The entry is at nextBar.open, so its full 15m high/low range must be tested.
+      if(s.open){
+       updateTrade(s.open,next);
+       if(s.open.remaining<=1e-8){s.open.exitTime=next.time;s.trades.push(s.open);s.open=null;}
+      }
      }
     }
    }
