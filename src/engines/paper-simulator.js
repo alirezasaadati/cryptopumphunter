@@ -30,7 +30,8 @@ const isEntry2Touched = (bar, side, entry2) =>
  */
 export function simulatePaperTrade({
   signal, candles, entryNotional, targetWeights,
-  feeRate = 0.0005, slippageBps = 2, maxEntryDriftPct = 0.35, quantityPrecision = 8, maxBars = 500
+  feeRate = 0.0005, slippageBps = 2, maxEntryDriftPct = 0.35, quantityPrecision = 8,
+  moveStopToBreakevenAfterTarget1 = false, maxBars = 500
 }) {
   if (!signal || !["LONG","SHORT"].includes(signal.side) ||
     !finite(signal.entry) || signal.entry <= 0 ||
@@ -47,6 +48,7 @@ export function simulatePaperTrade({
     !finite(slippageBps) || slippageBps < 0 ||
     !finite(maxEntryDriftPct) || maxEntryDriftPct < 0 ||
     !Number.isInteger(quantityPrecision) || quantityPrecision < 0 || quantityPrecision > 12 ||
+    typeof moveStopToBreakevenAfterTarget1 !== "boolean" ||
     !Number.isInteger(maxBars) || maxBars < 1 ||
     !Array.isArray(candles)) return {status:"invalid_input"};
 
@@ -71,6 +73,7 @@ export function simulatePaperTrade({
   let qty = 0, initialQty = 0, deployed = 0, fees = 0;
   let funding = 0, realized = 0, entry1Filled = false;
   let entry2Filled = false, entry2Cancelled = false, nextTarget = 0;
+  let activeStop = signal.stop, stopMovedToBreakeven = false;
   const fills = [], exits = [], events = [], ambiguousEvents = [];
   let barsProcessed = 0;
 
@@ -119,14 +122,14 @@ export function simulatePaperTrade({
     if (qty <= 1e-12) break;
 
     // Stop has priority over every other event in an OHLC bar.
-    if (isStopTouched(bar,side,signal.stop)) {
+    if (isStopTouched(bar,side,activeStop)) {
       if (entry2 !== null && !entry2Filled && !entry2Cancelled &&
           isEntry2Touched(bar,side,entry2)) {
         ambiguousEvents.push({time:bar.time,events:["entry2","stop"],resolution:"stop_first"});
       }
-      const rawStop = side === "LONG" && bar.open < signal.stop ? bar.open :
-        side === "SHORT" && bar.open > signal.stop ? bar.open : signal.stop;
-      closeQty(qty,rawStop,"stop",bar.time);
+      const rawStop = side === "LONG" && bar.open < activeStop ? bar.open :
+        side === "SHORT" && bar.open > activeStop ? bar.open : activeStop;
+      closeQty(qty,rawStop,stopMovedToBreakeven?"breakeven_stop":"stop",bar.time);
       break;
     }
 
@@ -162,6 +165,11 @@ export function simulatePaperTrade({
       const rawPrice = side === "LONG" && bar.open > target ? bar.open :
         side === "SHORT" && bar.open < target ? bar.open : target;
       closeQty(amount,rawPrice,`target_${nextTarget+1}`,bar.time);
+      if (nextTarget === 0 && moveStopToBreakevenAfterTarget1 && qty > 1e-12) {
+        activeStop = averageEntry();
+        stopMovedToBreakeven = true;
+        events.push({type:"stop_update",time:bar.time,reason:"target_1",stop:activeStop});
+      }
       nextTarget++;
     }
 
@@ -177,7 +185,7 @@ export function simulatePaperTrade({
   const grossPnl = realized+unrealized;
   const netPnl = grossPnl-fees-funding;
   return {
-    status,side,entry1Filled,entry2Filled,entry2Cancelled,fills,exits,events,ambiguousEvents,
+    status,side,entry1Filled,entry2Filled,entry2Cancelled,stopMovedToBreakeven,activeStop,fills,exits,events,ambiguousEvents,
     averageEntry:averageEntry(),remainingQuantity:qty,deployedNotional:deployed,
     grossPnl,fees,funding,unrealized,netPnl,
     returnPct:deployed ? netPnl/deployed*100 : 0,
