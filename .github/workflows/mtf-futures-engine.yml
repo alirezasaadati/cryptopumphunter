@@ -1,0 +1,20 @@
+name: MTF Futures Engine Tests
+on:
+  push:
+    branches: [experiment/mtf-futures-engine]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/mtf-futures-engine.js'
+      - 'scripts/mtf-futures-engine.test.mjs'
+      - '.github/workflows/mtf-futures-engine.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check src/mtf-futures-engine.js
+      - run: node --test scripts/mtf-futures-engine.test.mjs
