@@ -11,9 +11,9 @@ export function aggregateCandles(bars, minutes) {
   }
   return [...groups.values()].sort((a,b)=>a.time-b.time).filter(g=>g.count===minutes/15);
 }
-function alignedHigherTrend(htf, time, side) {
+function alignedHigherTrend(htf, time, side, minutes) {
   let lo=0,hi=htf.length-1,idx=-1;
-  while(lo<=hi){const m=(lo+hi)>>1;if(htf[m].time+60*60_000<=time){idx=m;lo=m+1;}else hi=m-1;}
+  while(lo<=hi){const m=(lo+hi)>>1;if(htf[m].time+minutes*60_000<=time){idx=m;lo=m+1;}else hi=m-1;}
   if(idx<80)return false;
   const v=ichimokuAt(htf,idx),b=htf[idx];
   if(!v)return false;
@@ -48,7 +48,7 @@ export function detectFibIchimokuStrategySignals(bars, mode="A", options={}) {
   if(mode==="B")return base.filter(s=>priorCloudBreakout(bars,s,s.side));
   if(mode==="C"){
     const h1=aggregateCandles(bars,60),h4=aggregateCandles(bars,240);
-    return base.filter(s=>alignedHigherTrend(h1,s.signalTime,s.side)&&alignedHigherTrend(h4,s.signalTime,s.side));
+    return base.filter(s=>alignedHigherTrend(h1,s.signalTime,s.side,60)&&alignedHigherTrend(h4,s.signalTime,s.side,240));
   }
   throw new Error("Unknown strategy mode: "+mode);
 }
