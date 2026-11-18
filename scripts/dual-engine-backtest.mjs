@@ -153,6 +153,7 @@ function summarize(trades,skipped){
 }
 
 const instruments=await fetchInstruments();
+let btcCandles=[];
 
 for(const symbol of SYMBOLS){
   let candles;
