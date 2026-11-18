@@ -244,7 +244,9 @@ export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, liveP
   }
   const oneHourStructure=describeStructure(oneHour).direction;
   const fourHourStructure=describeStructure(fourHour).direction;
-  const activeStrategies=Array.isArray(strategyIds) && strategyIds.length\n    ? STRATEGIES.filter(strategy=>strategyIds.includes(strategy.id)) : STRATEGIES;\n  const evaluated=activeStrategies.map(strategy=>{
+  const activeStrategies=Array.isArray(strategyIds) && strategyIds.length
+    ? STRATEGIES.filter(strategy=>strategyIds.includes(strategy.id)) : STRATEGIES;
+  const evaluated=activeStrategies.map(strategy=>{
     try {
       const candidate=strategy.fn({symbol,oneHour,fourHour,fifteenMin});
       if(candidate) candidate.context={
