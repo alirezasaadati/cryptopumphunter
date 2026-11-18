@@ -29,7 +29,12 @@ export function classifySymbol1h(candles,marketRegime){
   const d=trend(candles);if(marketRegime==="BULL"&&d==="BULL")return "LONG";if(marketRegime==="BEAR"&&d==="BEAR")return "SHORT";return null;
 }
 export function findEntry15m(candles,side,options={}){
-  const minVolumeRatio=options.minVolumeRatio??1.15;  const minBodyRatio=options.minBodyRatio??0.45;\n  const breakoutLookback=options.breakoutLookback??8;\n  const breakoutCloseLocation=options.breakoutCloseLocation??0.72;\n  const reclaimCloseLocation=options.reclaimCloseLocation??0.65;\n  const entryMode=options.entryMode??"BOTH";
+  const minVolumeRatio=options.minVolumeRatio??1.15;
+  const minBodyRatio=options.minBodyRatio??0.45;
+  const breakoutLookback=options.breakoutLookback??8;
+  const breakoutCloseLocation=options.breakoutCloseLocation??0.72;
+  const reclaimCloseLocation=options.reclaimCloseLocation??0.65;
+  const entryMode=options.entryMode??"BOTH";
   if(!Array.isArray(candles)||candles.length<60||!["LONG","SHORT"].includes(side))return null;
   const c=candles.at(-1),prev=candles.at(-2),closes=candles.map(x=>x.close),e20=ema(closes,20),volatility=atr(candles,14);
   if(!(e20>0)||!(volatility>0))return null;
@@ -39,7 +44,9 @@ export function findEntry15m(candles,side,options={}){
   const recent=candles.slice(-(breakoutLookback+1),-1),swingHigh=Math.max(...recent.map(x=>x.high)),swingLow=Math.min(...recent.map(x=>x.low));
   const breakout=side==="LONG"?c.close>swingHigh&&c.close>c.open&&closeLocation>=breakoutCloseLocation:c.close<swingLow&&c.close<c.open&&closeLocation>=breakoutCloseLocation;
   const reclaim=side==="LONG"?prev.close<=e20&&c.close>e20&&c.close>c.open&&closeLocation>=reclaimCloseLocation:prev.close>=e20&&c.close<e20&&c.close<c.open&&closeLocation>=reclaimCloseLocation;
-  if(bodyRatio<minBodyRatio)return null;  if(entryMode==="BREAKOUT"&&!breakout)return null;  if(entryMode==="RECLAIM"&&!reclaim)return null;  if(!["BOTH","BREAKOUT","RECLAIM"].includes(entryMode)||(!breakout&&!reclaim))return null;
+  if(bodyRatio<minBodyRatio)return null;
+  if(entryMode==="BREAKOUT"&&!breakout)return null;  if(entryMode==="RECLAIM"&&!reclaim)return null;
+  if(!["BOTH","BREAKOUT","RECLAIM"].includes(entryMode)||(!breakout&&!reclaim))return null;
   const entry=c.close,structural=side==="LONG"?Math.min(...candles.slice(-8).map(x=>x.low)):Math.max(...candles.slice(-8).map(x=>x.high));
   const atrStop=side==="LONG"?entry-1.4*volatility:entry+1.4*volatility,stop=side==="LONG"?Math.min(structural,atrStop):Math.max(structural,atrStop);
   const risk=side==="LONG"?entry-stop:stop-entry,riskPct=risk/entry;if(!(risk>0)||riskPct<.0015||riskPct>.04)return null;
