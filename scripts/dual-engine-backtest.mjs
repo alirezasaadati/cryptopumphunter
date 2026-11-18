@@ -125,7 +125,15 @@ function summarize(trades,skipped){
     equity+=trade.netPnl; peak=Math.max(peak,equity);
     maxDrawdown=Math.max(maxDrawdown,peak-equity);
   }
-  const sideStats=side=>{\n    const subset=closed.filter(t=>t.side===side), sideWins=subset.filter(t=>t.netPnl>0), sideLosses=subset.filter(t=>t.netPnl<0);\n    const profit=sideWins.reduce((s,t)=>s+t.netPnl,0), loss=Math.abs(sideLosses.reduce((s,t)=>s+t.netPnl,0));\n    return {closed:subset.length,netPnlUsd:Number(subset.reduce((s,t)=>s+t.netPnl,0).toFixed(6)),\n      winRatePct:subset.length?Number((sideWins.length/subset.length*100).toFixed(2)):null,\n      profitFactor:loss?Number((profit/loss).toFixed(4)):profit?null:0};\n  };\n  return {\n    signals:trades.length+skipped,executed:trades.length,skipped,closed:closed.length,open:trades.filter(t=>t.status==="open").length,
+  const sideStats=side=>{
+    const subset=closed.filter(t=>t.side===side), sideWins=subset.filter(t=>t.netPnl>0), sideLosses=subset.filter(t=>t.netPnl<0);
+    const profit=sideWins.reduce((s,t)=>s+t.netPnl,0), loss=Math.abs(sideLosses.reduce((s,t)=>s+t.netPnl,0));
+    return {closed:subset.length,netPnlUsd:Number(subset.reduce((s,t)=>s+t.netPnl,0).toFixed(6)),
+      winRatePct:subset.length?Number((sideWins.length/subset.length*100).toFixed(2)):null,
+      profitFactor:loss?Number((profit/loss).toFixed(4)):profit?null:0};
+  };
+  return {
+    signals:trades.length+skipped,executed:trades.length,skipped,closed:closed.length,open:trades.filter(t=>t.status==="open").length,
     wins:wins.length,losses:losses.length,
     winRatePct:closed.length?Number((wins.length/closed.length*100).toFixed(2)):null,
     netPnlUsd:Number(trades.reduce((s,t)=>s+t.netPnl,0).toFixed(6)),
@@ -210,7 +218,14 @@ for(const symbol of SYMBOLS){
     console.log(`failed ${symbol}: ${String(error?.message??error)}`);
   }
 }
-for(const engine of ["A","B"]){\n  const item=report.engines[engine];\n  item.summary=summarize(item.trades,item.skipped.length);\n  item.summary.periods={\n    development:summarize(item.trades.filter(t=>t.candleTime<splitAt),item.skipped.filter(t=>t.candleTime<splitAt).length),\n    holdout:summarize(item.trades.filter(t=>t.candleTime>=splitAt),item.skipped.filter(t=>t.candleTime>=splitAt).length)\n  };\n}
+for(const engine of ["A","B"]){
+  const item=report.engines[engine];
+  item.summary=summarize(item.trades,item.skipped.length);
+  item.summary.periods={
+    development:summarize(item.trades.filter(t=>t.candleTime<splitAt),item.skipped.filter(t=>t.candleTime<splitAt).length),
+    holdout:summarize(item.trades.filter(t=>t.candleTime>=splitAt),item.skipped.filter(t=>t.candleTime>=splitAt).length)
+  };
+}
 await fs.mkdir("artifacts",{recursive:true});
 await fs.writeFile("artifacts/dual-engine-backtest.json",JSON.stringify(report,null,2));
 console.log(JSON.stringify({
