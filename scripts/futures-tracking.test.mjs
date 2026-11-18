@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   priceChangePercent,
+  tradeResultR,
   tradeOutcomePercent,
   targetReached,
   stopReached,
@@ -84,4 +85,27 @@ test("tracking does not fall back to an old candle when no new candle exists", (
   ];
   assert.deepEqual(getNewClosedFuturesCandles(candles, 120000), []);
   assert.deepEqual(getNewClosedFuturesCandles([], 120000), []);
+});
+
+
+test("R accounting matches staged exits and stop remainder", () => {
+  const base = { side: "LONG", actualEntry: 100, initialRisk: 5, currentStop: 95 };
+  assert.equal(tradeResultR({ ...base, tpHits: [] }, true), -1);
+  assert.equal(tradeResultR({ ...base, tpHits: ["TP1"] }, true), 0);
+  assert.equal(tradeResultR({ ...base, tpHits: ["TP1", "TP2"] }, true), 1.12);
+  assert.equal(tradeResultR({ ...base, tpHits: ["TP1", "TP2", "TP3"] }, false), 2.12);
+});
+
+test("R accounting is directionally correct for SHORT stop-outs", () => {
+  const trade = { side: "SHORT", actualEntry: 100, initialRisk: 5, currentStop: 105, tpHits: ["TP1"] };
+  assert.equal(tradeResultR(trade, true), 0);
+});
+
+test("a candle spanning both stop and target is identifiable as ambiguous", () => {
+  // The tracker resolves this ambiguity conservatively by checking stop first.
+  const high = 106, low = 94;
+  assert.equal(stopReached("LONG", low, 95), true);
+  assert.equal(targetReached("LONG", high, 105), true);
+  assert.equal(stopReached("SHORT", high, 105), true);
+  assert.equal(targetReached("SHORT", low, 95), true);
 });
