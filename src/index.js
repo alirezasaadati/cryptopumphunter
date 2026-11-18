@@ -45,7 +45,7 @@ function withQuotaAwareKV(env) {
         const gate = await kvWriteGate(env, "allow");
         if (gate?.allowed === false) {
           console.warn("KV write suppressed by daily quota circuit breaker.");
-          return;
+          throw new Error("KV daily write quota is paused until the next UTC day; this change was not saved.");
         }
         try { return await target[property](...args); }
         catch (error) {
@@ -1598,6 +1598,9 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
           return Response.json({ok:true,allowed:false,day:today});
         }
+        if((url.pathname==="/deliver"||url.pathname==="/reconcile") && (await this.ctx.storage.get("kv-daily-write-pause"))?.day===quotaDayKey()){
+          throw new Error("KV daily write quota is paused until the next UTC day.");
+        }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
           const now=Date.now();
@@ -1636,6 +1639,9 @@ export class SignalDeliveryCoordinator {
         }
         throw new Error("Unknown reconciliation action.");
       }catch(error){
+        if(isKvDailyWriteQuotaError(error)){
+          await this.ctx.storage.put("kv-daily-write-pause",{day:quotaDayKey(),pausedAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,300)});
+        }
         return Response.json({ok:false,error:String(error?.message||error).slice(0,500)},{status:409});
       }
     });
