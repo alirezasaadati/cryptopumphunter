@@ -78,6 +78,118 @@ function ema(values, period) {
   return value;
 }
 
+
+function adx14(candles, period = 14) {
+  if (candles.length < period * 2 + 2) return null;
+  const dx = [];
+  for (let end = period + 1; end < candles.length; end++) {
+    let tr = 0, plus = 0, minus = 0;
+    for (let i = end - period + 1; i <= end; i++) {
+      const cur = candles[i], prev = candles[i - 1];
+      tr += Math.max(cur.high - cur.low, Math.abs(cur.high - prev.close), Math.abs(cur.low - prev.close));
+      const up = cur.high - prev.high, down = prev.low - cur.low;
+      if (up > down && up > 0) plus += up;
+      if (down > up && down > 0) minus += down;
+    }
+    if (tr > 0 && plus + minus > 0) dx.push(100 * Math.abs(plus - minus) / (plus + minus));
+    else dx.push(0);
+  }
+  return dx.length ? dx.slice(-period).reduce((a, b) => a + b, 0) / Math.min(period, dx.length) : null;
+}
+
+function marketContextAt(series, time) {
+  let bullish = 0, bearish = 0, total = 0, btcTrend = "UNKNOWN";
+  for (const [symbol, data] of series.entries()) {
+    if (symbol.includes("NVDA")) continue;
+    const n = closedCount(data.h4, time, H4);
+    if (n < 55) continue;
+    const h4 = data.h4.slice(0, n);
+    const closes = h4.map(c => c.close);
+    const fast = ema(closes, 20), slow = ema(closes, 50);
+    if (!Number.isFinite(fast) || !Number.isFinite(slow)) continue;
+    const trend = fast > slow ? "BULL" : fast < slow ? "BEAR" : "FLAT";
+    if (trend === "BULL") bullish++;
+    if (trend === "BEAR") bearish++;
+    total++;
+    if (symbol.includes("XBT")) btcTrend = trend;
+  }
+  return {
+    btc4hTrend: btcTrend,
+    marketBullishBreadthPct: total ? bullish / total * 100 : null,
+    marketBearishBreadthPct: total ? bearish / total * 100 : null,
+    marketTrendCoverage: total
+  };
+}
+
+function signalFeatures(signal, h1, h4, marketContext) {
+  const last = h1.at(-1);
+  const previous20 = h1.slice(-21, -1);
+  const recent5 = h1.slice(-5), prior5 = h1.slice(-10, -5);
+  const rangeHigh20 = previous20.length ? Math.max(...previous20.map(c => c.high)) : last.high;
+  const rangeLow20 = previous20.length ? Math.min(...previous20.map(c => c.low)) : last.low;
+  const recentHigh = recent5.length ? Math.max(...recent5.map(c => c.high)) : last.high;
+  const priorHigh = prior5.length ? Math.max(...prior5.map(c => c.high)) : last.high;
+  const recentLow = recent5.length ? Math.min(...recent5.map(c => c.low)) : last.low;
+  const priorLow = prior5.length ? Math.min(...prior5.map(c => c.low)) : last.low;
+  const ema20_4h = ema(h4.map(c => c.close), 20);
+  const ema50_4h = ema(h4.map(c => c.close), 50);
+  const atr4h = h4.length > 15 ? (() => {
+    const recent = h4.slice(-14);
+    const ranges = recent.map((c, i) => {
+      const prev = h4[h4.length - recent.length + i - 1];
+      return Math.max(c.high - c.low, prev ? Math.abs(c.high - prev.close) : 0, prev ? Math.abs(c.low - prev.close) : 0);
+    });
+    return ranges.reduce((a, b) => a + b, 0) / ranges.length;
+  })() : null;
+  const candleRange = Math.max(0, last.high - last.low);
+  const directionalExtensionAtr = signal.side === "LONG"
+    ? (last.close - signal.ema20) / signal.atr
+    : (signal.ema20 - last.close) / signal.atr;
+  const closeLocation = candleRange > 0 ? (last.close - last.low) / candleRange : 0.5;
+  const rangePosition20 = rangeHigh20 > rangeLow20
+    ? (last.close - rangeLow20) / (rangeHigh20 - rangeLow20) : 0.5;
+  const directionStructure = signal.side === "LONG"
+    ? recentHigh > priorHigh && recentLow > priorLow
+    : recentHigh < priorHigh && recentLow < priorLow;
+  const closes = h1.map(c => c.close);
+  const return6hPct = closes.length > 6 ? (last.close / closes.at(-7) - 1) * 100 : null;
+  const return24hPct = closes.length > 24 ? (last.close / closes.at(-25) - 1) * 100 : null;
+  return {
+    rsi: signal.rsi,
+    score: signal.score,
+    volumeRatio: signal.volumeRatio,
+    atrPct: signal.atr / signal.entry * 100,
+    adx14: adx14(h1),
+    emaGapAtr: (signal.ema20 - signal.ema50) / signal.atr,
+    directionalExtensionAtr,
+    h4EmaGapPct: Number.isFinite(ema20_4h) && Number.isFinite(ema50_4h) ? (ema20_4h - ema50_4h) / last.close * 100 : null,
+    h4PriceVsEma20Atr: Number.isFinite(ema20_4h) && atr4h > 0 ? (last.close - ema20_4h) / atr4h : null,
+    rangePosition20,
+    breakout20: signal.side === "LONG" ? last.close > rangeHigh20 : last.close < rangeLow20,
+    directionStructure,
+    closeLocation,
+    return6hPct,
+    return24hPct,
+    ...marketContext
+  };
+}
+
+function bucketBreakdown(trades, field, cuts) {
+  const rows = [];
+  const bounds = [-Infinity, ...cuts, Infinity];
+  for (let i = 0; i < bounds.length - 1; i++) {
+    const group = trades.filter(t => {
+      const value = Number(t.features?.[field]);
+      return Number.isFinite(value) && value >= bounds[i] && value < bounds[i + 1];
+    });
+    rows.push({
+      range: `${bounds[i] === -Infinity ? "-inf" : bounds[i]} to ${bounds[i + 1] === Infinity ? "+inf" : bounds[i + 1]}`,
+      ...summarize(group)
+    });
+  }
+  return rows;
+}
+
 function targetTrigger(entryFill, side) {
   const q = TARGET_MARGIN_ROI / LEVERAGE;
   if (side === "LONG") {
@@ -269,6 +381,7 @@ async function main() {
         premium: undefined
       };
       const signal = analyzeFuturesSymbol(ticker, h1, h4);
+      if (signal?.side) signal.features = signalFeatures(signal, h1, h4, marketContextAt(series, time));
       if (signal?.eligible) candidates.push(signal);
       const closes1h = h1.map(c => c.close);
       const closes4h = h4.map(c => c.close);
@@ -299,7 +412,7 @@ async function main() {
       const entryFill = entry * (1 + d * SLIPPAGE);
       const trade = {
         symbol: signal.symbol, side: signal.side, score: signal.score,
-        signalTime: time, signal, entryFill,
+        signalTime: time, signal, features: signal.features || {}, entryFill,
         targetTrigger: targetTrigger(entryFill, signal.side)
       };
       active.set(key, trade);
@@ -439,14 +552,37 @@ async function main() {
     perSymbol: [...new Set(closed.map(t => t.symbol))].map(symbol => ({
       symbol, ...summarize(closed.filter(t => t.symbol === symbol))
     })),
-    trades: closed.map(t => ({
-      symbol: t.symbol, side: t.side, score: t.score,
-      signalTime: new Date(t.signalTime).toISOString(),
-      exitTime: new Date(t.exitTime).toISOString(),
-      entry: t.signal.entry, stop: t.signal.stop, targetTrigger: t.targetTrigger,
-      exitPrice: t.exitPrice, exitReason: t.exitReason, marginRoiPct: t.marginRoiPct,
-      netR: t.netR, gapExit: t.gapExit
-    }))
+    directionBreakdown: ["LONG", "SHORT"].map(side => ({
+      side, ...summarize(closed.filter(t => t.side === side))
+    })),
+    diagnosticBreakdowns: {
+      adx14: bucketBreakdown(closed, "adx14", [15, 20, 25]),
+      directionalExtensionAtr: bucketBreakdown(closed, "directionalExtensionAtr", [0.25, 0.75, 1.25]),
+      volumeRatio: bucketBreakdown(closed, "volumeRatio", [0.75, 1, 1.5]),
+      rsi: bucketBreakdown(closed, "rsi", [35, 45, 55, 65]),
+      score: bucketBreakdown(closed, "score", [80, 90]),
+      rangePosition20: bucketBreakdown(closed, "rangePosition20", [0.25, 0.5, 0.75])
+    },
+    trades: closed.map(t => {
+      const bars = series.get(t.symbol).h1.filter(c => c.time >= t.signalTime && c.time + H1 <= t.exitTime);
+      const entry = t.signal.entry;
+      const favorable = t.side === "LONG"
+        ? (bars.length ? (Math.max(...bars.map(c => c.high)) / entry - 1) * 100 : 0)
+        : (bars.length ? (1 - Math.min(...bars.map(c => c.low)) / entry) * 100 : 0);
+      const adverse = t.side === "LONG"
+        ? (bars.length ? (1 - Math.min(...bars.map(c => c.low)) / entry) * 100 : 0)
+        : (bars.length ? (Math.max(...bars.map(c => c.high)) / entry - 1) * 100 : 0);
+      return {
+        symbol: t.symbol, side: t.side, score: t.score,
+        signalTime: new Date(t.signalTime).toISOString(),
+        exitTime: new Date(t.exitTime).toISOString(),
+        entry, stop: t.signal.stop, targetTrigger: t.targetTrigger,
+        exitPrice: t.exitPrice, exitReason: t.exitReason, marginRoiPct: t.marginRoiPct,
+        netR: t.netR, gapExit: t.gapExit,
+        mfePricePct: favorable, maePricePct: adverse,
+        features: t.features
+      };
+    })
   };
   await mkdir("artifacts", { recursive: true });
   await writeFile("artifacts/current-engine-25-margin-backtest.json", JSON.stringify(summary, null, 2));
