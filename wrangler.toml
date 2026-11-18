@@ -17,7 +17,7 @@ id = "dab441cdffc0460faeb497cee6edd314"
 crons = ["*/5 * * * *"]
 
 [secrets]
-required = ["OWNER_TELEGRAM_ID"]
+required = ["OWNER_TELEGRAM_ID", "SIGNAL_DELIVERY_SECRET"]
 
 
 [[durable_objects.bindings]]
