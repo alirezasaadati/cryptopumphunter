@@ -2,7 +2,7 @@ import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { analyzeFuturesSymbol } from "../src/index.js";
 import { passesCompression, passesAtrCap, passesBreakoutBody } from "../src/futures-filter-experiments.js";
-import { passesVolumeThreshold, isLateEntry, hasPullbackOrBreakout } from "../src/futures-entry-experiments.js";
+import { passesVolumeThreshold, isLateEntry, hasPullbackOrBreakout, passesEntryFreshness } from "../src/futures-entry-experiments.js";
 
 const BASE = "https://fapi.binance.com";
 const SYMBOL = "BTCUSDT";
@@ -67,6 +67,7 @@ function confirm15m(side, candle, history) {
 function startTrade(side, signal, candle, nextBar) {
   if (!nextBar || !(nextBar.open > 0)) return null;
   const dir = side === "LONG" ? 1 : -1;
+  if (!passesEntryFreshness(signal.entry,nextBar.open,0.35)) return null;
   const entry = nextBar.open * (1 + dir * SLIPPAGE);
   const shift = entry - signal.entry;
   const stop = signal.stop + shift;
