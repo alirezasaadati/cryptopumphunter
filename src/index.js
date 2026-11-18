@@ -878,6 +878,13 @@ async function runSpotMarketScanForChat(env, chatId) {
   }
   await sendMessage(env, chatId, "🔎 اسکن هوشمند بازار اسپات شروع شد...\nدر حال دریافت اطلاعات CoinLore و بررسی کندل‌های Kraken.");
   try {
+    // Invalidate the previous snapshot before starting. If this scan fails or
+    // exits early, the analysis button must not present stale data as current.
+    await env.APP_KV.put("last_scan", JSON.stringify({
+      timestamp: Date.now(),
+      analysis: [],
+      status: "scan_in_progress"
+    }));
     const result = await runSpotScan(env);
     await sendLongMessage(env, chatId, result.report);
     await sendMessage(env, chatId, "✅ عملیات اسکن بازار اسپات به پایان رسید.", menuForChat(env, chatId));
