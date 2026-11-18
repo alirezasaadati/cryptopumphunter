@@ -1,5 +1,4 @@
-// Experimental multi-timeframe engine: 4H market breadth, 1H symbol direction,
-// and the live bot's original stop/target construction applied to a 15m entry.
+// Experimental multi-timeframe engine: 4H market breadth and 1H direction, entry, stop and targets.
 export function ema(values, period) {
   if (!Array.isArray(values) || values.length < period) return null;
   const k=2/(period+1); let v=values.slice(0,period).reduce((a,b)=>a+b,0)/period;
@@ -44,15 +43,13 @@ export function classifySymbol1h(candles,marketRegime){
   if(marketRegime==="BEAR"&&down&&rsiValue>=31&&rsiValue<=52&&volumeRatio>=.75)return "SHORT";
   return null;
 }
-// Entry timing is 15m, but the stop calculation is kept identical to the
-// live bot: 1H swing over candles[-8:-1] and 1.5 * 1H ATR(14).
-// Targets retain the live bot's 1.5R / 2.5R / 3.5R reference levels;
-// this experiment exits fully at +25% net margin ROI. No BE/trailing.
-export function findEntry15m(candles15m,candles1h,side){
-  if(!Array.isArray(candles15m)||candles15m.length<40||
-     !Array.isArray(candles1h)||candles1h.length<60||
+// Entry, stop and target are all calculated from closed 1H candles.
+// Stop preserves the live bot's structure: prior 7 closed 1H candles and
+// 1.5 * ATR(14) on 1H. Targets are 1.5R / 2.5R / 3.5R.
+export function findEntry1h(candles1h,side){
+  if(!Array.isArray(candles1h)||candles1h.length<60||
      !["LONG","SHORT"].includes(side))return null;
-  const c=candles15m.at(-1),entry=c.close,volatility=atr(candles1h,14);
+  const c=candles1h.at(-1),entry=c.close,volatility=atr(candles1h,14);
   if(!(volatility>0))return null;
   const swing=candles1h.slice(-8,-1),swingLow=Math.min(...swing.map(x=>x.low)),swingHigh=Math.max(...swing.map(x=>x.high));
   const stop=side==="LONG"?Math.min(swingLow,entry-volatility*1.5):Math.max(swingHigh,entry+volatility*1.5);
@@ -61,9 +58,9 @@ export function findEntry15m(candles15m,candles1h,side){
   const dir=side==="LONG"?1:-1;
   return {side,entry,stop,risk,target1:entry+dir*risk*1.5,target2:entry+dir*risk*2.5,target3:entry+dir*risk*3.5,atr:volatility,candleTime:c.time};
 }
-export function buildMtfSignal({symbol,market,candles1h,candles15m}){
+export function buildMtfSignal({symbol,market,candles1h}){
   if(!market||!["BULL","BEAR"].includes(market.regime))return null;
   const side=classifySymbol1h(candles1h,market.regime);if(!side)return null;
-  const plan=findEntry15m(candles15m,candles1h,side);
+  const plan=findEntry1h(candles1h,side);
   return plan?{symbol,side,marketRegime:market.regime,marketBreadth:market,trend1h:side,...plan}:null;
 }
