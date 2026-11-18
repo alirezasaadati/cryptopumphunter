@@ -1414,6 +1414,43 @@ const FUTURES_OPEN_KEY="futures_open_trades";
 const FUTURES_CLOSED_KEY="futures_closed_trades";
 async function readTradeList(env,key){if(!env.APP_KV)throw new Error("APP_KV binding is missing");const raw=await env.APP_KV.get(key);if(!raw)return[];try{const v=JSON.parse(raw);return Array.isArray(v)?v:[]}catch{return[]}}
 async function writeTradeList(env,key,value){if(!env.APP_KV)throw new Error("APP_KV binding is missing");await env.APP_KV.put(key,JSON.stringify(value))}
+async function migrateLegacySignalArchive(env){
+  if(!env.APP_KV) return {migrated:0,skipped:true};
+  const marker="signals:v1:migration:legacy-trades-v1";
+  if(await env.APP_KV.get(marker)) return {migrated:0,alreadyDone:true};
+  const [open,closed]=await Promise.all([
+    readTradeList(env,FUTURES_OPEN_KEY),
+    readTradeList(env,FUTURES_CLOSED_KEY)
+  ]);
+  let migrated=0;
+  for(const trade of [...open,...closed]){
+    if(!trade?.chatId||!trade?.signalId||!trade?.symbol) continue;
+    const signal={
+      id:String(trade.signalId),symbol:trade.symbol,side:trade.side,
+      entry:Number(trade.actualEntry??trade.plannedEntry),
+      stop:Number(trade.initialStop??trade.currentStop),
+      target1:Number(trade.target1),target2:Number(trade.target2),target3:Number(trade.target3),
+      strategyId:trade.strategyId||"legacy-import",
+      exchange:trade.exchange||"Kraken",
+      tier:trade.tier||"STANDARD"
+    };
+    const publishedAt=trade.createdAt||new Date().toISOString();
+    await archivePublishedSignal(env,trade.chatId,signal,trade,publishedAt);
+    if(String(trade.status||"").startsWith("CLOSED")||trade.closedAt){
+      const finalResult=trade.closeReason==="STOP_LOSS"||trade.status==="CLOSED_STOP"?"STOP":"FULL_TARGET";
+      await updateArchivedSignal(env,trade.chatId,trade.signalId,{
+        milestones:trade.tpHits||[],status:trade.status||"CLOSED_TARGETS",finalResult,
+        closedAt:trade.closedAt||publishedAt,exitPrice:trade.exitPrice,
+        outcomeR:trade.outcomeR,outcomePercent:trade.outcomePercent,
+        updatedAt:trade.closedAt||publishedAt
+      });
+    }
+    migrated++;
+  }
+  await env.APP_KV.put(marker,JSON.stringify({completedAt:new Date().toISOString(),migrated}));
+  return {migrated};
+}
+
 async function savePendingFuturesSignals(env,fresh){const now=Date.now(),old=await readTradeList(env,FUTURES_PENDING_KEY),m=new Map();for(const x of old.filter(v=>v.expiresAt>now)){const f=futuresSignalFingerprint(x);if(f&&!m.has(f))m.set(f,x)}for(const x of fresh){const f=futuresSignalFingerprint(x);if(f&&!m.has(f))m.set(f,x)}const merged=[...m.values()].slice(0,150);await writeTradeList(env,FUTURES_PENDING_KEY,merged);return fresh.map(x=>m.get(futuresSignalFingerprint(x))).filter(Boolean)}
 const tradeDir=side=>side==="LONG"?1:-1;
 const targetReached=(side,p,t)=>side==="LONG"?p>=t:p<=t;
@@ -1442,6 +1479,7 @@ async function showSignalArchiveSymbols(env,chatId){
 }
 async function showSignalSymbolMenu(env,chatId,view,title){
   if(!env.APP_KV) return sendMessage(env,chatId,"⚠️ ذخیره‌سازی تاریخچه در دسترس نیست.",BACK_MENU);
+  await migrateLegacySignalArchive(env);
   const symbols=await listArchivedSymbols(env,chatId,view);
   if(!symbols.length) return sendMessage(env,chatId,view==="open"?"📭 معامله بازی ثبت نشده است.":view==="history"?"📚 هنوز معامله بسته‌شده‌ای ثبت نشده است.":"🗂 هنوز سیگنالی برای نمایش ثبت نشده است.",BACK_MENU);
   const keyboard=symbols.slice(0,80).map(symbol=>[{text:"🪙 "+symbol,callback_data:`sigv:${view}:${encodeURIComponent(symbol)}`}]);
