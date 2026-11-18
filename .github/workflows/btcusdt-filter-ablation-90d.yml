@@ -1,0 +1,28 @@
+name: BTCUSDT 90-day filter ablation
+on:
+  push:
+    branches: [experiment/btcusdt-filter-ablation-90d]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  btc-only-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Repository tests
+        run: npm test
+      - name: 90-day BTCUSDT Binance USD-M filter ablation
+        run: node scripts/btcusdt-filter-ablation-90d.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: btcusdt-filter-ablation-90d
+          path: artifacts/btcusdt-filter-ablation-90d.*
+          if-no-files-found: warn
+          retention-days: 30
