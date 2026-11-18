@@ -67,7 +67,25 @@ async function getJson(url) {
   throw error;
 }
 
-async function fetchInstruments(){\n  const payload=await getJson("https://futures.kraken.com/derivatives/api/v3/instruments");\n  return new Map((payload.instruments??[]).map(item=>[item.symbol, item]));\n}\n\nfunction normalizeSignal(signal,tickSize){\n  const side=signal.side;\n  const snap=(price,mode)=>Number((Math[mode](price/tickSize)*tickSize).toPrecision(12));\n  const normalized={...signal,entry:snap(signal.entry,"round"),\n    stop:snap(signal.stop,side==="LONG"?"floor":"ceil"),\n    targets:signal.targets.map(price=>snap(price,side==="LONG"?"ceil":"floor"))};\n  const rawEntry2=signal.entry2??signal.context?.entry2??null;\n  const entry2=rawEntry2===null?null:snap(rawEntry2,side==="LONG"?"floor":"ceil");\n  normalized.entry2=entry2;\n  normalized.context={...signal.context,entry2};\n  return normalized;\n}\n\nasync function fetchFunding(symbol){
+async function fetchInstruments(){
+  const payload=await getJson("https://futures.kraken.com/derivatives/api/v3/instruments");
+  return new Map((payload.instruments??[]).map(item=>[item.symbol, item]));
+}
+
+function normalizeSignal(signal,tickSize){
+  const side=signal.side;
+  const snap=(price,mode)=>Number((Math[mode](price/tickSize)*tickSize).toPrecision(12));
+  const normalized={...signal,entry:snap(signal.entry,"round"),
+    stop:snap(signal.stop,side==="LONG"?"floor":"ceil"),
+    targets:signal.targets.map(price=>snap(price,side==="LONG"?"ceil":"floor"))};
+  const rawEntry2=signal.entry2??signal.context?.entry2??null;
+  const entry2=rawEntry2===null?null:snap(rawEntry2,side==="LONG"?"floor":"ceil");
+  normalized.entry2=entry2;
+  normalized.context={...signal.context,entry2};
+  return normalized;
+}
+
+async function fetchFunding(symbol){
   const payload=await getJson(`https://futures.kraken.com/derivatives/api/v3/historical-funding-rates?symbol=${encodeURIComponent(symbol)}`);
   const rates=new Map();
   for(const item of payload.rates??[]){
@@ -124,7 +142,9 @@ function summarize(trades,skipped){
   };
 }
 
-const instruments=await fetchInstruments();\n\nfor(const symbol of SYMBOLS){
+const instruments=await fetchInstruments();
+
+for(const symbol of SYMBOLS){
   let candles;
   try{
     candles=await fetchCandles(symbol);
@@ -148,7 +168,8 @@ const instruments=await fetchInstruments();\n\nfor(const symbol of SYMBOLS){
     }
     report.data.push({symbol,candles:valid.length,first:valid[0]?.time??null,last:valid.at(-1)?.time??null,
       gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0,
-      fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError,\n      tickSize,quantityPrecision,contractSize:instrument.contractSize,contractType:instrument.type});
+      fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError,
+      tickSize,quantityPrecision,contractSize:instrument.contractSize,contractType:instrument.type});
     for(const engine of ["A","B"]){
       const analyze=engine==="A"?analyzeEngineA:analyzeEngineB;
       const weights=engine==="A"?A_WEIGHTS:B_WEIGHTS;
