@@ -111,9 +111,11 @@ export function calculateMACD(candles, fast=12, slow=26, signal=9) {
   return {macd,signal:signalValue,histogram:macd-signalValue};
 }
 function confirmationPassed(candles, side, mode="baseline") {
-  const volumeMultiplier=mode==="volume"||mode==="macd_volume"?1.2:0.9;
+  const strictVolume=mode==="volume"||mode==="macd_volume";
+  const volumeMultiplier=strictVolume?1.2:0.9;
   const ratio=relativeVolumeRatio(candles);
-  if (ratio===null || ratio<volumeMultiplier) return false;
+  // Preserve legacy fail-open behavior only for baseline/MACD-only comparisons.
+  if(ratio===null ? strictVolume : ratio<volumeMultiplier) return false;
   if (mode==="macd"||mode==="macd_volume") {
     const momentum=calculateMACD(candles);
     if(!momentum) return false;
