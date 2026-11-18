@@ -4,7 +4,7 @@ const BASE="https://futures.kraken.com", MIN=15*60*1000, HOUR=4*MIN, FOUR=4*HOUR
 const DAYS=Math.max(30,Math.min(90,Number(process.env.BACKTEST_DAYS||90)));
 const LIMIT=Math.max(5,Math.min(20,Number(process.env.BACKTEST_SYMBOLS||10)));
 const FEE=Number(process.env.BACKTEST_FEE??0.0005), SLIP=Number(process.env.BACKTEST_SLIPPAGE??0.0003);
-const MAX_HOLD=96, WEIGHTS=[.4,.35,.25], MIN_VOLUME=Number(process.env.MTF_MIN_VOLUME_RATIO||1.15);\nconst ENTRY_MODE=String(process.env.MTF_ENTRY_MODE||"BOTH").toUpperCase();\nconst MIN_BODY=Number(process.env.MTF_MIN_BODY_RATIO||0.45);
+const MAX_HOLD=96, WEIGHTS=[.4,.35,.25], MIN_VOLUME=Number(process.env.MTF_MIN_VOLUME_RATIO||1.15);const ENTRY_MODE=String(process.env.MTF_ENTRY_MODE||"BOTH").toUpperCase();const MIN_BODY=Number(process.env.MTF_MIN_BODY_RATIO||0.45);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function json(url){let last;for(let n=0;n<4;n++){try{const r=await fetch(url,{headers:{accept:"application/json"},signal:AbortSignal.timeout(30000)});const t=await r.text();if(!r.ok)throw Error("HTTP "+r.status+" "+t.slice(0,120));const d=JSON.parse(t);if(d?.result==="error"||d?.errors?.length)throw Error(JSON.stringify(d.errors||d.error));return d;}catch(e){last=e;await sleep(400*(n+1));}}throw last;}
 function norm(rows,ms){const seen=new Set();return (rows||[]).map(x=>({time:Number(x.time)<1e12?Number(x.time)*1000:Number(x.time),open:+x.open,high:+x.high,low:+x.low,close:+x.close,volume:+x.volume})).filter(x=>[x.time,x.open,x.high,x.low,x.close,x.volume].every(Number.isFinite)&&x.open>0&&x.low>0&&x.high>=x.low&&x.close>0&&x.volume>=0&&x.time+ms<=Date.now()).sort((a,b)=>a.time-b.time).filter(x=>{if(seen.has(x.time))return false;seen.add(x.time);return true;});}
