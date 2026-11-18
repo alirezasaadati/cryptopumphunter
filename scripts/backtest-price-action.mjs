@@ -1,4 +1,4 @@
-import { analyzePriceAction } from "../src/price-action-engine.js";
+import { analyzePriceAction, PA_CONFIG } from "../src/price-action-engine.js";
 import { mkdir, writeFile } from "node:fs/promises";
 
 const BASE = "https://futures.kraken.com";
@@ -12,6 +12,9 @@ const MAX_HOLD_BARS = 72 * 4;
 const WEIGHTS = [0.4, 0.35, 0.25];
 const STRATEGY_IDS = process.env.PA_BACKTEST_STRATEGIES
   ? process.env.PA_BACKTEST_STRATEGIES.split(",").map(x=>x.trim()).filter(Boolean) : null;
+const CONFIRMATION_MODE = process.env.PA_BACKTEST_CONFIRMATION || "baseline";
+if(!["baseline","macd","volume","macd_volume"].includes(CONFIRMATION_MODE))
+  throw new Error(`Unsupported PA_BACKTEST_CONFIRMATION: ${CONFIRMATION_MODE}`);
 
 async function getJson(url) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(25000) });
@@ -106,12 +109,16 @@ async function runSymbol(ticker, from, to, evaluationStart) {
     diagnostics.evaluated++;
     const next=m15[i+1];
     const live=next.open;
-    const result=analyzePriceAction({symbol:ticker.symbol,oneHour,fourHour,fifteenMin,livePrice:live,strategyIds:STRATEGY_IDS});
+    const result=analyzePriceAction({symbol:ticker.symbol,oneHour,fourHour,fifteenMin,livePrice:live,strategyIds:STRATEGY_IDS,confirmationMode:CONFIRMATION_MODE});
     if(!result.signals?.length){diagnostics.lateOrFiltered++;continue;}
     const signal=result.signals[0],dir=signal.side==="LONG"?1:-1;
     const entry=next.open*(1+dir*SLIPPAGE);
-    const trade=simulate(signal.side,entry,signal.stop,
-      [signal.target1,signal.target2,signal.target3],m15,i+1,ticker.symbol);
+    const risk=dir===1?entry-signal.stop:signal.stop-entry;
+    const riskPct=risk/entry;
+    if(!(risk>0)||riskPct<0.0015||riskPct>0.06) continue;
+    // Rebase targets to the actual simulated fill, not the signal candle's planned close.
+    const targets=PA_CONFIG.TARGET_R_MULTIPLES.map(r=>entry+dir*risk*r);
+    const trade=simulate(signal.side,entry,signal.stop,targets,m15,i+1,ticker.symbol);
     if(!trade) continue;
     trade.strategyId=signal.strategyId;trade.score=signal.score;trade.signalTime=bar.time;
     trades.push(trade);diagnostics.accepted++;
@@ -139,12 +146,12 @@ async function main(){
     .sort((a,b)=>a.time-b.time||a.delta-b.delta);
   let openPositions=0,maxConcurrentPositions=0;
   for(const event of timeline){openPositions+=event.delta;maxConcurrentPositions=Math.max(maxConcurrentPositions,openPositions);}
-  const report={generatedAt:new Date().toISOString(),engine:"src/price-action-engine.js",
+  const report={generatedAt:new Date().toISOString(),engine:"src/price-action-engine.js",confirmationMode:CONFIRMATION_MODE,
     venue:"Kraken Derivatives public OHLC",period:{from:new Date(evaluationStart).toISOString(),to:new Date(end).toISOString(),days:TEST_DAYS},
     methodology:{warmupDays:6,symbolSelection:"current highest-volume eligible perpetuals (survivorship/universe bias)",
       entry:"next 15m candle open with adverse slippage",feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,
       partialExitsPct:[40,35,25],maxHoldHours:72,sameCandleRule:"stop checked before targets",
-      funding:"excluded",signals:"strictly closed 4h/1h/15m candles; 15m walk-forward; one position per symbol at a time",strategyFilter:STRATEGY_IDS||"all"},
+      funding:"excluded",signals:"strictly closed 4h/1h/15m candles; 15m walk-forward; one position per symbol at a time",strategyFilter:STRATEGY_IDS||"all",confirmationMode:CONFIRMATION_MODE},
     overall:summarize(all),byStrategy,maxConcurrentPositions,
     symbols:results.map(({trades,...x})=>x),trades:all};
   await mkdir("artifacts",{recursive:true});
