@@ -1448,6 +1448,7 @@ async function registerTrackedSignal(env,chatId,signal){
 }
 async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMarkup=null){
   if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
+  if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
   if(!env.APP_KV)throw new Error("APP_KV is required for durable signal delivery.");
   const key=signalOutboxKey(chatId,signal.id);
   let record=await env.APP_KV.get(key,"json");
