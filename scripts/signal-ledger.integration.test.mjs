@@ -315,7 +315,8 @@ test("worker interruption with an unfinalized SENDING record requires reconcilia
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ chatId: "914", signal: pending, messageText: "restart test" })
     });
-    await assert.rejects(coordinator.fetch(request()));
+    const interrupted = await coordinator.fetch(request());
+    assert.equal(interrupted.status, 409);
     assert.equal((await base.get("futures:signal-outbox:v1:914:worker-interruption", "json")).status, "SENDING");
     const restarted = new SignalDeliveryCoordinator({}, { APP_KV: base, BOT_TOKEN: "test-token" });
     const response = await restarted.fetch(request());
