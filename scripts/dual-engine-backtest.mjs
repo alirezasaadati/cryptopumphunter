@@ -147,6 +147,13 @@ const instruments=await fetchInstruments();
 for(const symbol of SYMBOLS){
   let candles;
   try{
+    const instrument=instruments.get(symbol);
+    const quantityPrecision=Number(instrument?.contractValueTradePrecision);
+    const tickSize=Number(instrument?.tickSize);
+    if(!instrument || !Number.isInteger(quantityPrecision) || quantityPrecision<0 || !(tickSize>0)){
+      report.data.push({symbol,error:"Missing valid exchange tick/quantity precision metadata"});
+      continue;
+    }
     candles=await fetchCandles(symbol);
     let fundingRates=new Map(), fundingError=null;
     try{fundingRates=await fetchFunding(symbol);}catch(error){fundingError=String(error?.message??error);}
@@ -179,9 +186,11 @@ for(const symbol of SYMBOLS){
         const history=valid.slice(0,i+1);
         const signal=analyze({symbol,candles:history,skipLiquidityCheck:true});
         if(!signal){i++;continue;}
+        const executableSignal=normalizeSignal(signal,tickSize);
         const result=simulatePaperTrade({
-          signal,candles:valid.slice(i+1),entryNotional:ENTRY_NOTIONAL,
-          targetWeights:weights,feeRate:FEE_RATE,slippageBps:SLIPPAGE_BPS,maxEntryDriftPct:0.35,maxBars:MAX_HOLD_BARS
+          signal:executableSignal,candles:valid.slice(i+1),entryNotional:ENTRY_NOTIONAL,
+          targetWeights:weights,feeRate:FEE_RATE,slippageBps:SLIPPAGE_BPS,maxEntryDriftPct:0.35,
+          quantityPrecision,maxBars:MAX_HOLD_BARS
         });
         if(["invalid_input","invalid_data","no_future_candles","not_filled"].includes(result.status)){
           report.engines[engine].skipped.push({symbol,side:signal.side,candleTime:signal.candleTime,
