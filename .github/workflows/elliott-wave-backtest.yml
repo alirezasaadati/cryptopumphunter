@@ -1,0 +1,39 @@
+name: Elliott Wave Long Short Backtest
+on:
+  push:
+    branches: [feature/elliott-wave-long-short]
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Historical days (30-180)
+        required: false
+        default: "90"
+      symbols:
+        description: Highest-volume Kraken perpetual contracts (3-24)
+        required: false
+        default: "12"
+permissions:
+  contents: read
+jobs:
+  test-and-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Elliott wave historical backtest
+        env:
+          BACKTEST_DAYS: ${{ github.event.inputs.days || '90' }}
+          BACKTEST_SYMBOLS: ${{ github.event.inputs.symbols || '12' }}
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0002"
+          BACKTEST_MARGIN_USD: "1"
+          BACKTEST_LEVERAGE: "10"
+        run: node scripts/backtest-elliott-wave.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elliott-wave-backtest-report
+          path: artifacts/elliott-wave-backtest.*
