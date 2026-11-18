@@ -104,6 +104,6 @@ export function validateOhlc(candles) {
 export function detectCandlestickSignals(candles,index=candles?.length-1) {
   if(!Array.isArray(candles)||!Number.isInteger(index)||index<0||index>=candles.length) return [];
   const start=Math.max(0,index-2), window=candles.slice(start,index+1);
-  if(window.length<3||window.some((x,i)=>!valid(x)||(i&&x.time<=window[i-1].time))) return [];
+  if(window.length<1||window.some((x,i)=>!valid(x)||(i&&x.time<=window[i-1].time))) return [];
   return DETECTORS.flatMap(fn=>fn(candles,index)).filter(Boolean);
 }
