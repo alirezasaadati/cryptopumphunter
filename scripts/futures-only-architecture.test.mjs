@@ -22,5 +22,5 @@ test("bot exposes only the Kraken Futures signal engine", () => {
 
 test("manual and scheduled alerts both use the same futures scan", () => {
   assert.match(source, /const result = await runFuturesSignalScan\(env\);/);
-  assert.match(source, /async scheduled\(event, env, ctx\)\s*\{\s*ctx\.waitUntil\(runAutomaticFuturesAlertScan\(env\)\);/);
+  assert.match(source, /async scheduled\(event, env, ctx\)\s*\{\s*env = withQuotaAwareKV\(env\);\s*ctx\.waitUntil\(runAutomaticFuturesAlertScan\(env\)\);/);
 });
