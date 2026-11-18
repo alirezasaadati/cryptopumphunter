@@ -274,7 +274,7 @@ async function main() {
     trades: closed.map(t => ({
       symbol: t.symbol, side: t.side, score: t.score,
       signalTime: new Date(t.signalTime).toISOString(),
-      exitTime: new Date(t.exitTime).toISOString()
+      exitTime: new Date(t.exitTime).toISOString(),
       entry: t.signal.entry, stop: t.signal.stop, targetTrigger: t.targetTrigger,
       exitPrice: t.exitPrice, exitReason: t.exitReason, marginRoiPct: t.marginRoiPct,
       netR: t.netR, gapExit: t.gapExit
