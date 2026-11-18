@@ -42,8 +42,11 @@ async function candles(symbol, resolution, from, to, interval) {
 function summarize(trades) {
   const wins=trades.filter(x=>x.netR>0), losses=trades.filter(x=>x.netR<0);
   const grossWin=wins.reduce((s,x)=>s+x.netR,0), grossLoss=Math.abs(losses.reduce((s,x)=>s+x.netR,0));
+  // Realized-equity drawdown must follow exit chronology, not entry chronology.
   let equity=0,peak=0,dd=0;
-  for(const t of trades){equity+=t.netR;peak=Math.max(peak,equity);dd=Math.max(dd,peak-equity);}
+  for(const t of [...trades].sort((a,b)=>a.exitTime-b.exitTime||a.entryTime-b.entryTime)){
+    equity+=t.netR;peak=Math.max(peak,equity);dd=Math.max(dd,peak-equity);
+  }
   return {trades:trades.length,wins:wins.length,losses:losses.length,
     breakeven:trades.length-wins.length-losses.length,
     winRatePct:trades.length?100*wins.length/trades.length:0,
@@ -125,13 +128,22 @@ async function main(){
   for(const t of universe){try{results.push(await runSymbol(t,start,end,evaluationStart));}
     catch(e){results.push({symbol:t.symbol,error:String(e.message||e),metrics:summarize([]),trades:[]});}}
   const all=results.flatMap(x=>x.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const strategyGroups=Object.groupBy(all,t=>t.strategyId||"unknown");
+  const byStrategy=Object.entries(strategyGroups).map(([strategyId,trades])=>({
+    strategyId,...summarize(trades)
+  })).sort((a,b)=>a.strategyId.localeCompare(b.strategyId));
+  const timeline=all.flatMap(t=>[{time:t.entryTime,delta:1},{time:t.exitTime,delta:-1}])
+    .sort((a,b)=>a.time-b.time||a.delta-b.delta);
+  let openPositions=0,maxConcurrentPositions=0;
+  for(const event of timeline){openPositions+=event.delta;maxConcurrentPositions=Math.max(maxConcurrentPositions,openPositions);}
   const report={generatedAt:new Date().toISOString(),engine:"src/price-action-engine.js",
     venue:"Kraken Derivatives public OHLC",period:{from:new Date(evaluationStart).toISOString(),to:new Date(end).toISOString(),days:TEST_DAYS},
     methodology:{warmupDays:6,symbolSelection:"current highest-volume eligible perpetuals (survivorship/universe bias)",
       entry:"next 15m candle open with adverse slippage",feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,
       partialExitsPct:[40,35,25],maxHoldHours:72,sameCandleRule:"stop checked before targets",
       funding:"excluded",signals:"strictly closed 4h/1h/15m candles; 15m walk-forward; one position per symbol at a time"},
-    overall:summarize(all),symbols:results.map(({trades,...x})=>x),trades:all};
+    overall:summarize(all),byStrategy,maxConcurrentPositions,
+    symbols:results.map(({trades,...x})=>x),trades:all};
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/price-action-backtest.json",JSON.stringify(report,null,2));
   const md=["# Price Action Engine — Historical Backtest","",
@@ -140,7 +152,12 @@ async function main(){
     `Trades: ${report.overall.trades}`,`Win rate: ${report.overall.winRatePct.toFixed(2)}%`,
     `Net: ${report.overall.netR.toFixed(2)}R`,`Expectancy: ${report.overall.expectancyR.toFixed(3)}R/trade`,
     `Profit factor: ${report.overall.profitFactor===null?"n/a":report.overall.profitFactor.toFixed(2)}`,
-    `Max drawdown: ${report.overall.maxDrawdownR.toFixed(2)}R`,"",
+    `Max drawdown (realized exit order): ${report.overall.maxDrawdownR.toFixed(2)}R`,
+    `Max concurrent positions: ${report.maxConcurrentPositions}`,"",
+    "## Strategy breakdown","",
+    "| Strategy | Trades | Win rate | Net R | Expectancy | Profit factor | Max DD |",
+    "|---|---:|---:|---:|---:|---:|---:|",
+    ...report.byStrategy.map(x=>`| ${x.strategyId} | ${x.trades} | ${x.winRatePct.toFixed(1)}% | ${x.netR.toFixed(2)} | ${x.expectancyR.toFixed(3)} | ${x.profitFactor===null?"n/a":x.profitFactor.toFixed(2)} | ${x.maxDrawdownR.toFixed(2)} |`),"",
     "| Symbol | Trades | Win rate | Net R | Expectancy | Max DD | Error |",
     "|---|---:|---:|---:|---:|---:|---|",
     ...results.map(x=>`| ${x.symbol} | ${x.metrics.trades} | ${x.metrics.winRatePct.toFixed(1)}% | ${x.metrics.netR.toFixed(2)} | ${x.metrics.expectancyR.toFixed(3)} | ${x.metrics.maxDrawdownR.toFixed(2)} | ${x.error||""} |`),
