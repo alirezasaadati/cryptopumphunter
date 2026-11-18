@@ -7,7 +7,7 @@ const DAYS=Math.max(30,Math.min(180,Number(process.env.BACKTEST_DAYS||90)));
 const SYMBOLS=Math.max(3,Math.min(24,Number(process.env.BACKTEST_SYMBOLS||12)));
 const FEE=Number(process.env.BACKTEST_FEE||0.0005);
 const SLIPPAGE=Number(process.env.BACKTEST_SLIPPAGE||0.0002);
-const NOTIONAL=Number(process.env.BACKTEST_NOTIONAL_USD||10);
+const NOTIONAL=Number(process.env.BACKTEST_NOTIONAL_USD||50);
 const PATTERNS=["bullish_engulfing","bearish_engulfing","bullish_pin_bar","bearish_pin_bar","morning_star","evening_star","piercing_line","dark_cloud_cover","three_white_soldiers","three_black_crows","inside_bar_breakout_long","inside_bar_breakout_short"];
 const PRIORITY=["three_white_soldiers","three_black_crows","morning_star","evening_star","bullish_engulfing","bearish_engulfing","piercing_line","dark_cloud_cover","bullish_pin_bar","bearish_pin_bar","inside_bar_breakout_long","inside_bar_breakout_short"];
 
