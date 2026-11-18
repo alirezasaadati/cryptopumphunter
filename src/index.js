@@ -1493,9 +1493,10 @@ async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMa
   const key=signalOutboxKey(chatId,signal.id);
   const id=env.SIGNAL_DELIVERY.idFromName(key);
   const stub=env.SIGNAL_DELIVERY.get(id);
+  if(!env.SIGNAL_DELIVERY_SECRET)throw new Error("SIGNAL_DELIVERY_SECRET is required for authenticated delivery.");
   const response=await stub.fetch("https://signal-delivery.internal/deliver",{
     method:"POST",
-    headers:{"content-type":"application/json"},
+    headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},
     body:JSON.stringify({chatId:String(chatId),signal,messageText,replyMarkup})
   });
   let payload;
@@ -1513,6 +1514,9 @@ export class SignalDeliveryCoordinator {
   async fetch(request){
     const url=new URL(request.url);
     if(request.method!=="POST"||!["/deliver","/reconcile"].includes(url.pathname))return new Response("Not found",{status:404});
+    const expectedSecret=this.env.SIGNAL_DELIVERY_SECRET;
+    const suppliedSecret=request.headers.get("x-signal-delivery-secret");
+    if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
     let payload;
     try{payload=await request.json()}catch{return Response.json({ok:false,error:"Invalid JSON payload."},{status:400});}
     return this.serial(async()=>{
@@ -1592,7 +1596,8 @@ async function reconcileSignalOutbox(env,ownerId,token,action){
   if(!selection){await sendMessage(env,ownerId,"این مورد منقضی شده است؛ فهرست را دوباره باز کن.");return;}
   const key=signalOutboxKey(selection.chatId,selection.signalId);
   const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
-  const response=await stub.fetch("https://signal-delivery.internal/reconcile",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({...selection,action})});
+  if(!env.SIGNAL_DELIVERY_SECRET){await sendMessage(env,ownerId,"❌ کلید امنیتی ارتباط داخلی تنظیم نشده است.");return;}
+   const response=await stub.fetch("https://signal-delivery.internal/reconcile",{method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},body:JSON.stringify({...selection,action})});
   let payload={};try{payload=await response.json()}catch{}
   if(!response.ok||!payload.ok){await sendMessage(env,ownerId,"❌ تعیین تکلیف انجام نشد: "+String(payload.error||"خطای نامشخص"));return;}
   await sendMessage(env,ownerId,action==="confirm_delivered"?"✅ سیگنال به‌عنوان ارسال‌شده در آرشیو ثبت شد.":"🔁 تلاش مجدد انجام شد و نتیجه در آرشیو ثبت شد.");
