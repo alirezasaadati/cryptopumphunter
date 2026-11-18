@@ -29,25 +29,25 @@ export function classifySymbol1h(candles,marketRegime){
   const d=trend(candles);if(marketRegime==="BULL"&&d==="BULL")return "LONG";if(marketRegime==="BEAR"&&d==="BEAR")return "SHORT";return null;
 }
 export function findEntry15m(candles,side,options={}){
-  const minVolumeRatio=options.minVolumeRatio??1.15;
+  const minVolumeRatio=options.minVolumeRatio??1.15;\n  const minBodyRatio=options.minBodyRatio??0.45;\n  const breakoutLookback=options.breakoutLookback??8;\n  const breakoutCloseLocation=options.breakoutCloseLocation??0.72;\n  const reclaimCloseLocation=options.reclaimCloseLocation??0.65;\n  const entryMode=options.entryMode??"BOTH";
   if(!Array.isArray(candles)||candles.length<60||!["LONG","SHORT"].includes(side))return null;
   const c=candles.at(-1),prev=candles.at(-2),closes=candles.map(x=>x.close),e20=ema(closes,20),volatility=atr(candles,14);
   if(!(e20>0)||!(volatility>0))return null;
   const avgVol=candles.slice(-21,-1).reduce((s,x)=>s+x.volume,0)/20,volumeRatio=avgVol>0?c.volume/avgVol:0,range=c.high-c.low;
   if(!(range>0)||volumeRatio<minVolumeRatio)return null;
   const bodyRatio=Math.abs(c.close-c.open)/range,closeLocation=side==="LONG"?(c.close-c.low)/range:(c.high-c.close)/range;
-  const recent=candles.slice(-9,-1),swingHigh=Math.max(...recent.map(x=>x.high)),swingLow=Math.min(...recent.map(x=>x.low));
-  const breakout=side==="LONG"?c.close>swingHigh&&c.close>c.open&&closeLocation>=.72:c.close<swingLow&&c.close<c.open&&closeLocation>=.72;
-  const reclaim=side==="LONG"?prev.close<=e20&&c.close>e20&&c.close>c.open&&closeLocation>=.65:prev.close>=e20&&c.close<e20&&c.close<c.open&&closeLocation>=.65;
-  if(bodyRatio<.45||(!breakout&&!reclaim))return null;
+  const recent=candles.slice(-(breakoutLookback+1),-1),swingHigh=Math.max(...recent.map(x=>x.high)),swingLow=Math.min(...recent.map(x=>x.low));
+  const breakout=side==="LONG"?c.close>swingHigh&&c.close>c.open&&closeLocation>=breakoutCloseLocation:c.close<swingLow&&c.close<c.open&&closeLocation>=breakoutCloseLocation;
+  const reclaim=side==="LONG"?prev.close<=e20&&c.close>e20&&c.close>c.open&&closeLocation>=reclaimCloseLocation:prev.close>=e20&&c.close<e20&&c.close<c.open&&closeLocation>=reclaimCloseLocation;
+  if(bodyRatio<minBodyRatio)return null;\n  if(entryMode==="BREAKOUT"&&!breakout)return null;\n  if(entryMode==="RECLAIM"&&!reclaim)return null;\n  if(!["BOTH","BREAKOUT","RECLAIM"].includes(entryMode)||(!breakout&&!reclaim))return null;
   const entry=c.close,structural=side==="LONG"?Math.min(...candles.slice(-8).map(x=>x.low)):Math.max(...candles.slice(-8).map(x=>x.high));
   const atrStop=side==="LONG"?entry-1.4*volatility:entry+1.4*volatility,stop=side==="LONG"?Math.min(structural,atrStop):Math.max(structural,atrStop);
   const risk=side==="LONG"?entry-stop:stop-entry,riskPct=risk/entry;if(!(risk>0)||riskPct<.0015||riskPct>.04)return null;
   const sign=side==="LONG"?1:-1;
   return {side,entry,stop,risk,target1:entry+sign*risk*1.5,target2:entry+sign*risk*2.2,target3:entry+sign*risk*3,volumeRatio:Number(volumeRatio.toFixed(3)),setup:breakout?"BREAKOUT":"EMA20_RECLAIM",candleTime:c.time,ema20:e20,atr:volatility};
 }
-export function buildMtfSignal({symbol,market,candles1h,candles15m}){
+export function buildMtfSignal({symbol,market,candles1h,candles15m,options={}}){
   if(!market||!["BULL","BEAR"].includes(market.regime))return null;
   const side=classifySymbol1h(candles1h,market.regime);if(!side)return null;
-  const entry=findEntry15m(candles15m,side);return entry?{symbol,side,marketRegime:market.regime,marketBreadth:market,trend1h:side,...entry}:null;
+  const entry=findEntry15m(candles15m,side,options);return entry?{symbol,side,marketRegime:market.regime,marketBreadth:market,trend1h:side,...entry}:null;
 }
