@@ -112,9 +112,9 @@ function stats(trades){
  let eq=0,peak=0,dd=0;for(const t of [...trades].sort((a,b)=>a.exitTime-b.exitTime)){eq+=t.netR;peak=Math.max(peak,eq);dd=Math.max(dd,peak-eq);}
  return{trades:trades.length,wins:wins.length,losses:loss.length,winRatePct:trades.length?100*wins.length/trades.length:0,netR:trades.reduce((s,t)=>s+t.netR,0),expectancyR:trades.length?trades.reduce((s,t)=>s+t.netR,0)/trades.length:0,profitFactor:gl?gw/gl:gw?null:0,maxDrawdownR:dd};
 }
-function summarizeTrades(trades,split){
+function summarizeTrades(trades,split,openAtEnd){
  const done=trades.filter(t=>t.closedAt),oos=done.filter(t=>t.signalTime>=split),ins=done.filter(t=>t.signalTime<split);
- return{overall:stats(done),inSample:stats(ins),outOfSample:stats(oos),openAtEnd:trades.filter(t=>!t.closedAt).length};
+ return{overall:stats(done),inSample:stats(ins),outOfSample:stats(oos),openAtEnd};
 }
 async function main(){
  const now=Date.now(),periodStart=now-DAYS*DAY,from=periodStart-WARMUP_DAYS*DAY;
@@ -174,7 +174,7 @@ async function main(){
  const variants={};
  for(const v of VARIANTS){
   const s=state[v.id];
-  variants[v.id]={label:v.label,...summarizeTrades(s.trades,split),pendingAtEnd:Boolean(s.pending)};
+  variants[v.id]={label:v.label,...summarizeTrades(s.trades,split,s.open?1:0),pendingAtEnd:Boolean(s.pending)};
  }
  const report={generatedAt:new Date().toISOString(),exchange:"Binance USD-M Futures",symbol:SYMBOL,period:{from:new Date(periodStart).toISOString(),to:new Date(now).toISOString(),days:DAYS},split:{inSampleDays:120,outOfSampleDays:60,outOfSampleFrom:new Date(split).toISOString()},data:{oneHourCandles:h1.length,fourHourCandles:h4.length,fifteenMinuteCandles:m15.length,warmupDays:WARMUP_DAYS},execution:{entry:"next 15m open",feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,partialExitsPct:[40,35,25],maxHoldHours:72,stopTargetSameCandle:"stop first",funding:"excluded"},method:"Chronological 15m simulation. A-C use the current analyzer, the same filter definitions and closed-15m EMA20 confirmation. D uses the independent pure-PA 4H/1H/15m logic. One open position per model; overlapping signals while a position is open are ignored.",variants};
  await mkdir("artifacts",{recursive:true});
