@@ -2,7 +2,7 @@ import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { analyzeFuturesSymbol } from "../src/index.js";
 import { passesCompression, passesAtrCap, passesBreakoutBody } from "../src/futures-filter-experiments.js";
-import { passesVolumeThreshold, isLateEntry, hasPullbackOrBreakout, passesEntryFreshness } from "../src/futures-entry-experiments.js";
+import { passesVolumeThreshold, isLateEntry, hasPullbackOrBreakout, passesEntryFreshness } from "../src/futures-entry-experiments.js";\nimport { detectOneHourBOS, buildPriceActionSignal } from "./btcusdt-price-action.mjs";
 
 const BASE = "https://fapi.binance.com";
 const SYMBOL = "BTCUSDT";
@@ -165,7 +165,7 @@ async function cycle() {
   }
   await saveState(state);
   const report={at:new Date().toISOString(),symbol:SYMBOL,exchange:"Binance USD-M public market data",mode:"PAPER ONLY — no order endpoints or credentials",
-    architecture:"4H regime + 1H directional signal + 15M candle confirmation; entry at next 15M open",
+    architecture:"A-C: existing analyzer + 15M EMA/candle confirmation. D: pure PA — 4H HH/HL or LH/LL, 1H BOS, 15M liquidity sweep/reclaim + close through prior bar; entry next 15M open.",
     costs:{feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,funding:"not included"},
     latestClosed:{h4:h4.at(-1).time,h1:latest1h.time,m15:m15.at(-1).time},
     variants:Object.fromEntries(VARIANTS.map(v=>{const s=state.variants[v.id];return[v.id,{label:v.label,...stats(s.trades),open:Boolean(s.open),pending:Boolean(s.pending),openTrade:s.open?{side:s.open.side,entry:s.open.entry,stop:s.open.stop,targets:s.open.targets,openedAt:s.open.openedAt}:null}]}))};
