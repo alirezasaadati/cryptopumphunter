@@ -7,9 +7,9 @@ const SYMBOLS=Math.max(3,Math.min(24,Number(process.env.BACKTEST_SYMBOLS||12)));
 const FEE=Number(process.env.BACKTEST_FEE||.0005),SLIP=Number(process.env.BACKTEST_SLIPPAGE||.0002);
 const MARGIN=Number(process.env.BACKTEST_MARGIN_USD||1),LEV=Number(process.env.BACKTEST_LEVERAGE||10),NOTIONAL=MARGIN*LEV;
 const VARIANTS=[
-{name:"golden_zone_38_62",fibMin:.382,fibMax:.618,leftBars:3,rightBars:3},
-{name:"wide_zone_38_78",fibMin:.382,fibMax:.786,leftBars:3,rightBars:3},
-{name:"tight_zone_50_62",fibMin:.5,fibMax:.618,leftBars:3,rightBars:3}
+{name:"A_strong_cloud",mode:"A",fibMin:.382,fibMax:.618,leftBars:3,rightBars:3},
+{name:"B_cloud_breakout_fib_pullback",mode:"B",fibMin:.382,fibMax:.618,leftBars:3,rightBars:3},
+{name:"C_multi_timeframe_1h_4h",mode:"C",fibMin:.382,fibMax:.618,leftBars:3,rightBars:3}
 ];
 async function json(url){const r=await fetch(url,{headers:{accept:"application/json"},signal:AbortSignal.timeout(25000)});const t=await r.text();if(!r.ok)throw Error("HTTP "+r.status+" "+t.slice(0,160));const d=JSON.parse(t);if(d?.result==="error")throw Error(JSON.stringify(d.errors||d.error));return d;}
 function norm(rows){const seen=new Set();return(rows||[]).map(x=>({time:Number(x.time)<1e12?Number(x.time)*1000:Number(x.time),open:+x.open,high:+x.high,low:+x.low,close:+x.close,volume:+x.volume||0})).filter(x=>[x.time,x.open,x.high,x.low,x.close].every(Number.isFinite)&&x.open>0&&x.low>0&&x.high>=Math.max(x.open,x.close)&&x.low<=Math.min(x.open,x.close)).sort((a,b)=>a.time-b.time).filter(x=>{if(seen.has(x.time)||x.time+INTERVAL>Date.now())return false;seen.add(x.time);return true;});}
