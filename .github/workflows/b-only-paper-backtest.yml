@@ -50,3 +50,5 @@ jobs:
           path: artifacts/dual-engine-backtest.json
           if-no-files-found: warn
           retention-days: 14
+
+# Validate corrected minimum pivot-history guard
