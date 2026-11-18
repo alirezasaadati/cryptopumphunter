@@ -1,0 +1,49 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  priceChangePercent,
+  tradeOutcomePercent,
+  targetReached,
+  stopReached
+} from "../src/index.js";
+
+test("LONG and SHORT price returns use the correct direction", () => {
+  assert.equal(priceChangePercent("LONG", 100, 105), 5);
+  assert.equal(priceChangePercent("SHORT", 100, 95), 5);
+  assert.equal(priceChangePercent("SHORT", 100, 105), -5);
+});
+
+test("TP/SL predicates respect trade direction", () => {
+  assert.equal(targetReached("LONG", 110, 105), true);
+  assert.equal(targetReached("SHORT", 95, 100), true);
+  assert.equal(stopReached("LONG", 95, 100), true);
+  assert.equal(stopReached("SHORT", 105, 100), true);
+});
+
+test("partial TP outcome includes the remaining position at the stop", () => {
+  const trade = {
+    side: "SHORT",
+    actualEntry: 100,
+    target1: 95,
+    target2: 90,
+    target3: 85,
+    tpHits: ["TP1"]
+  };
+  const result = tradeOutcomePercent(trade, 105);
+  // 40% at +5%, remaining 60% at -5% = 0%.
+  assert.equal(Number(result.toFixed(8)), 0);
+});
+
+test("full TP3 outcome is the weighted result of all targets", () => {
+  const trade = {
+    side: "LONG",
+    actualEntry: 100,
+    target1: 105,
+    target2: 110,
+    target3: 120,
+    tpHits: ["TP1", "TP2", "TP3"]
+  };
+  const result = tradeOutcomePercent(trade, 120);
+  // 40%*5 + 35%*10 + 25%*20 = 10%.
+  assert.equal(Number(result.toFixed(8)), 10);
+});
