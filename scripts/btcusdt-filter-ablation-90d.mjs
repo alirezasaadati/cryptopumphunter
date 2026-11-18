@@ -19,7 +19,40 @@ const VARIANTS=[
 {id:"combined_1_2x_quality",label:"Volume 1.2x + entry quality",minVolumeRatio:1.2,requireSetup:true,avoidLate:true}
 ];
 async function getJson(url){const r=await fetch(url,{headers:{accept:"application/json"},signal:AbortSignal.timeout(25000)});const body=await r.text();if(!r.ok)throw new Error("Binance HTTP "+r.status+": "+body.slice(0,200));const d=JSON.parse(body);if(!Array.isArray(d))throw new Error("Unexpected Binance kline response");return d;}
-async function fetchKlines(interval,fromMs,toMs){const out=[];let cursor=fromMs;const step=interval==="1h"?HOUR:FOUR_HOURS;for(let page=0;page<5&&cursor<toMs;page++){const u=new URL(BASE+"/fapi/v1/klines");u.searchParams.set("symbol",SYMBOL);u.searchParams.set("interval",interval);u.searchParams.set("startTime",String(cursor));u.searchParams.set("endTime",String(toMs));u.searchParams.set("limit","1500");const rows=await getJson(u);if(!rows.length)break;for(const x of rows){const c={time:+x[0],open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+x[5],closeTime:+x[6]};if([c.time,c.open,c.high,c.low,c.close,c.volume,c.closeTime].every(Number.isFinite)&&c.open>0&&c.low>0&&c.high>=c.low&&c.close>0&&c.volume>=0&&c.closeTime<Date.now())out.push(c);}const last=+rows[rows.length-1][0];if(!Number.isFinite(last)||last<cursor)throw new Error("Binance pagination did not advance");cursor=last+step;if(rows.length<1500)break;}const m=new Map(out.map(c=>[c.time,c]));return [...m.values()].sort((a,b)=>a.time-b.time);}
+async function fetchKlines(interval,fromMs,toMs){
+ const dir=await mkdtemp(join(tmpdir(),"btc-klines-")),all=[];
+ try{
+  const first=new Date(fromMs),last=new Date(toMs);
+  let month=new Date(Date.UTC(first.getUTCFullYear(),first.getUTCMonth(),1));
+  const currentMonth=Date.UTC(last.getUTCFullYear(),last.getUTCMonth(),1);
+  while(month.getTime()<currentMonth){
+   const y=month.getUTCFullYear(),m=String(month.getUTCMonth()+1).padStart(2,"0");
+   const file=SYMBOL+"-"+interval+"-"+y+"-"+m+".zip";
+   const url="https://data.binance.vision/data/futures/um/monthly/klines/"+SYMBOL+"/"+interval+"/"+file;
+   const response=await fetch(url,{signal:AbortSignal.timeout(30000)});
+   if(response.status===404)throw new Error("Binance Vision monthly archive missing: "+file);
+   if(!response.ok)throw new Error("Binance Vision HTTP "+response.status+" for "+file);
+   const path=join(dir,file);await writeFile(path,Buffer.from(await response.arrayBuffer()));
+   const csv=execFileSync("unzip",["-p",path],{encoding:"utf8",maxBuffer:128*1024*1024});
+   all.push(...parseCsvCandles(csv,interval));
+   month=new Date(Date.UTC(y,month.getUTCMonth()+1,1));
+  }
+  const day=new Date(Date.UTC(last.getUTCFullYear(),last.getUTCMonth(),1));
+  while(day.getTime()<toMs){
+   const y=day.getUTCFullYear(),m=String(day.getUTCMonth()+1).padStart(2,"0"),d=String(day.getUTCDate()).padStart(2,"0");
+   const file=SYMBOL+"-"+interval+"-"+y+"-"+m+"-"+d+".zip";
+   const url="https://data.binance.vision/data/futures/um/daily/klines/"+SYMBOL+"/"+interval+"/"+file;
+   const response=await fetch(url,{signal:AbortSignal.timeout(30000)});
+   if(response.status===404){day.setUTCDate(day.getUTCDate()+1);continue;}
+   if(!response.ok)throw new Error("Binance Vision HTTP "+response.status+" for "+file);
+   const path=join(dir,file);await writeFile(path,Buffer.from(await response.arrayBuffer()));
+   const csv=execFileSync("unzip",["-p",path],{encoding:"utf8",maxBuffer:32*1024*1024});
+   all.push(...parseCsvCandles(csv,interval));day.setUTCDate(day.getUTCDate()+1);
+  }
+ }finally{await rm(dir,{recursive:true,force:true});}
+ const unique=new Map(all.filter(c=>c.time>=fromMs&&c.time<toMs).map(c=>[c.time,c]));
+ return [...unique.values()].sort((x,y)=>x.time-y.time);
+}
 function summarize(ts){const w=ts.filter(t=>t.netR>0),l=ts.filter(t=>t.netR<0),gw=w.reduce((s,t)=>s+t.netR,0),gl=Math.abs(l.reduce((s,t)=>s+t.netR,0));let e=0,p=0,dd=0;for(const t of ts){e+=t.netR;p=Math.max(p,e);dd=Math.max(dd,p-e);}return{trades:ts.length,wins:w.length,losses:l.length,winRatePct:ts.length?w.length/ts.length*100:0,netR:ts.reduce((s,t)=>s+t.netR,0),expectancyR:ts.length?ts.reduce((s,t)=>s+t.netR,0)/ts.length:0,profitFactor:gl?gw/gl:gw?null:0,maxDrawdownR:dd};}
 function simulate({side,entry,stop,targets,candles}){const dir=side==="LONG"?1:-1,risk=dir===1?entry-stop:stop-entry;if(!(risk>0))return null;let rem=1,net=0,hits=0,reason="TIME_EXIT";const feeR=p=>FEE*(entry+p)/risk;const close=raw=>{const fill=raw*(1-dir*SLIPPAGE);net+=rem*(dir*(fill-entry)/risk-feeR(fill));rem=0;};for(let i=0;i<Math.min(candles.length,MAX_HOLD_HOURS+1)&&rem>1e-9;i++){const b=candles[i],gap=dir===1?b.open<=stop:b.open>=stop,touch=dir===1?b.low<=stop:b.high>=stop;if(gap||touch){close(gap?b.open:stop);reason="STOP";break;}for(let k=0;k<3&&rem>1e-9;k++){const t=targets[k],hit=dir===1?b.high>=t:b.low<=t;if(!hit)break;const wt=[.4,.35,.25][k],fill=t*(1-dir*SLIPPAGE);net+=wt*(dir*(fill-entry)/risk-feeR(fill));rem-=wt;hits++;}if(rem<=1e-9){rem=0;reason="TARGETS";break;}if(i===Math.min(candles.length-1,MAX_HOLD_HOURS))close(b.close);}if(rem>1e-9)close(candles[Math.min(candles.length-1,MAX_HOLD_HOURS)].close);return{side,entry,stop,risk,netR:net,targetHits:hits,exitReason:reason,entryTime:candles[0].time};}
 function bySide(ts){return{LONG:summarize(ts.filter(t=>t.side==="LONG")),SHORT:summarize(ts.filter(t=>t.side==="SHORT"))};}
