@@ -36,6 +36,27 @@ jobs:
           name: mtf-futures-baseline-reports
           path: artifacts/
           retention-days: 30
+  fixed-margin-target:
+    needs: validate-and-backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 90-day fixed 25% margin ROI backtest at 10x
+        env:
+          BACKTEST_DAYS: '90'
+          BACKTEST_SYMBOLS: '10'
+          BACKTEST_LEVERAGE: '10'
+          MTF_TARGET_MODE: MARGIN_ROI
+        run: node scripts/backtest-mtf-futures.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtf-fixed-25pct-margin-roi-10x
+          path: artifacts/mtf-futures-backtest.*
+          retention-days: 30
   entry-ablation:
     needs: validate-and-backtest
     runs-on: ubuntu-latest
