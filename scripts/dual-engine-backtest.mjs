@@ -190,7 +190,7 @@ for(const symbol of SYMBOLS){
       gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0,
       fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError,
       tickSize,quantityPrecision,contractSize:instrument.contractSize,contractType:instrument.type});
-    for(const engine of ["A","A_LONG_ONLY","A_BE","B","B_BTC_FILTER","B_SHORT_ONLY"]){
+    for(const engine of ["A","A_BE","B","B_BTC_FILTER"]){
       const analyze=(engine==="B"||engine==="B_BTC_FILTER"||engine==="B_SHORT_ONLY")?analyzeEngineB:analyzeEngineA;
       const weights=(engine==="B"||engine==="B_BTC_FILTER"||engine==="B_SHORT_ONLY")?B_WEIGHTS:A_WEIGHTS;
       const trades=report.engines[engine].trades;
@@ -240,30 +240,72 @@ for(const symbol of SYMBOLS){
         i += result.barsObserved + 1;
       }
     }
+
+    // True combined A-LONG / B-SHORT simulation. Both engines are evaluated
+    // on each closed candle; one accepted trade reserves this symbol until its
+    // simulated exit. No post-hoc trade deletion is used.
+    let directionalIndex = 79;
+    while (directionalIndex < valid.length - 1) {
+      const history = valid.slice(0, directionalIndex + 1);
+      const candidates = [];
+      const aSignal = analyzeEngineA({symbol, candles:history, skipLiquidityCheck:true});
+      const bSignal = analyzeEngineB({symbol, candles:history, skipLiquidityCheck:true});
+      if (aSignal?.side === "LONG") candidates.push({engine:"A_LONG_ONLY",signal:aSignal,weights:A_WEIGHTS});
+      if (bSignal?.side === "SHORT") candidates.push({engine:"B_SHORT_ONLY",signal:bSignal,weights:B_WEIGHTS});
+      if (!candidates.length) { directionalIndex++; continue; }
+      candidates.sort((a,b)=>b.signal.score-a.signal.score ||
+        (a.engine==="A_LONG_ONLY"?-1:1));
+      const chosen = candidates[0];
+      for (const rejected of candidates.slice(1)) {
+        report.engines[rejected.engine].skipped.push({
+          symbol,side:rejected.signal.side,candleTime:rejected.signal.candleTime,
+          score:rejected.signal.score,status:"same_candle_direction_conflict",
+          reason:"Only one directional engine may reserve a symbol at a time"
+        });
+      }
+      const executableSignal = normalizeSignal(chosen.signal,tickSize);
+      const result = simulatePaperTrade({
+        signal:executableSignal,candles:valid.slice(directionalIndex+1),
+        entryNotional:ENTRY_NOTIONAL,targetWeights:chosen.weights,
+        feeRate:FEE_RATE,slippageBps:SLIPPAGE_BPS,maxEntryDriftPct:0.35,
+        quantityPrecision,maxBars:MAX_HOLD_BARS
+      });
+      if (["invalid_input","invalid_data","no_future_candles","not_filled"].includes(result.status)) {
+        report.engines[chosen.engine].skipped.push({
+          symbol,side:chosen.signal.side,candleTime:chosen.signal.candleTime,
+          score:chosen.signal.score,status:result.status,reason:result.reason??null
+        });
+        directionalIndex++;
+        continue;
+      }
+      report.engines[chosen.engine].trades.push({
+        symbol,side:chosen.signal.side,candleTime:chosen.signal.candleTime,
+        score:chosen.signal.score,entry:executableSignal.entry,
+        entry2:executableSignal.entry2??null,stop:executableSignal.stop,
+        targets:executableSignal.targets,status:result.status,
+        netPnl:result.netPnl,fees:result.fees,funding:result.funding,
+        closedAt:result.status==="closed"?(result.exits.at(-1)?.time??null):null,
+        fills:result.fills,exits:result.exits,returnPct:result.returnPct,
+        barsObserved:result.barsObserved,entry2Filled:result.entry2Filled,
+        stopMovedToBreakeven:result.stopMovedToBreakeven,
+        ambiguousEvents:result.ambiguousEvents
+      });
+      // Advance past the entire simulated position: this is the shared
+      // symbol lock in the simulation lifecycle, not a report-time filter.
+      directionalIndex += Math.max(1,result.barsObserved);
+    }
     console.log(`completed ${symbol}: ${valid.length} candles`);
   }catch(error){
     report.data.push({symbol,error:String(error?.message??error)});
     console.log(`failed ${symbol}: ${String(error?.message??error)}`);
   }
 }
-// Apply the cross-engine symbol lock after both directional ledgers are simulated.
-const exclusive = resolveExclusiveDirectionalTrades(
-  report.engines.A_LONG_ONLY.trades,
-  report.engines.B_SHORT_ONLY.trades
-);
-report.engines.A_LONG_ONLY.trades = exclusive.longTrades;
-report.engines.B_SHORT_ONLY.trades = exclusive.shortTrades;
-for (const rejected of exclusive.rejected) {
-  const engine = rejected.engine;
-  report.engines[engine].skipped.push({symbol:rejected.symbol,side:rejected.side,
-    candleTime:rejected.candleTime,score:rejected.score,status:"symbol_direction_conflict",
-    reason:"Opposite direction already active for this symbol"});
-}
 report.directionalModel = {
-  policy: "Engine A emits LONG only; Engine B emits SHORT only. A symbol is reserved from signal candle through trade close; simultaneous candidates choose higher score, ties favor Engine A.",
-  acceptedLongTrades: exclusive.longTrades.length,
-  acceptedShortTrades: exclusive.shortTrades.length,
-  rejectedConflicts: exclusive.rejected.length
+  policy: "Combined chronological simulation: A contributes LONG candidates, B contributes SHORT candidates; the selected trade reserves the symbol through its simulated position lifetime. Same-candle candidates choose higher score; ties favor A.",
+  acceptedLongTrades: report.engines.A_LONG_ONLY.trades.length,
+  acceptedShortTrades: report.engines.B_SHORT_ONLY.trades.length,
+  rejectedSameCandleConflicts: report.engines.A_LONG_ONLY.skipped.filter(t=>t.status==="same_candle_direction_conflict").length +
+    report.engines.B_SHORT_ONLY.skipped.filter(t=>t.status==="same_candle_direction_conflict").length
 };
 for(const engine of ["A","A_LONG_ONLY","A_BE","B","B_BTC_FILTER","B_SHORT_ONLY"]){
   const item=report.engines[engine];
