@@ -1,0 +1,27 @@
+name: Staging config validation
+
+on:
+  push:
+    branches:
+      - feature/permanent-signal-ledger
+    paths:
+      - 'wrangler.staging.toml'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/staging-config-check.yml'
+  workflow_dispatch:
+
+jobs:
+  staging-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Run unit tests
+        run: npm test
+      - name: Validate staging Worker configuration without deploying
+        run: npx wrangler deploy --config wrangler.staging.toml --dry-run --outdir /tmp/staging-worker

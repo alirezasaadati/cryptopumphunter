@@ -2,7 +2,7 @@ name: Code checks
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/permanent-signal-ledger]
   pull_request:
   workflow_dispatch:
 
@@ -23,3 +23,5 @@ jobs:
         run: npm install
       - name: Syntax and unit tests
         run: npm test
+      - name: Cloudflare Worker dry-run build
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-dry-run

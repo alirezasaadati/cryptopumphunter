@@ -17,4 +17,13 @@ id = "dab441cdffc0460faeb497cee6edd314"
 crons = ["*/5 * * * *"]
 
 [secrets]
-required = ["OWNER_TELEGRAM_ID"]
+required = ["OWNER_TELEGRAM_ID", "SIGNAL_DELIVERY_SECRET"]
+
+
+[[durable_objects.bindings]]
+name = "SIGNAL_DELIVERY"
+class_name = "SignalDeliveryCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SignalDeliveryCoordinator"]

@@ -1,0 +1,25 @@
+name = "cryptopumphunter-staging"
+main = "src/index.js"
+compatibility_date = "2026-11-16"
+
+[vars]
+APP_MODE = "manual"
+MIN_SIGNAL_SCORE = "72"
+SIGNAL_TTL_MINUTES = "60"
+MAX_ENTRY_DRIFT_PCT = "0.35"
+MAX_SCAN_SYMBOLS = "8"
+
+[[kv_namespaces]]
+binding = "APP_KV"
+id = "69be0d945b1a442ca926a84a4f9a86f7"
+
+[secrets]
+required = ["OWNER_TELEGRAM_ID", "SIGNAL_DELIVERY_SECRET"]
+
+[[durable_objects.bindings]]
+name = "SIGNAL_DELIVERY"
+class_name = "SignalDeliveryCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SignalDeliveryCoordinator"]
