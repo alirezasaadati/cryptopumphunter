@@ -1,4 +1,5 @@
 import { runSpotScan } from "./spot-engine.js";
+import { entryDriftPercent, passesEntryFreshness } from "./futures-entry-experiments.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals, issuedSignalSymbols } from "./signal-ledger.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
@@ -1219,6 +1220,19 @@ async function getKrakenFuturesUniverse() {
     }));
 }
 
+async function getFreshKrakenFuturesPrices(symbols) {
+  const wanted = new Set((Array.isArray(symbols) ? symbols : []).map(x => String(x).toUpperCase()));
+  const data = await krakenFuturesJson("/tickers", "Kraken Futures live entry validation");
+  if (!Array.isArray(data?.tickers)) throw new Error("فهرست قیمت لحظه‌ای Kraken معتبر نیست.");
+  const prices = new Map();
+  for (const ticker of data.tickers) {
+    const symbol = String(ticker?.symbol || "").toUpperCase();
+    const price = Number(ticker?.last);
+    if (wanted.has(symbol) && Number.isFinite(price) && price > 0) prices.set(symbol, price);
+  }
+  return prices;
+}
+
 async function getKrakenFuturesCandles(symbol, interval) {
   const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}`;
   const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
@@ -1404,6 +1418,7 @@ function formatFuturesSignal(item, index = 1) {
     `🪙 نماد: ${formatFuturesSymbol(item.symbol)}\n` +
     `🧭 جهت معامله: ${sideLabel}\n` +
     `📍 ورود: ${formatPrice(item.entry)}\n` +
+    (Number.isFinite(Number(item.livePrice)) ? `📡 قیمت بازار هنگام کنترل: ${formatPrice(item.livePrice)} | اختلاف: ${Number(item.entryDriftPct).toFixed(3)}%\n` : "") +
     `🛑 حد ضرر: ${formatPrice(item.stop)}\n` +
     `🎯 تارگت ۱: ${formatPrice(item.target1)}\n` +
     `🎯 تارگت ۲: ${formatPrice(item.target2)}\n` +
@@ -1717,7 +1732,31 @@ async function runFuturesSignalScan(env, options = {}) {
   const nonDuplicateCandidates = await filterActiveDuplicateFuturesSignals(env, eligibleCandidates);
   const generatedSignals = nonDuplicateCandidates.slice(0, 8)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
-  const signals = await savePendingFuturesSignals(env, generatedSignals);
+  let publishableSignals = generatedSignals;
+  if (generatedSignals.length) {
+    try {
+      const livePrices = await getFreshKrakenFuturesPrices(generatedSignals.map(x => x.symbol));
+      const checkedAt = Date.now();
+      const maxDriftPct = 0.20;
+      publishableSignals = generatedSignals.filter(signal => {
+        const livePrice = livePrices.get(String(signal.symbol).toUpperCase());
+        const driftPct = entryDriftPercent(signal.entry, livePrice);
+        if (!passesEntryFreshness(signal.entry, livePrice, maxDriftPct)) {
+          console.warn("Futures signal rejected: stale entry price", signal.symbol,
+            "entry=", signal.entry, "live=", livePrice, "driftPct=", driftPct);
+          return false;
+        }
+        signal.livePrice = livePrice;
+        signal.entryDriftPct = driftPct;
+        signal.livePriceCheckedAt = new Date(checkedAt).toISOString();
+        return true;
+      });
+    } catch (error) {
+      console.error("Live entry-price validation failed; signals withheld:", String(error?.message || error));
+      publishableSignals = [];
+    }
+  }
+  const signals = await savePendingFuturesSignals(env, publishableSignals);
 
   // Experimental candidates are delivered only to the owner, clearly labelled,
   // and rate-limited per symbol/direction. They never enter the production signal queue.
