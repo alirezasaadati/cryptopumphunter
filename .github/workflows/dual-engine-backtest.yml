@@ -7,6 +7,7 @@ on:
     paths:
       - "src/engines/**"
       - "scripts/dual-engine-backtest.mjs"
+      - "scripts/dual-engine.test.mjs"
       - ".github/workflows/dual-engine-backtest.yml"
   workflow_dispatch:
     inputs:
