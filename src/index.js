@@ -1465,8 +1465,10 @@ async function handleSignalArchiveAction(action,env,chatId){
     const s=r.signal||{};
     const date=new Date(r.publishedAt).toLocaleString("fa-IR",{timeZone:"Asia/Tehran"});
     const resultLabel=r.finalResult==="STOP"?"استاپ":r.finalResult==="FULL_TARGET"?"فول تارگت":r.finalResult||"باز";
-    const milestones=(r.milestones||[]).join("، ")||"—";
-    return `🪙 ${r.symbol} | ${r.side==="LONG"?"لانگ":"شورت"}\n🕒 ${date}\nورود: ${formatPrice(s.entry)} | استاپ: ${formatPrice(s.stop)}\nاهداف: ${formatPrice(s.target1)} / ${formatPrice(s.target2)} / ${formatPrice(s.target3)}\nوضعیت: ${resultLabel} | اهداف لمس‌شده: ${milestones}`;
+    const milestoneNames={TP1:"تارگت یک",TP2:"تارگت دو",TP3:"تارگت سه"};
+    const milestones=(r.milestones||[]).map(x=>milestoneNames[x]||x).join("، ")||"—";
+    const closedDate=r.closedAt?new Date(r.closedAt).toLocaleString("fa-IR",{timeZone:"Asia/Tehran"}):null;
+    return `🪙 ${r.symbol} | ${r.side==="LONG"?"لانگ":"شورت"}\n🕒 زمان صدور: ${date}${closedDate?`\n🔒 زمان بسته‌شدن: ${closedDate}`:""}\nورود: ${formatPrice(s.entry)} | استاپ: ${formatPrice(s.stop)}\nاهداف: ${formatPrice(s.target1)} / ${formatPrice(s.target2)} / ${formatPrice(s.target3)}\nنتیجه نهایی: ${resultLabel} | اهداف لمس‌شده: ${milestones}`;
   }).join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
   const back=view==="archive"?"signal_archive":view==="open"?"open_trades":"trade_history";
   const keyboard=[];
