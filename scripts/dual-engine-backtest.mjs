@@ -51,7 +51,7 @@ const report = {
     intrabar: "Stop-first; ambiguous Entry 2 versus TP1 resolves TP1-first/cancel Entry 2 and is recorded."
   },
   data: [],
-  engines: {A:{trades:[],skipped:[],summary:null},A_BE:{trades:[],skipped:[],summary:null},B:{trades:[],skipped:[],summary:null},B_BTC_FILTER:{trades:[],skipped:[],summary:null}},
+  engines: {A:{trades:[],skipped:[],summary:null},A_BE:{trades:[],skipped:[],summary:null},B:{trades:[],skipped:[],summary:null},B_BTC_FILTER:{trades:[],skipped:[],summary:null},B_SHORT_ONLY:{trades:[],skipped:[],summary:null}},
   warnings: [
     "This is an exploratory strategy backtest, not proof of future performance.",
     "Liquidity filter is disabled because historical quote turnover and contract multipliers are not yet validated.",
@@ -189,15 +189,19 @@ for(const symbol of SYMBOLS){
       gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0,
       fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError,
       tickSize,quantityPrecision,contractSize:instrument.contractSize,contractType:instrument.type});
-    for(const engine of ["A","A_BE","B","B_BTC_FILTER"]){
-      const analyze=(engine==="B"||engine==="B_BTC_FILTER")?analyzeEngineB:analyzeEngineA;
-      const weights=(engine==="B"||engine==="B_BTC_FILTER")?B_WEIGHTS:A_WEIGHTS;
+    for(const engine of ["A","A_BE","B","B_BTC_FILTER","B_SHORT_ONLY"]){
+      const analyze=(engine==="B"||engine==="B_BTC_FILTER"||engine==="B_SHORT_ONLY")?analyzeEngineB:analyzeEngineA;
+      const weights=(engine==="B"||engine==="B_BTC_FILTER"||engine==="B_SHORT_ONLY")?B_WEIGHTS:A_WEIGHTS;
       const trades=report.engines[engine].trades;
       let i=79;
       while(i<valid.length-1){
         const history=valid.slice(0,i+1);
         const signal=analyze({symbol,candles:history,skipLiquidityCheck:true});
         if(!signal){i++;continue;}
+        if(engine==="B_SHORT_ONLY" && signal.side!=="SHORT"){
+          report.engines[engine].skipped.push({symbol,side:signal.side,candleTime:signal.candleTime,score:signal.score,status:"long_disabled",reason:"Diagnostic short-only variant"});
+          i++;continue;
+        }
         if(engine==="B_BTC_FILTER"){
           const signalTime=history.at(-1).time;
           let lo=0,hi=btcCandles.length;
@@ -250,6 +254,6 @@ await fs.mkdir("artifacts",{recursive:true});
 await fs.writeFile("artifacts/dual-engine-backtest.json",JSON.stringify(report,null,2));
 console.log(JSON.stringify({
   data:report.data.map(({symbol,candles,gapCount,missingIntervals,error})=>({symbol,candles,gapCount,missingIntervals,error})),
-  A:report.engines.A.summary,A_BE:report.engines.A_BE.summary,B:report.engines.B.summary,B_BTC_FILTER:report.engines.B_BTC_FILTER.summary
+  A:report.engines.A.summary,A_BE:report.engines.A_BE.summary,B:report.engines.B.summary,B_BTC_FILTER:report.engines.B_BTC_FILTER.summary,B_SHORT_ONLY:report.engines.B_SHORT_ONLY.summary
 },null,2));
 if(!report.data.some(d=>d.candles>=80)) process.exitCode=1;
