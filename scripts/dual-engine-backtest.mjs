@@ -27,7 +27,7 @@ const report = {
   universe: SYMBOLS,
   methodology: {
     signalTiming: "Signal is evaluated using the just-closed candle; execution starts no earlier than the next candle.",
-    liquidity: "Historical quote turnover and contract multipliers are not yet validated; liquidity filter is explicitly bypassed for this research run.",
+    liquidity: "Historical quote turnover is not validated; liquidity filter is explicitly bypassed for this research run. Current contract tick size and quantity precision are read from Kraken instrument metadata.",
     universe: "Current listed PF contracts only; delisted/historical universe and survivorship bias are not resolved.",
     fees: {rate:FEE_RATE, note:"Configurable research assumption; not verified account-specific Kraken fee tier."},
     slippageBps: SLIPPAGE_BPS,
@@ -42,6 +42,7 @@ const report = {
     entryNotionalPerLegUsd: ENTRY_NOTIONAL,
     maxHoldBars: MAX_HOLD_BARS,
     portfolio: "Trades are sequential per engine/symbol; cross-symbol portfolio exposure, correlation, and concurrent capital constraints are not modeled.",
+    drawdown: "Max drawdown is a closed-trade equity-curve proxy sorted by exit timestamp, not a true portfolio drawdown because cross-symbol overlap and capital allocation are not modeled.",
     intrabar: "Stop-first; ambiguous Entry 2 versus TP1 resolves TP1-first/cancel Entry 2 and is recorded."
   },
   data: [],
