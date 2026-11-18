@@ -1227,8 +1227,10 @@ async function getFreshKrakenFuturesPrices(symbols) {
   const prices = new Map();
   for (const ticker of data.tickers) {
     const symbol = String(ticker?.symbol || "").toUpperCase();
-    const price = Number(ticker?.last);
-    if (wanted.has(symbol) && Number.isFinite(price) && price > 0) prices.set(symbol, price);
+    const bid = Number(ticker?.bid);
+    const ask = Number(ticker?.ask);
+    if (wanted.has(symbol) && Number.isFinite(bid) && bid > 0 &&
+        Number.isFinite(ask) && ask >= bid) prices.set(symbol, { bid, ask });
   }
   return prices;
 }
@@ -1739,7 +1741,8 @@ async function runFuturesSignalScan(env, options = {}) {
       const checkedAt = Date.now();
       const maxDriftPct = 0.20;
       publishableSignals = generatedSignals.filter(signal => {
-        const livePrice = livePrices.get(String(signal.symbol).toUpperCase());
+        const quote = livePrices.get(String(signal.symbol).toUpperCase());
+        const livePrice = quote ? (signal.side === "LONG" ? quote.ask : quote.bid) : null;
         const driftPct = entryDriftPercent(signal.entry, livePrice);
         if (!passesEntryFreshness(signal.entry, livePrice, maxDriftPct)) {
           console.warn("Futures signal rejected: stale entry price", signal.symbol,
@@ -1747,6 +1750,7 @@ async function runFuturesSignalScan(env, options = {}) {
           return false;
         }
         signal.livePrice = livePrice;
+        signal.livePriceType = signal.side === "LONG" ? "ASK" : "BID";
         signal.entryDriftPct = driftPct;
         signal.livePriceCheckedAt = new Date(checkedAt).toISOString();
         return true;
