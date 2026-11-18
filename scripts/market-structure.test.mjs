@@ -6,11 +6,11 @@ const candle = (i, high, low, close = (high + low) / 2) =>
   ({ time:i*900000, open:close, high, low, close, volume:100 });
 
 test("confirmed pivots are withheld until right-side candles have closed", () => {
-  const bars = [candle(0,9,7),candle(1,10,8),candle(2,15,9),candle(3,11,8),candle(4,10,7)];
-  const early = analyzeMarketStructure(bars.slice(0,4), {leftBars:2,rightBars:2});
+  const bars = [candle(0,9,7),candle(1,10,8),candle(2,11,9),candle(3,15,10),candle(4,12,9),candle(5,11,8),candle(6,10,7)];
+  const early = analyzeMarketStructure(bars.slice(0,5), {leftBars:2,rightBars:2});
   const confirmed = analyzeMarketStructure(bars, {leftBars:2,rightBars:2});
-  assert.equal(early.confirmedHighs.some(p=>p.index===2), false);
-  assert.equal(confirmed.confirmedHighs.some(p=>p.index===2), true);
+  assert.equal(early.confirmedHighs.some(p=>p.index===3), false);
+  assert.equal(confirmed.confirmedHighs.some(p=>p.index===3), true);
 });
 
 test("BOS and CHoCH use only the last confirmed swing levels", () => {
