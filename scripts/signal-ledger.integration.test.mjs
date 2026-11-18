@@ -5,6 +5,8 @@ import { signalOutboxAction } from "../src/signal-outbox.js";
 import { createSerialExecutor } from "../src/serial-executor.js";
 import { SignalDeliveryCoordinator } from "../src/index.js";
 
+const TEST_DELIVERY_SECRET = "unit-test-delivery-secret";
+
 function memoryKV({ pageSize = 1000, failNextPut = false } = {}) {
   const data = new Map();
   let shouldFailPut = failNextPut;
@@ -165,6 +167,17 @@ test("serial executor continues processing after an earlier delivery fails", asy
   assert.equal(await run(async () => "next delivery"), "next delivery");
 });
 
+
+test("coordinator rejects missing or incorrect internal authentication secret", async () => {
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: memoryKV(), SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+  const response = await coordinator.fetch(new Request("https://signal-delivery.internal/deliver", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chatId: "1", signal: { id: "unauthorized", symbol: "BTC-PERP", side: "LONG" }, messageText: "no" })
+  }));
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).error, "Unauthorized.");
+});
 
 test("owner reconciliation confirms uncertain delivery and archives the signal idempotently", async () => {
   const kv = memoryKV();
