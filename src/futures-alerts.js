@@ -35,6 +35,7 @@ export function formatFuturesSignalAlert(signal, index = 1) {
     `🪙 نماد: ${formatFuturesSymbol(signal?.symbol)}\n` +
     `🧭 جهت معامله: ${side}\n` +
     `📍 ورود: ${formatSignalPrice(signal?.entry)}\n` +
+    (Number.isFinite(Number(signal?.livePrice)) ? `📡 قیمت بازار هنگام کنترل: ${formatSignalPrice(signal.livePrice)} | اختلاف: ${Number(signal.entryDriftPct).toFixed(3)}%\n` : "") +
     `🛑 حد ضرر: ${formatSignalPrice(signal?.stop)}\n` +
     `🎯 تارگت ۱: ${formatSignalPrice(signal?.target1)}\n` +
     `🎯 تارگت ۲: ${formatSignalPrice(signal?.target2)}\n` +
