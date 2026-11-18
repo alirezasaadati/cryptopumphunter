@@ -228,7 +228,7 @@ function directionalRejection(candidate, oneHourStructure, fourHourStructure) {
   return null;
 }
 
-export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, livePrice}) {
+export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, livePrice, strategyIds}) {
   if (!validateCandles(oneHour,PA_CONFIG.MIN_CANDLES_1H) ||
       !validateCandles(fourHour,PA_CONFIG.MIN_CANDLES_4H) ||
       !validateCandles(fifteenMin,PA_CONFIG.MIN_CANDLES_15M)) {
@@ -244,7 +244,7 @@ export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, liveP
   }
   const oneHourStructure=describeStructure(oneHour).direction;
   const fourHourStructure=describeStructure(fourHour).direction;
-  const evaluated=STRATEGIES.map(strategy=>{
+  const activeStrategies=Array.isArray(strategyIds) && strategyIds.length\n    ? STRATEGIES.filter(strategy=>strategyIds.includes(strategy.id)) : STRATEGIES;\n  const evaluated=activeStrategies.map(strategy=>{
     try {
       const candidate=strategy.fn({symbol,oneHour,fourHour,fifteenMin});
       if(candidate) candidate.context={
