@@ -126,9 +126,19 @@ for(const symbol of SYMBOLS){
   let candles;
   try{
     candles=await fetchCandles(symbol);
+    let fundingRates=new Map(), fundingError=null;
+    try{fundingRates=await fetchFunding(symbol);}catch(error){fundingError=String(error?.message??error);}
     const valid=candles.filter(c=>[c.time,c.open,c.high,c.low,c.close,c.volume].every(Number.isFinite) &&
       c.open>0 && c.low>0 && c.volume>=0 && c.high>=Math.max(c.open,c.close) &&
       c.low<=Math.min(c.open,c.close));
+    let fundingSettlements=0;
+    for(const candle of valid){
+      if(fundingRates.has(candle.time)){
+        candle.fundingSettlement=true;
+        candle.fundingRate=fundingRates.get(candle.time);
+        fundingSettlements++;
+      }
+    }
     const gaps=[];
     for(let i=1;i<valid.length;i++){
       const delta=valid[i].time-valid[i-1].time;
