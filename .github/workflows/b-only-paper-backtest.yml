@@ -1,4 +1,5 @@
 name: Engine B structure ablation backtests
+# Re-run matrix after causal-pivot boundary test correction
 
 on:
   push:
