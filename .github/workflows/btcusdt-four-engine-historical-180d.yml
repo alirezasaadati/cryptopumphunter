@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - experiment/btcusdt-four-engine-historical-backtest
+      - experiment/btcusdt-pa-diagnostics
 permissions:
   contents: read
 jobs:
