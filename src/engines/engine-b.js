@@ -1,7 +1,8 @@
+import { analyzeMarketStructure } from "./market-structure.js";
 import { ENGINE_CONFIG, validateCandles, ema, rsi, atr, volumeRatio, swings, scoreSignal, makeSignalBase, roundPrice } from "./engine-utils.js";
 
 // Independent adaptive trend/momentum/volatility model. Targets are risk multiples.
-export function analyzeEngineB({symbol,candles,quoteVolume,skipLiquidityCheck=false}) {
+export function analyzeEngineB({symbol,candles,quoteVolume,skipLiquidityCheck=false,structureMode="off"}) {
   if(!validateCandles(candles) || (!skipLiquidityCheck && (!Number.isFinite(Number(quoteVolume)) || Number(quoteVolume)<ENGINE_CONFIG.MIN_QUOTE_VOLUME))) return null;
   const closes=candles.map(c=>c.close), last=candles.at(-1), prev=candles.at(-2);
   const fast=ema(closes,20), slow=ema(closes,50), momentum=rsi(closes,14);
@@ -14,6 +15,17 @@ export function analyzeEngineB({symbol,candles,quoteVolume,skipLiquidityCheck=fa
   if(longTrend && longTrigger && momentum>=48 && momentum<=78) side="LONG";
   if(shortTrend && shortTrigger && momentum<=52 && momentum>=22) side="SHORT";
   if(!side) return null;
+  let structure = null;
+  if (structureMode !== "off") {
+    if (side !== "SHORT") return null;
+    structure = analyzeMarketStructure(candles, { atr: volatility });
+    if (!structure || structure.chochUp) return null;
+    if (structureMode === "structure" && !structure.bearishStructure) return null;
+    if (structureMode === "trendline" && !(structure.bearishStructure && structure.trendlineReject)) return null;
+    if (structureMode === "liquidity" && !(structure.bearishStructure && (structure.bosDown || structure.sweptHigh))) return null;
+    if (structureMode === "combined" && !(structure.bearishStructure && (structure.bosDown || structure.sweptHigh) && (structure.trendlineReject || structure.sweptHigh))) return null;
+    if (!["structure","trendline","liquidity","combined"].includes(structureMode)) return null;
+  }
   const trend=side==="LONG"?longTrend:shortTrend;
   const momentumOk=side==="LONG"?momentum>50:momentum<50;
   const entry=last.close, buffer=Math.max(volatility*0.65,entry*0.0015);
@@ -29,7 +41,10 @@ export function analyzeEngineB({symbol,candles,quoteVolume,skipLiquidityCheck=fa
     ...makeSignalBase({engine:"B",symbol,side,entry,stop,score,
       reason:"Adaptive 15m trend/momentum/volume trigger with ATR and swing invalidation",
       candleTime:last.time,context:{ema20:roundPrice(fast),ema50:roundPrice(slow),rsi:roundPrice(momentum),
-        atr:roundPrice(volatility),volumeRatio:roundPrice(vol),targetsR:[1.5,2.2,3]}}),
+        atr:roundPrice(volatility),volumeRatio:roundPrice(vol),targetsR:[1.5,2.2,3],structureMode,
+        marketStructure:structure?{lowerHighs:structure.lowerHighs,lowerLows:structure.lowerLows,bosDown:structure.bosDown,
+          chochUp:structure.chochUp,trendlineReject:structure.trendlineReject,equalHighPool:structure.equalHighPool,
+          sweptHigh:structure.sweptHigh}:null}}),
     targets
   };
 }
