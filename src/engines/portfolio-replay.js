@@ -8,7 +8,18 @@ export function replayPortfolio(trades, config = {}) {
   if (!Number.isInteger(cfg.maxConcurrentTrades)) throw new TypeError("maxConcurrentTrades must be an integer");
   const pnlScale = cfg.marginPerTradeUsd * cfg.leverage / cfg.sourceEntryNotionalUsd;
   const candidates = trades.filter(t => t && ["closed", "open"].includes(t.status) && Number.isFinite(t.candleTime) && Number.isFinite(t.netPnl))
-    .map(t => ({ ...t, entryTime: t.candleTime + cfg.candleIntervalMs, exitTime: t.status === "closed" && Number.isFinite(t.closedAt) ? t.closedAt : Number.POSITIVE_INFINITY, scaledNetPnlUsd: t.status === "closed" ? t.netPnl * pnlScale : null }))
+    .map(t => {
+      const rawScaledNetPnlUsd = t.status === "closed" ? t.netPnl * pnlScale : null;
+      const liquidationApproximation = rawScaledNetPnlUsd !== null && rawScaledNetPnlUsd < -cfg.marginPerTradeUsd;
+      return {
+        ...t,
+        entryTime: t.candleTime + cfg.candleIntervalMs,
+        exitTime: t.status === "closed" && Number.isFinite(t.closedAt) ? t.closedAt : Number.POSITIVE_INFINITY,
+        rawScaledNetPnlUsd,
+        scaledNetPnlUsd: rawScaledNetPnlUsd === null ? null : Math.max(rawScaledNetPnlUsd, -cfg.marginPerTradeUsd),
+        liquidationApproximation,
+      };
+    })
     .sort((a,b) => a.entryTime-b.entryTime || String(a.symbol).localeCompare(String(b.symbol)));
   let cashUsd = cfg.initialCapitalUsd, peakEquityUsd = cashUsd, maxDrawdownUsd = 0, maxConcurrentObserved = 0;
   const open = [], accepted = [], rejected = [], closed = [];
@@ -26,7 +37,7 @@ export function replayPortfolio(trades, config = {}) {
     if (open.some(p => p.symbol === t.symbol)) { rejected.push({symbol:t.symbol,candleTime:t.candleTime,reason:"symbol_already_open"}); continue; }
     if (open.length >= cfg.maxConcurrentTrades) { rejected.push({symbol:t.symbol,candleTime:t.candleTime,reason:"max_concurrent_reached"}); continue; }
     if (cashUsd - open.length*cfg.marginPerTradeUsd + 1e-9 < cfg.marginPerTradeUsd) { rejected.push({symbol:t.symbol,candleTime:t.candleTime,reason:"insufficient_free_margin"}); continue; }
-    const p = {symbol:t.symbol,side:t.side,entryTime:t.entryTime,exitTime:t.exitTime,status:t.status,marginUsd:cfg.marginPerTradeUsd,notionalUsd:cfg.marginPerTradeUsd*cfg.leverage,sourceNetPnlUsd:t.status==="closed"?t.netPnl:null,scaledNetPnlUsd:t.scaledNetPnlUsd};
+    const p = {symbol:t.symbol,side:t.side,entryTime:t.entryTime,exitTime:t.exitTime,status:t.status,marginUsd:cfg.marginPerTradeUsd,notionalUsd:cfg.marginPerTradeUsd*cfg.leverage,rawScaledNetPnlUsd:t.rawScaledNetPnlUsd,scaledNetPnlUsd:t.scaledNetPnlUsd,liquidationApproximation:t.liquidationApproximation};
     open.push(p); accepted.push(p); maxConcurrentObserved=Math.max(maxConcurrentObserved,open.length);
   }
   settleThrough(Number.POSITIVE_INFINITY);
@@ -42,7 +53,8 @@ export function replayPortfolio(trades, config = {}) {
     endingCashUsd:Number(cashUsd.toFixed(6)),availableFreeMarginUsd:Number((cashUsd-open.length*cfg.marginPerTradeUsd).toFixed(6)),
     profitFactor:grossLossUsd?Number((grossProfitUsd/grossLossUsd).toFixed(4)):grossProfitUsd?null:0,
     maxDrawdownUsd:Number(maxDrawdownUsd.toFixed(6)),maxConcurrentObserved,
+    liquidationCount:closed.filter(t=>t.liquidationApproximation).length,
     openPositions:open.map(({symbol,side,entryTime,marginUsd,notionalUsd})=>({symbol,side,entryTime,marginUsd,notionalUsd})),rejectedTrades:rejected,
-    warnings:["PnL is linearly scaled from source notional, not a fresh $50 candle-level simulation.","Fees, slippage and funding are included only as present in source trade netPnl.","Exchange-specific maintenance margin and liquidation rules are not modeled.","Drawdown uses realized cash only; intratrade and unrealized equity drawdown are unavailable."]
+    warnings:["PnL is linearly scaled from source notional, not a fresh $50 candle-level simulation.","Isolated-margin losses are capped at the full allocated margin as a conservative approximation; exact maintenance-margin/liquidation price is not modeled.","Fees, slippage and funding are included only as present in source trade netPnl.","Drawdown uses realized cash only; intratrade and unrealized equity drawdown are unavailable."]
   };
 }
