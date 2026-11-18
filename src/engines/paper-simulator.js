@@ -87,6 +87,14 @@ export function simulatePaperTrade({
   for (const bar of later) {
     barsProcessed++;
     if (!validBar(bar)) return {status:"invalid_data",fills,exits,events,ambiguousEvents};
+    // Settlement is timestamped at the candle boundary: charge only size carried
+    // into this bar, before any new fills or exits at this timestamp.
+    if (qty > 1e-12 && bar.fundingSettlement === true && finite(bar.fundingRate)) {
+      const payment = sign * bar.open * qty * bar.fundingRate;
+      funding += payment;
+      events.push({type:"funding",time:bar.time,rate:bar.fundingRate,payment});
+    }
+
     if (!entry1Filled) {
       // A signal is known only after its candle closes; no same-candle fill.
       const driftPct = Math.abs(bar.open-signal.entry)/signal.entry*100;
@@ -148,12 +156,6 @@ export function simulatePaperTrade({
       nextTarget++;
     }
 
-    // Funding is charged only on bars explicitly marked as settlement bars.
-    if (qty > 1e-12 && bar.fundingSettlement === true && finite(bar.fundingRate)) {
-      const payment = sign * bar.close * qty * bar.fundingRate;
-      funding += payment;
-      events.push({type:"funding",time:bar.time,rate:bar.fundingRate,payment});
-    }
     if (qty <= 1e-12) break;
   }
 
