@@ -135,3 +135,46 @@ jobs:
           name: mtf-entry-${{ matrix.name }}
           path: artifacts/mtf-futures-backtest.*
           retention-days: 30
+
+  channel-controller-backtest:
+    needs: validate-and-backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - allocation: front_loaded
+            move_be: 'false'
+          - allocation: equal
+            move_be: 'false'
+          - allocation: back_loaded
+            move_be: 'false'
+          - allocation: front_loaded
+            move_be: 'true'
+          - allocation: equal
+            move_be: 'true'
+          - allocation: back_loaded
+            move_be: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check src/channel-controller.js
+      - run: node --check scripts/backtest-channel-controller.mjs
+      - run: node --test scripts/channel-controller.test.mjs
+      - name: 90-day channel-controller backtest
+        env:
+          BACKTEST_DAYS: '90'
+          BACKTEST_SYMBOLS: '10'
+          BACKTEST_LEVERAGE: '10'
+          CHANNEL_ALLOCATION: ${{ matrix.allocation }}
+          CHANNEL_MOVE_BE: ${{ matrix.move_be }}
+        run: node scripts/backtest-channel-controller.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: channel-controller-${{ matrix.allocation }}-be-${{ matrix.move_be }}
+          path: artifacts/mtf-futures-backtest.*
+          retention-days: 30
