@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  PA_CONFIG, validateCandles, findSwings, describeStructure, analyzePriceAction, resolvePriceActionSignals
+  PA_CONFIG, validateCandles, findSwings, describeStructure, analyzePriceAction, resolvePriceActionSignals, calculateATR, volumeConfirmed
 } from "../src/price-action-engine.js";
 
 function flatCandles(n=100, price=100, step=900000) {
@@ -221,4 +221,21 @@ test("isolated strategy mode evaluates only the requested Price Action strategy"
   assert.deepEqual(result.diagnostics.map(x=>x.strategyId),["market_structure"]);
   assert.ok(result.signals.length>0);
   assert.ok(result.signals.every(x=>x.strategyId==="market_structure"));
+});
+
+
+test("Wilder ATR returns a positive smoothed true range",()=>{
+  const data=flatCandles(30,100);
+  assert.ok(calculateATR(data,14)>0);
+  assert.equal(calculateATR(data,40),null);
+});
+
+test("volume confirmation rejects materially weak trigger volume but allows unavailable volume",()=>{
+  const data=flatCandles(25,100);
+  data[24].volume=50;
+  assert.equal(volumeConfirmed(data),false);
+  data[24].volume=100;
+  assert.equal(volumeConfirmed(data),true);
+  data.forEach(c=>{delete c.volume;});
+  assert.equal(volumeConfirmed(data),true);
 });
