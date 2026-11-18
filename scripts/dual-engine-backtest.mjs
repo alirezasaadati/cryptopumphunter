@@ -3,6 +3,7 @@ import { analyzeEngineA } from "../src/engines/engine-a.js";
 import { analyzeEngineB } from "../src/engines/engine-b.js";
 import { simulatePaperTrade } from "../src/engines/paper-simulator.js";
 import { ema } from "../src/engines/engine-utils.js";
+import { resolveExclusiveDirectionalTrades } from "../src/engines/directional-coordinator.js";
 
 const BASE = "https://futures.kraken.com/api/charts/v1";
 const SYMBOLS = [
@@ -51,7 +52,7 @@ const report = {
     intrabar: "Stop-first; ambiguous Entry 2 versus TP1 resolves TP1-first/cancel Entry 2 and is recorded."
   },
   data: [],
-  engines: {A:{trades:[],skipped:[],summary:null},A_BE:{trades:[],skipped:[],summary:null},B:{trades:[],skipped:[],summary:null},B_BTC_FILTER:{trades:[],skipped:[],summary:null},B_SHORT_ONLY:{trades:[],skipped:[],summary:null}},
+  engines: {A:{trades:[],skipped:[],summary:null},A_LONG_ONLY:{trades:[],skipped:[],summary:null},A_BE:{trades:[],skipped:[],summary:null},B:{trades:[],skipped:[],summary:null},B_BTC_FILTER:{trades:[],skipped:[],summary:null},B_SHORT_ONLY:{trades:[],skipped:[],summary:null}},
   warnings: [
     "This is an exploratory strategy backtest, not proof of future performance.",
     "Liquidity filter is disabled because historical quote turnover and contract multipliers are not yet validated.",
@@ -189,7 +190,7 @@ for(const symbol of SYMBOLS){
       gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0,
       fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError,
       tickSize,quantityPrecision,contractSize:instrument.contractSize,contractType:instrument.type});
-    for(const engine of ["A","A_BE","B","B_BTC_FILTER","B_SHORT_ONLY"]){
+    for(const engine of ["A","A_LONG_ONLY","A_BE","B","B_BTC_FILTER","B_SHORT_ONLY"]){
       const analyze=(engine==="B"||engine==="B_BTC_FILTER"||engine==="B_SHORT_ONLY")?analyzeEngineB:analyzeEngineA;
       const weights=(engine==="B"||engine==="B_BTC_FILTER"||engine==="B_SHORT_ONLY")?B_WEIGHTS:A_WEIGHTS;
       const trades=report.engines[engine].trades;
@@ -198,6 +199,10 @@ for(const symbol of SYMBOLS){
         const history=valid.slice(0,i+1);
         const signal=analyze({symbol,candles:history,skipLiquidityCheck:true});
         if(!signal){i++;continue;}
+        if(engine==="A_LONG_ONLY" && signal.side!=="LONG"){
+          report.engines[engine].skipped.push({symbol,side:signal.side,candleTime:signal.candleTime,score:signal.score,status:"short_disabled",reason:"Diagnostic long-only variant"});
+          i++;continue;
+        }
         if(engine==="B_SHORT_ONLY" && signal.side!=="SHORT"){
           report.engines[engine].skipped.push({symbol,side:signal.side,candleTime:signal.candleTime,score:signal.score,status:"long_disabled",reason:"Diagnostic short-only variant"});
           i++;continue;
@@ -241,7 +246,26 @@ for(const symbol of SYMBOLS){
     console.log(`failed ${symbol}: ${String(error?.message??error)}`);
   }
 }
-for(const engine of ["A","A_BE","B","B_BTC_FILTER","B_SHORT_ONLY"]){
+// Apply the cross-engine symbol lock after both directional ledgers are simulated.
+const exclusive = resolveExclusiveDirectionalTrades(
+  report.engines.A_LONG_ONLY.trades,
+  report.engines.B_SHORT_ONLY.trades
+);
+report.engines.A_LONG_ONLY.trades = exclusive.longTrades;
+report.engines.B_SHORT_ONLY.trades = exclusive.shortTrades;
+for (const rejected of exclusive.rejected) {
+  const engine = rejected.engine;
+  report.engines[engine].skipped.push({symbol:rejected.symbol,side:rejected.side,
+    candleTime:rejected.candleTime,score:rejected.score,status:"symbol_direction_conflict",
+    reason:"Opposite direction already active for this symbol"});
+}
+report.directionalModel = {
+  policy: "Engine A emits LONG only; Engine B emits SHORT only. A symbol is reserved from signal candle through trade close; simultaneous candidates choose higher score, ties favor Engine A.",
+  acceptedLongTrades: exclusive.longTrades.length,
+  acceptedShortTrades: exclusive.shortTrades.length,
+  rejectedConflicts: exclusive.rejected.length
+};
+for(const engine of ["A","A_LONG_ONLY","A_BE","B","B_BTC_FILTER","B_SHORT_ONLY"]){
   const item=report.engines[engine];
   item.summary=summarize(item.trades,item.skipped.length);
   item.summary.periods={
@@ -254,6 +278,6 @@ await fs.mkdir("artifacts",{recursive:true});
 await fs.writeFile("artifacts/dual-engine-backtest.json",JSON.stringify(report,null,2));
 console.log(JSON.stringify({
   data:report.data.map(({symbol,candles,gapCount,missingIntervals,error})=>({symbol,candles,gapCount,missingIntervals,error})),
-  A:report.engines.A.summary,A_BE:report.engines.A_BE.summary,B:report.engines.B.summary,B_BTC_FILTER:report.engines.B_BTC_FILTER.summary,B_SHORT_ONLY:report.engines.B_SHORT_ONLY.summary,B_SHORT_ONLY:report.engines.B_SHORT_ONLY.summary
+  A:report.engines.A.summary,A_LONG_ONLY:report.engines.A_LONG_ONLY.summary,A_BE:report.engines.A_BE.summary,B:report.engines.B.summary,B_BTC_FILTER:report.engines.B_BTC_FILTER.summary,B_SHORT_ONLY:report.engines.B_SHORT_ONLY.summary,directionalModel:report.directionalModel
 },null,2));
 if(!report.data.some(d=>d.candles>=80)) process.exitCode=1;
