@@ -174,7 +174,7 @@ async function main() {
     // Faster path: use the last fully closed 1h/4h engine snapshot for direction and
     // exact existing SL/TP levels, but permit the 4h trend to be non-confirming (not opposing)
     // through the engine's experimentalEligible path. Trigger and fill are 15m.
-    let h1Index=59, nextFastTime=0, cachedIndex=-1, cachedSignal=null;
+    let h1Index=-1, nextFastTime=0, cachedIndex=-1, cachedSignal=null;
     for(let i=60;i<m15.length-1;i++){
       const bar=m15[i], signalTime=bar.time+INTERVALS["15m"];
       if(signalTime<start||signalTime<=nextFastTime) continue;
