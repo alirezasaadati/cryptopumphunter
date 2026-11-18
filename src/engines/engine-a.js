@@ -1,8 +1,8 @@
 import { ENGINE_CONFIG, validateCandles, ema, rsi, atr, volumeRatio, swings, scoreSignal, makeSignalBase, roundPrice } from "./engine-utils.js";
 
 // Channel-inspired model. Entry 2 is conditional and is not averaged until filled.
-export function analyzeEngineA({symbol,candles,quoteVolume=Infinity}) {
-  if (!validateCandles(candles) || !(Number(quoteVolume)>=ENGINE_CONFIG.MIN_QUOTE_VOLUME)) return null;
+export function analyzeEngineA({symbol,candles,quoteVolume}) {
+  if (!validateCandles(candles) || (!Number.isFinite(Number(quoteVolume)) || Number(quoteVolume)<ENGINE_CONFIG.MIN_QUOTE_VOLUME)) return null;
   const closes=candles.map(c=>c.close), last=candles.at(-1), prior=candles.at(-2);
   const fast=ema(closes,20), slow=ema(closes,50), momentum=rsi(closes,14);
   const volatility=atr(candles,14), vol=volumeRatio(candles,20), levels=swings(candles,20);
