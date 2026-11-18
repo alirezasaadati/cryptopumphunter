@@ -75,3 +75,59 @@ test("outbox recovery policy distinguishes safe resume from ambiguous delivery",
   assert.equal(signalOutboxAction({ status: "SENDING" }), "reconcile");
   assert.equal(signalOutboxAction({ status: "UNCERTAIN" }), "reconcile");
 });
+
+
+test("repeated sequential registration is idempotent and does not overwrite the first snapshot", async () => {
+  const kv = memoryKV();
+  assert.equal(await saveIssuedSignal(kv, 505, signal("same")), true);
+  const changed = { ...signal("same"), entry: 101, score: 99 };
+  assert.equal(await saveIssuedSignal(kv, 505, changed), false);
+  const [saved] = await listIssuedSignals(kv, 505);
+  assert.equal(saved.entry, 100);
+});
+
+test("same signal id in different chats and symbols has separate archive keys", async () => {
+  const kv = memoryKV();
+  await saveIssuedSignal(kv, 11, signal("collision", "BTC-PERP"));
+  await saveIssuedSignal(kv, 11, signal("collision", "ETH-PERP"));
+  await saveIssuedSignal(kv, 22, signal("collision", "BTC-PERP"));
+  assert.equal((await listIssuedSignals(kv, 11)).length, 2);
+  assert.equal((await listIssuedSignals(kv, 22)).length, 1);
+  assert.equal((await listIssuedSignals(kv, 11, { symbol: "BTC-PERP" })).length, 1);
+});
+
+test("archive preserves completed result when later update omits close fields", async () => {
+  const kv = memoryKV();
+  await saveIssuedSignal(kv, 606, signal("closed"));
+  await updateIssuedSignal(kv, 606, {
+    signalId: "closed", symbol: "BTC-PERP", status: "CLOSED_STOP",
+    tpHits: ["TP1"], closeReason: "STOP_LOSS", exitPrice: 95,
+    outcomePercent: -1.25, outcomeR: -0.25
+  });
+  await updateIssuedSignal(kv, 606, {
+    signalId: "closed", symbol: "BTC-PERP", status: "CLOSED_STOP",
+    tpHits: ["TP2"]
+  });
+  const [saved] = await listIssuedSignals(kv, 606);
+  assert.equal(saved.status, "CLOSED_STOP");
+  assert.equal(saved.closeReason, "STOP_LOSS");
+  assert.equal(saved.exitPrice, 95);
+  assert.equal(saved.outcomeR, -0.25);
+  assert.deepEqual(saved.tpHits, ["TP1", "TP2"]);
+});
+
+test("archive listing returns newest published signals first", async () => {
+  const kv = memoryKV();
+  await saveIssuedSignal(kv, 707, signal("older"));
+  await new Promise(resolve => setTimeout(resolve, 3));
+  await saveIssuedSignal(kv, 707, signal("newer"));
+  const rows = await listIssuedSignals(kv, 707);
+  assert.equal(rows[0].id, "newer");
+  assert.equal(rows[1].id, "older");
+});
+
+test("outbox keys are isolated by chat and signal identity", async () => {
+  const { signalOutboxKey } = await import("../src/signal-outbox.js");
+  assert.notEqual(signalOutboxKey(1, "abc"), signalOutboxKey(2, "abc"));
+  assert.notEqual(signalOutboxKey(1, "abc"), signalOutboxKey(1, "def"));
+});
