@@ -157,9 +157,10 @@ async function main() {
   }
   const timeline = [...times].sort((a, b) => a - b);
   const active = new Map();
+  const experimentalActive = new Map();
   const closed = [];
-  const issuedBySymbol = new Map();
   let issued = 0, skippedDuplicate = 0, skippedByEightLimit = 0, ambiguousBars = 0;
+  let experimentalIssued = 0, experimentalSkippedDuplicate = 0, experimentalSkippedByEightLimit = 0;
 
   for (const time of timeline) {
     // First settle positions using the just-closed hourly candle. Stop wins
@@ -185,8 +186,22 @@ async function main() {
       }
     }
 
-    // Run the production analyzer on closed 1H/4H candles only.
+    // Independently release experimental positions using the same stop and +25% margin target.
+    for (const [key, trade] of [...experimentalActive.entries()]) {
+      const data = series.get(trade.symbol);
+      const bar = data.h1.find(c => c.time + H1 === time);
+      if (!bar) continue;
+      const d = trade.side === "LONG" ? 1 : -1;
+      const stopGap = d === 1 ? bar.open <= trade.signal.stop : bar.open >= trade.signal.stop;
+      const targetGap = d === 1 ? bar.open >= trade.targetTrigger : bar.open <= trade.targetTrigger;
+      const stopHit = stopGap || (d === 1 ? bar.low <= trade.signal.stop : bar.high >= trade.signal.stop);
+      const targetHit = targetGap || (d === 1 ? bar.high >= trade.targetTrigger : bar.low <= trade.targetTrigger);
+      if (stopHit || targetHit) experimentalActive.delete(key);
+    }
+
+    // Run the same analyzer once, then independently count standard and relaxed eligibility.
     const candidates = [];
+    const experimentalCandidates = [];
     for (const [symbol, data] of series.entries()) {
       const n1 = closedCount(data.h1, time, H1);
       const n4 = closedCount(data.h4, time, H4);
@@ -204,8 +219,12 @@ async function main() {
       };
       const signal = analyzeFuturesSymbol(ticker, h1, h4);
       if (signal?.eligible) candidates.push(signal);
+      const relaxedEligible = signal?.eligible ||
+        (signal?.experimentalEligible && signal.score >= 60 && signal.volumeRatio >= 0.5);
+      if (relaxedEligible) experimentalCandidates.push(signal);
     }
     candidates.sort((a, b) => b.score - a.score);
+    experimentalCandidates.sort((a, b) => b.score - a.score);
 
     let selected = 0;
     for (const signal of candidates) {
@@ -223,6 +242,23 @@ async function main() {
       active.set(key, trade);
       issued++;
       selected++;
+    }
+
+    let experimentalSelected = 0;
+    for (const signal of experimentalCandidates) {
+      const key = `${signal.symbol}|${signal.side}`;
+      if (experimentalActive.has(key)) { experimentalSkippedDuplicate++; continue; }
+      if (experimentalSelected >= 8) { experimentalSkippedByEightLimit++; continue; }
+      const entry = signal.entry;
+      const d = signal.side === "LONG" ? 1 : -1;
+      const entryFill = entry * (1 + d * SLIPPAGE);
+      experimentalActive.set(key, {
+        symbol: signal.symbol, side: signal.side, score: signal.score,
+        signalTime: time, signal, entryFill,
+        targetTrigger: targetTrigger(entryFill, signal.side)
+      });
+      experimentalIssued++;
+      experimentalSelected++;
     }
   }
 
@@ -261,6 +297,17 @@ async function main() {
       liquidation: "not separately simulated; all accepted stops are at or inside 8% price distance"
     },
     signalCount: issued,
+    averageSignalsPerDay: issued / DAYS,
+    experimental: {
+      rules: "standard signals plus relaxed signals where the 1H trend is valid, 4H is not opposing, RSI is within the relaxed band, score >= 60, and volumeRatio >= 0.50",
+      signalCount: experimentalIssued,
+      averageSignalsPerDay: experimentalIssued / DAYS,
+      additionalSignals: experimentalIssued - issued,
+      increasePct: issued ? (experimentalIssued / issued - 1) * 100 : null,
+      openAtEndCount: experimentalActive.size,
+      skippedDuplicate: experimentalSkippedDuplicate,
+      skippedByEightLimit: experimentalSkippedByEightLimit
+    },
     skippedDuplicate,
     skippedByEightLimit,
     validSymbols: [...series.keys()],
