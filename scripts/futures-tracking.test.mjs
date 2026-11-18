@@ -4,7 +4,8 @@ import {
   priceChangePercent,
   tradeOutcomePercent,
   targetReached,
-  stopReached
+  stopReached,
+  isValidFuturesSignalLevels
 } from "../src/index.js";
 
 test("LONG and SHORT price returns use the correct direction", () => {
@@ -46,4 +47,18 @@ test("full TP3 outcome is the weighted result of all targets", () => {
   const result = tradeOutcomePercent(trade, 120);
   // 40%*5 + 35%*10 + 25%*20 = 10.5%.
   assert.equal(Number(result.toFixed(8)), 10.5);
+});
+
+test("signal tracking accepts correctly ordered LONG and SHORT levels", () => {
+  assert.equal(isValidFuturesSignalLevels({id:"l1",symbol:"PI_ETHUSD",side:"LONG",entry:100,stop:95,target1:105,target2:110,target3:120}), true);
+  assert.equal(isValidFuturesSignalLevels({id:"s1",symbol:"PI_ETHUSD",side:"SHORT",entry:100,stop:105,target1:95,target2:90,target3:80}), true);
+});
+
+test("signal tracking rejects missing, non-positive, and misordered levels", () => {
+  const base = {id:"x1",symbol:"PI_ETHUSD",side:"LONG",entry:100,stop:95,target1:105,target2:110,target3:120};
+  assert.equal(isValidFuturesSignalLevels({...base,target2:104}), false);
+  assert.equal(isValidFuturesSignalLevels({...base,stop:101}), false);
+  assert.equal(isValidFuturesSignalLevels({...base,target3:0}), false);
+  assert.equal(isValidFuturesSignalLevels({...base,side:"SHORT"}), false);
+  assert.equal(isValidFuturesSignalLevels({...base,id:""}), false);
 });
