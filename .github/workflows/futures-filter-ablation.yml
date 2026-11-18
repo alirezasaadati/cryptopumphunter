@@ -1,5 +1,7 @@
 name: Futures filter ablation backtest
 on:
+  push:
+    branches: [experiment/filter-ablation-60d]
   pull_request:
     branches: [main]
     paths:
