@@ -28,7 +28,8 @@ const MAIN_MENU = {
     ],
     [
       { text: "📌 معاملات باز", callback_data: "open_trades" },
-      { text: "📚 تاریخچه معاملات", callback_data: "trade_history" },\n      { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" }
+      { text: "📚 تاریخچه معاملات", callback_data: "trade_history" },
+      { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" }
     ],
     [{ text: "📡 وضعیت ربات", callback_data: "status" }],
     [
