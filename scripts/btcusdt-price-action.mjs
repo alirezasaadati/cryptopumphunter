@@ -57,24 +57,25 @@ export function detectOneHourBOS(h4, h1) {
   return null;
 }
 
-export function detectLiquiditySweep15m(candles, lookback = 8) {
+export function detectLiquiditySweep15m(candles, lookback = 8, options = {}) {
   if (!Array.isArray(candles) || candles.length < lookback + 2) return null;
   const bar = candles.at(-1), prev = candles.at(-2);
   const prior = candles.slice(-lookback-1, -1);
   if (!valid(bar) || !valid(prev) || prior.some(x => !valid(x))) return null;
   const priorLow = Math.min(...prior.map(x => x.low));
   const priorHigh = Math.max(...prior.map(x => x.high));
+  const requirePrevBarBreak = options.requirePrevBarBreak !== false;
   const bullishSweep = bar.low < priorLow && bar.close > priorLow &&
-    bar.close > bar.open && bar.close > prev.high;
+    bar.close > bar.open && (!requirePrevBarBreak || bar.close > prev.high);
   const bearishSweep = bar.high > priorHigh && bar.close < priorHigh &&
-    bar.close < bar.open && bar.close < prev.low;
+    bar.close < bar.open && (!requirePrevBarBreak || bar.close < prev.low);
   if (bullishSweep) return { side:"LONG", entry:bar.close, stop:bar.low, sweepLevel:priorLow, candleTime:bar.time };
   if (bearishSweep) return { side:"SHORT", entry:bar.close, stop:bar.high, sweepLevel:priorHigh, candleTime:bar.time };
   return null;
 }
 
-export function buildPriceActionSignal(direction, candles15m, lookback = 8) {
-  const sweep = detectLiquiditySweep15m(candles15m, lookback);
+export function buildPriceActionSignal(direction, candles15m, lookback = 8, options = {}) {
+  const sweep = detectLiquiditySweep15m(candles15m, lookback, options);
   if (!sweep || sweep.side !== direction?.side) return null;
   const entry = sweep.entry;
   const risk = direction.side === "LONG" ? entry - sweep.stop : sweep.stop - entry;
