@@ -70,11 +70,32 @@ function upperWick(c) { return c.high-Math.max(c.open,c.close); }
 function near(price, level) {
   return Math.abs(price-level)/level <= PA_CONFIG.LEVEL_TOLERANCE_PCT;
 }
+export function calculateATR(candles, period=14) {
+  if (!Array.isArray(candles) || candles.length < period+1) return null;
+  const tr=[];
+  for (let i=1;i<candles.length;i++) {
+    const c=candles[i], p=candles[i-1];
+    tr.push(Math.max(c.high-c.low,Math.abs(c.high-p.close),Math.abs(c.low-p.close)));
+  }
+  if (tr.length<period) return null;
+  let atr=tr.slice(0,period).reduce((s,x)=>s+x,0)/period;
+  for (let i=period;i<tr.length;i++) atr=((atr*(period-1))+tr[i])/period;
+  return Number.isFinite(atr)&&atr>0?atr:null;
+}
+export function volumeConfirmed(candles, multiplier=0.9) {
+  if (!Array.isArray(candles) || candles.length<21) return true;
+  const current=Number(candles.at(-1)?.volume);
+  const baseline=candles.slice(-21,-1).map(x=>Number(x.volume)).filter(x=>Number.isFinite(x)&&x>0);
+  if (!(current>0) || !baseline.length) return true; // unavailable volume must not fabricate a rejection
+  const average=baseline.reduce((s,x)=>s+x,0)/baseline.length;
+  return current>=average*multiplier;
+}
 function recentMedianRange(candles) {
   return median(candles.slice(-20).map(range).filter(x=>x>0));
 }
 function levelBuffer(candles, entry) {
-  return Math.max(recentMedianRange(candles)*0.18, entry*0.0005);
+  const atr=calculateATR(candles);
+  return Math.max(recentMedianRange(candles)*0.18, (atr||0)*0.15, entry*0.0005);
 }
 function makePlan({symbol, side, strategyId, strategyName, score, reason, entry, invalidation, context}) {
   if (![entry,invalidation].every(finite) || entry<=0) return null;
@@ -98,6 +119,7 @@ function lastClosed(candles) { return candles[candles.length-1]; }
 function scoreBase(...checks) { return Math.min(95, 50+checks.filter(Boolean).length*15); }
 
 function structureStrategy({symbol, oneHour, fourHour, fifteenMin}) {
+  if (!volumeConfirmed(fifteenMin)) return null;
   const s1=describeStructure(oneHour), s4=describeStructure(fourHour);
   const swings=findSwings(oneHour), prev=oneHour.at(-2), last=lastClosed(oneHour), trigger=lastClosed(fifteenMin);
   const high=swings.highs.at(-1), low=swings.lows.at(-1);
@@ -114,6 +136,7 @@ function structureStrategy({symbol, oneHour, fourHour, fifteenMin}) {
 }
 
 function rejectionStrategy({symbol, oneHour, fourHour, fifteenMin}) {
+  if (!volumeConfirmed(fifteenMin)) return null;
   const swings=findSwings(oneHour), c=lastClosed(fifteenMin), prev=fifteenMin.at(-2);
   const s1=describeStructure(oneHour).direction,s4=describeStructure(fourHour).direction;
   const candidates=[
@@ -134,6 +157,7 @@ function rejectionStrategy({symbol, oneHour, fourHour, fifteenMin}) {
 }
 
 function breakoutRetestStrategy({symbol, oneHour, fourHour, fifteenMin}) {
+  if (!volumeConfirmed(fifteenMin)) return null;
   const swings=findSwings(oneHour), c=lastClosed(fifteenMin), h=swings.highs.at(-1), l=swings.lows.at(-1);
   if (!h||!l||oneHour.length<3) return null;
   const last=lastClosed(oneHour), prev=oneHour.at(-2);
@@ -150,6 +174,7 @@ function breakoutRetestStrategy({symbol, oneHour, fourHour, fifteenMin}) {
 }
 
 function candlestickStrategy({symbol, oneHour, fourHour, fifteenMin}) {
+  if (!volumeConfirmed(fifteenMin)) return null;
   const swings=findSwings(oneHour), c=lastClosed(fifteenMin), p=fifteenMin.at(-2);
   const support=swings.lows.at(-1), resistance=swings.highs.at(-1);
   const bullEngulf=c.close>c.open && p.close<p.open && c.open<=p.close && c.close>=p.open;
