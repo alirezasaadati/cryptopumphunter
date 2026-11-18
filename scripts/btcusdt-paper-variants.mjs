@@ -116,6 +116,14 @@ async function cycle() {
   if(h1.length<130||h4.length<60||m15.length<40) throw new Error("Insufficient closed candles for 4H/1H/15M analysis.");
   const state=await loadState();
   const latest1h=h1.at(-1), idx=h1.length-1;
+  // First launch only establishes a clean live checkpoint; never backfill signals.
+  if (!state.last15mTime) {
+    state.last15mTime=m15.at(-1).time;
+    state.last1hTime=latest1h.time;
+    await saveState(state);
+    console.log(JSON.stringify({ok:true,mode:"INITIALIZED — waiting for the next closed 1H/15M candles",symbol:SYMBOL,checkpoint15m:state.last15mTime,checkpoint1h:state.last1hTime},null,2));
+    return;
+  }
   let signal=null;
   if(latest1h.time>state.last1hTime) {
     const change=(latest1h.close/h1[Math.max(0,idx-24)].close-1)*100;
@@ -139,7 +147,7 @@ async function cycle() {
         updateTrade(slot.open,bar);
         if(slot.open.remaining<=1e-8) { slot.trades.push(slot.open); slot.open=null; }
       }
-      if(!slot.open && slot.pending && bar.time>slot.pending.candleTime) {
+      if(!slot.open && slot.pending && bar.closeTime>=slot.pending.createdAt) {
         if(bar.closeTime>slot.pending.expiresAt) slot.pending=null;
         else if(confirm15m(slot.pending.side,bar,m15.slice(Math.max(0,barIndex-40),barIndex+1))) {
           const nextBar=m15raw.find(x=>x.time===bar.time+15*60000) || (forming?.time===bar.time+15*60000?forming:null);
