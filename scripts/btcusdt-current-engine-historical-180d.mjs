@@ -1,5 +1,4 @@
 import { analyzeFuturesSymbol } from "../src/index.js";
-import { passesEntryFreshness } from "../src/futures-entry-experiments.js";
 import { mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +10,7 @@ const DAYS=180, WARMUP_DAYS=30, FEE=.0005, SLIPPAGE=.0003;
 const MAX_HOLD_15M=288, MAX_PENDING_15M=4;
 const VARIANTS=[{id:"CURRENT_PRODUCTION",label:"Current production engine (unmodified)"}];
 const finite=(...xs)=>xs.every(Number.isFinite);
+function passesEntryFreshness(referencePrice,livePrice,maxDriftPct=.35){const reference=Number(referencePrice),live=Number(livePrice),max=Number(maxDriftPct);return reference>0&&live>0&&Number.isFinite(reference)&&Number.isFinite(live)&&Number.isFinite(max)&&max>=0&&Math.abs(live-reference)/reference*100<=max;}
 function parseCsv(csv){
  const out=[];
  for(const line of csv.split(/\r?\n/)){
