@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { analyzeFuturesSymbol } from "../src/index.js";
 import { passesCompression, passesAtrCap, passesBreakoutBody } from "../src/futures-filter-experiments.js";
 import { passesVolumeThreshold, isLateEntry, hasPullbackOrBreakout, passesEntryFreshness } from "../src/futures-entry-experiments.js";
+import { detectOneHourBOS, buildPriceActionSignal } from "./btcusdt-price-action.mjs";
 
 const BASE = "https://fapi.binance.com";
 const SYMBOL = "BTCUSDT";
@@ -14,7 +15,8 @@ const MAX_HOLD_15M = 288; // 72 hours
 const VARIANTS = [
   { id: "A_baseline", label: "Baseline", minVolume: 0.75 },
   { id: "B_all_filters", label: "All filters", minVolume: 1.2, compression: 0.8, atrCap: 5, bodyRatio: 1.2, requireSetup: true, avoidLate: true },
-  { id: "C_avoid_late", label: "Avoid late entry only", minVolume: 0.75, avoidLate: true }
+  { id: "C_avoid_late", label: "Avoid late entry only", minVolume: 0.75, avoidLate: true },
+  { id: "D_price_action", label: "Pure price action (4H structure / 1H BOS / 15M sweep)", priceAction: true }
 ];
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -118,6 +120,8 @@ async function cycle() {
   const forming=m15raw.find(c=>c.time===m15raw.at(-1)?.time && c.closeTime>=now);
   if(h1.length<130||h4.length<60||m15.length<40) throw new Error("Insufficient closed candles for 4H/1H/15M analysis.");
   const state=await loadState();
+  state.version=2;
+  for (const v of VARIANTS) if (!state.variants[v.id]) state.variants[v.id]={pending:null,open:null,trades:[]};
   const latest1h=h1.at(-1), idx=h1.length-1;
   // First launch only establishes a clean live checkpoint; never backfill signals.
   if (!state.last15mTime) {
@@ -136,9 +140,14 @@ async function cycle() {
     state.last1hTime=latest1h.time;
     for(const v of VARIANTS) {
       const slot=state.variants[v.id];
-      slot.pending=signal && filterPasses(v,signal,h1,idx)
-        ? { ...signal, createdAt:latest1h.closeTime, expiresAt:latest1h.closeTime+MAX_PENDING_15M*15*60000, variant:v.id }
-        : null;
+      if (v.priceAction) {
+        const direction=detectOneHourBOS(h4,h1);
+        slot.pending=direction ? { ...direction, createdAt:latest1h.closeTime, expiresAt:latest1h.closeTime+4*15*60000, variant:v.id } : null;
+      } else {
+        slot.pending=signal && filterPasses(v,signal,h1,idx)
+          ? { ...signal, createdAt:latest1h.closeTime, expiresAt:latest1h.closeTime+MAX_PENDING_15M*15*60000, variant:v.id }
+          : null;
+      }
     }
   }
   const newBars=m15.filter(c=>c.time>state.last15mTime);
@@ -146,6 +155,7 @@ async function cycle() {
     const barIndex=m15.findIndex(x=>x.time===bar.time);
     for(const v of VARIANTS) {
       const slot=state.variants[v.id];
+      if (v.priceAction) continue;
       if(slot.open && bar.time>slot.open.entryTime) {
         updateTrade(slot.open,bar);
         if(slot.open.remaining<=1e-8) { slot.trades.push(slot.open); slot.open=null; }
@@ -161,11 +171,33 @@ async function cycle() {
         }
       }
     }
+    // D is evaluated independently; it never uses EMA confirmation or the existing analyzer.
+    {
+      const slot=state.variants.D_price_action;
+      if(slot.open && bar.time>slot.open.entryTime) {
+        updateTrade(slot.open,bar);
+        if(slot.open.remaining<=1e-8) { slot.trades.push(slot.open); slot.open=null; }
+      }
+      if(slot.pending && bar.closeTime>=slot.pending.createdAt) {
+        if(bar.closeTime>slot.pending.expiresAt) slot.pending=null;
+        else if(!slot.open) {
+          const history=m15.slice(Math.max(0,barIndex-12),barIndex+1);
+          const paSignal=buildPriceActionSignal(slot.pending,history,8);
+          if(paSignal) {
+            const nextBar=m15raw.find(x=>x.time===bar.time+15*60000) || (forming?.time===bar.time+15*60000?forming:null);
+            if(nextBar) {
+              slot.open=startTrade(paSignal.side,paSignal,bar,nextBar);
+              slot.pending=null;
+            }
+          }
+        }
+      }
+    }
     state.last15mTime=bar.time;
   }
   await saveState(state);
   const report={at:new Date().toISOString(),symbol:SYMBOL,exchange:"Binance USD-M public market data",mode:"PAPER ONLY — no order endpoints or credentials",
-    architecture:"4H regime + 1H directional signal + 15M candle confirmation; entry at next 15M open",
+    architecture:"A-C: existing analyzer + 15M EMA/candle confirmation. D: pure PA — 4H HH/HL or LH/LL, 1H BOS, 15M liquidity sweep/reclaim + close through prior bar; entry next 15M open.",
     costs:{feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,funding:"not included"},
     latestClosed:{h4:h4.at(-1).time,h1:latest1h.time,m15:m15.at(-1).time},
     variants:Object.fromEntries(VARIANTS.map(v=>{const s=state.variants[v.id];return[v.id,{label:v.label,...stats(s.trades),open:Boolean(s.open),pending:Boolean(s.pending),openTrade:s.open?{side:s.open.side,entry:s.open.entry,stop:s.open.stop,targets:s.open.targets,openedAt:s.open.openedAt}:null}]}))};
