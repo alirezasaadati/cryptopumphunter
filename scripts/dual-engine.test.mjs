@@ -111,9 +111,10 @@ test("entry 2 fills only when touched before TP1",()=>{
 
 test("fees, adverse slippage and funding are included in net PnL",()=>{
   const signal=paperSignal({entry2:null,context:{}});
-  const candle={...bar(2000,{open:100,high:101,low:99,close:100,fundingRate:0.001}),fundingSettlement:true};
-  const noCosts=simulatePaperTrade(paperArgs(signal,[candle]));
-  const withCosts=simulatePaperTrade(paperArgs(signal,[candle],{feeRate:0.001,slippageBps:10}));
+  const entryCandle=bar(2000,{open:100,high:101,low:99,close:100});
+  const settlement={...bar(29000,{open:100,high:101,low:99,close:100,fundingRate:0.001}),fundingSettlement:true};
+  const noCosts=simulatePaperTrade(paperArgs(signal,[entryCandle,settlement]));
+  const withCosts=simulatePaperTrade(paperArgs(signal,[entryCandle,settlement],{feeRate:0.001,slippageBps:10}));
   assert.ok(withCosts.fees>0);
   assert.ok(withCosts.funding>0);
   assert.ok(withCosts.netPnl<noCosts.netPnl);
