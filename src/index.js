@@ -29,15 +29,18 @@ async function kvWriteGate(env, action, error = null) {
       headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET || "" },
       body: JSON.stringify({ day: quotaDayKey(), message: error ? String(error?.message || error).slice(0, 300) : undefined })
     });
-    if (!response.ok) return { allowed: true };
-    return await response.json();
+    if (!response.ok) throw new Error("KV quota gate returned HTTP " + response.status + "; refusing KV write.");
+    const result = await response.json();
+    if (typeof result?.allowed !== "boolean") throw new Error("KV quota gate returned an invalid response; refusing KV write.");
+    return result;
   } catch (gateError) {
-    console.error("KV quota gate unavailable; allowing the KV operation:", String(gateError?.message || gateError));
-    return { allowed: true };
+    console.error("KV quota gate unavailable; KV write blocked:", String(gateError?.message || gateError));
+    throw new Error("KV quota gate unavailable; write blocked to protect the daily quota.");
   }
 }
 export function withQuotaAwareKV(env) {
-  if (!env.APP_KV || !env.SIGNAL_DELIVERY) return env;
+  if (!env.APP_KV) return env;
+  if (!env.SIGNAL_DELIVERY) throw new Error("SIGNAL_DELIVERY is required for safe KV quota enforcement.");
   const raw = env.APP_KV;
   const guarded = new Proxy(raw, {
     get(target, property) {
@@ -1573,7 +1576,7 @@ async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMa
 export class SignalDeliveryCoordinator {
   constructor(ctx,env){
     this.ctx=ctx;
-    this.env=env;
+    this.env=withQuotaAwareKV(env);
     this.serial=createSerialExecutor();
   }
   async fetch(request){
