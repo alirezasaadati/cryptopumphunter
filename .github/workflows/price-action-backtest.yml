@@ -1,4 +1,4 @@
-name: Price Action Confirmation Matrix
+name: Price Action Strategy Validation
 on:
   pull_request:
     paths:
@@ -12,11 +12,20 @@ permissions:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        confirmation: [baseline, macd, volume, macd_volume]
+        include:
+          - name: candlestick_baseline
+            confirmation: baseline
+            strategies: candlestick
+          - name: candlestick_volume
+            confirmation: volume
+            strategies: candlestick
+          - name: candlestick_breakout_volume
+            confirmation: volume
+            strategies: candlestick,breakout_retest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,16 +34,17 @@ jobs:
       - run: npm install
       - name: Run engine unit tests
         run: node --test scripts/price-action-engine.test.mjs
-      - name: Run historical Price Action backtest
+      - name: Run 30-day strategy-specific historical backtest
         run: node scripts/backtest-price-action.mjs
         env:
-          PA_BACKTEST_DAYS: "14"
+          PA_BACKTEST_DAYS: "30"
           PA_BACKTEST_OFFSET_DAYS: "14"
-          PA_BACKTEST_SYMBOLS: "5"
+          PA_BACKTEST_SYMBOLS: "8"
           PA_BACKTEST_CONFIRMATION: ${{ matrix.confirmation }}
+          PA_BACKTEST_STRATEGIES: ${{ matrix.strategies }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: price-action-${{ matrix.confirmation }}-report
+          name: price-action-${{ matrix.name }}-report
           path: artifacts/
           if-no-files-found: warn
