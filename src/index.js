@@ -1641,6 +1641,7 @@ async function runFuturesSignalsForChat(env, chatId) {
       const signal = signals[i];
       await sendMessage(env, chatId, formatFuturesSignal(signal, i + 1));
       await registerTrackedSignal(env, chatId, signal);
+      await archivePublishedSignal(env, chatId, signal, null, new Date().toISOString());
     }
   } catch (error) {
     const diagnostic = String(error?.stack || error?.message || error).slice(0, 1800);
@@ -1668,6 +1669,7 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
     t.lastPrice=price;t.lastCheckedAt=new Date().toISOString();
     if(stopReached(t.side,price,t.currentStop)) {
       t.status="CLOSED_STOP";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,true);
+      await updateArchivedSignal(env,t.chatId,t.signalId,{milestones:t.tpHits,status:t.status,finalResult:"STOP",closedAt:t.closedAt,exitPrice:t.exitPrice,outcomeR:t.outcomeR});
       closed.unshift(t);
       await sendMessage(env,chatId,`🛑 ${t.symbol} به حد ضرر فعلی رسید. نتیجه نظری: ${t.outcomeR.toFixed(2)}R | اهداف لمس‌شده: ${t.tpHits.join(",")||"هیچ‌کدام"}`);
       continue;
@@ -1681,12 +1683,14 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
     const levels=[["TP1",t.target1],["TP2",t.target2],["TP3",t.target3]],hits=[];
     for(const [key,target] of levels)if(!t.tpHits.includes(key)&&targetReached(t.side,price,target)){t.tpHits.push(key);hits.push(key);}
     for(const hit of hits) {
+      await updateArchivedSignal(env,t.chatId,t.signalId,{milestones:[hit]});
       if(hit==="TP1")await sendMessage(env,chatId,`🎯 هدف اول ${t.symbol} لمس شد. ۴۰٪ حجم در مدل ثبت شد. اگر واقعاً بخشی از معامله را بسته‌ای، حد ضرر باقی‌مانده را در صرافی به نقطه ورود منتقل کن و سپس تأیید کن.`,
         {inline_keyboard:[[{text:"✅ حد ضرر را به ورود منتقل کردم",callback_data:`trade:be:${t.id}`}]]});
       if(hit==="TP2")await sendMessage(env,chatId,`🥈 هدف دوم ${t.symbol} لمس شد؛ ۳۵٪ دیگر در مدل ثبت شد.`);
     }
     if(t.tpHits.includes("TP3")) {
       t.status="CLOSED_TARGETS";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,false);
+      await updateArchivedSignal(env,t.chatId,t.signalId,{milestones:t.tpHits,status:t.status,finalResult:"FULL_TARGET",closedAt:t.closedAt,exitPrice:t.exitPrice,outcomeR:t.outcomeR});
       closed.unshift(t);await sendMessage(env,chatId,`🏁 هر سه هدف ${t.symbol} لمس شد. نتیجه نظری پیش از کارمزد: +${t.outcomeR.toFixed(2)}R.`);continue;
     }
     remaining.push(t);
