@@ -30,8 +30,8 @@ test("partial TP outcome includes the remaining position at the stop", () => {
     tpHits: ["TP1"]
   };
   const result = tradeOutcomePercent(trade, 105);
-  // 40% at +5%, remaining 60% at -5% = 0%.
-  assert.equal(Number(result.toFixed(8)), 0);
+  // 40% at +5%, remaining 60% at -5% = -1%.
+  assert.equal(Number(result.toFixed(8)), -1);
 });
 
 test("full TP3 outcome is the weighted result of all targets", () => {
@@ -44,6 +44,6 @@ test("full TP3 outcome is the weighted result of all targets", () => {
     tpHits: ["TP1", "TP2", "TP3"]
   };
   const result = tradeOutcomePercent(trade, 120);
-  // 40%*5 + 35%*10 + 25%*20 = 10%.
-  assert.equal(Number(result.toFixed(8)), 10);
+  // 40%*5 + 35%*10 + 25%*20 = 10.5%.
+  assert.equal(Number(result.toFixed(8)), 10.5);
 });
