@@ -1420,7 +1420,7 @@ function formatFuturesSignal(item, index = 1) {
     `🪙 نماد: ${formatFuturesSymbol(item.symbol)}\n` +
     `🧭 جهت معامله: ${sideLabel}\n` +
     `📍 ورود: ${formatPrice(item.entry)}\n` +
-    (Number.isFinite(Number(item.livePrice)) ? `📡 قیمت بازار هنگام کنترل: ${formatPrice(item.livePrice)} | اختلاف: ${Number(item.entryDriftPct).toFixed(3)}%\n` : "") +
+    (Number.isFinite(Number(item.livePrice)) ? `📡 قیمت سمت اجرا (${item.livePriceType || "BID/ASK"}): ${formatPrice(item.livePrice)} | اختلاف: ${Number(item.entryDriftPct).toFixed(3)}%\n` : "") +
     `🛑 حد ضرر: ${formatPrice(item.stop)}\n` +
     `🎯 تارگت ۱: ${formatPrice(item.target1)}\n` +
     `🎯 تارگت ۲: ${formatPrice(item.target2)}\n` +
