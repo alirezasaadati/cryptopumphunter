@@ -1289,7 +1289,7 @@ function calculateAtr(candles, period = 14) {
   return recent.length === period ? average(recent) : null;
 }
 
-function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
+function analyzeFuturesSymbol(ticker, candles1h, candles4h, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   }
@@ -1319,8 +1319,9 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
 
   const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
   const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
-  const relaxedLong = up1h && !down4h && rsiValue >= 40 && rsiValue <= 75;
-  const relaxedShort = down1h && !up4h && rsiValue >= 25 && rsiValue <= 60;
+  const allowCounterTrend4h = options.allowCounterTrend4h === true;
+  const relaxedLong = up1h && (allowCounterTrend4h || !down4h) && rsiValue >= 40 && rsiValue <= 75;
+  const relaxedShort = down1h && (allowCounterTrend4h || !up4h) && rsiValue >= 25 && rsiValue <= 60;
   const strictSetup = strictLong || strictShort;
 
   if (strictLong || (!strictSetup && relaxedLong)) {
@@ -1341,6 +1342,11 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
     score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
   } else {
     return { symbol: ticker.symbol, rejected: "حتی شرایط منعطف آزمایشی روند و RSI نیز تأیید نشد" };
+  }
+
+  if (allowCounterTrend4h && ((side === "LONG" && down4h) || (side === "SHORT" && up4h))) {
+    score -= 8;
+    reasons.push("روند ۴ساعته مخالف است؛ جریمه امتیاز اعمال شد");
   }
 
   if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
