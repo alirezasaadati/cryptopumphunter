@@ -5,6 +5,7 @@ on:
     branches:
       - experiment/btcusdt-four-engine-historical-backtest
       - experiment/btcusdt-pa-diagnostics
+      - experiment/btcusdt-pa-variants-d1-d3
 permissions:
   contents: read
 jobs:
