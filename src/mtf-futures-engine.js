@@ -31,7 +31,12 @@ export function classifyMarket(btc4h,universe4h){
 export function classifySymbol1h(candles,marketRegime){
   if(!Array.isArray(candles)||candles.length<60||!["BULL","BEAR"].includes(marketRegime))return null;
   const closes=candles.map(c=>c.close),last=candles.at(-1),e20=ema(closes,20),e50=ema(closes,50);
-  const rsiValue=(()=>{let gains=0,losses=0;for(let i=closes.length-14;i<closes.length;i++){const d=closes[i]-closes[i-1];if(d>0)gains+=d;else losses-=d;}const ag=gains/14,al=losses/14;return al===0?100:100-100/(1+ag/al);})();
+  // Exact Wilder RSI implementation copied from the live production engine.
+  let gains=0,losses=0;
+  for(let i=1;i<=14;i++){const change=closes[i]-closes[i-1];gains+=Math.max(change,0);losses+=Math.max(-change,0);}
+  let avgGain=gains/14,avgLoss=losses/14;
+  for(let i=15;i<closes.length;i++){const change=closes[i]-closes[i-1];avgGain=(avgGain*13+Math.max(change,0))/14;avgLoss=(avgLoss*13+Math.max(-change,0))/14;}
+  const rsiValue=avgLoss===0?100:avgGain===0?0:100-100/(1+avgGain/avgLoss);
   const avgVol=candles.slice(-21,-1).reduce((s,c)=>s+c.volume,0)/20;
   const volumeRatio=avgVol>0?last.volume/avgVol:0;
   const up=e20>e50&&last.close>e20,down=e20<e50&&last.close<e20;
@@ -39,14 +44,17 @@ export function classifySymbol1h(candles,marketRegime){
   if(marketRegime==="BEAR"&&down&&rsiValue>=31&&rsiValue<=52&&volumeRatio>=.75)return "SHORT";
   return null;
 }
-// Live-bot plan logic transplanted to 15m: entry at closed candle close;
-// stop = more conservative of 7-candle swing and 1.5*ATR(14);
-// targets = 1.5R / 2.5R / 3.5R. No BE move or trailing stop.
-export function findEntry15m(candles,side){
-  if(!Array.isArray(candles)||candles.length<40||!["LONG","SHORT"].includes(side))return null;
-  const c=candles.at(-1),entry=c.close,volatility=atr(candles,14);
+// Entry timing is 15m, but the stop calculation is kept identical to the
+// live bot: 1H swing over candles[-8:-1] and 1.5 * 1H ATR(14).
+// Targets retain the live bot's 1.5R / 2.5R / 3.5R reference levels;
+// this experiment exits fully at +25% net margin ROI. No BE/trailing.
+export function findEntry15m(candles15m,candles1h,side){
+  if(!Array.isArray(candles15m)||candles15m.length<40||
+     !Array.isArray(candles1h)||candles1h.length<60||
+     !["LONG","SHORT"].includes(side))return null;
+  const c=candles15m.at(-1),entry=c.close,volatility=atr(candles1h,14);
   if(!(volatility>0))return null;
-  const swing=candles.slice(-8,-1),swingLow=Math.min(...swing.map(x=>x.low)),swingHigh=Math.max(...swing.map(x=>x.high));
+  const swing=candles1h.slice(-8,-1),swingLow=Math.min(...swing.map(x=>x.low)),swingHigh=Math.max(...swing.map(x=>x.high));
   const stop=side==="LONG"?Math.min(swingLow,entry-volatility*1.5):Math.max(swingHigh,entry+volatility*1.5);
   const risk=side==="LONG"?entry-stop:stop-entry,riskPct=risk/entry;
   if(!(risk>0)||riskPct<.002||riskPct>.08)return null;
@@ -56,6 +64,6 @@ export function findEntry15m(candles,side){
 export function buildMtfSignal({symbol,market,candles1h,candles15m}){
   if(!market||!["BULL","BEAR"].includes(market.regime))return null;
   const side=classifySymbol1h(candles1h,market.regime);if(!side)return null;
-  const plan=findEntry15m(candles15m,side);
+  const plan=findEntry15m(candles15m,candles1h,side);
   return plan?{symbol,side,marketRegime:market.regime,marketBreadth:market,trend1h:side,...plan}:null;
 }
