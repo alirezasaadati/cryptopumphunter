@@ -1,0 +1,37 @@
+name: Futures filter ablation backtest
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/futures-filter-ablation.mjs"
+      - "src/futures-filter-experiments.js"
+      - ".github/workflows/futures-filter-ablation.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate-and-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Repository tests
+        run: npm test
+      - name: 60-day filter ablation on up to 8 perpetual contracts
+        env:
+          BACKTEST_DAYS: 60
+          BACKTEST_SYMBOLS: 8
+          BACKTEST_FEE: 0.0005
+          BACKTEST_SLIPPAGE: 0.0003
+        run: node scripts/futures-filter-ablation.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: futures-filter-ablation
+          path: artifacts/kraken-entry-volume-experiments.*
+          if-no-files-found: warn
+          retention-days: 30
