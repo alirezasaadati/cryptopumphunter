@@ -9,6 +9,8 @@ const FEE = Number(process.env.PA_BACKTEST_FEE ?? 0.0005);
 const SLIPPAGE = Number(process.env.PA_BACKTEST_SLIPPAGE ?? 0.0003);
 const MAX_HOLD_BARS = 72 * 4;
 const WEIGHTS = [0.4, 0.35, 0.25];
+const STRATEGY_IDS = process.env.PA_BACKTEST_STRATEGIES
+  ? process.env.PA_BACKTEST_STRATEGIES.split(",").map(x=>x.trim()).filter(Boolean) : null;
 
 async function getJson(url) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(25000) });
@@ -103,7 +105,7 @@ async function runSymbol(ticker, from, to, evaluationStart) {
     diagnostics.evaluated++;
     const next=m15[i+1];
     const live=next.open;
-    const result=analyzePriceAction({symbol:ticker.symbol,oneHour,fourHour,fifteenMin,livePrice:live});
+    const result=analyzePriceAction({symbol:ticker.symbol,oneHour,fourHour,fifteenMin,livePrice:live,strategyIds:STRATEGY_IDS});
     if(!result.signals?.length){diagnostics.lateOrFiltered++;continue;}
     const signal=result.signals[0],dir=signal.side==="LONG"?1:-1;
     const entry=next.open*(1+dir*SLIPPAGE);
@@ -141,7 +143,7 @@ async function main(){
     methodology:{warmupDays:6,symbolSelection:"current highest-volume eligible perpetuals (survivorship/universe bias)",
       entry:"next 15m candle open with adverse slippage",feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,
       partialExitsPct:[40,35,25],maxHoldHours:72,sameCandleRule:"stop checked before targets",
-      funding:"excluded",signals:"strictly closed 4h/1h/15m candles; 15m walk-forward; one position per symbol at a time"},
+      funding:"excluded",signals:"strictly closed 4h/1h/15m candles; 15m walk-forward; one position per symbol at a time",strategyFilter:STRATEGY_IDS||"all"},
     overall:summarize(all),byStrategy,maxConcurrentPositions,
     symbols:results.map(({trades,...x})=>x),trades:all};
   await mkdir("artifacts",{recursive:true});
