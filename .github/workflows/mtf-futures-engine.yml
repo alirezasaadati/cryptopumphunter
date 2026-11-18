@@ -1,7 +1,7 @@
 name: MTF Futures Engine Tests and Backtests
 on:
   push:
-    branches: [experiment/mtf-futures-engine]
+    branches: [experiment/mtf-futures-engine, experiment/mtf-futures-engine-1h-entry]
   pull_request:
     branches: [main]
     paths:
