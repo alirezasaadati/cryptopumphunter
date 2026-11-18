@@ -332,10 +332,13 @@ async function main() {
   const active = new Map();
   const qualityActive = new Map();
   const breakoutActive = new Map();
+  const precisionActive = new Map();
   const qualityClosed = [];
   const breakoutClosed = [];
+  const precisionClosed = [];
   let qualityIssued = 0, qualitySkippedDuplicate = 0;
   let breakoutIssued = 0, breakoutSkippedDuplicate = 0;
+  let precisionIssued = 0, precisionSkippedDuplicate = 0;
   const experimentalActive = new Map();
   const tier2Active = new Map();
   const noVolumeActive = new Map();
@@ -373,6 +376,7 @@ async function main() {
     // Settle independent candidate strategies with exactly the same stop/target execution model.
     ambiguousBars += settleActiveMap(qualityActive, qualityClosed, series, time);
     ambiguousBars += settleActiveMap(breakoutActive, breakoutClosed, series, time);
+    ambiguousBars += settleActiveMap(precisionActive, precisionClosed, series, time);
 
     // Independently release experimental positions using the same stop and +25% margin target.
     for (const [key, trade] of [...experimentalActive.entries()]) {
@@ -516,6 +520,26 @@ async function main() {
       breakoutIssued++;
     }
 
+    // Candidate C: stronger side-specific confirmation.
+    // LONG: breakout + aligned swing structure + above-average participation.
+    // SHORT: weak RSI (<=45) with a measurable trend-strength regime (ADX 20+).
+    for (const signal of candidates) {
+      const passes = signal.side === "LONG"
+        ? Boolean(signal.features?.breakout20 && signal.features?.directionStructure && signal.volumeRatio >= 1.5)
+        : signal.rsi <= 45 && Number(signal.features?.adx14) >= 20;
+      if (!passes) continue;
+      const key = `${signal.symbol}|${signal.side}`;
+      if (precisionActive.has(key)) { precisionSkippedDuplicate++; continue; }
+      const d = signal.side === "LONG" ? 1 : -1;
+      const entryFill = signal.entry * (1 + d * SLIPPAGE);
+      precisionActive.set(key, {
+        symbol: signal.symbol, side: signal.side, score: signal.score,
+        signalTime: time, signal, features: signal.features || {}, entryFill,
+        targetTrigger: targetTrigger(entryFill, signal.side)
+      });
+      precisionIssued++;
+    }
+
     let experimentalSelected = 0;
     for (const signal of experimentalCandidates) {
       const key = `${signal.symbol}|${signal.side}`;
@@ -652,7 +676,8 @@ async function main() {
       splitAt: new Date(start + (DAYS / 2) * 24 * H1).toISOString(),
       baseline: temporalBreakdown(closed, start, start + (DAYS / 2) * 24 * H1, end),
       asymmetricCandidate: temporalBreakdown(qualityClosed, start, start + (DAYS / 2) * 24 * H1, end),
-      breakoutStructureCandidate: temporalBreakdown(breakoutClosed, start, start + (DAYS / 2) * 24 * H1, end)
+      breakoutStructureCandidate: temporalBreakdown(breakoutClosed, start, start + (DAYS / 2) * 24 * H1, end),
+      precisionCandidate: temporalBreakdown(precisionClosed, start, start + (DAYS / 2) * 24 * H1, end)
     },
     qualityFilter: {
       rule: "LONG: 20-candle breakout AND aligned 5-candle swing structure; SHORT: RSI <= 45",
@@ -661,7 +686,18 @@ async function main() {
       skippedDuplicate: qualitySkippedDuplicate,
       openAtEndCount: qualityActive.size,
       closed: summarize(qualityClosed),
+      precisionFilter: {
+      rule: "LONG: 20-candle breakout AND aligned 5-candle swing structure AND volumeRatio >= 1.5; SHORT: RSI <= 45 AND ADX14 >= 20",
+      signalCount: precisionIssued,
+      averageSignalsPerDay: precisionIssued / DAYS,
+      skippedDuplicate: precisionSkippedDuplicate,
+      openAtEndCount: precisionActive.size,
+      closed: summarize(precisionClosed),
       directionBreakdown: ["LONG", "SHORT"].map(side => ({
+        side, ...summarize(precisionClosed.filter(t => t.side === side))
+      }))
+    },
+    directionBreakdown: ["LONG", "SHORT"].map(side => ({
         side, ...summarize(qualityClosed.filter(t => t.side === side))
       }))
     },
