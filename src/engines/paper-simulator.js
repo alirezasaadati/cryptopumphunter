@@ -67,6 +67,7 @@ export function simulatePaperTrade({
   let funding = 0, realized = 0, entry1Filled = false;
   let entry2Filled = false, entry2Cancelled = false, nextTarget = 0;
   const fills = [], exits = [], events = [], ambiguousEvents = [];
+  let barsProcessed = 0;
 
   const averageEntry = () => fills.reduce((s,f)=>s+f.price*f.quantity,0) /
     (fills.reduce((s,f)=>s+f.quantity,0) || 1);
@@ -82,6 +83,7 @@ export function simulatePaperTrade({
   };
 
   for (const bar of later) {
+    barsProcessed++;
     if (!validBar(bar)) return {status:"invalid_data",fills,exits,events,ambiguousEvents};
     if (!entry1Filled) {
       // A signal is known only after its candle closes; no same-candle fill.
@@ -158,7 +160,7 @@ export function simulatePaperTrade({
     averageEntry:averageEntry(),remainingQuantity:qty,deployedNotional:deployed,
     grossPnl,fees,funding,unrealized,netPnl,
     returnPct:deployed ? netPnl/deployed*100 : 0,
-    barsObserved:later.length,nextTargetIndex:nextTarget,
+    barsObserved:barsProcessed,nextTargetIndex:nextTarget,
     fundingIncluded:events.some(e=>e.type==="funding"),
     unresolvedAtEnd:status==="open"
   };
