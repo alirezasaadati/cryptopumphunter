@@ -33,7 +33,20 @@ jobs:
           BACKTEST_MARGIN_USD: "1"
           BACKTEST_LEVERAGE: "10"
         run: node scripts/backtest-elliott-wave.mjs
+      - name: Multi-timeframe Elliott wave evaluation
+        env:
+          BACKTEST_DAYS: ${{ github.event.inputs.days || '90' }}
+          BACKTEST_SYMBOLS: ${{ github.event.inputs.symbols || '12' }}
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0002"
+          BACKTEST_MARGIN_USD: "1"
+          BACKTEST_LEVERAGE: "10"
+        run: node scripts/backtest-elliott-wave-mtf.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: elliott-wave-backtest-report
           path: artifacts/elliott-wave-backtest.*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elliott-wave-mtf-report
+          path: artifacts/elliott-wave-mtf.*
