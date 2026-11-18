@@ -21,7 +21,7 @@ class MemoryKV {
 
 test("published signals are archived idempotently without TTL and indexed by symbol",async()=>{
   const env={APP_KV:new MemoryKV()};
-  const signal={id:"sig-1",symbol:"PF_BTCUSDT",side:"LONG",entry:100,stop:95,target1:105,target2:110,target3:115};
+  const signal={id:"sig-1",symbol:"BTCUSDT",side:"LONG",entry:100,stop:95,target1:105,target2:110,target3:115};
   const first=await archivePublishedSignal(env,123,signal,{id:"trade-1"},"2026-11-18T08:00:00.000Z");
   const second=await archivePublishedSignal(env,123,signal,{id:"trade-1"},"2026-11-18T08:00:00.000Z");
   assert.equal(first.created,true);
