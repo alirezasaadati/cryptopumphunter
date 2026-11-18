@@ -16,6 +16,7 @@ const ENTRY_NOTIONAL = Number(process.env.ENTRY_NOTIONAL_USD ?? 100);
 const FEE_RATE = Number(process.env.FEE_RATE ?? 0.0005);
 const SLIPPAGE_BPS = Number(process.env.SLIPPAGE_BPS ?? 2);
 const MAX_HOLD_BARS = Number(process.env.MAX_HOLD_BARS ?? 500);
+const DIRECTIONAL_MODE = String(process.env.DIRECTIONAL_MODE ?? "COMBINED").toUpperCase();
 const A_WEIGHTS = [0.2,0.2,0.2,0.2,0.2];
 const B_WEIGHTS = [0.4,0.35,0.25];
 const end = Math.floor(Date.now()/INTERVAL_MS)*INTERVAL_MS;
@@ -28,6 +29,7 @@ const report = {
   timeframe: "15m",
   window: {start:new Date(start).toISOString(),end:new Date(end).toISOString(),days:DAYS,splitAt:new Date(splitAt).toISOString()},
   universe: SYMBOLS,
+  runMode: DIRECTIONAL_MODE,
   methodology: {
     signalTiming: "Signal is evaluated using the just-closed candle; execution starts no earlier than the next candle.",
     liquidity: "Historical quote turnover is not validated; liquidity filter is explicitly bypassed for this research run. Current contract tick size and quantity precision are read from Kraken instrument metadata.",
@@ -248,9 +250,22 @@ for(const symbol of SYMBOLS){
     while (directionalIndex < valid.length - 1) {
       const history = valid.slice(0, directionalIndex + 1);
       const candidates = [];
-      const aSignal = analyzeEngineA({symbol, candles:history, skipLiquidityCheck:true});
+      const aSignal = DIRECTIONAL_MODE === "B_ONLY" ? null :
+        analyzeEngineA({symbol, candles:history, skipLiquidityCheck:true});
       const bSignal = analyzeEngineB({symbol, candles:history, skipLiquidityCheck:true});
-      if (aSignal?.side === "LONG") candidates.push({engine:"A_LONG_ONLY",signal:aSignal,weights:A_WEIGHTS});
+      // A's revised research gate: allow LONG only while BTC 15m trend is
+      // aligned (close > EMA50 and EMA20 > EMA50), using no future candles.
+      if (aSignal?.side === "LONG") {
+        const signalTime = history.at(-1).time;
+        let lo=0,hi=btcCandles.length;
+        while(lo<hi){const mid=(lo+hi)>>1;if(btcCandles[mid].time<=signalTime)lo=mid+1;else hi=mid;}
+        const btcHistory=btcCandles.slice(0,lo);
+        const btcCloses=btcHistory.map(c=>c.close);
+        const btcFast=ema(btcCloses,20),btcSlow=ema(btcCloses,50),btcClose=btcHistory.at(-1)?.close;
+        const btcAligned=Number.isFinite(btcFast)&&Number.isFinite(btcSlow)&&Number.isFinite(btcClose)&&btcClose>btcSlow&&btcFast>btcSlow;
+        if (btcAligned) candidates.push({engine:"A_LONG_ONLY",signal:aSignal,weights:A_WEIGHTS});
+        else report.engines.A_LONG_ONLY.skipped.push({symbol,side:"LONG",candleTime:aSignal.candleTime,score:aSignal.score,status:"btc_regime_rejected",reason:"A long disabled unless BTC close > EMA50 and EMA20 > EMA50"});
+      }
       if (bSignal?.side === "SHORT") candidates.push({engine:"B_SHORT_ONLY",signal:bSignal,weights:B_WEIGHTS});
       if (!candidates.length) { directionalIndex++; continue; }
       candidates.sort((a,b)=>b.signal.score-a.signal.score ||
