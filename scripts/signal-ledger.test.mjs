@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { issuedSignalKey, saveIssuedSignal, updateIssuedSignal, listIssuedSignals, issuedSignalSymbols } from "../src/signal-ledger.js";
+import { signalOutboxKey, signalOutboxAction } from "../src/signal-outbox.js";
 
 function memoryKV() {
   const data = new Map();
@@ -62,4 +63,18 @@ test("archive rejects malformed signal prices instead of storing zero-valued lev
     saveIssuedSignal(kv,123,{...signal,entry:null}),
     /invalid price levels/
   );
+});
+
+
+test("outbox sends only queued work and resumes archive after confirmed Telegram delivery",()=>{
+  assert.equal(signalOutboxKey(123,"sig-1"),"futures:signal-outbox:v1:123:sig-1");
+  assert.equal(signalOutboxAction(null),"send");
+  assert.equal(signalOutboxAction({status:"QUEUED"}),"send");
+  assert.equal(signalOutboxAction({status:"SENT",telegramMessageId:42}),"archive");
+  assert.equal(signalOutboxAction({status:"ARCHIVED"}),"done");
+});
+
+test("outbox never blindly resends ambiguous in-flight or uncertain Telegram deliveries",()=>{
+  assert.equal(signalOutboxAction({status:"SENDING"}),"reconcile");
+  assert.equal(signalOutboxAction({status:"UNCERTAIN"}),"reconcile");
 });
