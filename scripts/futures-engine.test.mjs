@@ -85,6 +85,20 @@ test("legacy 1h/4h strategy can generate a SHORT",()=>{
   assert.ok(result.target3<result.target2);
 });
 
+
+test("relaxed 1h trend with neutral 4h context is tracked as experimental, never production",()=>{
+  const {ticker,oneHour}=makeSetup("LONG");
+  const neutralFourHour=Array.from({length:120},(_,i)=>({
+    time:Date.now()-(120-i)*4*60*60*1000,
+    open:100,high:100.1,low:99.9,close:100,volume:100
+  }));
+  const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour);
+  assert.equal(result.eligible,false);
+  assert.equal(result.experimentalEligible,true);
+  assert.ok(result.score>=55);
+  assert.ok(result.stop<result.entry && result.target1>result.entry);
+});
+
 test("risk distance outside the original 0.2%-8% band is rejected",()=>{
   const {ticker,oneHour,fourHour}=makeSetup("LONG");
   const altered=oneHour.map(x=>({...x}));
