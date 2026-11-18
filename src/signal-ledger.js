@@ -8,8 +8,21 @@ export function issuedSignalKey(chatId, symbol, signalId) {
   return PREFIX + String(chatId) + ":" + cleanSymbol(symbol) + ":" + encodeURIComponent(String(signalId));
 }
 
+function finiteOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 export async function saveIssuedSignal(kv, chatId, signal, trade = null) {
   if (!kv || !chatId || !signal?.id || !signal?.symbol) return false;
+  const numericLevels = [signal.entry, signal.stop, signal.target1, signal.target2, signal.target3].map(finiteOrNull);
+  if (numericLevels.some(value => value === null || value <= 0)) {
+    throw new Error("Issued signal contains invalid price levels.");
+  }
+  if (!["LONG", "SHORT"].includes(signal.side)) {
+    throw new Error("Issued signal direction must be LONG or SHORT.");
+  }
   const key = issuedSignalKey(chatId, signal.symbol, signal.id);
   const existing = await kv.get(key);
   if (existing) return false;
@@ -20,12 +33,12 @@ export async function saveIssuedSignal(kv, chatId, signal, trade = null) {
     side: signal.side,
     exchange: signal.exchange || "Kraken",
     strategyId: signal.strategyId || "kraken-futures-engine",
-    entry: Number(signal.entry),
-    stop: Number(signal.stop),
-    target1: Number(signal.target1),
-    target2: Number(signal.target2),
-    target3: Number(signal.target3),
-    score: Number.isFinite(Number(signal.score)) ? Number(signal.score) : null,
+    entry: numericLevels[0],
+    stop: numericLevels[1],
+    target1: numericLevels[2],
+    target2: numericLevels[3],
+    target3: numericLevels[4],
+    score: finiteOrNull(signal.score),
     tier: signal.tier === "EXPERIMENTAL" ? "EXPERIMENTAL" : "STANDARD",
     status: "OPEN",
     tpHits: [],
@@ -49,15 +62,15 @@ export async function updateIssuedSignal(kv, chatId, trade) {
   if (!raw) return false;
   const record = {
     ...raw,
-    tpHits: [...new Set(Array.isArray(trade.tpHits) ? trade.tpHits : raw.tpHits || [])],
+    tpHits: [...new Set([...(Array.isArray(raw.tpHits) ? raw.tpHits : []), ...(Array.isArray(trade.tpHits) ? trade.tpHits : [])])],
     status: String(trade.status || raw.status),
-    lastPrice: Number.isFinite(Number(trade.lastPrice)) ? Number(trade.lastPrice) : raw.lastPrice ?? null,
+    lastPrice: finiteOrNull(trade.lastPrice) ?? raw.lastPrice ?? null,
     lastCheckedAt: trade.lastCheckedAt || raw.lastCheckedAt || null,
     closedAt: trade.closedAt || raw.closedAt || null,
     closeReason: trade.closeReason || raw.closeReason || null,
-    exitPrice: Number.isFinite(Number(trade.exitPrice)) ? Number(trade.exitPrice) : raw.exitPrice ?? null,
-    outcomePercent: Number.isFinite(Number(trade.outcomePercent)) ? Number(trade.outcomePercent) : raw.outcomePercent ?? null,
-    outcomeR: Number.isFinite(Number(trade.outcomeR)) ? Number(trade.outcomeR) : raw.outcomeR ?? null
+    exitPrice: finiteOrNull(trade.exitPrice) ?? raw.exitPrice ?? null,
+    outcomePercent: finiteOrNull(trade.outcomePercent) ?? raw.outcomePercent ?? null,
+    outcomeR: finiteOrNull(trade.outcomeR) ?? raw.outcomeR ?? null
   };
   await kv.put(key, JSON.stringify(record));
   return true;
