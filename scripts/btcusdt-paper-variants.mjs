@@ -2,7 +2,8 @@ import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { analyzeFuturesSymbol } from "../src/index.js";
 import { passesCompression, passesAtrCap, passesBreakoutBody } from "../src/futures-filter-experiments.js";
-import { passesVolumeThreshold, isLateEntry, hasPullbackOrBreakout, passesEntryFreshness } from "../src/futures-entry-experiments.js";\nimport { detectOneHourBOS, buildPriceActionSignal } from "./btcusdt-price-action.mjs";
+import { passesVolumeThreshold, isLateEntry, hasPullbackOrBreakout, passesEntryFreshness } from "../src/futures-entry-experiments.js";
+import { detectOneHourBOS, buildPriceActionSignal } from "./btcusdt-price-action.mjs";
 
 const BASE = "https://fapi.binance.com";
 const SYMBOL = "BTCUSDT";
