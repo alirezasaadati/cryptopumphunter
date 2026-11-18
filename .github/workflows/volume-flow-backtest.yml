@@ -1,0 +1,36 @@
+name: Volume Flow Historical Backtest
+
+on:
+  pull_request:
+    paths:
+      - "src/volume-flow-engine.js"
+      - "scripts/backtest-volume-flow.mjs"
+      - ".github/workflows/volume-flow-backtest.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run engine tests
+        run: node --test scripts/volume-flow-engine.test.mjs
+      - name: Run 30-day historical backtest
+        run: node scripts/backtest-volume-flow.mjs
+        env:
+          VF_DAYS: 30
+          VF_SYMBOLS: 8
+          VF_FEE: 0.0005
+          VF_SLIPPAGE: 0.0003
+      - name: Upload backtest report
+        uses: actions/upload-artifact@v4
+        with:
+          name: volume-flow-backtest-report
+          path: artifacts/volume-flow-backtest.*
+          if-no-files-found: error
