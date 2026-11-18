@@ -54,7 +54,7 @@ export function processChannelCandle(position, candle) {
     p.remaining = 0; p.status = "CLOSED"; p.exitReason = "STOP"; p.exitTime = candle.time;
     return p;
   }
-  if (entry2Hit) {
+  const firstTargetTouched = dir === 1 ? high >= p.targets[0] : low <= p.targets[0];\n  // If TP1 and the second-entry trigger occur in the same OHLC candle,\n  // resolve conservatively in favor of TP1: do not assume the add filled first.\n  if (entry2Hit && firstTargetTouched) p.entry2Cancelled = true;\n  if (entry2Hit && !p.entry2Cancelled) {
     p.entry2 = p.entry2Trigger;
     p.averageEntry = (p.entry1 + p.entry2) / 2;
     p.remaining = 2;
