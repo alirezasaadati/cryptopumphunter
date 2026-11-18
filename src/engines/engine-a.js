@@ -1,6 +1,6 @@
 import { ENGINE_CONFIG, validateCandles, ema, rsi, atr, volumeRatio, swings, scoreSignal, makeSignalBase, roundPrice } from "./engine-utils.js";
 
-// Channel-inspired model. Entry 2 is conditional; all price plans expose
+export function buildEngineATargets(reference, side) {\n  if (!(Number.isFinite(reference) && reference > 0) || !["LONG", "SHORT"].includes(side)) return [];\n  const direction=side==="LONG"?1:-1;\n  return ENGINE_CONFIG.A_TARGETS_PCT.map(p=>roundPrice(reference*(1+direction*p/100)));\n}\n\n// Channel-inspired model. Entry 2 is conditional; all price plans expose
 // separate levels for the one-fill and two-fill scenarios.
 export function analyzeEngineA({symbol,candles,quoteVolume}) {
   if (!validateCandles(candles) || !Number.isFinite(Number(quoteVolume)) || Number(quoteVolume)<ENGINE_CONFIG.MIN_QUOTE_VOLUME) return null;
