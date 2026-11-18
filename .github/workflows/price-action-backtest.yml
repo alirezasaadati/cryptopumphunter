@@ -26,6 +26,15 @@ jobs:
           - name: candlestick_breakout_volume
             confirmation: volume
             strategies: candlestick,breakout_retest
+          - name: candlestick_macd
+            confirmation: macd
+            strategies: candlestick
+          - name: candlestick_breakout_macd
+            confirmation: macd
+            strategies: candlestick,breakout_retest
+          - name: candlestick_breakout_macd_volume
+            confirmation: macd_volume
+            strategies: candlestick,breakout_retest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
