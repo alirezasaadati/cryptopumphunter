@@ -132,6 +132,39 @@ function summarize(trades) {
   };
 }
 
+function compareSignalTiming(baselineTrades, candidateTrades, maxDelayHours = 24) {
+  const baseline = [...baselineTrades].filter(t => Number.isFinite(Number(t.signalTime)))
+    .sort((a,b) => a.signalTime - b.signalTime);
+  const candidates = [...candidateTrades].filter(t => Number.isFinite(Number(t.signalTime)))
+    .sort((a,b) => a.signalTime - b.signalTime);
+  const used = new Set();
+  const delays = [];
+  let unmatched = 0;
+  for (const base of baseline) {
+    const index = candidates.findIndex((candidate, i) =>
+      !used.has(i) && candidate.symbol === base.symbol && candidate.side === base.side &&
+      candidate.signalTime >= base.signalTime &&
+      candidate.signalTime <= base.signalTime + maxDelayHours * HOUR
+    );
+    if (index < 0) { unmatched++; continue; }
+    used.add(index);
+    delays.push((candidates[index].signalTime - base.signalTime) / HOUR);
+  }
+  const sorted = [...delays].sort((a,b)=>a-b);
+  const median = sorted.length
+    ? (sorted.length % 2 ? sorted[(sorted.length-1)/2] : (sorted[sorted.length/2-1]+sorted[sorted.length/2])/2)
+    : null;
+  return {
+    baselineSignals: baseline.length,
+    candidateSignals: candidates.length,
+    matchedWithin24h: delays.length,
+    unmatchedWithin24h: unmatched,
+    averageDelayHours: delays.length ? delays.reduce((s,x)=>s+x,0)/delays.length : null,
+    medianDelayHours: median,
+    delayedOver1h: delays.filter(x=>x>1).length
+  };
+}
+
 async function backtestSymbol(ticker, fromMs, toMs, variant) {
   const [oneHour,fourHour] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs,HOUR),
@@ -208,6 +241,11 @@ async function main() {
       trades:allTrades
     });
   }
+  const baseline=variantResults.find(x=>x.variant.id==="baseline");
+  const variantSummaries=variantResults.map(({trades,...rest})=>({
+    ...rest,
+    timing:compareSignalTiming(baseline?.trades||[],trades,24)
+  }));
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS},
@@ -222,7 +260,7 @@ async function main() {
       signalUses:"historical 1h/4h closed candles; 24h change derived from historical bars; no current funding or future candle data",
       note:"All variants reuse analyzeFuturesSymbol's existing stop/target outputs and the same trade simulator. Only entry eligibility gates vary."
     },
-    variants:variantResults.map(({trades,...rest})=>rest),
+    variants:variantSummaries,
     variantTrades:variantResults.map(x=>({id:x.variant.id,trades:x.trades}))
   };
   await mkdir("artifacts",{recursive:true});
@@ -233,9 +271,12 @@ async function main() {
     "Symbols tested: "+universe.length+"/"+SYMBOL_LIMIT,
     "Costs: "+(FEE_PER_SIDE*100).toFixed(3)+"% fee + "+(SLIPPAGE_PER_SIDE*100).toFixed(3)+"% slippage per side.",
     "Exit logic: unchanged existing stop/target outputs and simulator.","",
-    "| Variant | Trades | Win rate | Net R | Expectancy | Profit factor | Max DD |",
-    "|---|---:|---:|---:|---:|---:|---:|",
-    ...variantResults.map(x=>"| "+x.variant.id+" | "+x.overall.trades+" | "+x.overall.winRatePct.toFixed(2)+"% | "+x.overall.netR.toFixed(2)+" | "+x.overall.expectancyR.toFixed(3)+" | "+(x.overall.profitFactor===null?"n/a":x.overall.profitFactor.toFixed(2))+" | "+x.overall.maxDrawdownR.toFixed(2)+" |"),
+    "| Variant | Trades | Win rate | Net R | Expectancy | PF | Max DD | Avg delay (h) | Matched / baseline |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ...variantResults.map((x,i)=>{
+      const timing=variantSummaries[i].timing;
+      return "| "+x.variant.id+" | "+x.overall.trades+" | "+x.overall.winRatePct.toFixed(2)+"% | "+x.overall.netR.toFixed(2)+" | "+x.overall.expectancyR.toFixed(3)+" | "+(x.overall.profitFactor===null?"n/a":x.overall.profitFactor.toFixed(2))+" | "+x.overall.maxDrawdownR.toFixed(2)+" | "+(timing.averageDelayHours===null?"n/a":timing.averageDelayHours.toFixed(2))+" | "+timing.matchedWithin24h+"/"+timing.baselineSignals+" |";
+    }),
     "",
     "This is a historical simulation, not a live-fill guarantee. Historical funding is excluded."
   ];
