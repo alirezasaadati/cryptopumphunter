@@ -30,7 +30,7 @@ const isEntry2Touched = (bar, side, entry2) =>
  */
 export function simulatePaperTrade({
   signal, candles, entryNotional, targetWeights,
-  feeRate = 0.0005, slippageBps = 2, maxEntryDriftPct = 0.35, maxBars = 500
+  feeRate = 0.0005, slippageBps = 2, maxEntryDriftPct = 0.35, quantityPrecision = 8, maxBars = 500
 }) {
   if (!signal || !["LONG","SHORT"].includes(signal.side) ||
     !finite(signal.entry) || signal.entry <= 0 ||
@@ -46,6 +46,7 @@ export function simulatePaperTrade({
     !finite(feeRate) || feeRate < 0 ||
     !finite(slippageBps) || slippageBps < 0 ||
     !finite(maxEntryDriftPct) || maxEntryDriftPct < 0 ||
+    !Number.isInteger(quantityPrecision) || quantityPrecision < 0 || quantityPrecision > 12 ||
     !Number.isInteger(maxBars) || maxBars < 1 ||
     !Array.isArray(candles)) return {status:"invalid_input"};
 
@@ -65,6 +66,8 @@ export function simulatePaperTrade({
   const later = allLater.slice(0,maxBars);
   if (!later.length) return {status:"no_future_candles"};
 
+  const quantityScale = 10 ** quantityPrecision;
+  const quantizeQty = value => Math.floor((value + 1e-12) * quantityScale) / quantityScale;
   let qty = 0, initialQty = 0, deployed = 0, fees = 0;
   let funding = 0, realized = 0, entry1Filled = false;
   let entry2Filled = false, entry2Cancelled = false, nextTarget = 0;
@@ -74,7 +77,7 @@ export function simulatePaperTrade({
   const averageEntry = () => fills.reduce((s,f)=>s+f.price*f.quantity,0) /
     (fills.reduce((s,f)=>s+f.quantity,0) || 1);
   const closeQty = (amount, rawPrice, reason, time) => {
-    const q = Math.min(qty, amount);
+    const q = Math.min(qty, amount >= qty-1e-12 ? qty : quantizeQty(amount));
     if (q <= 1e-12) return;
     const px = adversePrice(rawPrice,side,"exit",slippageBps);
     const pnl = (px-averageEntry())*q*sign;
@@ -103,10 +106,13 @@ export function simulatePaperTrade({
           fills,exits,events,ambiguousEvents};
       }
       const price = adversePrice(bar.open,side,"entry",slippageBps);
-      const quantity = entryNotional / price;
-      fills.push({leg:1,time:bar.time,price,quantity});
-      qty += quantity; initialQty += quantity; deployed += entryNotional;
-      fees += entryNotional*feeRate; entry1Filled = true;
+      const quantity = quantizeQty(entryNotional / price);
+      if (quantity <= 0) return {status:"not_filled",reason:"below_minimum_quantity_precision",barsObserved:barsProcessed,
+        fills,exits,events,ambiguousEvents};
+      const notional = quantity * price;
+      fills.push({leg:1,time:bar.time,price,quantity,notional});
+      qty += quantity; initialQty += quantity; deployed += notional;
+      fees += notional*feeRate; entry1Filled = true;
       events.push({type:"entry",leg:1,time:bar.time,price,quantity});
     }
 
@@ -135,10 +141,13 @@ export function simulatePaperTrade({
       entry2Cancelled = true;
     } else if (entry2Touched) {
       const price = entry2;
-      const quantity = entryNotional / price;
-      fills.push({leg:2,time:bar.time,price,quantity});
-      qty += quantity; initialQty += quantity; deployed += entryNotional;
-      fees += entryNotional*feeRate; entry2Filled = true;
+      const quantity = quantizeQty(entryNotional / price);
+      if (quantity > 0) {
+        const notional = quantity * price;
+        fills.push({leg:2,time:bar.time,price,quantity,notional});
+        qty += quantity; initialQty += quantity; deployed += notional;
+        fees += notional*feeRate; entry2Filled = true;
+      }
       events.push({type:"entry",leg:2,time:bar.time,price,quantity});
     } else if (target1Touched && entry2 !== null && !entry2Filled) {
       entry2Cancelled = true;
