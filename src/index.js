@@ -1578,7 +1578,7 @@ async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMa
 export class SignalDeliveryCoordinator {
   constructor(ctx,env){
     this.ctx=ctx;
-    this.env=withQuotaAwareKV(env);
+    this.env=env;
     this.serial=createSerialExecutor();
   }
   async fetch(request){
@@ -1603,8 +1603,9 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
           return Response.json({ok:true,allowed:false,day:today});
         }
-        if((url.pathname==="/deliver"||url.pathname==="/reconcile") && (await this.ctx.storage.get("kv-daily-write-pause"))?.day===quotaDayKey()){
-          throw new Error("KV daily write quota is paused until the next UTC day.");
+        if(url.pathname==="/deliver"||url.pathname==="/reconcile"){
+          const gate=await kvWriteGate(this.env,"allow");
+          if(gate?.allowed===false)throw new Error("KV daily write quota is paused until the next UTC day.");
         }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
@@ -1645,6 +1646,7 @@ export class SignalDeliveryCoordinator {
         throw new Error("Unknown reconciliation action.");
       }catch(error){
         if(isKvDailyWriteQuotaError(error)){
+          await kvWriteGate(this.env,"pause",error);
           await this.ctx.storage.put("kv-daily-write-pause",{day:quotaDayKey(),pausedAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,300)});
         }
         return Response.json({ok:false,error:String(error?.message||error).slice(0,500)},{status:409});
