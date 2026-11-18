@@ -1,4 +1,5 @@
-import { readFile, writeFile, rename } from "node:fs/promises";
+import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import { analyzeFuturesSymbol } from "../src/index.js";
 import { passesCompression, passesAtrCap, passesBreakoutBody } from "../src/futures-filter-experiments.js";
 import { passesVolumeThreshold, isLateEntry, hasPullbackOrBreakout } from "../src/futures-entry-experiments.js";
@@ -42,6 +43,7 @@ async function loadState() {
     variants:Object.fromEntries(VARIANTS.map(v=>[v.id,{pending:null,open:null,trades:[]}])) };
 }
 async function saveState(state) {
+  await mkdir(dirname(STATE_PATH), { recursive: true });
   const tmp = STATE_PATH + ".tmp";
   await writeFile(tmp, JSON.stringify(state,null,2));
   await rename(tmp, STATE_PATH);
