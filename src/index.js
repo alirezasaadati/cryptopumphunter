@@ -11,7 +11,62 @@ const CONFIG = {
 
 
 const TELEGRAM_API = "https://api.telegram.org";
+
 const seenUpdates = new Set();
+let telegramKvDedupeUnavailable = false;
+
+export function quotaDayKey(now = Date.now()) { return new Date(now).toISOString().slice(0, 10); }
+export function isKvDailyWriteQuotaError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return message.includes("limit exceeded for the day") || (message.includes("quota") && (message.includes("put") || message.includes("delete")));
+}
+async function kvWriteGate(env, action, error = null) {
+  if (!env.SIGNAL_DELIVERY) return { allowed: true };
+  try {
+    const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global-kv-write-quota"));
+    const response = await stub.fetch("https://signal-delivery.internal/kv-write/" + action, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET || "" },
+      body: JSON.stringify({ day: quotaDayKey(), message: error ? String(error?.message || error).slice(0, 300) : undefined })
+    });
+    if (!response.ok) throw new Error("KV quota gate returned HTTP " + response.status + "; refusing KV write.");
+    const result = await response.json();
+    if (typeof result?.allowed !== "boolean") throw new Error("KV quota gate returned an invalid response; refusing KV write.");
+    return result;
+  } catch (gateError) {
+    console.error("KV quota gate unavailable; KV write blocked:", String(gateError?.message || gateError));
+    throw new Error("KV quota gate unavailable; write blocked to protect the daily quota.");
+  }
+}
+export function withQuotaAwareKV(env) {
+  if (!env.APP_KV) return env;
+  if (!env.SIGNAL_DELIVERY) throw new Error("SIGNAL_DELIVERY is required for safe KV quota enforcement.");
+  const raw = env.APP_KV;
+  const guarded = new Proxy(raw, {
+    get(target, property) {
+      if (property === "put" || property === "delete") return async (...args) => {
+        const gate = await kvWriteGate(env, "allow");
+        if (gate?.allowed === false) {
+          console.warn("KV write suppressed by daily quota circuit breaker.");
+          throw new Error("KV daily write quota is paused until the next UTC day; this change was not saved.");
+        }
+        try { return await target[property](...args); }
+        catch (error) {
+          if (isKvDailyWriteQuotaError(error)) {
+            await kvWriteGate(env, "pause", error);
+            console.error("KV daily write quota reached; writes paused until the next UTC day.");
+          }
+          throw error;
+        }
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }
+  });
+  const wrappedEnv = Object.create(env);
+  Object.defineProperty(wrappedEnv, "APP_KV", { value: guarded, enumerable: true });
+  return wrappedEnv;
+}
 
 const ABOUT_TEXT =
   "🤖 تریدیار | دستیار معامله‌گر فیوچرز\n\n" +
@@ -54,10 +109,12 @@ const BACK_MENU = {
 
 export default {
   async scheduled(event, env, ctx) {
+    env = withQuotaAwareKV(env);
     ctx.waitUntil(runAutomaticFuturesAlertScan(env));
   },
 
   async fetch(request, env, ctx) {
+    env = withQuotaAwareKV(env);
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/") {
@@ -103,9 +160,22 @@ export default {
       const updateId = update.update_id;
       if (updateId !== undefined) {
         const key = `telegram:update:${updateId}`;
-        if (env.APP_KV) {
-          if (await env.APP_KV.get(key)) return new Response("OK");
-          await env.APP_KV.put(key, "1", { expirationTtl: 86400 });
+        if (env.APP_KV && !telegramKvDedupeUnavailable) {
+          try {
+            if (await env.APP_KV.get(key)) return new Response("OK");
+            await env.APP_KV.put(key, "1", { expirationTtl: 86400 });
+          } catch (error) {
+            // KV daily write quotas must not take the Telegram webhook offline.
+            // Fall back to isolate-local deduplication for the rest of this isolate's lifetime.
+            telegramKvDedupeUnavailable = true;
+            console.error(
+              "Telegram update deduplication KV unavailable; using in-memory fallback:",
+              String(error?.message || error)
+            );
+            if (seenUpdates.has(updateId)) return new Response("OK");
+            seenUpdates.add(updateId);
+            if (seenUpdates.size > 500) seenUpdates.delete(seenUpdates.values().next().value);
+          }
         } else {
           if (seenUpdates.has(updateId)) return new Response("OK");
           seenUpdates.add(updateId);
@@ -1513,7 +1583,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=this.env.SIGNAL_DELIVERY_SECRET;
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -1521,6 +1591,33 @@ export class SignalDeliveryCoordinator {
     try{payload=await request.json()}catch{return Response.json({ok:false,error:"Invalid JSON payload."},{status:400});}
     return this.serial(async()=>{
       try{
+        if(url.pathname==="/kv-write/allow"){
+          const today=quotaDayKey();
+          const paused=await this.ctx.storage.get("kv-daily-write-pause");
+          if(paused?.day===today)return Response.json({ok:true,allowed:false,day:today});
+          if(paused?.day&&paused.day!==today)await this.ctx.storage.delete("kv-daily-write-pause");
+          return Response.json({ok:true,allowed:true,day:today});
+        }
+        if(url.pathname==="/kv-write/pause"){
+          const today=quotaDayKey();
+          await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
+          return Response.json({ok:true,allowed:false,day:today});
+        }
+        if((url.pathname==="/deliver"||url.pathname==="/reconcile") && this.env.SIGNAL_DELIVERY){
+          const gate=await kvWriteGate(this.env,"allow");
+          if(gate?.allowed===false)throw new Error("KV daily write quota is paused until the next UTC day.");
+        }
+        if(url.pathname==="/scan-lock/acquire"){
+          const current=await this.ctx.storage.get("automatic-futures-scan-lock");
+          const now=Date.now();
+          if(current&&Number(current.expiresAt)>now)return Response.json({ok:true,acquired:false});
+          await this.ctx.storage.put("automatic-futures-scan-lock",{acquiredAt:now,expiresAt:now+240000});
+          return Response.json({ok:true,acquired:true});
+        }
+        if(url.pathname==="/scan-lock/release"){
+          await this.ctx.storage.delete("automatic-futures-scan-lock");
+          return Response.json({ok:true,released:true});
+        }
         if(url.pathname==="/deliver"){
           const result=await sendAndArchiveFuturesSignalUnlocked(this.env,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null);
           return Response.json({ok:true,result});
@@ -1548,6 +1645,10 @@ export class SignalDeliveryCoordinator {
         }
         throw new Error("Unknown reconciliation action.");
       }catch(error){
+        if(isKvDailyWriteQuotaError(error)){
+          if(this.env.SIGNAL_DELIVERY)await kvWriteGate(this.env,"pause",error);
+          await this.ctx.storage.put("kv-daily-write-pause",{day:quotaDayKey(),pausedAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,300)});
+        }
         return Response.json({ok:false,error:String(error?.message||error).slice(0,500)},{status:409});
       }
     });
@@ -1646,16 +1747,22 @@ async function showIssuedSignalDetails(env,chatId,selection,view){
 async function showOpenFuturesTrades(env,chatId){try{await refreshTrackedFuturesTrades(env,chatId)}catch(error){console.error("Open trade refresh failed:",String(error?.stack||error))}const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));if(!list.length)return sendMessage(env,chatId,"📭 معامله بازی در دفتر پیگیری ثبت نشده است.",BACK_MENU);const body=list.slice(0,15).map(t=>{const p=priceChangePercent(t.side,t.actualEntry,t.lastPrice);return`${t.tier==="EXPERIMENTAL"?"🧪 آزمایشی | ":""}${t.side==="LONG"?"🟢 LONG":"🔴 SHORT"} ${t.symbol} | ${t.exchange||"Kraken"}\nورود سیگنال: ${formatPrice(t.actualEntry)} | قیمت آخر: ${formatPrice(t.lastPrice)}\nبازده فعلی قیمتی: ${Number.isFinite(p)?(p>=0?"+":"")+p.toFixed(2)+"%":"—"}\nحد ضرر: ${formatPrice(t.currentStop)}\nاهداف: ${formatPrice(t.target1)} / ${formatPrice(t.target2)} / ${formatPrice(t.target3)}\nاهداف لمس‌شده: ${t.tpHits.join(", ")||"—"}`}).join("\n\n");return sendLongMessage(env,chatId,"📌 معاملات باز / سیگنال‌های در حال ارزیابی\n━━━━━━━━━━━━━━━━━━\n"+body+"\n\n⚠️ این دفتر ارزیابی است؛ سفارش واقعی ثبت نمی‌شود.")}
 async function showFuturesTradeHistory(env,chatId){const list=(await readTradeList(env,FUTURES_CLOSED_KEY)).filter(t=>String(t.chatId)===String(chatId)).slice(0,50);if(!list.length)return sendMessage(env,chatId,"📚 هنوز معامله بسته‌شده‌ای ثبت نشده است.",BACK_MENU);const wins=list.filter(t=>Number(t.outcomePercent)>0).length,losses=list.filter(t=>Number(t.outcomePercent)<0).length,breakeven=list.length-wins-losses,winRate=list.length?wins/list.length*100:0,tp1=list.filter(t=>t.tpHits?.includes("TP1")).length,tp2=list.filter(t=>t.tpHits?.includes("TP2")).length,tp3=list.filter(t=>t.tpHits?.includes("TP3")).length,avg=list.reduce((s,t)=>s+Number(t.outcomePercent||0),0)/list.length,total=list.reduce((s,t)=>s+Number(t.outcomePercent||0),0);const summary=`📊 آمار عملکرد سیگنال‌ها\n━━━━━━━━━━━━━━━━━━\nکل سیگنال‌های بسته‌شده: ${list.length}\nبرد: ${wins} | باخت: ${losses} | سر‌به‌سر: ${breakeven}\n🏆 Win Rate: ${winRate.toFixed(1)}%\n📈 میانگین نتیجه هر سیگنال: ${avg>=0?"+":""}${avg.toFixed(2)}%\n💰 مجموع نتیجه قیمتی مدل: ${total>=0?"+":""}${total.toFixed(2)}%\n🎯 رسیدن به TP1: ${tp1} | TP2: ${tp2} | TP3: ${tp3}\n\n`;const body=list.slice(0,15).map(t=>`${t.tier==="EXPERIMENTAL"?"🧪 آزمایشی | ":""}${t.symbol} | ${t.side}\nورود: ${formatPrice(t.actualEntry)} | خروج: ${formatPrice(t.exitPrice)}\nنتیجه: ${Number(t.outcomePercent)>=0?"+":""}${Number(t.outcomePercent).toFixed(2)}% | ${Number(t.outcomeR).toFixed(2)}R\nTPها: ${t.tpHits.join(", ")||"—"} | ${t.closeReason==="STOP_LOSS"?"استاپ":"TP3"}`).join("\n\n");return sendLongMessage(env,chatId,summary+"📚 تاریخچه معاملات\n━━━━━━━━━━━━━━━━━━\n"+body)}
 async function runAutomaticFuturesAlertScan(env) {
-  if (!env.APP_KV) throw new Error("APP_KV binding is required for automatic alerts.");
-  const lockKey = "futures:auto-alerts:scan-lock";
-  if (await env.APP_KV.get(lockKey)) return { skipped: true, reason: "scan already running" };
-  await env.APP_KV.put(lockKey, String(Date.now()), { expirationTtl: 240 });
+  if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) {
+    throw new Error("SIGNAL_DELIVERY and SIGNAL_DELIVERY_SECRET are required for scan coordination.");
+  }
+  const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:automatic-futures-scan-lock"));
+  const headers = { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET };
+  const acquireResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/acquire", { method: "POST", headers, body: "{}" });
+  const acquire = await acquireResponse.json();
+  if (!acquireResponse.ok || !acquire.ok) throw new Error(acquire.error || "Could not acquire automatic scan lock.");
+  if (!acquire.acquired) return { skipped: true, reason: "scan already running" };
   try {
     const tracking = await refreshTrackedFuturesTrades(env);
     const result = await runFuturesSignalScan(env);
     return { scanned: true, signals: (result.signals || []).length, experimentalSignals: result.experimentalSent || 0, checkedTrades: tracking.checked, closedTrades: tracking.closed };
   } finally {
-    await env.APP_KV.delete(lockKey);
+    const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
+    if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
   }
 }
 
