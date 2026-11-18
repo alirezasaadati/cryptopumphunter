@@ -1,0 +1,39 @@
+name: Fibonacci Ichimoku Backtest
+on:
+  push:
+    branches: [feature/fibonacci-ichimoku-engine]
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Historical days (30-180)
+        required: false
+        default: "90"
+      symbols:
+        description: Highest-volume crypto perpetual contracts (3-24)
+        required: false
+        default: "12"
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Fibonacci and Ichimoku historical backtest
+        env:
+          BACKTEST_DAYS: ${{ github.event.inputs.days || '90' }}
+          BACKTEST_SYMBOLS: ${{ github.event.inputs.symbols || '12' }}
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0002"
+          BACKTEST_MARGIN_USD: "1"
+          BACKTEST_LEVERAGE: "10"
+        run: node scripts/backtest-fibonacci-ichimoku.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fibonacci-ichimoku-backtest-report
+          path: artifacts/fibonacci-ichimoku-backtest.*
