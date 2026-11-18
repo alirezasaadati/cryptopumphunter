@@ -29,24 +29,27 @@ export function analyzeEngineA({symbol,candles,quoteVolume,skipLiquidityCheck=fa
   if(score<ENGINE_CONFIG.MIN_SCORE) return null;
 
   const entry1=last.close, offset=ENGINE_CONFIG.ENTRY2_OFFSET_PCT/100;
-  const entry2=side==="LONG"?entry1*(1-offset):entry1*(1+offset);
-  const bothFilledAverage=(entry1+entry2)/2;
+  const entry2Candidate=side==="LONG"?entry1*(1-offset):entry1*(1+offset);
   const buffer=Math.max(volatility*0.8,entry1*0.002);
   const stop=side==="LONG"?Math.min(levels.low,last.low)-buffer:Math.max(levels.high,last.high)+buffer;
   // Validate risk against the less favorable one-fill case. Entry 2 is not
   // assumed filled when sizing or publishing the primary plan.
   const risk=side==="LONG"?entry1-stop:stop-entry1;
   if(!(risk>0 && risk/entry1<=0.12)) return null;
+  // Entry 2 is usable only if it sits before the structural stop on the pullback path.
+  const entry2Valid=side==="LONG"?entry2Candidate>stop:entry2Candidate<stop;
+  const entry2=entry2Valid?entry2Candidate:null;
+  const bothFilledAverage=entry2===null?entry1:(entry1+entry2)/2;
   const direction=side==="LONG"?1:-1;
   const targetsFor=reference=>ENGINE_CONFIG.A_TARGETS_PCT.map(p=>roundPrice(reference*(1+direction*p/100)));
   const targets=targetsFor(entry1);
   const targetsIfBothFilled=targetsFor(bothFilledAverage);
   const base=makeSignalBase({engine:"A",symbol,side,entry:entry1,stop,score,
     reason:`15m ${setup}; EMA20/50, RSI, volume and structure aligned`,
-    candleTime:last.time,context:{setup,entry2:roundPrice(entry2),averageEntryIfBothFilled:roundPrice(bothFilledAverage),
+    candleTime:last.time,context:{setup,entry2:entry2===null?null:roundPrice(entry2),averageEntryIfBothFilled:roundPrice(bothFilledAverage),
       entry2OffsetPct:ENGINE_CONFIG.ENTRY2_OFFSET_PCT,targets,targetsIfBothFilled,
-      entry2Conditional:true,cancelEntry2IfTarget1BeforeFill:true}});
+      entry2Conditional:entry2!==null,cancelEntry2IfTarget1BeforeFill:entry2!==null}});
   if(!base) return null;
-  return {...base,entry1:roundPrice(entry1),entry2:roundPrice(entry2),
+  return {...base,entry1:roundPrice(entry1),entry2:entry2===null?null:roundPrice(entry2),
     averageEntryIfBothFilled:roundPrice(bothFilledAverage),targets,targetsIfBothFilled};
 }
