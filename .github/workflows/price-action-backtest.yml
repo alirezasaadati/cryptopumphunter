@@ -1,0 +1,31 @@
+name: Price Action Historical Backtest
+on:
+  pull_request:
+    paths:
+      - "scripts/backtest-price-action.mjs"
+      - "src/price-action-engine.js"
+      - ".github/workflows/price-action-backtest.yml"
+      - "package.json"
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Run historical Price Action backtest
+        run: node scripts/backtest-price-action.mjs
+        env:
+          PA_BACKTEST_DAYS: "10"
+          PA_BACKTEST_SYMBOLS: "3"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: price-action-backtest-report
+          path: artifacts/
+          if-no-files-found: warn
