@@ -67,3 +67,54 @@ test("Engine A target ladders are calculated independently for one-fill and two-
   assert.deepEqual(buildEngineATargets(0,"LONG"),[]);
   assert.deepEqual(buildEngineATargets(100,"SIDEWAYS"),[]);
 });
+
+import { simulatePaperTrade } from "../src/engines/paper-simulator.js";
+
+const paperSignal=(overrides={})=>({
+  engine:"A",symbol:"PF_TESTUSD",side:"LONG",entry:100,entry2:97,stop:95,
+  targets:[102,104,106],candleTime:1000,context:{entry2:97},...overrides
+});
+const bar=(time,{open=100,high=101,low=99,close=100,fundingRate=0}={})=>
+  ({time,open,high,low,close,fundingRate});
+const paperArgs=(signal,candles,extra={})=>({
+  signal,candles,entryNotional:100,targetWeights:[0.4,0.35,0.25],
+  feeRate:0,slippageBps:0,...extra
+});
+
+test("paper simulator never uses the signal candle or earlier candles",()=>{
+  const result=simulatePaperTrade(paperArgs(paperSignal(),[bar(1000),bar(900)]));
+  assert.equal(result.status,"no_future_candles");
+});
+
+test("paper simulator gives stop priority when stop and target are both touched",()=>{
+  const result=simulatePaperTrade(paperArgs(paperSignal(),[bar(2000,{high:103,low:94})]));
+  assert.equal(result.status,"closed");
+  assert.equal(result.exits.length,1);
+  assert.equal(result.exits[0].reason,"stop");
+  assert.equal(result.entry2Filled,false);
+});
+
+test("TP1 touched in same candle cancels entry 2 conservatively",()=>{
+  const result=simulatePaperTrade(paperArgs(paperSignal(),[bar(2000,{high:103,low:96,close:102})]));
+  assert.equal(result.entry2Filled,false);
+  assert.equal(result.entry2Cancelled,true);
+  assert.equal(result.exits[0].reason,"target_1");
+  assert.equal(result.status,"open");
+});
+
+test("entry 2 fills only when touched before TP1",()=>{
+  const result=simulatePaperTrade(paperArgs(paperSignal(),[bar(2000,{high:101,low:96,close:99})]));
+  assert.equal(result.entry2Filled,true);
+  assert.equal(result.fills.length,2);
+  assert.equal(result.deployedNotional,200);
+});
+
+test("fees, adverse slippage and funding are included in net PnL",()=>{
+  const signal=paperSignal({entry2:null,context:{}});
+  const candle=bar(2000,{open:100,high:101,low:99,close:100,fundingRate:0.001});
+  const noCosts=simulatePaperTrade(paperArgs(signal,[candle]));
+  const withCosts=simulatePaperTrade(paperArgs(signal,[candle],{feeRate:0.001,slippageBps:10}));
+  assert.ok(withCosts.fees>0);
+  assert.ok(withCosts.funding>0);
+  assert.ok(withCosts.netPnl<noCosts.netPnl);
+});
