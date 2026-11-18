@@ -222,8 +222,9 @@ for(const engine of ["A","B"]){
   const item=report.engines[engine];
   item.summary=summarize(item.trades,item.skipped.length);
   item.summary.periods={
-    development:summarize(item.trades.filter(t=>t.candleTime<splitAt),item.skipped.filter(t=>t.candleTime<splitAt).length),
-    holdout:summarize(item.trades.filter(t=>t.candleTime>=splitAt),item.skipped.filter(t=>t.candleTime>=splitAt).length)
+    development:summarize(item.trades.filter(t=>t.candleTime<splitAt && t.status==="closed" && t.closedAt!==null && t.closedAt<splitAt),item.skipped.filter(t=>t.candleTime<splitAt).length),
+    holdout:summarize(item.trades.filter(t=>t.candleTime>=splitAt),item.skipped.filter(t=>t.candleTime>=splitAt).length),
+    developmentBoundaryExcluded:item.trades.filter(t=>t.candleTime<splitAt && (t.status!=="closed" || t.closedAt===null || t.closedAt>=splitAt)).length
   };
 }
 await fs.mkdir("artifacts",{recursive:true});
