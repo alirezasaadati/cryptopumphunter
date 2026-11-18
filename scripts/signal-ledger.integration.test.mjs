@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals } from "../src/signal-ledger.js";
 import { signalOutboxAction } from "../src/signal-outbox.js";
+import { createSerialExecutor } from "../src/serial-executor.js";
 
 function memoryKV({ pageSize = 1000, failNextPut = false } = {}) {
   const data = new Map();
@@ -130,4 +131,35 @@ test("outbox keys are isolated by chat and signal identity", async () => {
   const { signalOutboxKey } = await import("../src/signal-outbox.js");
   assert.notEqual(signalOutboxKey(1, "abc"), signalOutboxKey(2, "abc"));
   assert.notEqual(signalOutboxKey(1, "abc"), signalOutboxKey(1, "def"));
+});
+
+
+test("durable-object serial executor prevents overlapping deliveries for one signal key", async () => {
+  const run = createSerialExecutor();
+  let active = 0;
+  let maxActive = 0;
+  const order = [];
+  const task = (name) => run(async () => {
+    active++;
+    maxActive = Math.max(maxActive, active);
+    order.push("start:" + name);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    order.push("end:" + name);
+    active--;
+    return name;
+  });
+  const results = await Promise.all([task("first"), task("second"), task("third")]);
+  assert.deepEqual(results, ["first", "second", "third"]);
+  assert.equal(maxActive, 1);
+  assert.deepEqual(order, [
+    "start:first", "end:first",
+    "start:second", "end:second",
+    "start:third", "end:third"
+  ]);
+});
+
+test("serial executor continues processing after an earlier delivery fails", async () => {
+  const run = createSerialExecutor();
+  await assert.rejects(run(async () => { throw new Error("simulated delivery failure"); }), /simulated delivery failure/);
+  assert.equal(await run(async () => "next delivery"), "next delivery");
 });
