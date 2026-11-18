@@ -4,7 +4,7 @@ export function analyzeMarketStructure(candles, {
   leftBars = 3, rightBars = 3, atr = null,
   equalHighAtr = 0.2, trendlineAtr = 0.25, bosAtr = 0.05
 } = {}) {
-  if (!Array.isArray(candles) || candles.length < leftBars + rightBars + 5) return null;
+  if (!Array.isArray(candles) || candles.length < leftBars + rightBars + 1) return null;
   const n = candles.length;
   const confirmed = [];
   for (let i = leftBars; i < n - rightBars; i++) {
