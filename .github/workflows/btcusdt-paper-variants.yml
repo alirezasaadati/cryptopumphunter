@@ -1,8 +1,14 @@
-name: BTCUSDT paper variants (manual, isolated)
+name: BTCUSDT paper variants (isolated research)
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - experiment/btcusdt-paper-variants-4h-1h-15m
 permissions:
   contents: read
+concurrency:
+  group: btcusdt-paper-variants
+  cancel-in-progress: false
 jobs:
   paper-observation:
     runs-on: ubuntu-latest
@@ -12,16 +18,25 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Restore persistent paper ledger
+        uses: actions/cache@v4
+        with:
+          path: artifacts/btcusdt-paper-state.json
+          key: btcusdt-paper-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            btcusdt-paper-state-
       - run: npm install
       - name: Repository tests
         run: npm test
-      - name: Run BTCUSDT paper comparison (up to 5h 50m)
+      - name: Validate paper runner syntax
+        run: node --check scripts/btcusdt-paper-variants.mjs
+      - name: Run BTCUSDT paper comparison (up to 5h 40m)
         run: timeout 340m node scripts/btcusdt-paper-variants.mjs --watch
       - name: Upload paper ledger
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: btcusdt-paper-ledger
+          name: btcusdt-paper-ledger-${{ github.run_id }}
           path: artifacts/btcusdt-paper-state.json
           if-no-files-found: warn
           retention-days: 30
