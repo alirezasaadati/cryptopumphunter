@@ -3,9 +3,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 const BASE = "https://futures.kraken.com";
 const H15 = 15 * 60 * 1000, H1 = 60 * 60 * 1000, H4 = 4 * H1;
-const TEST_DAYS = Math.max(5, Math.min(14, Number(process.env.PA_BACKTEST_DAYS || 14)));
+const TEST_DAYS = Math.max(5, Math.min(30, Number(process.env.PA_BACKTEST_DAYS || 30)));
 const END_OFFSET_DAYS = Math.max(0, Number(process.env.PA_BACKTEST_OFFSET_DAYS || 0)); // shifts the evaluation window backward for out-of-sample validation
-const SYMBOL_LIMIT = Math.max(1, Math.min(5, Number(process.env.PA_BACKTEST_SYMBOLS || 3)));
+const SYMBOL_LIMIT = Math.max(1, Math.min(10, Number(process.env.PA_BACKTEST_SYMBOLS || 8)));
 const FEE = Number(process.env.PA_BACKTEST_FEE ?? 0.0005);
 const SLIPPAGE = Number(process.env.PA_BACKTEST_SLIPPAGE ?? 0.0003);
 const MAX_HOLD_BARS = 72 * 4;
@@ -37,13 +37,21 @@ function normalize(rows, interval) {
     });
 }
 async function candles(symbol, resolution, from, to, interval) {
-  const url = new URL(`${BASE}/api/charts/v1/trade/${encodeURIComponent(symbol)}/${resolution}`);
-  url.searchParams.set("from", String(Math.floor(from/1000)));
-  url.searchParams.set("to", String(Math.floor(to/1000)));
-  url.searchParams.set("count", "2000");
-  const data = await getJson(url);
-  if(data.more_candles===true) throw new Error(`${symbol} ${resolution}: historical range exceeds API candle limit`);
-  return normalize(data.candles, interval);
+  // Fetch bounded chunks so a 30-day 15m history never exceeds the venue's per-request candle cap.
+  const chunkBars = 1800;
+  const combined = [];
+  for (let chunkFrom=from; chunkFrom<to; chunkFrom+=chunkBars*interval) {
+    const chunkTo=Math.min(to,chunkFrom+chunkBars*interval);
+    const url = new URL(`${BASE}/api/charts/v1/trade/${encodeURIComponent(symbol)}/${resolution}`);
+    url.searchParams.set("from", String(Math.floor(chunkFrom/1000)));
+    url.searchParams.set("to", String(Math.floor(chunkTo/1000)));
+    url.searchParams.set("count", String(chunkBars));
+    const data = await getJson(url);
+    if(data.more_candles===true)
+      throw new Error(`${symbol} ${resolution}: API returned more than ${chunkBars} candles for a bounded chunk`);
+    combined.push(...(data.candles||[]));
+  }
+  return normalize(combined, interval);
 }
 function summarize(trades) {
   const wins=trades.filter(x=>x.netR>0), losses=trades.filter(x=>x.netR<0);
