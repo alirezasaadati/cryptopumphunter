@@ -22,8 +22,10 @@ function fixtureShort(){
 }
 test("validates chronological OHLC data",()=>{
   assert.equal(validateWaveCandles(fixtureLong()),false); // minimum 20 bars
-  const x=fixtureLong();while(x.length<20)add(114,116,113,115);
+  const x=Array.from({length:20},(_,i)=>({time:i*900000,open:100,high:101,low:99,close:100}));
   assert.equal(validateWaveCandles(x),true);
+  x[10].high=99;
+  assert.equal(validateWaveCandles(x),false);
 });
 test("does not emit future-confirmed pivots early",()=>{
   const x=fixtureLong();
