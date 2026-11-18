@@ -1,0 +1,40 @@
+import { ENGINE_CONFIG, validateCandles, ema, rsi, atr, volumeRatio, swings, scoreSignal, makeSignalBase, roundPrice } from "./engine-utils.js";
+
+// Channel-inspired model. Entry 2 is conditional and is not averaged until filled.
+export function analyzeEngineA({symbol,candles,quoteVolume=Infinity}) {
+  if (!validateCandles(candles) || !(Number(quoteVolume)>=ENGINE_CONFIG.MIN_QUOTE_VOLUME)) return null;
+  const closes=candles.map(c=>c.close), last=candles.at(-1), prior=candles.at(-2);
+  const fast=ema(closes,20), slow=ema(closes,50), momentum=rsi(closes,14);
+  const volatility=atr(candles,14), vol=volumeRatio(candles,20), levels=swings(candles,20);
+  if (![fast,slow,momentum,volatility,vol,levels.high,levels.low].every(Number.isFinite)) return null;
+  const trendUp=fast>slow, trendDown=fast<slow;
+  const bullish=last.close>last.open && last.close>prior.close;
+  const bearish=last.close<last.open && last.close<prior.close;
+  const breakoutLong=last.close>levels.high && prior.close<=levels.high;
+  const breakoutShort=last.close<levels.low && prior.close>=levels.low;
+  const pullbackLong=trendUp && last.low<=fast*1.002 && last.close>fast;
+  const pullbackShort=trendDown && last.high>=fast*0.998 && last.close<fast;
+  let side=null, setup="";
+  if(trendUp && momentum>=50 && momentum<=75 && bullish && (breakoutLong||pullbackLong)){side="LONG";setup=breakoutLong?"breakout":"pullback";}
+  if(trendDown && momentum<=50 && momentum>=25 && bearish && (breakoutShort||pullbackShort)){side="SHORT";setup=breakoutShort?"breakout":"pullback";}
+  if(!side) return null;
+  const score=scoreSignal({trend:true,momentum:true,volume:vol>=1.15,entry:true,context:Math.abs(last.close-fast)/last.close<0.025});
+  if(score<ENGINE_CONFIG.MIN_SCORE) return null;
+  const entry1=last.close, offset=ENGINE_CONFIG.ENTRY2_OFFSET_PCT/100;
+  const entry2=side==="LONG"?entry1*(1-offset):entry1*(1+offset);
+  const averageEntry=(entry1+entry2)/2;
+  const buffer=Math.max(volatility*0.8,averageEntry*0.002);
+  const stop=side==="LONG"?Math.min(levels.low,last.low)-buffer:Math.max(levels.high,last.high)+buffer;
+  const risk=side==="LONG"?averageEntry-stop:stop-averageEntry;
+  if(!(risk>0 && risk/averageEntry<=0.12)) return null;
+  const direction=side==="LONG"?1:-1;
+  const targets=ENGINE_CONFIG.A_TARGETS_PCT.map(p=>roundPrice(averageEntry*(1+direction*p/100)));
+  return {
+    ...makeSignalBase({engine:"A",symbol,side,entry:entry1,stop,score,
+      reason:`15m ${setup}; EMA20/50, RSI, volume and structure aligned`,
+      candleTime:last.time,context:{setup,entry2:roundPrice(entry2),averageEntryIfBothFilled:roundPrice(averageEntry),
+        entry2OffsetPct:ENGINE_CONFIG.ENTRY2_OFFSET_PCT,targets,entry2Conditional:true,
+        cancelEntry2IfTarget1BeforeFill:true}}),
+    entry1:roundPrice(entry1),entry2:roundPrice(entry2),averageEntryIfBothFilled:roundPrice(averageEntry),targets
+  };
+}
