@@ -43,3 +43,23 @@ test("history filtering can isolate completed signals",async()=>{
   assert.equal(all.length,2);
   assert.equal(all.filter(x=>String(x.status).startsWith("CLOSED")).length,1);
 });
+
+
+test("archive updates never erase earlier TP milestones or coerce null prices to zero",async()=>{
+  const kv=memoryKV();
+  await saveIssuedSignal(kv,123,signal);
+  await updateIssuedSignal(kv,123,{signalId:"sig-1",symbol:"BTC-PERP",status:"OPEN",tpHits:["TP1","TP2"],exitPrice:null,outcomePercent:null,outcomeR:null});
+  await updateIssuedSignal(kv,123,{signalId:"sig-1",symbol:"BTC-PERP",status:"CLOSED_STOP",tpHits:[],exitPrice:99,outcomePercent:1.25,outcomeR:0.25});
+  const [row]=await listIssuedSignals(kv,123);
+  assert.deepEqual(row.tpHits,["TP1","TP2"]);
+  assert.equal(row.exitPrice,99);
+  assert.equal(row.outcomePercent,1.25);
+});
+
+test("archive rejects malformed signal prices instead of storing zero-valued levels",async()=>{
+  const kv=memoryKV();
+  await assert.rejects(
+    saveIssuedSignal(kv,123,{...signal,entry:null}),
+    /invalid price levels/
+  );
+});
