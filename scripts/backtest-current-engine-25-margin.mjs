@@ -195,8 +195,8 @@ function temporalBreakdown(trades, start, split, end) {
     (byMonth[month] ||= []).push(trade);
   }
   return {
-    first60Days: summarize(first),
-    last30Days: summarize(last),
+    firstHalf: summarize(first),
+    secondHalf: summarize(last),
     byMonth: Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b)).map(([month, group]) => ({
       month, ...summarize(group)
     }))
@@ -649,10 +649,10 @@ async function main() {
       symbol, ...summarize(closed.filter(t => t.symbol === symbol))
     })),
     temporalBreakdown: {
-      splitAt: new Date(start + 60 * 24 * H1).toISOString(),
-      baseline: temporalBreakdown(closed, start, start + 60 * 24 * H1, end),
-      asymmetricCandidate: temporalBreakdown(qualityClosed, start, start + 60 * 24 * H1, end),
-      breakoutStructureCandidate: temporalBreakdown(breakoutClosed, start, start + 60 * 24 * H1, end)
+      splitAt: new Date(start + (DAYS / 2) * 24 * H1).toISOString(),
+      baseline: temporalBreakdown(closed, start, start + (DAYS / 2) * 24 * H1, end),
+      asymmetricCandidate: temporalBreakdown(qualityClosed, start, start + (DAYS / 2) * 24 * H1, end),
+      breakoutStructureCandidate: temporalBreakdown(breakoutClosed, start, start + (DAYS / 2) * 24 * H1, end)
     },
     qualityFilter: {
       rule: "LONG: 20-candle breakout AND aligned 5-candle swing structure; SHORT: RSI <= 45",
