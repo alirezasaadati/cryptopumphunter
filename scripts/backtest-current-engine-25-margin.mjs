@@ -80,21 +80,33 @@ function ema(values, period) {
 
 
 function adx14(candles, period = 14) {
-  if (candles.length < period * 2 + 2) return null;
-  const dx = [];
-  for (let end = period + 1; end < candles.length; end++) {
-    let tr = 0, plus = 0, minus = 0;
-    for (let i = end - period + 1; i <= end; i++) {
-      const cur = candles[i], prev = candles[i - 1];
-      tr += Math.max(cur.high - cur.low, Math.abs(cur.high - prev.close), Math.abs(cur.low - prev.close));
-      const up = cur.high - prev.high, down = prev.low - cur.low;
-      if (up > down && up > 0) plus += up;
-      if (down > up && down > 0) minus += down;
-    }
-    if (tr > 0 && plus + minus > 0) dx.push(100 * Math.abs(plus - minus) / (plus + minus));
-    else dx.push(0);
+  if (candles.length < period * 2 + 1) return null;
+  const tr = [], plusDm = [], minusDm = [];
+  for (let i = 1; i < candles.length; i++) {
+    const cur = candles[i], prev = candles[i - 1];
+    tr.push(Math.max(cur.high - cur.low, Math.abs(cur.high - prev.close), Math.abs(cur.low - prev.close)));
+    const up = cur.high - prev.high, down = prev.low - cur.low;
+    plusDm.push(up > down && up > 0 ? up : 0);
+    minusDm.push(down > up && down > 0 ? down : 0);
   }
-  return dx.length ? dx.slice(-period).reduce((a, b) => a + b, 0) / Math.min(period, dx.length) : null;
+  let trSmooth = tr.slice(0, period).reduce((x, y) => x + y, 0);
+  let plusSmooth = plusDm.slice(0, period).reduce((x, y) => x + y, 0);
+  let minusSmooth = minusDm.slice(0, period).reduce((x, y) => x + y, 0);
+  const dx = [];
+  for (let i = period - 1; i < tr.length; i++) {
+    if (i >= period) {
+      trSmooth = trSmooth - trSmooth / period + tr[i];
+      plusSmooth = plusSmooth - plusSmooth / period + plusDm[i];
+      minusSmooth = minusSmooth - minusSmooth / period + minusDm[i];
+    }
+    const plusDi = trSmooth > 0 ? 100 * plusSmooth / trSmooth : 0;
+    const minusDi = trSmooth > 0 ? 100 * minusSmooth / trSmooth : 0;
+    dx.push(plusDi + minusDi > 0 ? 100 * Math.abs(plusDi - minusDi) / (plusDi + minusDi) : 0);
+  }
+  if (dx.length < period) return null;
+  let adx = dx.slice(0, period).reduce((x, y) => x + y, 0) / period;
+  for (let i = period; i < dx.length; i++) adx = (adx * (period - 1) + dx[i]) / period;
+  return adx;
 }
 
 function marketContextAt(series, time) {
@@ -563,8 +575,27 @@ async function main() {
       score: bucketBreakdown(closed, "score", [80, 90]),
       rangePosition20: bucketBreakdown(closed, "rangePosition20", [0.25, 0.5, 0.75])
     },
+    postStopContinuation: (() => {
+      const stopped = closed.filter(t => t.exitReason === "STOP");
+      const reached24 = stopped.filter(t => {
+        const bars = series.get(t.symbol).h1.filter(c => c.time >= t.exitTime && c.time < t.exitTime + 24 * H1);
+        return t.side === "LONG" ? bars.some(c => c.high >= t.targetTrigger) : bars.some(c => c.low <= t.targetTrigger);
+      }).length;
+      const reached48 = stopped.filter(t => {
+        const bars = series.get(t.symbol).h1.filter(c => c.time >= t.exitTime && c.time < t.exitTime + 48 * H1);
+        return t.side === "LONG" ? bars.some(c => c.high >= t.targetTrigger) : bars.some(c => c.low <= t.targetTrigger);
+      }).length;
+      return {
+        stoppedTrades: stopped.length,
+        targetReachedAgainWithin24h: reached24,
+        targetReachedAgainWithin24hPct: stopped.length ? reached24 / stopped.length * 100 : 0,
+        targetReachedAgainWithin48h: reached48,
+        targetReachedAgainWithin48hPct: stopped.length ? reached48 / stopped.length * 100 : 0
+      };
+    })(),
     trades: closed.map(t => {
-      const bars = series.get(t.symbol).h1.filter(c => c.time >= t.signalTime && c.time + H1 <= t.exitTime);
+      const h1Series = series.get(t.symbol).h1;
+      const bars = h1Series.filter(c => c.time >= t.signalTime && c.time + H1 <= t.exitTime);
       const entry = t.signal.entry;
       const favorable = t.side === "LONG"
         ? (bars.length ? (Math.max(...bars.map(c => c.high)) / entry - 1) * 100 : 0)
@@ -572,6 +603,12 @@ async function main() {
       const adverse = t.side === "LONG"
         ? (bars.length ? (1 - Math.min(...bars.map(c => c.low)) / entry) * 100 : 0)
         : (bars.length ? (Math.max(...bars.map(c => c.high)) / entry - 1) * 100 : 0);
+      const forwardReturn = hours => {
+        const targetClose = t.signalTime + hours * H1;
+        const bar = h1Series.find(c => c.time + H1 >= targetClose);
+        if (!bar) return null;
+        return (t.side === "LONG" ? 1 : -1) * (bar.close / entry - 1) * 100;
+      };
       return {
         symbol: t.symbol, side: t.side, score: t.score,
         signalTime: new Date(t.signalTime).toISOString(),
@@ -580,6 +617,9 @@ async function main() {
         exitPrice: t.exitPrice, exitReason: t.exitReason, marginRoiPct: t.marginRoiPct,
         netR: t.netR, gapExit: t.gapExit,
         mfePricePct: favorable, maePricePct: adverse,
+        forwardReturn4hPct: forwardReturn(4),
+        forwardReturn12hPct: forwardReturn(12),
+        forwardReturn24hPct: forwardReturn(24),
         features: t.features
       };
     })
