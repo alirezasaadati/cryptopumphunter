@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals } from "../src/signal-ledger.js";
 import { signalOutboxAction } from "../src/signal-outbox.js";
 import { createSerialExecutor } from "../src/serial-executor.js";
+import { SignalDeliveryCoordinator } from "../src/index.js";
 
 function memoryKV({ pageSize = 1000, failNextPut = false } = {}) {
   const data = new Map();
@@ -162,4 +163,47 @@ test("serial executor continues processing after an earlier delivery fails", asy
   const run = createSerialExecutor();
   await assert.rejects(run(async () => { throw new Error("simulated delivery failure"); }), /simulated delivery failure/);
   assert.equal(await run(async () => "next delivery"), "next delivery");
+});
+
+
+test("owner reconciliation confirms uncertain delivery and archives the signal idempotently", async () => {
+  const kv = memoryKV();
+  const pending = signal("uncertain-confirm");
+  const key = "futures:signal-outbox:v1:909:uncertain-confirm";
+  await kv.put(key, JSON.stringify({
+    version: 1, chatId: "909", signalId: pending.id, symbol: pending.symbol,
+    status: "UNCERTAIN", signal: pending, messageText: "test signal",
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  }));
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv });
+  const request = () => new Request("https://signal-delivery.internal/reconcile", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "confirm_delivered", chatId: "909", signalId: pending.id })
+  });
+  const first = await coordinator.fetch(request());
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).result.confirmed, true);
+  const saved = await kv.get(key, "json");
+  assert.equal(saved.status, "ARCHIVED");
+  assert.ok(saved.manualConfirmedAt);
+  assert.equal((await listIssuedSignals(kv, "909")).length, 1);
+  const second = await coordinator.fetch(request());
+  assert.equal(second.status, 200);
+  assert.equal((await second.json()).result.alreadyArchived, true);
+  assert.equal((await listIssuedSignals(kv, "909")).length, 1);
+});
+
+test("owner reconciliation refuses to auto-archive legacy uncertain records without a signal snapshot", async () => {
+  const kv = memoryKV();
+  await kv.put("futures:signal-outbox:v1:910:legacy", JSON.stringify({
+    chatId: "910", signalId: "legacy", symbol: "BTC-PERP", status: "UNCERTAIN"
+  }));
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv });
+  const response = await coordinator.fetch(new Request("https://signal-delivery.internal/reconcile", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "confirm_delivered", chatId: "910", signalId: "legacy" })
+  }));
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /no signal snapshot/);
+  assert.equal((await kv.get("futures:signal-outbox:v1:910:legacy", "json")).status, "UNCERTAIN");
 });
