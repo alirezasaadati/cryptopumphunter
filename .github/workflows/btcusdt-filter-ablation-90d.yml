@@ -2,6 +2,11 @@ name: BTCUSDT 90-day filter ablation
 on:
   push:
     branches: [experiment/btcusdt-filter-ablation-90d]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/btcusdt-filter-ablation-90d.mjs'
+      - '.github/workflows/btcusdt-filter-ablation-90d.yml'
   workflow_dispatch:
 permissions:
   contents: read
