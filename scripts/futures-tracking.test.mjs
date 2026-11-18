@@ -5,6 +5,7 @@ import {
   tradeOutcomePercent,
   targetReached,
   stopReached,
+  getNewClosedFuturesCandles,
   isValidFuturesSignalLevels
 } from "../src/index.js";
 
@@ -61,4 +62,26 @@ test("signal tracking rejects missing, non-positive, and misordered levels", () 
   assert.equal(isValidFuturesSignalLevels({...base,target3:0}), false);
   assert.equal(isValidFuturesSignalLevels({...base,side:"SHORT"}), false);
   assert.equal(isValidFuturesSignalLevels({...base,id:""}), false);
+});
+
+
+test("tracking only processes candles newer than the last checked candle", () => {
+  const candles = [
+    { time: 60000, close: 100 },
+    { time: 120000, close: 101 },
+    { time: 180000, close: 102 }
+  ];
+  assert.deepEqual(
+    getNewClosedFuturesCandles(candles, 120000).map(c => c.time),
+    [180000]
+  );
+});
+
+test("tracking does not fall back to an old candle when no new candle exists", () => {
+  const candles = [
+    { time: 60000, close: 100 },
+    { time: 120000, close: 101 }
+  ];
+  assert.deepEqual(getNewClosedFuturesCandles(candles, 120000), []);
+  assert.deepEqual(getNewClosedFuturesCandles([], 120000), []);
 });
