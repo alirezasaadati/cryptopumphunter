@@ -64,6 +64,7 @@ export async function updateIssuedSignal(kv, chatId, trade) {
     ...raw,
     tpHits: [...new Set([...(Array.isArray(raw.tpHits) ? raw.tpHits : []), ...(Array.isArray(trade.tpHits) ? trade.tpHits : [])])],
     status: String(trade.status || raw.status),
+    tradeId: trade.id || raw.tradeId || null,
     lastPrice: finiteOrNull(trade.lastPrice) ?? raw.lastPrice ?? null,
     lastCheckedAt: trade.lastCheckedAt || raw.lastCheckedAt || null,
     closedAt: trade.closedAt || raw.closedAt || null,
