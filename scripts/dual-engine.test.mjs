@@ -111,10 +111,45 @@ test("entry 2 fills only when touched before TP1",()=>{
 
 test("fees, adverse slippage and funding are included in net PnL",()=>{
   const signal=paperSignal({entry2:null,context:{}});
-  const candle=bar(2000,{open:100,high:101,low:99,close:100,fundingRate:0.001});
+  const candle={...bar(2000,{open:100,high:101,low:99,close:100,fundingRate:0.001}),fundingSettlement:true};
   const noCosts=simulatePaperTrade(paperArgs(signal,[candle]));
   const withCosts=simulatePaperTrade(paperArgs(signal,[candle],{feeRate:0.001,slippageBps:10}));
   assert.ok(withCosts.fees>0);
   assert.ok(withCosts.funding>0);
   assert.ok(withCosts.netPnl<noCosts.netPnl);
+});
+
+test("ambiguous Entry 2 and TP1 ordering is explicitly logged and resolved conservatively",()=>{
+  const result=simulatePaperTrade(paperArgs(paperSignal(),[bar(2000,{high:103,low:96,close:102})]));
+  assert.equal(result.ambiguousEvents.length,1);
+  assert.deepEqual(result.ambiguousEvents[0].events,["entry2","target_1"]);
+  assert.equal(result.ambiguousEvents[0].resolution,"target_1_first_cancel_entry2");
+  assert.equal(result.entry2Filled,false);
+});
+
+test("funding is charged only on explicit settlement candles",()=>{
+  const signal=paperSignal({entry2:null,context:{}});
+  const ordinary=bar(2000,{fundingRate:0.01});
+  const settlement={...bar(29000,{fundingRate:0.001}),fundingSettlement:true};
+  const result=simulatePaperTrade(paperArgs(signal,[ordinary,settlement]));
+  assert.ok(result.funding>0);
+  assert.equal(result.events.filter(e=>e.type==="funding").length,1);
+});
+
+test("target weights close the configured fraction of the position, not the remaining fraction",()=>{
+  const signal=paperSignal({entry2:null,context:{},targets:[102,104,106]});
+  const result=simulatePaperTrade(paperArgs(signal,[
+    bar(2000,{high:102.5,low:99,close:102}),
+    bar(29000,{high:104.5,low:101,close:104}),
+    bar(56000,{high:106.5,low:103,close:106})
+  ]));
+  assert.equal(result.status,"closed");
+  assert.equal(result.exits.length,3);
+  const total=result.exits.reduce((sum,e)=>sum+e.quantity,0);
+  assert.ok(Math.abs(total-1)<1e-9);
+});
+
+test("invalid Entry 2 on the wrong side of the stop is rejected",()=>{
+  const result=simulatePaperTrade(paperArgs(paperSignal({entry2:94,context:{entry2:94}}),[bar(2000)]));
+  assert.equal(result.status,"invalid_input");
 });
