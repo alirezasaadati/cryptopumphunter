@@ -1,0 +1,38 @@
+name: Candlestick Long Short Backtest
+on:
+  push:
+    branches: [feature/candlestick-long-short]
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Historical days (30-180)
+        required: false
+        default: "90"
+      symbols:
+        description: Number of highest-volume Kraken perpetual symbols (3-24)
+        required: false
+        default: "12"
+permissions:
+  contents: read
+jobs:
+  test-and-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Historical candlestick backtest
+        env:
+          BACKTEST_DAYS: ${{ github.event.inputs.days || '90' }}
+          BACKTEST_SYMBOLS: ${{ github.event.inputs.symbols || '12' }}
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0002"
+          BACKTEST_NOTIONAL_USD: "10"
+        run: node scripts/backtest-candlesticks.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candlestick-backtest-report
+          path: artifacts/candlestick-backtest.*
