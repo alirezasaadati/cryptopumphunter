@@ -654,9 +654,10 @@ async function changeMemberAccess(env,ownerId,id,allow) {
 // ---------------- MAIN MENU ----------------
 function menuForChat(env, chatId) {
   const keyboard = MAIN_MENU.inline_keyboard.map(row => row.slice());
-  if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0, [
-    { text: "👥 مدیریت اعضا", callback_data: "members:0" }
-  ]);
+  if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0,
+    [{ text: "👥 مدیریت اعضا", callback_data: "members:0" }],
+    [{ text: "⚠️ بررسی ارسال‌های نامشخص", callback_data: "outbox:review" }]
+  );
   return { inline_keyboard: keyboard };
 }
 async function configureTelegramMenu(env, chatId) {
@@ -795,7 +796,7 @@ async function handleCallback(query, env) {
 
   if (action.startsWith("approve:") || action.startsWith("reject:") ||
       action.startsWith("members:") || action.startsWith("mprof:") ||
-      action.startsWith("mrev:") || action.startsWith("mall:")) {
+      action.startsWith("mrev:") || action.startsWith("mall:") || action.startsWith("outbox:")) {
     if (!isOwner(chatId,env) || String(query.from?.id)!==String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
       await answerCallback(env,query.id,"⛔ دسترسی غیرمجاز"); return;
     }
@@ -807,6 +808,10 @@ async function handleCallback(query, env) {
     else if(action.startsWith("mprof:")) await showMemberProfile(env,chatId,action.slice(6));
     else if(action.startsWith("mrev:")) await changeMemberAccess(env,chatId,action.slice(5),false);
       else if(action.startsWith("mall:")) await changeMemberAccess(env,chatId,action.slice(5),true);
+      else if(action==="outbox:review") await showUncertainSignalOutbox(env,chatId);
+      else if(action.startsWith("outbox:detail:")) await showOutboxSignalDetail(env,chatId,action.slice(14));
+      else if(action.startsWith("outbox:confirm:")) await reconcileSignalOutbox(env,chatId,action.slice(15),"confirm_delivered");
+      else if(action.startsWith("outbox:retry:")) await reconcileSignalOutbox(env,chatId,action.slice(13),"retry");
     }
     return;
   }
@@ -1459,7 +1464,7 @@ async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText
     throw new Error(`Signal delivery requires reconciliation (${record.status}): ${signal.symbol} ${signal.id}`);
   }
   if(!record){
-    record={version:1,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,status:"QUEUED",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+    record={version:1,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,signal,messageText,replyMarkup,status:"QUEUED",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     await env.APP_KV.put(key,JSON.stringify(record));
   }
   if(signalOutboxAction(record)==="send"){
@@ -1507,23 +1512,92 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||url.pathname!=="/deliver")return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile"].includes(url.pathname))return new Response("Not found",{status:404});
     let payload;
     try{payload=await request.json()}catch{return Response.json({ok:false,error:"Invalid JSON payload."},{status:400});}
     return this.serial(async()=>{
       try{
-        const result=await sendAndArchiveFuturesSignalUnlocked(
-          this.env,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null
-        );
-        return Response.json({ok:true,result});
+        if(url.pathname==="/deliver"){
+          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null);
+          return Response.json({ok:true,result});
+        }
+        if(!this.env.APP_KV)throw new Error("APP_KV is required for reconciliation.");
+        const chatId=String(payload.chatId), signalId=String(payload.signalId);
+        const key=signalOutboxKey(chatId,signalId);
+        const record=await this.env.APP_KV.get(key,"json");
+        if(!record)throw new Error("Outbox record was not found.");
+        if(payload.action==="confirm_delivered"){
+          if(record.status==="ARCHIVED")return Response.json({ok:true,result:{alreadyArchived:true}});
+          if(!["SENDING","UNCERTAIN","SENT"].includes(record.status))throw new Error("This signal is not awaiting delivery reconciliation.");
+          if(!record.signal)throw new Error("This older outbox record has no signal snapshot; it cannot be safely archived automatically.");
+          await registerTrackedSignal(this.env,chatId,record.signal);
+          const confirmed={...record,status:"ARCHIVED",archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),manualConfirmedAt:new Date().toISOString()};
+          await this.env.APP_KV.put(key,JSON.stringify(confirmed));
+          return Response.json({ok:true,result:{confirmed:true}});
+        }
+        if(payload.action==="retry"){
+          if(!["SENDING","UNCERTAIN"].includes(record.status))throw new Error("Only SENDING or UNCERTAIN records can be retried.");
+          if(!record.signal||typeof record.messageText!=="string")throw new Error("This older outbox record has no retry payload.");
+          await this.env.APP_KV.put(key,JSON.stringify({...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
+          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,chatId,record.signal,record.messageText,record.replyMarkup??null);
+          return Response.json({ok:true,result});
+        }
+        throw new Error("Unknown reconciliation action.");
       }catch(error){
-        return Response.json({ok:false,error:String(error?.message||error).slice(0,500)},{status:500});
+        return Response.json({ok:false,error:String(error?.message||error).slice(0,500)},{status:409});
       }
     });
   }
 }
 
 
+function outboxSelectionKey(ownerId,token){return "admin:outbox-selection:"+ownerId+":"+token;}
+
+async function showUncertainSignalOutbox(env,ownerId){
+  if(!isOwner(ownerId,env)||!env.APP_KV)return;
+  const page=await env.APP_KV.list({prefix:"futures:signal-outbox:v1:",limit:1000});
+  const records=[];
+  for(const item of page.keys||[]){const record=await env.APP_KV.get(item.name,"json");if(record&&["SENDING","UNCERTAIN","SENT"].includes(record.status))records.push(record);}
+  records.sort((a,b)=>String(b.updatedAt||b.createdAt||"").localeCompare(String(a.updatedAt||a.createdAt||"")));
+  const keyboard=[];
+  for(const record of records.slice(0,15)){
+    const token=crypto.randomUUID().replace(/-/g,"").slice(0,12);
+    await env.APP_KV.put(outboxSelectionKey(ownerId,token),JSON.stringify({chatId:record.chatId,signalId:record.signalId}),{expirationTtl:3600});
+    keyboard.push([{text:"⚠️ "+(record.symbol||"Signal")+" · "+record.status,callback_data:"outbox:detail:"+token}]);
+  }
+  keyboard.push([{text:"🔄 به‌روزرسانی",callback_data:"outbox:review"},{text:"🏠 منوی اصلی",callback_data:"menu"}]);
+  const note=page.list_complete===false?"\nنمایش بر اساس اولین ۱۰۰۰ رکورد KV است.":"";
+  await sendMessage(env,ownerId,"🛠 بررسی ارسال‌های نیازمند تعیین تکلیف\n━━━━━━━━━━━━━━━━━━\nتعداد موارد نیازمند بررسی: "+records.length+note+"\n\nبرای هر مورد، ابتدا پیام‌های تلگرام را بررسی کن.",{inline_keyboard:keyboard});
+}
+
+async function showOutboxSignalDetail(env,ownerId,token){
+  if(!isOwner(ownerId,env)||!env.APP_KV)return;
+  const selection=await env.APP_KV.get(outboxSelectionKey(ownerId,token),"json");
+  if(!selection){await sendMessage(env,ownerId,"این مورد منقضی شده است؛ فهرست را دوباره باز کن.");return;}
+  const record=await env.APP_KV.get(signalOutboxKey(selection.chatId,selection.signalId),"json");
+  if(!record){await sendMessage(env,ownerId,"رکورد ارسال پیدا نشد.");return;}
+  const hasPayload=Boolean(record.signal&&typeof record.messageText==="string");
+  const keyboard=[];
+  if(["SENDING","UNCERTAIN","SENT"].includes(record.status))keyboard.push([{text:"✅ پیام را در تلگرام دیدم؛ ثبت‌شده محسوب شود",callback_data:"outbox:confirm:"+token}]);
+  if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ پیام را ندیدم؛ تلاش مجدد (احتمال تکرار)",callback_data:"outbox:retry:"+token}]);
+  keyboard.push([{text:"⬅️ بازگشت",callback_data:"outbox:review"}]);
+  const body=["🔍 جزئیات ارسال","━━━━━━━━━━━━━━━━━━","نماد: "+(record.symbol||"—"),"شناسه گفتگو: "+record.chatId,"شناسه سیگنال: "+record.signalId,"وضعیت: "+record.status,"آخرین به‌روزرسانی: "+(record.updatedAt||"—"),"","اگر پیام در تلگرام دیده می‌شود، گزینه ثبت ارسال‌شده را بزن.","تلاش مجدد فقط وقتی مناسب است که پیام را بررسی کرده باشی؛ در وضعیت نامشخص احتمال ارسال تکراری وجود دارد."];
+  if(!hasPayload)body.push("⚠️ این رکورد قدیمی است و اطلاعات کافی برای بازیابی خودکار ندارد.");
+  await sendMessage(env,ownerId,body.join("\n"),{inline_keyboard:keyboard});
+}
+
+async function reconcileSignalOutbox(env,ownerId,token,action){
+  if(!isOwner(ownerId,env)||!env.APP_KV||!env.SIGNAL_DELIVERY)return;
+  const selection=await env.APP_KV.get(outboxSelectionKey(ownerId,token),"json");
+  if(!selection){await sendMessage(env,ownerId,"این مورد منقضی شده است؛ فهرست را دوباره باز کن.");return;}
+  const key=signalOutboxKey(selection.chatId,selection.signalId);
+  const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
+  const response=await stub.fetch("https://signal-delivery.internal/reconcile",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({...selection,action})});
+  let payload={};try{payload=await response.json()}catch{}
+  if(!response.ok||!payload.ok){await sendMessage(env,ownerId,"❌ تعیین تکلیف انجام نشد: "+String(payload.error||"خطای نامشخص"));return;}
+  await sendMessage(env,ownerId,action==="confirm_delivered"?"✅ سیگنال به‌عنوان ارسال‌شده در آرشیو ثبت شد.":"🔁 تلاش مجدد انجام شد و نتیجه در آرشیو ثبت شد.");
+  await showUncertainSignalOutbox(env,ownerId);
+}
 async function refreshTrackedFuturesTrades(env,chatId=null){const open=await readTradeList(env,FUTURES_OPEN_KEY);if(!open.length)return{checked:0,closed:0};const targets=open.filter(t=>chatId==null||String(t.chatId)===String(chatId));if(!targets.length)return{checked:0,closed:0};const closed=await readTradeList(env,FUTURES_CLOSED_KEY),remaining=open.slice();let checked=0,closedCount=0;const checkpointNow=Date.now();for(const trade of targets)ensureTradeTrackingCheckpoint(trade,checkpointNow);const results=await mapLimit(targets,3,async trade=>{try{const candles=await getKrakenFuturesCandles(trade.symbol,"1m");const recent=getNewClosedFuturesCandles(candles,trade.lastCheckedCandleTime);let event=null,eventPrice=null,eventCandleTime=null;for(const candle of recent.sort((a,b)=>a.time-b.time)){const hi=Number(candle.high),lo=Number(candle.low);const stopHit=stopReached(trade.side,hi,trade.currentStop)||stopReached(trade.side,lo,trade.currentStop);const hits=[["TP1",Number(trade.target1)],["TP2",Number(trade.target2)],["TP3",Number(trade.target3)]].filter(([,target])=>Number.isFinite(target)&&(targetReached(trade.side,hi,target)||targetReached(trade.side,lo,target)));if(stopHit){event="STOP";eventPrice=trade.currentStop;eventCandleTime=candle.time;break}for(const[k,target]of hits)if(!trade.tpHits.includes(k)){trade.tpHits.push(k);await notifyTradeMilestone(env,trade,k,target)}if(trade.tpHits.includes("TP3")){event="TP3";eventPrice=trade.target3;eventCandleTime=candle.time;break}}const latest=recent[recent.length-1];if(latest){trade.lastPrice=Number(latest.close);trade.lastCheckedAt=new Date().toISOString();trade.lastCheckedCandleTime=Number(latest.time)}checked++;if(event){trade.closedAt=new Date().toISOString();trade.exitPrice=Number(eventPrice);trade.outcomeR=tradeResultR(trade,event==="STOP");trade.outcomePercent=tradeOutcomePercent(trade,eventPrice);trade.closeReason=event==="STOP"?"STOP_LOSS":"TP3";trade.status=event==="STOP"?"CLOSED_STOP":"CLOSED_TARGETS";trade.resolutionCandleTime=eventCandleTime;return{trade,closed:true}}return{trade,closed:false}}catch(error){console.error("Tracked futures trade refresh failed:",trade.symbol,String(error?.message||error));return{trade,closed:false}}});const closedIds=new Set();for(const x of results){const i=remaining.findIndex(t=>t.id===x.trade.id);if(i>=0){remaining[i]=x.trade;if(x.closed){closedIds.add(x.trade.id);closed.unshift(x.trade);closedCount++}}}for(const item of results) await updateIssuedSignal(env.APP_KV,item.trade.chatId,item.trade);await writeTradeList(env,FUTURES_OPEN_KEY,remaining.filter(t=>!closedIds.has(t.id)).slice(0,300));await writeTradeList(env,FUTURES_CLOSED_KEY,closed.slice(0,500));for(const x of results.filter(v=>v.closed)){const t=x.trade,o=Number(t.outcomePercent),label=o>0?"سود":o<0?"ضرر":"سر‌به‌سر";await sendMessage(env,t.chatId,`📚 نتیجه سیگنال ${t.symbol}\n━━━━━━━━━━━━━━━━━━\nجهت: ${t.side==="LONG"?"LONG 🟢":"SHORT 🔴"}\nورود سیگنال: ${formatPrice(t.actualEntry)}\nخروج ثبت‌شده: ${formatPrice(t.exitPrice)}\nنتیجه: ${label} ${Number.isFinite(o)?(o>=0?"+":"")+o.toFixed(2)+"%":"—"}\nR: ${Number.isFinite(t.outcomeR)?(t.outcomeR>=0?"+":"")+t.outcomeR.toFixed(2):"—"}\nTPهای لمس‌شده: ${t.tpHits.join(", ")||"هیچ‌کدام"}\nدلیل بسته‌شدن: ${t.closeReason==="STOP_LOSS"?"حد ضرر":"TP3"}`)}return{checked,closed:closedCount}}
 async function notifyTradeMilestone(env,trade,key,target){const p=priceChangePercent(trade.side,trade.actualEntry,target),labels={TP1:"🥇 هدف اول",TP2:"🥈 هدف دوم",TP3:"🥉 هدف سوم"},weight={TP1:"۴۰٪",TP2:"۳۵٪",TP3:"۲۵٪"};await sendMessage(env,trade.chatId,`${labels[key]||key} ${trade.symbol} لمس شد.\nقیمت هدف: ${formatPrice(target)}\nبازده قیمتی تا این هدف: ${p>=0?"+":""}${Number(p).toFixed(2)}%\nسهم مدل: ${weight[key]||"—"}\nمعامله هنوز باز است و حد ضرر اولیه دست‌نخورده باقی می‌ماند.`)}
 async function handleTradeAction(action,chatId,env){const[,op]=action.split(":");if(op==="be")return sendMessage(env,chatId,"ℹ️ در نسخه جدید حد ضرر سیگنال خودکار جابه‌جا نمی‌شود؛ برای ارزیابی منصفانه حد ضرر اولیه ثابت می‌ماند.");if(op==="skip"||op==="enter")return sendMessage(env,chatId,"ℹ️ این نسخه هر سیگنال صادرشده را خودکار در دفتر ارزیابی ثبت می‌کند؛ ثبت دستی لازم نیست.")}
