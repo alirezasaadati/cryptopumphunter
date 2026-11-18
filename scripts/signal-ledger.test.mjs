@@ -57,6 +57,14 @@ test("archive updates never erase earlier TP milestones or coerce null prices to
   assert.equal(row.outcomePercent,1.25);
 });
 
+test("archive backfills trade linkage when a retry reconstructs an open trade",async()=>{
+  const kv=memoryKV();
+  await saveIssuedSignal(kv,123,signal);
+  await updateIssuedSignal(kv,123,{id:"trade-rebuilt",signalId:"sig-1",symbol:"BTC-PERP",status:"OPEN",tpHits:[]});
+  const [row]=await listIssuedSignals(kv,123);
+  assert.equal(row.tradeId,"trade-rebuilt");
+});
+
 test("archive rejects malformed signal prices instead of storing zero-valued levels",async()=>{
   const kv=memoryKV();
   await assert.rejects(
