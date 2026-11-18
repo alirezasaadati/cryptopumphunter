@@ -153,3 +153,12 @@ test("invalid Entry 2 on the wrong side of the stop is rejected",()=>{
   const result=simulatePaperTrade(paperArgs(paperSignal({entry2:94,context:{entry2:94}}),[bar(2000)]));
   assert.equal(result.status,"invalid_input");
 });
+
+test("entry is not filled when the next candle opens beyond the drift limit",()=>{
+  const result=simulatePaperTrade(paperArgs(paperSignal({entry2:null,context:{}}),[
+    bar(2000,{open:100.5,high:101,low:100.2,close:100.8})
+  ]));
+  assert.equal(result.status,"not_filled");
+  assert.equal(result.reason,"entry_drift_exceeded");
+  assert.equal(result.fills.length,0);
+});
