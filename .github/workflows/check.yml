@@ -11,6 +11,10 @@ permissions:
 
 jobs:
   test:
+    strategy:
+      fail-fast: false
+      matrix:
+        volume_threshold: ["0.5", "0.75", "1.0", "1.25"]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,8 +27,11 @@ jobs:
         run: npm install
       - name: Syntax and unit tests
         run: npm test
-      - name: Production engine 25% margin ROI historical backtest
-        run: BACKTEST_DAYS=90 node scripts/backtest-current-engine-25-margin.mjs
+      - name: Production engine 25% margin ROI backtest (volume threshold ${{ matrix.volume_threshold }})
+        env:
+          BACKTEST_DAYS: "90"
+          VOLUME_THRESHOLD: ${{ matrix.volume_threshold }}
+        run: node scripts/backtest-current-engine-25-margin.mjs
         timeout-minutes: 35
       - name: Cloudflare Worker dry-run build
         run: npx wrangler deploy --dry-run --outdir /tmp/worker-dry-run
