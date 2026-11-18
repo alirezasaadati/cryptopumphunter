@@ -107,6 +107,21 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
   };
 }
 
+function sideMetrics(trades) {
+  const wins = trades.filter(t => t.netR > 0), losses = trades.filter(t => t.netR < 0);
+  const grossWin = wins.reduce((sum,t)=>sum+t.netR,0);
+  const grossLoss = Math.abs(losses.reduce((sum,t)=>sum+t.netR,0));
+  return {
+    trades: trades.length,
+    wins: wins.length,
+    losses: losses.length,
+    winRatePct: trades.length ? wins.length / trades.length * 100 : 0,
+    netR: trades.reduce((sum,t)=>sum+t.netR,0),
+    expectancyR: trades.length ? trades.reduce((sum,t)=>sum+t.netR,0) / trades.length : 0,
+    profitFactor: grossLoss ? grossWin / grossLoss : grossWin ? null : 0
+  };
+}
+
 function summarize(trades) {
   const wins = trades.filter(t => t.netR > 0), losses = trades.filter(t => t.netR < 0);
   const grossWin = wins.reduce((s,t)=>s+t.netR,0), grossLoss = Math.abs(losses.reduce((s,t)=>s+t.netR,0));
@@ -119,7 +134,11 @@ function summarize(trades) {
     netR: trades.reduce((s,t)=>s+t.netR,0),
     expectancyR: trades.length ? trades.reduce((s,t)=>s+t.netR,0)/trades.length : 0,
     profitFactor: grossLoss ? grossWin/grossLoss : grossWin ? null : 0,
-    maxDrawdownR: maxDrawdown, targetHits: trades.reduce((s,t)=>s+t.targetHits,0)
+    maxDrawdownR: maxDrawdown, targetHits: trades.reduce((s,t)=>s+t.targetHits,0),
+    bySide: {
+      LONG: sideMetrics(trades.filter(t=>t.side==="LONG")),
+      SHORT: sideMetrics(trades.filter(t=>t.side==="SHORT"))
+    }
   };
 }
 
@@ -203,7 +222,9 @@ async function main() {
     "Net result: "+report.overall.netR.toFixed(2)+"R",
     "Expectancy: "+report.overall.expectancyR.toFixed(3)+"R/trade",
     "Profit factor: "+(report.overall.profitFactor===null?"n/a":report.overall.profitFactor.toFixed(2)),
-    "Max drawdown: "+report.overall.maxDrawdownR.toFixed(2)+"R","",
+    "Max drawdown: "+report.overall.maxDrawdownR.toFixed(2)+"R",
+    "LONG: "+report.overall.bySide.LONG.trades+" trades | win "+report.overall.bySide.LONG.winRatePct.toFixed(2)+"% | PF "+(report.overall.bySide.LONG.profitFactor===null?"n/a":report.overall.bySide.LONG.profitFactor.toFixed(2))+" | net "+report.overall.bySide.LONG.netR.toFixed(2)+"R | expectancy "+report.overall.bySide.LONG.expectancyR.toFixed(3)+"R",
+    "SHORT: "+report.overall.bySide.SHORT.trades+" trades | win "+report.overall.bySide.SHORT.winRatePct.toFixed(2)+"% | PF "+(report.overall.bySide.SHORT.profitFactor===null?"n/a":report.overall.bySide.SHORT.profitFactor.toFixed(2))+" | net "+report.overall.bySide.SHORT.netR.toFixed(2)+"R | expectancy "+report.overall.bySide.SHORT.expectancyR.toFixed(3)+"R","",
     "Costs assumed: "+(FEE_PER_SIDE*100).toFixed(3)+"% fee + "+(SLIPPAGE_PER_SIDE*100).toFixed(3)+"% slippage per side.",
     "Partial exits: 40% at 1.5R, 35% at 2.2R, 25% at 3R. Same-candle stop/target ambiguity is resolved as stop first.",
     "Historical funding is excluded. Simplified price-based simulation; not a live-fill or profitability guarantee.","",
