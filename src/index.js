@@ -12,6 +12,7 @@ const CONFIG = {
 
 const TELEGRAM_API = "https://api.telegram.org";
 const seenUpdates = new Set();
+let telegramKvDedupeUnavailable = false;
 
 const ABOUT_TEXT =
   "🤖 تریدیار | دستیار معامله‌گر فیوچرز\n\n" +
@@ -103,9 +104,22 @@ export default {
       const updateId = update.update_id;
       if (updateId !== undefined) {
         const key = `telegram:update:${updateId}`;
-        if (env.APP_KV) {
-          if (await env.APP_KV.get(key)) return new Response("OK");
-          await env.APP_KV.put(key, "1", { expirationTtl: 86400 });
+        if (env.APP_KV && !telegramKvDedupeUnavailable) {
+          try {
+            if (await env.APP_KV.get(key)) return new Response("OK");
+            await env.APP_KV.put(key, "1", { expirationTtl: 86400 });
+          } catch (error) {
+            // KV daily write quotas must not take the Telegram webhook offline.
+            // Fall back to isolate-local deduplication for the rest of this isolate's lifetime.
+            telegramKvDedupeUnavailable = true;
+            console.error(
+              "Telegram update deduplication KV unavailable; using in-memory fallback:",
+              String(error?.message || error)
+            );
+            if (seenUpdates.has(updateId)) return new Response("OK");
+            seenUpdates.add(updateId);
+            if (seenUpdates.size > 500) seenUpdates.delete(seenUpdates.values().next().value);
+          }
         } else {
           if (seenUpdates.has(updateId)) return new Response("OK");
           seenUpdates.add(updateId);
