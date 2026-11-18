@@ -1343,7 +1343,7 @@ function calculateAtr(candles, period = 14) {
   return recent.length === period ? average(recent) : null;
 }
 
-function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
+export function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   }
