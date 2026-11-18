@@ -3,7 +3,8 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - experiment/btcusdt-paper-variants-4h-1h-15m\n      - experiment/btcusdt-four-engine-price-action
+      - experiment/btcusdt-paper-variants-4h-1h-15m
+      - experiment/btcusdt-four-engine-price-action
 permissions:
   contents: read
 concurrency:
@@ -18,27 +19,32 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Restore persistent paper ledger
+      - name: Restore persistent four-engine paper ledger
         uses: actions/cache@v4
         with:
           path: artifacts/btcusdt-four-engine-state.json
           key: btcusdt-four-engine-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            btcusdt-paper-state-
+            btcusdt-four-engine-state-
       - run: npm install
       - name: Repository tests
         run: npm test
-      - name: Validate paper runner syntax
-        run: node --check scripts/btcusdt-paper-variants.mjs
-      - name: Run BTCUSDT paper comparison (up to 5h 40m)
+      - name: Validate research runner and PA engine syntax
+        run: |
+          node --check scripts/btcusdt-paper-variants.mjs
+          node --check scripts/btcusdt-price-action.mjs
+          node --check scripts/btcusdt-price-action.test.mjs
+      - name: Run four-model BTCUSDT paper comparison (up to 5h 40m)
+        env:
+          BTC_PAPER_STATE: ./artifacts/btcusdt-four-engine-state.json
         run: |
           timeout 340m node scripts/btcusdt-paper-variants.mjs --watch || code=$?
           if [ "${code:-0}" -ne 0 ] && [ "$code" -ne 124 ]; then exit "$code"; fi
-      - name: Upload paper ledger
+      - name: Upload four-engine paper ledger
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: btcusdt-four-engine-ledger-${{ github.run_id }}
-          path: artifacts/btcusdt-paper-state.json
+          path: artifacts/btcusdt-four-engine-state.json
           if-no-files-found: warn
           retention-days: 30
