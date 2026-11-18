@@ -186,6 +186,23 @@ function signalFeatures(signal, h1, h4, marketContext) {
   };
 }
 
+function temporalBreakdown(trades, start, split, end) {
+  const first = trades.filter(t => t.signalTime < split);
+  const last = trades.filter(t => t.signalTime >= split && t.signalTime < end);
+  const byMonth = {};
+  for (const trade of trades) {
+    const month = new Date(trade.signalTime).toISOString().slice(0, 7);
+    (byMonth[month] ||= []).push(trade);
+  }
+  return {
+    first60Days: summarize(first),
+    last30Days: summarize(last),
+    byMonth: Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b)).map(([month, group]) => ({
+      month, ...summarize(group)
+    }))
+  };
+}
+
 function bucketBreakdown(trades, field, cuts) {
   const rows = [];
   const bounds = [-Infinity, ...cuts, Infinity];
@@ -631,6 +648,12 @@ async function main() {
     perSymbol: [...new Set(closed.map(t => t.symbol))].map(symbol => ({
       symbol, ...summarize(closed.filter(t => t.symbol === symbol))
     })),
+    temporalBreakdown: {
+      splitAt: new Date(start + 60 * 24 * H1).toISOString(),
+      baseline: temporalBreakdown(closed, start, start + 60 * 24 * H1, end),
+      asymmetricCandidate: temporalBreakdown(qualityClosed, start, start + 60 * 24 * H1, end),
+      breakoutStructureCandidate: temporalBreakdown(breakoutClosed, start, start + 60 * 24 * H1, end)
+    },
     qualityFilter: {
       rule: "LONG: 20-candle breakout AND aligned 5-candle swing structure; SHORT: RSI <= 45",
       signalCount: qualityIssued,
