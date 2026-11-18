@@ -66,13 +66,20 @@ function closeTrade(position, rawPrice, reason, time, config) {
   return position;
 }
 
+export function calculateEntryFill(side, nextOpen, slippage = 0.0003) {
+  const direction = side === "LONG" ? 1 : side === "SHORT" ? -1 : 0;
+  if (!direction || !Number.isFinite(nextOpen) || nextOpen <= 0 ||
+      !Number.isFinite(slippage) || slippage < 0) throw new Error("Invalid entry fill inputs");
+  return nextOpen * (1 + direction * slippage);
+}
+
 export function simulateTrade({ side, entry, stop, targets, candles, startIndex, fee = 0.0005, slippage = 0.0003, maxHoldHours = 72 }) {
   const direction = side === "LONG" ? 1 : -1;
   const risk = direction === 1 ? entry - stop : stop - entry;
   if (!(risk > 0) || !Number.isFinite(risk)) throw new Error("Invalid trade risk");
   const position = { side, entry, stop, risk, direction, remaining: 1, realizedR: 0, targetHits: 0, exitTime: null, exitReason: null };
   const config = { fee, slippage };
-  const endIndex = Math.min(candles.length - 1, startIndex + maxHoldHours);
+  const endIndex = Math.min(candles.length - 1, startIndex + maxHoldHours - 1);
   for (let i = startIndex; i <= endIndex && position.remaining > 0; i++) {
     const bar = candles[i];
     const stopGap = direction === 1 ? bar.open <= stop : bar.open >= stop;
@@ -141,20 +148,28 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       symbol:ticker.symbol,last:nextBar.open,quoteVolume:Number(ticker.volumeQuote)||0,
       priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}
     };
-    const first=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
-    if (!first?.eligible) continue;
-    const direction=first.side==="LONG"?1:-1;
-    tickerAtSignal.last=nextBar.open*(1+direction*SLIPPAGE_PER_SIDE);
-    const confirmed=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
-    if (!confirmed?.eligible) continue;
+    const signal=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
+    if (!signal?.eligible) continue;
+    const direction=signal.side==="LONG"?1:-1;
     const entryIndex=i+1;
-    const tradeCandles=oneHour.slice(entryIndex,Math.min(oneHour.length,entryIndex+MAX_HOLD_HOURS+1));
+    // A signal is known only after the signal candle closes. Fill at the next
+    // candle open, then apply adverse entry slippage exactly once.
+    const entry=calculateEntryFill(signal.side,nextBar.open,SLIPPAGE_PER_SIDE);
+    const risk=direction===1?entry-signal.stop:signal.stop-entry;
+    const targets=[signal.target1,signal.target2,signal.target3];
+    const targetsValid=targets.every((target,index)=>Number.isFinite(target)&&
+      (direction===1?target>entry:target<entry) &&
+      (index===0 || (direction===1?target>targets[index-1]:target<targets[index-1])));
+    if (!(risk>0) || !targetsValid) continue;
+    const tradeCandles=oneHour.slice(entryIndex,Math.min(oneHour.length,entryIndex+MAX_HOLD_HOURS));
+    if (!tradeCandles.length) continue;
     const trade=simulateTrade({
-      side:confirmed.side,entry:confirmed.entry,stop:confirmed.stop,
-      targets:[confirmed.target1,confirmed.target2,confirmed.target3],
+      side:signal.side,entry,stop:signal.stop,targets,
       candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
     });
-    trade.symbol=ticker.symbol; trade.score=confirmed.score; trade.signalTime=signalBar.time;
+    trade.symbol=ticker.symbol; trade.score=signal.score; trade.signalTime=signalBar.time;
+    trade.signalClose=signal.close ?? signalBar.close;
+    trade.entryOpen=nextBar.open;
     trades.push(trade);
     const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
     nextAvailableIndex=Math.max(entryIndex+1,exitIndex+1);
@@ -185,7 +200,7 @@ async function main() {
       feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
       maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
       sameCandleStopTargetRule:"stop first (conservative)",
-      entryRule:"next 1h candle open, adverse slippage applied",
+      entryRule:"next 1h candle open after signal close, adverse entry slippage applied once; stop/targets remain anchored to signal levels",
       funding:"excluded (historical funding series not included)",
       signalUses:"historical 1h/4h closed candles; 24h change derived from historical bars; no current funding or future candle data"
     },
