@@ -51,18 +51,20 @@ test("1H BOS must agree with the 4H structure",()=>{
 
 test("15m bullish liquidity sweep requires reclaim and close above prior bar high",()=>{
   const x=candles(10,105);
-  x[8]={...x[8],open:103,high:105,low:101,close:102};
-  x[9]={...x[9],open:102,high:108,low:99,close:106};
+  for (const c of x) { c.low=105; c.high=110; }
+  x[8]={...x[8],open:105.2,high:105.8,low:105.1,close:105.5};
+  x[9]={...x[9],open:105.5,high:108,low:104.5,close:106.5};
   const sweep=detectLiquiditySweep15m(x,8);
   assert.equal(sweep?.side,"LONG");
-  assert.equal(sweep?.sweepLevel,100);
-  assert.equal(buildPriceActionSignal({side:"LONG"},x,8)?.target3>106,true);
+  assert.equal(sweep?.sweepLevel,105);
+  assert.equal(buildPriceActionSignal({side:"LONG"},x,8)?.target3>106.5,true);
   assert.equal(buildPriceActionSignal({side:"SHORT"},x,8),null);
 });
 
 test("15m sweep without a close through the prior candle extreme is rejected",()=>{
   const x=candles(10,105);
-  x[8]={...x[8],open:103,high:105,low:101,close:102};
-  x[9]={...x[9],open:102,high:105,low:99,close:104};
+  for (const c of x) { c.low=105; c.high=110; }
+  x[8]={...x[8],open:105.2,high:105.8,low:105.1,close:105.5};
+  x[9]={...x[9],open:105.5,high:105.8,low:104.5,close:105.4};
   assert.equal(detectLiquiditySweep15m(x,8),null);
 });
