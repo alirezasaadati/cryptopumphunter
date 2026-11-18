@@ -32,6 +32,8 @@ const report = {
     fees: {rate:FEE_RATE, note:"Configurable research assumption; not verified account-specific Kraken fee tier."},
     slippageBps: SLIPPAGE_BPS,
     maxEntryDriftPct: 0.35,
+    quantityPrecision: "per-instrument contractValueTradePrecision",
+    priceLevels: "Rounded conservatively to each instrument tick size.",
     funding: "Kraken historical relativeFundingRate is applied at settlement boundaries to positions carried into that timestamp; settlement price uses the 15m candle open.",
     exits: {
       engineA: {weights:A_WEIGHTS, note:"Equal allocation across five targets is an explicit provisional research assumption."},
@@ -65,7 +67,7 @@ async function getJson(url) {
   throw error;
 }
 
-async function fetchFunding(symbol){
+async function fetchInstruments(){\n  const payload=await getJson("https://futures.kraken.com/derivatives/api/v3/instruments");\n  return new Map((payload.instruments??[]).map(item=>[item.symbol, item]));\n}\n\nfunction normalizeSignal(signal,tickSize){\n  const side=signal.side;\n  const snap=(price,mode)=>Number((Math[mode](price/tickSize)*tickSize).toPrecision(12));\n  const normalized={...signal,entry:snap(signal.entry,"round"),\n    stop:snap(signal.stop,side==="LONG"?"floor":"ceil"),\n    targets:signal.targets.map(price=>snap(price,side==="LONG"?"ceil":"floor"))};\n  const rawEntry2=signal.entry2??signal.context?.entry2??null;\n  const entry2=rawEntry2===null?null:snap(rawEntry2,side==="LONG"?"floor":"ceil");\n  normalized.entry2=entry2;\n  normalized.context={...signal.context,entry2};\n  return normalized;\n}\n\nasync function fetchFunding(symbol){
   const payload=await getJson(`https://futures.kraken.com/derivatives/api/v3/historical-funding-rates?symbol=${encodeURIComponent(symbol)}`);
   const rates=new Map();
   for(const item of payload.rates??[]){
@@ -122,7 +124,7 @@ function summarize(trades,skipped){
   };
 }
 
-for(const symbol of SYMBOLS){
+const instruments=await fetchInstruments();\n\nfor(const symbol of SYMBOLS){
   let candles;
   try{
     candles=await fetchCandles(symbol);
@@ -146,7 +148,7 @@ for(const symbol of SYMBOLS){
     }
     report.data.push({symbol,candles:valid.length,first:valid[0]?.time??null,last:valid.at(-1)?.time??null,
       gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0,
-      fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError});
+      fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError,\n      tickSize,quantityPrecision,contractSize:instrument.contractSize,contractType:instrument.type});
     for(const engine of ["A","B"]){
       const analyze=engine==="A"?analyzeEngineA:analyzeEngineB;
       const weights=engine==="A"?A_WEIGHTS:B_WEIGHTS;
@@ -166,7 +168,7 @@ for(const symbol of SYMBOLS){
           i++;continue;
         }
         trades.push({symbol,side:signal.side,candleTime:signal.candleTime,score:signal.score,
-          entry:signal.entry,entry2:signal.entry2??null,stop:signal.stop,targets:signal.targets,
+          entry:executableSignal.entry,entry2:executableSignal.entry2??null,stop:executableSignal.stop,targets:executableSignal.targets,
           status:result.status,netPnl:result.netPnl,fees:result.fees,funding:result.funding,closedAt:result.exits.at(-1)?.time??null,
           returnPct:result.returnPct,barsObserved:result.barsObserved,entry2Filled:result.entry2Filled,
           ambiguousEvents:result.ambiguousEvents,exits:result.exits});
