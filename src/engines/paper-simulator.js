@@ -59,8 +59,9 @@ export function simulatePaperTrade({
       (side === "LONG" ? entry2 >= signal.entry || entry2 <= signal.stop :
         entry2 <= signal.entry || entry2 >= signal.stop))) return {status:"invalid_input"};
 
-  const later = candles.filter(c => c && finite(c.time) && c.time > signal.candleTime)
-    .sort((a,b)=>a.time-b.time).slice(0,maxBars);
+  const allLater = candles.filter(c => c && finite(c.time) && c.time > signal.candleTime)
+    .sort((a,b)=>a.time-b.time);
+  const later = allLater.slice(0,maxBars);
   if (!later.length) return {status:"no_future_candles"};
 
   let qty = 0, initialQty = 0, deployed = 0, fees = 0;
@@ -150,6 +151,9 @@ export function simulatePaperTrade({
     if (qty <= 1e-12) break;
   }
 
+  if (qty > 1e-12 && allLater.length > later.length && barsProcessed === maxBars) {
+    closeQty(qty,later.at(-1).close,"time_exit",later.at(-1).time);
+  }
   const status = qty <= 1e-12 ? "closed" : "open";
   const mark = later.at(-1).close;
   const unrealized = status === "open" ? (mark-averageEntry())*qty*sign : 0;
