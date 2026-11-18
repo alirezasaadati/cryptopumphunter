@@ -88,16 +88,24 @@ test("tracking does not fall back to an old candle when no new candle exists", (
 });
 
 
-test("R accounting matches staged exits and stop remainder", () => {
-  const base = { side: "LONG", actualEntry: 100, initialRisk: 5, currentStop: 95 };
+test("R accounting uses actual signal target distances and staged exits", () => {
+  const base = {
+    side: "LONG", actualEntry: 100, initialRisk: 5, currentStop: 95,
+    target1: 107.5, target2: 112.5, target3: 117.5
+  };
   assert.ok(Math.abs(tradeResultR({ ...base, tpHits: [] }, true) - (-1)) < 1e-9);
   assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1"] }, true)) < 1e-9);
-  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1", "TP2"] }, true) - 1.12) < 1e-9);
-  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1", "TP2", "TP3"] }, false) - 2.12) < 1e-9);
+  // 40% at 1.5R + 35% at 2.5R + 25% remainder at -1R = 1.225R.
+  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1", "TP2"] }, true) - 1.225) < 1e-9);
+  // 40%*1.5R + 35%*2.5R + 25%*3.5R = 2.35R.
+  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1", "TP2", "TP3"] }, false) - 2.35) < 1e-9);
 });
 
 test("R accounting is directionally correct for SHORT stop-outs", () => {
-  const trade = { side: "SHORT", actualEntry: 100, initialRisk: 5, currentStop: 105, tpHits: ["TP1"] };
+  const trade = {
+    side: "SHORT", actualEntry: 100, initialRisk: 5, currentStop: 105,
+    target1: 92.5, target2: 87.5, target3: 82.5, tpHits: ["TP1"]
+  };
   assert.ok(Math.abs(tradeResultR(trade, true)) < 1e-9);
 });
 
