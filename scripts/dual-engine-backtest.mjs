@@ -31,6 +31,7 @@ const report = {
     universe: "Current listed PF contracts only; delisted/historical universe and survivorship bias are not resolved.",
     fees: {rate:FEE_RATE, note:"Configurable research assumption; not verified account-specific Kraken fee tier."},
     slippageBps: SLIPPAGE_BPS,
+    maxEntryDriftPct: 0.35,
     funding: "Excluded: historical funding settlement series has not yet been integrated.",
     exits: {
       engineA: {weights:A_WEIGHTS, note:"Equal allocation across five targets is an explicit provisional research assumption."},
@@ -136,9 +137,9 @@ for(const symbol of SYMBOLS){
         if(!signal){i++;continue;}
         const result=simulatePaperTrade({
           signal,candles:valid.slice(i+1),entryNotional:ENTRY_NOTIONAL,
-          targetWeights:weights,feeRate:FEE_RATE,slippageBps:SLIPPAGE_BPS,maxBars:MAX_HOLD_BARS
+          targetWeights:weights,feeRate:FEE_RATE,slippageBps:SLIPPAGE_BPS,maxEntryDriftPct:0.35,maxBars:MAX_HOLD_BARS
         });
-        if(["invalid_input","invalid_data","no_future_candles"].includes(result.status)){
+        if(["invalid_input","invalid_data","no_future_candles","not_filled"].includes(result.status)){
           trades.push({symbol,side:signal.side,candleTime:signal.candleTime,score:signal.score,
             status:result.status,netPnl:0,fees:0,ambiguousEvents:[]});
           i++;continue;
