@@ -1,4 +1,4 @@
-name: MTF Futures Engine Tests
+name: MTF Futures Engine Tests and Backtests
 on:
   push:
     branches: [experiment/mtf-futures-engine]
@@ -7,14 +7,32 @@ on:
     paths:
       - 'src/mtf-futures-engine.js'
       - 'scripts/mtf-futures-engine.test.mjs'
+      - 'scripts/backtest-mtf-futures.mjs'
       - '.github/workflows/mtf-futures-engine.yml'
+permissions:
+  contents: read
 jobs:
-  test:
+  validate-and-backtest:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: node --check src/mtf-futures-engine.js
+      - run: node --check scripts/backtest-mtf-futures.mjs
       - run: node --test scripts/mtf-futures-engine.test.mjs
+      - name: 30-day historical backtest
+        run: BACKTEST_DAYS=30 BACKTEST_SYMBOLS=10 node scripts/backtest-mtf-futures.mjs
+      - name: Preserve 30-day report
+        run: mkdir -p artifacts/30d && cp artifacts/mtf-futures-backtest.* artifacts/30d/
+      - name: 90-day historical backtest
+        run: BACKTEST_DAYS=90 BACKTEST_SYMBOLS=10 node scripts/backtest-mtf-futures.mjs
+      - name: Preserve 90-day report
+        run: mkdir -p artifacts/90d && cp artifacts/mtf-futures-backtest.* artifacts/90d/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtf-futures-backtest-reports
+          path: artifacts/
+          retention-days: 30
