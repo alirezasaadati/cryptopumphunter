@@ -95,7 +95,7 @@ function bestSwing(swings, side, beforeIndex=Infinity) {
   return [...list].reverse().find(x=>x.index<beforeIndex) || null;
 }
 function lastClosed(candles) { return candles[candles.length-1]; }
-function scoreBase(...checks) { return Math.min(98, 60+checks.filter(Boolean).length*10); }
+function scoreBase(...checks) { return Math.min(95, 50+checks.filter(Boolean).length*15); }
 
 function structureStrategy({symbol, oneHour, fourHour, fifteenMin}) {
   const s1=describeStructure(oneHour), s4=describeStructure(fourHour);
@@ -110,11 +110,11 @@ function structureStrategy({symbol, oneHour, fourHour, fifteenMin}) {
   if (!side) return null;
   const swing=bestSwing(swings,side,oneHour.length-1);
   if (!swing) return null;
-  return makePlan({symbol,side,strategyId:"market_structure",strategyName:"ساختار بازار",score:scoreBase(true,candleDirection(trigger)===side),reason:evidence,entry:trigger.close,invalidation:side==="LONG"?swing.price-levelBuffer(fifteenMin,trigger.close):swing.price+levelBuffer(fifteenMin,trigger.close),context:{oneHourStructure:s1.direction,fourHourStructure:s4.direction,triggerTime:trigger.time}});
+  return makePlan({symbol,side,strategyId:"market_structure",strategyName:"ساختار بازار",score:scoreBase(body(trigger)/Math.max(range(trigger),Number.EPSILON)>=0.45,sideMatchesStructure(s1.direction,side),sideMatchesStructure(s4.direction,side)),reason:evidence,entry:trigger.close,invalidation:side==="LONG"?swing.price-levelBuffer(fifteenMin,trigger.close):swing.price+levelBuffer(fifteenMin,trigger.close),context:{oneHourStructure:s1.direction,fourHourStructure:s4.direction,triggerTime:trigger.time}});
 }
 
 function rejectionStrategy({symbol, oneHour, fourHour, fifteenMin}) {
-  const swings=findSwings(oneHour), c=lastClosed(fifteenMin), prev=fifteenMin.at(-2);
+  const swings=findSwings(oneHour), c=lastClosed(fifteenMin), prev=fifteenMin.at(-2);\n  const s1=describeStructure(oneHour).direction,s4=describeStructure(fourHour).direction;
   const candidates=[
     ...swings.lows.map(x=>({side:"LONG",level:x.price,index:x.index})),
     ...swings.highs.map(x=>({side:"SHORT",level:x.price,index:x.index}))
@@ -129,7 +129,7 @@ function rejectionStrategy({symbol, oneHour, fourHour, fifteenMin}) {
   const bearish=hit.side==="SHORT" && upperWick(c)>body(c)*1.5 && c.close<c.open;
   if (!(bullish||bearish)) return null;
   const pad=levelBuffer(fifteenMin,c.close);
-  return makePlan({symbol,side:hit.side,strategyId:"sr_rejection",strategyName:"برگشت از حمایت/مقاومت",score:scoreBase(true,range(c)>0, candleDirection(prev)===hit.side),reason:"واکنش و سایه رد قیمت در سطح ساختاری 1H همراه با بسته‌شدن تأییدی 15M",entry:c.close,invalidation:hit.side==="LONG"?Math.min(c.low,hit.level)-pad:Math.max(c.high,hit.level)+pad,context:{level:hit.level,triggerTime:c.time}});
+  return makePlan({symbol,side:hit.side,strategyId:"sr_rejection",strategyName:"برگشت از حمایت/مقاومت",score:scoreBase((hit.side==="LONG"?lowerWick(c):upperWick(c))>=body(c)*2,sideMatchesStructure(s1,hit.side),sideMatchesStructure(s4,hit.side),candleDirection(prev)===hit.side),reason:"واکنش و سایه رد قیمت در سطح ساختاری 1H همراه با بسته‌شدن تأییدی 15M",entry:c.close,invalidation:hit.side==="LONG"?Math.min(c.low,hit.level)-pad:Math.max(c.high,hit.level)+pad,context:{level:hit.level,triggerTime:c.time}});
 }
 
 function breakoutRetestStrategy({symbol, oneHour, fourHour, fifteenMin}) {
@@ -145,7 +145,7 @@ function breakoutRetestStrategy({symbol, oneHour, fourHour, fifteenMin}) {
       c.close<l.price && candleDirection(c)==="SHORT") {side="SHORT";level=l.price;}
   if (!side) return null;
   const pad=levelBuffer(fifteenMin,c.close);
-  return makePlan({symbol,side,strategyId:"breakout_retest",strategyName:"شکست و پولبک",score:scoreBase(true,last.close!==prev.close,Math.abs(c.close-level)/level<0.01),reason:"شکست تثبیت‌شده سطح 1H، بازآزمایی سطح و بسته‌شدن 15M در جهت شکست",entry:c.close,invalidation:side==="LONG"?Math.min(c.low,level)-pad:Math.max(c.high,level)+pad,context:{level,triggerTime:c.time}});
+  return makePlan({symbol,side,strategyId:"breakout_retest",strategyName:"شکست و پولبک",score:scoreBase(sideMatchesStructure(describeStructure(oneHour).direction,side),Math.abs(c.close-level)/level<=0.005,body(c)/Math.max(range(c),Number.EPSILON)>=0.35),reason:"شکست تثبیت‌شده سطح 1H، بازآزمایی سطح و بسته‌شدن 15M در جهت شکست",entry:c.close,invalidation:side==="LONG"?Math.min(c.low,level)-pad:Math.max(c.high,level)+pad,context:{level,triggerTime:c.time}});
 }
 
 function candlestickStrategy({symbol, oneHour, fourHour, fifteenMin}) {
@@ -160,7 +160,7 @@ function candlestickStrategy({symbol, oneHour, fourHour, fifteenMin}) {
   if ((bearEngulf||bearPin)&&resistance&&near(c.high,resistance.price)) {side="SHORT";anchor=resistance.price;pattern=bearEngulf?"Bearish Engulfing":"Bearish Pin Bar";}
   if (!side) return null;
   const pad=levelBuffer(fifteenMin,c.close);
-  return makePlan({symbol,side,strategyId:"candlestick",strategyName:"الگوهای کندلی",score:scoreBase(true,range(c)>0,Math.abs(c.close-anchor)/anchor<0.01),reason:pattern+" در مجاورت سطح ساختاری 1H",entry:c.close,invalidation:side==="LONG"?Math.min(c.low,anchor)-pad:Math.max(c.high,anchor)+pad,context:{pattern,level:anchor,triggerTime:c.time}});
+  return makePlan({symbol,side,strategyId:"candlestick",strategyName:"الگوهای کندلی",score:scoreBase((bullEngulf||bearEngulf)?body(c)/Math.max(range(c),Number.EPSILON)>=0.35:(bullPin||bearPin),Math.abs((side==="LONG"?c.low:c.high)-anchor)/anchor<=PA_CONFIG.LEVEL_TOLERANCE_PCT,sideMatchesStructure(describeStructure(oneHour).direction,side),sideMatchesStructure(describeStructure(fourHour).direction,side)),reason:pattern+" در مجاورت سطح ساختاری 1H",entry:c.close,invalidation:side==="LONG"?Math.min(c.low,anchor)-pad:Math.max(c.high,anchor)+pad,context:{pattern,level:anchor,triggerTime:c.time}});
 }
 
 const STRATEGIES=[
