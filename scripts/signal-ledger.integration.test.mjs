@@ -268,3 +268,94 @@ test("owner-authorized retry sends an uncertain signal once and archives it", as
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test("network timeout after request starts is marked UNCERTAIN and never auto-resends", async () => {
+  const kv = memoryKV();
+  const pending = signal("timeout-ambiguous");
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, BOT_TOKEN: "test-token" });
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    throw new Error("simulated socket timeout after request dispatch");
+  };
+  try {
+    const request = () => new Request("https://signal-delivery.internal/deliver", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chatId: "913", signal: pending, messageText: "timeout test" })
+    });
+    const first = await coordinator.fetch(request());
+    assert.equal(first.status, 409);
+    assert.equal((await kv.get("futures:signal-outbox:v1:913:timeout-ambiguous", "json")).status, "UNCERTAIN");
+    const second = await new SignalDeliveryCoordinator({}, { APP_KV: kv, BOT_TOKEN: "test-token" }).fetch(request());
+    assert.equal(second.status, 409);
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("worker interruption with an unfinalized SENDING record requires reconciliation after restart", async () => {
+  const base = memoryKV();
+  const kv = {
+    get: (...args) => base.get(...args),
+    list: (...args) => base.list(...args),
+    async put(key, value, options) {
+      const record = JSON.parse(String(value));
+      if (record.status === "UNCERTAIN") throw new Error("simulated worker termination before recovery write");
+      return base.put(key, value, options);
+    }
+  };
+  const pending = signal("worker-interruption");
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, BOT_TOKEN: "test-token" });
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error("simulated interrupted request"); };
+  try {
+    const request = () => new Request("https://signal-delivery.internal/deliver", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chatId: "914", signal: pending, messageText: "restart test" })
+    });
+    await assert.rejects(coordinator.fetch(request()));
+    assert.equal((await base.get("futures:signal-outbox:v1:914:worker-interruption", "json")).status, "SENDING");
+    const restarted = new SignalDeliveryCoordinator({}, { APP_KV: base, BOT_TOKEN: "test-token" });
+    const response = await restarted.fetch(request());
+    assert.equal(response.status, 409);
+    assert.equal(calls, 1);
+    assert.equal((await base.get("futures:signal-outbox:v1:914:worker-interruption", "json")).status, "SENDING");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Telegram acceptance followed by a failed SENT-state KV write becomes UNCERTAIN, not an automatic retry", async () => {
+  const base = memoryKV();
+  let puts = 0;
+  const kv = {
+    get: (...args) => base.get(...args),
+    list: (...args) => base.list(...args),
+    async put(key, value, options) {
+      puts++;
+      const record = JSON.parse(String(value));
+      if (record.status === "SENT") throw new Error("simulated KV failure after Telegram accepted message");
+      return base.put(key, value, options);
+    }
+  };
+  const pending = signal("accepted-kv-failure");
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, BOT_TOKEN: "test-token" });
+  const originalFetch = globalThis.fetch;
+  let sends = 0;
+  globalThis.fetch = async () => {
+    sends++;
+    return new Response(JSON.stringify({ ok: true, result: { message_id: 765 } }), { status: 200 });
+  };
+  try {
+    const request = () => new Request("https://signal-delivery.internal/deliver", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chatId: "915", signal: pending, messageText: "accepted test" })
+    });
+    const first = await coordinator.fetch(request());
+    assert.equal(first.status, 409);
+    assert.equal((await base.get("futures:signal-outbox:v1:915:accepted-kv-failure", "json")).status, "UNCERTAIN");
+    const second = await new SignalDeliveryCoordinator({}, { APP_KV: base, BOT_TOKEN: "test-token" }).fetch(request());
+    assert.equal(second.status, 409);
+    assert.equal(sends, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
