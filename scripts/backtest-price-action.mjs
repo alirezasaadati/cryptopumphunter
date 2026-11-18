@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 const BASE = "https://futures.kraken.com";
 const H15 = 15 * 60 * 1000, H1 = 60 * 60 * 1000, H4 = 4 * H1;
-const TEST_DAYS = Math.max(5, Math.min(10, Number(process.env.PA_BACKTEST_DAYS || 10)));
+const TEST_DAYS = Math.max(5, Math.min(14, Number(process.env.PA_BACKTEST_DAYS || 14)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(5, Number(process.env.PA_BACKTEST_SYMBOLS || 3)));
 const FEE = Number(process.env.PA_BACKTEST_FEE ?? 0.0005);
 const SLIPPAGE = Number(process.env.PA_BACKTEST_SLIPPAGE ?? 0.0003);
