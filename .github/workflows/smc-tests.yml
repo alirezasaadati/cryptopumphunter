@@ -1,0 +1,34 @@
+name: Experimental SMC checks
+
+on:
+  pull_request:
+    paths:
+      - "src/smc-engine.js"
+      - "scripts/smc-engine.test.mjs"
+      - "scripts/backtest-smc-comparison.mjs"
+      - ".github/workflows/smc-tests.yml"
+  push:
+    branches:
+      - feat/smc-engine-experiment
+    paths:
+      - "src/smc-engine.js"
+      - "scripts/smc-engine.test.mjs"
+      - "scripts/backtest-smc-comparison.mjs"
+      - ".github/workflows/smc-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: node --check src/smc-engine.js
+      - run: node --check scripts/smc-engine.test.mjs
+      - run: node --check scripts/backtest-smc-comparison.mjs
+      - run: node --test scripts/smc-engine.test.mjs
