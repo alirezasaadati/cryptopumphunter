@@ -49,6 +49,10 @@ test("Engine B emits an adaptive R-multiple plan, not channel percentage targets
 test("both engines reject symbols below the liquidity floor",()=>{
   const candles=makeSeries();
   assert.equal(analyzeEngineA({symbol:"PF_TESTUSD",candles,quoteVolume:1}),null);
+  assert.equal(analyzeEngineA({symbol:"PF_TESTUSD",candles}),null);
+  assert.equal(analyzeEngineA({symbol:"PF_TESTUSD",candles,quoteVolume:Infinity}),null);
   assert.equal(analyzeEngineB({symbol:"PF_TESTUSD",candles,quoteVolume:1}),null);
+  assert.equal(analyzeEngineB({symbol:"PF_TESTUSD",candles}),null);
+  assert.equal(analyzeEngineB({symbol:"PF_TESTUSD",candles,quoteVolume:Infinity}),null);
   assert.equal(ENGINE_CONFIG.INTERVAL,"15m");
 });
