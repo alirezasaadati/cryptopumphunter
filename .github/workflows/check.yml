@@ -2,7 +2,7 @@ name: Code checks
 
 on:
   push:
-    branches: [main, feature/permanent-signal-ledger]
+    branches: [main, feature/permanent-signal-ledger, experiment/current-engine-25-margin-target]
   pull_request:
   workflow_dispatch:
 
