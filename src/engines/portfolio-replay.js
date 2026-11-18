@@ -20,7 +20,7 @@ export function replayPortfolio(trades, config = {}) {
         liquidationApproximation,
       };
     })
-    .sort((a,b) => a.entryTime-b.entryTime || String(a.symbol).localeCompare(String(b.symbol)));
+    .sort((a,b) => a.entryTime-b.entryTime || Number(b.score??0)-Number(a.score??0) || String(a.symbol).localeCompare(String(b.symbol)));
   let cashUsd = cfg.initialCapitalUsd, peakEquityUsd = cashUsd, maxDrawdownUsd = 0, maxConcurrentObserved = 0;
   const open = [], accepted = [], rejected = [], closed = [];
   function settleThrough(time) {
