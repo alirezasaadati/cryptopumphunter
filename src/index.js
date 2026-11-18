@@ -1603,7 +1603,7 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
           return Response.json({ok:true,allowed:false,day:today});
         }
-        if(url.pathname==="/deliver"||url.pathname==="/reconcile"){
+        if((url.pathname==="/deliver"||url.pathname==="/reconcile") && this.env.SIGNAL_DELIVERY){
           const gate=await kvWriteGate(this.env,"allow");
           if(gate?.allowed===false)throw new Error("KV daily write quota is paused until the next UTC day.");
         }
@@ -1646,7 +1646,7 @@ export class SignalDeliveryCoordinator {
         throw new Error("Unknown reconciliation action.");
       }catch(error){
         if(isKvDailyWriteQuotaError(error)){
-          await kvWriteGate(this.env,"pause",error);
+          if(this.env.SIGNAL_DELIVERY)await kvWriteGate(this.env,"pause",error);
           await this.ctx.storage.put("kv-daily-write-pause",{day:quotaDayKey(),pausedAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,300)});
         }
         return Response.json({ok:false,error:String(error?.message||error).slice(0,500)},{status:409});
