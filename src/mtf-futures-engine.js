@@ -1,4 +1,5 @@
-// Independent 4H / 1H / 15m futures signal engine. Closed candles only.
+// Experimental multi-timeframe engine: 4H market breadth, 1H symbol direction,
+// and the live bot's original stop/target construction applied to a 15m entry.
 export function ema(values, period) {
   if (!Array.isArray(values) || values.length < period) return null;
   const k=2/(period+1); let v=values.slice(0,period).reduce((a,b)=>a+b,0)/period;
@@ -25,36 +26,36 @@ export function classifyMarket(btc4h,universe4h){
   else if(btcTrend==="NEUTRAL"||Math.max(bullPct,bearPct)<55)regime="NEUTRAL";
   return {regime,btcTrend,bullish,bearish,neutral:total-bullish-bearish,total,bullPct:Number(bullPct.toFixed(2)),bearPct:Number(bearPct.toFixed(2))};
 }
+// Direction logic mirrors the live bot's strict 1H EMA20/EMA50 + RSI + volume rules.
+// 4H individual-coin trend is intentionally removed: 4H is the market-wide gate.
 export function classifySymbol1h(candles,marketRegime){
-  const d=trend(candles);if(marketRegime==="BULL"&&d==="BULL")return "LONG";if(marketRegime==="BEAR"&&d==="BEAR")return "SHORT";return null;
+  if(!Array.isArray(candles)||candles.length<60||!["BULL","BEAR"].includes(marketRegime))return null;
+  const closes=candles.map(c=>c.close),last=candles.at(-1),e20=ema(closes,20),e50=ema(closes,50);
+  const rsiValue=(()=>{let gains=0,losses=0;for(let i=closes.length-14;i<closes.length;i++){const d=closes[i]-closes[i-1];if(d>0)gains+=d;else losses-=d;}const ag=gains/14,al=losses/14;return al===0?100:100-100/(1+ag/al);})();
+  const avgVol=candles.slice(-21,-1).reduce((s,c)=>s+c.volume,0)/20;
+  const volumeRatio=avgVol>0?last.volume/avgVol:0;
+  const up=e20>e50&&last.close>e20,down=e20<e50&&last.close<e20;
+  if(marketRegime==="BULL"&&up&&rsiValue>=48&&rsiValue<=69&&volumeRatio>=.75)return "LONG";
+  if(marketRegime==="BEAR"&&down&&rsiValue>=31&&rsiValue<=52&&volumeRatio>=.75)return "SHORT";
+  return null;
 }
-export function findEntry15m(candles,side,options={}){
-  const minVolumeRatio=options.minVolumeRatio??1.15;
-  const minBodyRatio=options.minBodyRatio??0.45;
-  const breakoutLookback=options.breakoutLookback??8;
-  const breakoutCloseLocation=options.breakoutCloseLocation??0.72;
-  const reclaimCloseLocation=options.reclaimCloseLocation??0.65;
-  const entryMode=options.entryMode??"BOTH";
-  if(!Array.isArray(candles)||candles.length<60||!["LONG","SHORT"].includes(side))return null;
-  const c=candles.at(-1),prev=candles.at(-2),closes=candles.map(x=>x.close),e20=ema(closes,20),volatility=atr(candles,14);
-  if(!(e20>0)||!(volatility>0))return null;
-  const avgVol=candles.slice(-21,-1).reduce((s,x)=>s+x.volume,0)/20,volumeRatio=avgVol>0?c.volume/avgVol:0,range=c.high-c.low;
-  if(!(range>0)||volumeRatio<minVolumeRatio)return null;
-  const bodyRatio=Math.abs(c.close-c.open)/range,closeLocation=side==="LONG"?(c.close-c.low)/range:(c.high-c.close)/range;
-  const recent=candles.slice(-(breakoutLookback+1),-1),swingHigh=Math.max(...recent.map(x=>x.high)),swingLow=Math.min(...recent.map(x=>x.low));
-  const breakout=side==="LONG"?c.close>swingHigh&&c.close>c.open&&closeLocation>=breakoutCloseLocation:c.close<swingLow&&c.close<c.open&&closeLocation>=breakoutCloseLocation;
-  const reclaim=side==="LONG"?prev.close<=e20&&c.close>e20&&c.close>c.open&&closeLocation>=reclaimCloseLocation:prev.close>=e20&&c.close<e20&&c.close<c.open&&closeLocation>=reclaimCloseLocation;
-  if(bodyRatio<minBodyRatio)return null;
-  if(entryMode==="BREAKOUT"&&!breakout)return null;  if(entryMode==="RECLAIM"&&!reclaim)return null;
-  if(!["BOTH","BREAKOUT","RECLAIM"].includes(entryMode)||(!breakout&&!reclaim))return null;
-  const entry=c.close,structural=side==="LONG"?Math.min(...candles.slice(-8).map(x=>x.low)):Math.max(...candles.slice(-8).map(x=>x.high));
-  const atrStop=side==="LONG"?entry-1.4*volatility:entry+1.4*volatility,stop=side==="LONG"?Math.min(structural,atrStop):Math.max(structural,atrStop);
-  const risk=side==="LONG"?entry-stop:stop-entry,riskPct=risk/entry;if(!(risk>0)||riskPct<.0015||riskPct>.04)return null;
-  const sign=side==="LONG"?1:-1;
-  return {side,entry,stop,risk,target1:entry+sign*risk*1.5,target2:entry+sign*risk*2.2,target3:entry+sign*risk*3,volumeRatio:Number(volumeRatio.toFixed(3)),setup:breakout?"BREAKOUT":"EMA20_RECLAIM",candleTime:c.time,ema20:e20,atr:volatility};
+// Live-bot plan logic transplanted to 15m: entry at closed candle close;
+// stop = more conservative of 7-candle swing and 1.5*ATR(14);
+// targets = 1.5R / 2.5R / 3.5R. No BE move or trailing stop.
+export function findEntry15m(candles,side){
+  if(!Array.isArray(candles)||candles.length<40||!["LONG","SHORT"].includes(side))return null;
+  const c=candles.at(-1),entry=c.close,volatility=atr(candles,14);
+  if(!(volatility>0))return null;
+  const swing=candles.slice(-8,-1),swingLow=Math.min(...swing.map(x=>x.low)),swingHigh=Math.max(...swing.map(x=>x.high));
+  const stop=side==="LONG"?Math.min(swingLow,entry-volatility*1.5):Math.max(swingHigh,entry+volatility*1.5);
+  const risk=side==="LONG"?entry-stop:stop-entry,riskPct=risk/entry;
+  if(!(risk>0)||riskPct<.002||riskPct>.08)return null;
+  const dir=side==="LONG"?1:-1;
+  return {side,entry,stop,risk,target1:entry+dir*risk*1.5,target2:entry+dir*risk*2.5,target3:entry+dir*risk*3.5,atr:volatility,candleTime:c.time};
 }
-export function buildMtfSignal({symbol,market,candles1h,candles15m,options={}}){
+export function buildMtfSignal({symbol,market,candles1h,candles15m}){
   if(!market||!["BULL","BEAR"].includes(market.regime))return null;
   const side=classifySymbol1h(candles1h,market.regime);if(!side)return null;
-  const entry=findEntry15m(candles15m,side,options);return entry?{symbol,side,marketRegime:market.regime,marketBreadth:market,trend1h:side,...entry}:null;
+  const plan=findEntry15m(candles15m,side);
+  return plan?{symbol,side,marketRegime:market.regime,marketBreadth:market,trend1h:side,...plan}:null;
 }
