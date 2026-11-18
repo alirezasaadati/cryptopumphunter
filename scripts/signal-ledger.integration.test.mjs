@@ -207,3 +207,64 @@ test("owner reconciliation refuses to auto-archive legacy uncertain records with
   assert.match((await response.json()).error, /no signal snapshot/);
   assert.equal((await kv.get("futures:signal-outbox:v1:910:legacy", "json")).status, "UNCERTAIN");
 });
+
+
+test("concurrent duplicate deliveries through the coordinator send one Telegram message", async () => {
+  const kv = memoryKV();
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, BOT_TOKEN: "test-token" });
+  const originalFetch = globalThis.fetch;
+  let sendCalls = 0;
+  globalThis.fetch = async () => {
+    sendCalls++;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    return new Response(JSON.stringify({ ok: true, result: { message_id: 321 } }), { status: 200 });
+  };
+  const pending = signal("concurrent-once");
+  const request = () => new Request("https://signal-delivery.internal/deliver", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chatId: "911", signal: pending, messageText: "test signal" })
+  });
+  try {
+    const responses = await Promise.all([coordinator.fetch(request()), coordinator.fetch(request())]);
+    const results = await Promise.all(responses.map(x => x.json()));
+    assert.equal(sendCalls, 1);
+    assert.equal(results.filter(x => x.ok && x.result.duplicate === false).length, 1);
+    assert.equal(results.filter(x => x.ok && x.result.duplicate === true).length, 1);
+    assert.equal((await listIssuedSignals(kv, "911")).length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("owner-authorized retry sends an uncertain signal once and archives it", async () => {
+  const kv = memoryKV();
+  const pending = signal("uncertain-retry");
+  const key = "futures:signal-outbox:v1:912:uncertain-retry";
+  await kv.put(key, JSON.stringify({
+    version: 1, chatId: "912", signalId: pending.id, symbol: pending.symbol,
+    status: "UNCERTAIN", signal: pending, messageText: "retry signal",
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  }));
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, BOT_TOKEN: "test-token" });
+  const originalFetch = globalThis.fetch;
+  let sendCalls = 0;
+  globalThis.fetch = async (_url, options) => {
+    sendCalls++;
+    const body = JSON.parse(options.body);
+    assert.equal(body.text, "retry signal");
+    return new Response(JSON.stringify({ ok: true, result: { message_id: 654 } }), { status: 200 });
+  };
+  try {
+    const response = await coordinator.fetch(new Request("https://signal-delivery.internal/reconcile", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "retry", chatId: "912", signalId: pending.id })
+    }));
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).ok, true);
+    assert.equal(sendCalls, 1);
+    assert.equal((await kv.get(key, "json")).status, "ARCHIVED");
+    assert.equal((await listIssuedSignals(kv, "912")).length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
