@@ -28,7 +28,7 @@ jobs:
     env:
       BACKTEST_DAYS: "90"
       DIRECTIONAL_MODE: "B_ONLY"
-      B_STRUCTURE_MODE: \$\{\{ matrix.structure_mode \}\}
+      B_STRUCTURE_MODE: ${{ matrix.structure_mode }}
       ENTRY_NOTIONAL_USD: "100"
       FEE_RATE: "0.0005"
       SLIPPAGE_BPS: "2"
