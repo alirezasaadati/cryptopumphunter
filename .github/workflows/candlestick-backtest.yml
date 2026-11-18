@@ -30,7 +30,7 @@ jobs:
           BACKTEST_SYMBOLS: ${{ github.event.inputs.symbols || '12' }}
           BACKTEST_FEE: "0.0005"
           BACKTEST_SLIPPAGE: "0.0002"
-          BACKTEST_NOTIONAL_USD: "10"
+          BACKTEST_NOTIONAL_USD: "50"
         run: node scripts/backtest-candlesticks.mjs
       - uses: actions/upload-artifact@v4
         with:
