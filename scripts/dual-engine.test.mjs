@@ -106,7 +106,7 @@ test("entry 2 fills only when touched before TP1",()=>{
   const result=simulatePaperTrade(paperArgs(paperSignal(),[bar(2000,{high:101,low:96,close:99})]));
   assert.equal(result.entry2Filled,true);
   assert.equal(result.fills.length,2);
-  assert.equal(result.deployedNotional,200);
+  assert.ok(Math.abs(result.deployedNotional-200)<1e-6);
 });
 
 test("fees, adverse slippage and funding are included in net PnL",()=>{
@@ -170,4 +170,13 @@ test("funding at the entry candle boundary is not charged to a position opened a
   const result=simulatePaperTrade(paperArgs(signal,[settlement]));
   assert.equal(result.funding,0);
   assert.equal(result.events.filter(e=>e.type==="funding").length,0);
+});
+
+test("paper simulator rounds filled quantity down to exchange precision",()=>{
+  const signal=paperSignal({entry:3,entry2:null,stop:2.5,targets:[3.3,3.6,3.9],context:{}});
+  const result=simulatePaperTrade(paperArgs(signal,[bar(2000,{open:3,high:3.1,low:2.9,close:3})],{
+    quantityPrecision:1
+  }));
+  assert.equal(result.fills[0].quantity,33.3);
+  assert.ok(Math.abs(result.deployedNotional-99.9)<1e-9);
 });
