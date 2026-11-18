@@ -10,7 +10,7 @@ This runner compares three independent paper portfolios on **BTCUSDT only**:
 
 - 4H: market regime confirmation (the existing analyzer checks 4H EMA20/EMA50).
 - 1H: directional signal and existing entry/stop/target calculation.
-- 15m: wait for a closed candle in the signal direction above/below EMA20, then paper-enter at the next 15m candle open.
+- 15m: wait for a closed candle in the signal direction above/below EMA20, then paper-enter at the next 15m candle open, provided drift from the 1H reference entry is no more than 0.35%.
 
 The 15m confirmation is a new execution rule and must be evaluated as such; it was not part of the prior 180-day hourly filter ablation.
 
