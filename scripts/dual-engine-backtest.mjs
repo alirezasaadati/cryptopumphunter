@@ -32,7 +32,7 @@ const report = {
     fees: {rate:FEE_RATE, note:"Configurable research assumption; not verified account-specific Kraken fee tier."},
     slippageBps: SLIPPAGE_BPS,
     maxEntryDriftPct: 0.35,
-    funding: "Excluded: historical funding settlement series has not yet been integrated.",
+    funding: "Kraken historical relativeFundingRate is applied at settlement boundaries to positions carried into that timestamp; settlement price uses the 15m candle open.",
     exits: {
       engineA: {weights:A_WEIGHTS, note:"Equal allocation across five targets is an explicit provisional research assumption."},
       engineB: {weights:B_WEIGHTS, note:"40/35/25 provisional allocation."}
@@ -47,7 +47,7 @@ const report = {
   warnings: [
     "This is an exploratory strategy backtest, not proof of future performance.",
     "Liquidity filter is disabled because historical quote turnover and contract multipliers are not yet validated.",
-    "Historical funding is excluded and may materially change net results.",
+    "Funding-rate completeness is reported per contract; if Kraken does not return historical rates for a symbol, that symbol has incomplete funding accounting.",
     "Current-contract-only universe introduces survivorship bias."
   ]
 };
@@ -65,7 +65,7 @@ async function getJson(url) {
   throw error;
 }
 
-async function fetchCandles(symbol){
+async function fetchFunding(symbol){\n  const payload=await getJson(`https://futures.kraken.com/derivatives/api/v3/historical-funding-rates?symbol=${encodeURIComponent(symbol)}`);\n  const rates=new Map();\n  for(const item of payload.rates??[]){\n    const time=Date.parse(item.timestamp), rate=Number(item.relativeFundingRate);\n    if(Number.isFinite(time)&&Number.isFinite(rate)) rates.set(time,rate);\n  }\n  return rates;\n}\n\nasync function fetchCandles(symbol){
   const byTime=new Map();
   for(let from=start;from<end;from+=7*24*60*60*1000){
     const to=Math.min(end,from+7*24*60*60*1000);
@@ -102,7 +102,7 @@ function summarize(trades,skipped){
     expectancyUsd:closed.length?Number((closed.reduce((s,t)=>s+t.netPnl,0)/closed.length).toFixed(6)):null,
     maxDrawdownUsd:Number(maxDrawdown.toFixed(6)),
     feesUsd:Number(trades.reduce((s,t)=>s+t.fees,0).toFixed(6)),
-    fundingUsd:0,
+    fundingUsd:Number(trades.reduce((s,t)=>s+(t.funding??0),0).toFixed(6)),
     ambiguousBars:trades.reduce((s,t)=>s+t.ambiguousEvents.length,0),
     entry2FillRatePct:trades.length?Number((trades.filter(t=>t.entry2Filled).length/trades.length*100).toFixed(2)):0,
     bySide:{
@@ -125,7 +125,7 @@ for(const symbol of SYMBOLS){
       if(delta>INTERVAL_MS) gaps.push({from:valid[i-1].time,to:valid[i].time,count:Math.round(delta/INTERVAL_MS)-1});
     }
     report.data.push({symbol,candles:valid.length,first:valid[0]?.time??null,last:valid.at(-1)?.time??null,
-      gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0});
+      gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0,\n      fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError});
     for(const engine of ["A","B"]){
       const analyze=engine==="A"?analyzeEngineA:analyzeEngineB;
       const weights=engine==="A"?A_WEIGHTS:B_WEIGHTS;
