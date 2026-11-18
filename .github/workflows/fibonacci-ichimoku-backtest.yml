@@ -33,7 +33,14 @@ jobs:
           BACKTEST_MARGIN_USD: "1"
           BACKTEST_LEVERAGE: "10"
         run: node scripts/backtest-fibonacci-ichimoku.mjs
-      - name: Capital-constrained portfolio replay\n        env:\n          PORTFOLIO_START_USD: "10"\n          PORTFOLIO_MARGIN_USD: "1"\n          PORTFOLIO_LEVERAGE: "10"\n          PORTFOLIO_MAX_OPEN: "2"\n        run: node scripts/replay-fibonacci-ichimoku-portfolio.mjs\n      - uses: actions/upload-artifact@v4
+      - name: Capital-constrained portfolio replay
+        env:
+          PORTFOLIO_START_USD: "10"
+          PORTFOLIO_MARGIN_USD: "1"
+          PORTFOLIO_LEVERAGE: "10"
+          PORTFOLIO_MAX_OPEN: "2"
+        run: node scripts/replay-fibonacci-ichimoku-portfolio.mjs
+      - uses: actions/upload-artifact@v4
         with:
           name: fibonacci-ichimoku-backtest-report
           path: artifacts/fibonacci-ichimoku-*
