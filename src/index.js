@@ -1226,7 +1226,8 @@ async function getKrakenFuturesCandles(symbol, interval) {
   ).sort((a, b) => a.time - b.time);
 
   // Exclude the currently forming candle. Kraken chart responses may include it.
-  const intervalMsMap={"1m":60000,"5m":300000,"15m":900000,"30m":1800000,"1h":3600000,"4h":14400000,"12h":43200000,"1d":86400000,"1w":604800000};\n  const intervalMs=intervalMsMap[interval]||3600000;
+  const intervalMsMap={"1m":60000,"5m":300000,"15m":900000,"30m":1800000,"1h":3600000,"4h":14400000,"12h":43200000,"1d":86400000,"1w":604800000};
+  const intervalMs=intervalMsMap[interval]||3600000;
   const now = Date.now();
   return candles.filter(c => c.time + intervalMs <= now);
 }
