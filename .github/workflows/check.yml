@@ -35,3 +35,11 @@ jobs:
         timeout-minutes: 35
       - name: Cloudflare Worker dry-run build
         run: npx wrangler deploy --dry-run --outdir /tmp/worker-dry-run
+      - name: Upload production signal diagnostics
+        if: matrix.volume_threshold == '0.75'
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-signal-quality-diagnostics
+          path: artifacts/current-engine-25-margin-backtest.json
+          if-no-files-found: error
+          retention-days: 14
