@@ -15,8 +15,8 @@ const TELEGRAM_API = "https://api.telegram.org";
 const seenUpdates = new Set();
 let telegramKvDedupeUnavailable = false;
 
-function quotaDayKey(now = Date.now()) { return new Date(now).toISOString().slice(0, 10); }
-function isKvDailyWriteQuotaError(error) {
+export function quotaDayKey(now = Date.now()) { return new Date(now).toISOString().slice(0, 10); }
+export function isKvDailyWriteQuotaError(error) {
   const message = String(error?.message || error || "").toLowerCase();
   return message.includes("limit exceeded for the day") || (message.includes("quota") && (message.includes("put") || message.includes("delete")));
 }
@@ -36,7 +36,7 @@ async function kvWriteGate(env, action, error = null) {
     return { allowed: true };
   }
 }
-function withQuotaAwareKV(env) {
+export function withQuotaAwareKV(env) {
   if (!env.APP_KV || !env.SIGNAL_DELIVERY) return env;
   const raw = env.APP_KV;
   const guarded = new Proxy(raw, {
