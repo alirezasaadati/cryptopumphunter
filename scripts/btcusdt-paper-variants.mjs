@@ -26,7 +26,7 @@ function ema(values, period = 20) {
   for (let i = period; i < values.length; i++) v = values[i] * k + v * (1 - k);
   return v;
 }
-async function fetchCandles(interval, limit = 240) {
+async function fetchCandles(interval, limit = 500) {
   const url = `${BASE}/fapi/v1/klines?symbol=${SYMBOL}&interval=${interval}&limit=${limit}`;
   const res = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`Binance ${interval} HTTP ${res.status}`);
