@@ -17,6 +17,7 @@ const FEE_RATE = Number(process.env.FEE_RATE ?? 0.0005);
 const SLIPPAGE_BPS = Number(process.env.SLIPPAGE_BPS ?? 2);
 const MAX_HOLD_BARS = Number(process.env.MAX_HOLD_BARS ?? 500);
 const DIRECTIONAL_MODE = String(process.env.DIRECTIONAL_MODE ?? "COMBINED").toUpperCase();
+const B_STRUCTURE_MODE = String(process.env.B_STRUCTURE_MODE ?? "off").toLowerCase();
 const A_WEIGHTS = [0.2,0.2,0.2,0.2,0.2];
 const B_WEIGHTS = [0.4,0.35,0.25];
 const end = Math.floor(Date.now()/INTERVAL_MS)*INTERVAL_MS;
@@ -30,6 +31,7 @@ const report = {
   window: {start:new Date(start).toISOString(),end:new Date(end).toISOString(),days:DAYS,splitAt:new Date(splitAt).toISOString()},
   universe: SYMBOLS,
   runMode: DIRECTIONAL_MODE,
+  engineBStructureMode: B_STRUCTURE_MODE,
   methodology: {
     signalTiming: "Signal is evaluated using the just-closed candle; execution starts no earlier than the next candle.",
     liquidity: "Historical quote turnover is not validated; liquidity filter is explicitly bypassed for this research run. Current contract tick size and quantity precision are read from Kraken instrument metadata.",
@@ -59,7 +61,8 @@ const report = {
     "This is an exploratory strategy backtest, not proof of future performance.",
     "Liquidity filter is disabled because historical quote turnover and contract multipliers are not yet validated.",
     "Funding-rate completeness is reported per contract; if Kraken does not return historical rates for a symbol, that symbol has incomplete funding accounting.",
-    "Current-contract-only universe introduces survivorship bias."
+    "Current-contract-only universe introduces survivorship bias.",
+    "Structure modes use confirmed pivots only; pivot confirmation waits for right-side closed candles. Liquidity pools are inferred from historical equal highs, not order-book depth."
   ]
 };
 
@@ -193,7 +196,7 @@ for(const symbol of SYMBOLS){
       fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError,
       tickSize,quantityPrecision,contractSize:instrument.contractSize,contractType:instrument.type});
     for(const engine of ["A","A_BE","B","B_BTC_FILTER"]){
-      const analyze=(engine==="B"||engine==="B_BTC_FILTER"||engine==="B_SHORT_ONLY")?analyzeEngineB:analyzeEngineA;
+      const analyze=(engine==="B"||engine==="B_BTC_FILTER"||engine==="B_SHORT_ONLY")?args=>analyzeEngineB({...args,structureMode:B_STRUCTURE_MODE}):analyzeEngineA;
       const weights=(engine==="B"||engine==="B_BTC_FILTER"||engine==="B_SHORT_ONLY")?B_WEIGHTS:A_WEIGHTS;
       const trades=report.engines[engine].trades;
       let i=79;
@@ -252,7 +255,7 @@ for(const symbol of SYMBOLS){
       const candidates = [];
       const aSignal = DIRECTIONAL_MODE === "B_ONLY" ? null :
         analyzeEngineA({symbol, candles:history, skipLiquidityCheck:true});
-      const bSignal = analyzeEngineB({symbol, candles:history, skipLiquidityCheck:true});
+      const bSignal = analyzeEngineB({symbol, candles:history, skipLiquidityCheck:true, structureMode:B_STRUCTURE_MODE});
       // A's revised research gate: allow LONG only while BTC 15m trend is
       // aligned (close > EMA50 and EMA20 > EMA50), using no future candles.
       if (aSignal?.side === "LONG") {
