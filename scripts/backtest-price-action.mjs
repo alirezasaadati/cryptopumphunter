@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 const BASE = "https://futures.kraken.com";
 const H15 = 15 * 60 * 1000, H1 = 60 * 60 * 1000, H4 = 4 * H1;
 const TEST_DAYS = Math.max(5, Math.min(14, Number(process.env.PA_BACKTEST_DAYS || 14)));
+const END_OFFSET_DAYS = Math.max(0, Number(process.env.PA_BACKTEST_OFFSET_DAYS || 0));
 const SYMBOL_LIMIT = Math.max(1, Math.min(5, Number(process.env.PA_BACKTEST_SYMBOLS || 3)));
 const FEE = Number(process.env.PA_BACKTEST_FEE ?? 0.0005);
 const SLIPPAGE = Number(process.env.PA_BACKTEST_SLIPPAGE ?? 0.0003);
@@ -120,7 +121,7 @@ async function runSymbol(ticker, from, to, evaluationStart) {
   return {symbol:ticker.symbol,candles:{m15:m15.length,h1:h1.length,h4:h4.length},diagnostics,metrics:summarize(trades),trades};
 }
 async function main(){
-  const end=Date.now(),start=end-(TEST_DAYS+6)*24*H1,evaluationStart=end-TEST_DAYS*24*H1;
+  const end=Date.now()-END_OFFSET_DAYS*24*H1,start=end-(TEST_DAYS+6)*24*H1,evaluationStart=end-TEST_DAYS*24*H1;
   const data=await getJson(BASE+"/derivatives/api/v3/tickers");
   const universe=(data.tickers||[]).filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&
     /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&Number(t.volumeQuote)>0)
