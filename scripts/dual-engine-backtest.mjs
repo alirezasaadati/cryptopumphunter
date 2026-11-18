@@ -219,7 +219,7 @@ for(const symbol of SYMBOLS){
     console.log(`failed ${symbol}: ${String(error?.message??error)}`);
   }
 }
-for(const engine of ["A","B"]){
+for(const engine of ["A","A_BE","B"]){
   const item=report.engines[engine];
   item.summary=summarize(item.trades,item.skipped.length);
   item.summary.periods={
