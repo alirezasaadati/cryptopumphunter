@@ -114,7 +114,8 @@ function structureStrategy({symbol, oneHour, fourHour, fifteenMin}) {
 }
 
 function rejectionStrategy({symbol, oneHour, fourHour, fifteenMin}) {
-  const swings=findSwings(oneHour), c=lastClosed(fifteenMin), prev=fifteenMin.at(-2);\n  const s1=describeStructure(oneHour).direction,s4=describeStructure(fourHour).direction;
+  const swings=findSwings(oneHour), c=lastClosed(fifteenMin), prev=fifteenMin.at(-2);
+  const s1=describeStructure(oneHour).direction,s4=describeStructure(fourHour).direction;
   const candidates=[
     ...swings.lows.map(x=>({side:"LONG",level:x.price,index:x.index})),
     ...swings.highs.map(x=>({side:"SHORT",level:x.price,index:x.index}))
