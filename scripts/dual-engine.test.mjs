@@ -162,3 +162,11 @@ test("entry is not filled when the next candle opens beyond the drift limit",()=
   assert.equal(result.reason,"entry_drift_exceeded");
   assert.equal(result.fills.length,0);
 });
+
+test("funding at the entry candle boundary is not charged to a position opened at that boundary",()=>{
+  const signal=paperSignal({entry2:null,context:{}});
+  const settlement={...bar(2000,{fundingRate:0.01}),fundingSettlement:true};
+  const result=simulatePaperTrade(paperArgs(signal,[settlement]));
+  assert.equal(result.funding,0);
+  assert.equal(result.events.filter(e=>e.type==="funding").length,0);
+});
