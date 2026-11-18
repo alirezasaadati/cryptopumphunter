@@ -8,6 +8,7 @@ const BASE="https://data.binance.vision/data/futures/um";
 const SYMBOL="BTCUSDT", ENGINE_SYMBOL="PF_XBTUSD", HOUR=3600000, DAY=24*HOUR;
 const DAYS=180, WARMUP_DAYS=30, FEE=.0005, SLIPPAGE=.0003;
 const MAX_HOLD_15M=288, MAX_PENDING_15M=4;
+const LEVERAGE=10, TARGET_MARGIN_ROE=.25, TARGET_PRICE_MOVE=TARGET_MARGIN_ROE/LEVERAGE;
 const VARIANTS=[{id:"CURRENT_PRODUCTION",label:"Current production engine (unmodified)"}];
 const finite=(...xs)=>xs.every(Number.isFinite);
 function passesEntryFreshness(referencePrice,livePrice,maxDriftPct=.35){const reference=Number(referencePrice),live=Number(livePrice),max=Number(maxDriftPct);return reference>0&&live>0&&Number.isFinite(reference)&&Number.isFinite(live)&&Number.isFinite(max)&&max>=0&&Math.abs(live-reference)/reference*100<=max;}
@@ -79,16 +80,15 @@ function closeR(t,raw,fraction,reason,time){
  if(t.remaining<1e-8){t.remaining=0;t.closedAt=new Date(time).toISOString();t.exitReason=reason;}
 }
 function updateTrade(t,bar){
- const dir=t.side==="LONG"?1:-1,stopHit=dir===1?bar.low<=t.stop:bar.high>=t.stop;
- if(stopHit){closeR(t,t.stop,t.remaining,"STOP",bar.time);return;}
- const weights=[.4,.35,.25];
- for(let k=0;k<3&&t.remaining>1e-8;k++){
-  if(t.targetHits.includes(k))continue;
-  const hit=dir===1?bar.high>=t.targets[k]:bar.low<=t.targets[k];
-  if(hit){closeR(t,t.targets[k],Math.min(weights[k],t.remaining),"TARGET_"+(k+1),bar.time);t.targetHits.push(k);}
- }
+ const dir=t.side==="LONG"?1:-1;
+ const target=t.entry*(1+dir*TARGET_PRICE_MOVE);
+ const targetHit=dir===1?bar.high>=target:bar.low<=target;
+ const stopHit=dir===1?bar.low<=t.stop:bar.high>=t.stop;
+ // Conservative intrabar ordering: if TP and SL are both touched in one candle, count the stop first.
+ if(stopHit){closeR(t,t.stop,1,"STOP",bar.time);return;}
+ if(targetHit){closeR(t,target,1,"TARGET_25PCT_MARGIN_ROE",bar.time);return;}
  t.barsHeld++;
- if(t.remaining>1e-8&&t.barsHeld>=MAX_HOLD_15M)closeR(t,bar.close,t.remaining,"TIME_EXIT",bar.time);
+ if(t.barsHeld>=MAX_HOLD_15M)closeR(t,bar.close,1,"TIME_EXIT",bar.time);
 }
 function stats(trades){
  const wins=trades.filter(t=>t.netR>0),loss=trades.filter(t=>t.netR<0);
@@ -153,11 +153,11 @@ async function main(){
   const s=state[v.id];
   variants[v.id]={label:v.label,...summarizeTrades(s.trades,split,s.open?1:0),pendingAtEnd:Boolean(s.pending)};
  }
- const report={generatedAt:new Date().toISOString(),exchange:"Binance USD-M historical BTCUSDT candles as price proxy; live strategy provider is Kraken Futures",symbol:SYMBOL,engineSymbol:ENGINE_SYMBOL,period:{from:new Date(periodStart).toISOString(),to:new Date(now).toISOString(),days:DAYS},split:{inSampleDays:120,outOfSampleDays:60,outOfSampleFrom:new Date(split).toISOString()},data:{oneHourCandles:h1.length,fourHourCandles:h4.length,fifteenMinuteCandles:m15.length,warmupDays:WARMUP_DAYS},execution:{entry:"next 15m open",feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,partialExitsPct:[40,35,25],maxHoldHours:72,stopTargetSameCandle:"stop first",funding:"excluded"},method:"Chronological simulation of the exact main-branch analyzeFuturesSymbol logic: closed 1H/4H candles, strict candidate.eligible gate, no experimental filters and no 15m EMA confirmation. Entry at next 15m open if drift is within the production 0.35% limit. One open position; overlapping signals while a position is open are ignored. Binance BTCUSDT is used only as a historical BTC price proxy because the current production provider is Kraken Futures.",variants};
+ const report={generatedAt:new Date().toISOString(),exchange:"Binance USD-M historical BTCUSDT candles as price proxy; live strategy provider is Kraken Futures",symbol:SYMBOL,engineSymbol:ENGINE_SYMBOL,period:{from:new Date(periodStart).toISOString(),to:new Date(now).toISOString(),days:DAYS},split:{inSampleDays:120,outOfSampleDays:60,outOfSampleFrom:new Date(split).toISOString()},data:{oneHourCandles:h1.length,fourHourCandles:h4.length,fifteenMinuteCandles:m15.length,warmupDays:WARMUP_DAYS},execution:{entry:"next 15m open",leverage:LEVERAGE,targetMarginROE:TARGET_MARGIN_ROE*100,targetUnderlyingMovePct:TARGET_PRICE_MOVE*100,exit:"close full position at +25% gross PnL on initial margin; current engine stop unchanged",feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,maxHoldHours:72,stopTargetSameCandle:"stop first",funding:"excluded"},method:"Chronological simulation of exact main-branch analyzeFuturesSymbol logic: closed 1H/4H candles, strict candidate.eligible gate, no experimental filters and no 15m EMA confirmation. At 10x leverage, close full position at +25% gross PnL on initial margin (2.5% favorable BTC price move); keep engine-provided stop unchanged. Entry at next 15m open if drift is within production 0.35% limit. One open position; overlapping signals while a position is open are ignored. Binance BTCUSDT is a historical BTC price proxy; live provider is Kraken Futures.",variants};
  await mkdir("artifacts",{recursive:true});
  await writeFile("artifacts/btcusdt-current-engine-historical-180d.json",JSON.stringify(report,null,2));
  const rows=VARIANTS.map(v=>{const x=variants[v.id],o=x.outOfSample;return`| ${v.id} | ${x.overall.trades} | ${x.overall.netR.toFixed(2)} | ${x.overall.profitFactor===null?"n/a":x.overall.profitFactor.toFixed(2)} | ${o.trades} | ${o.winRatePct.toFixed(1)}% | ${o.netR.toFixed(2)} | ${o.profitFactor===null?"n/a":o.profitFactor.toFixed(2)} | ${o.maxDrawdownR.toFixed(2)} |`;});
- const md=["# BTCUSDT — Current production engine historical backtest","",`Period: ${report.period.from} to ${report.period.to} (180 days)`,`Out-of-sample: final 60 days from ${report.split.outOfSampleFrom}`,`Candles: ${h1.length} 1h / ${h4.length} 4h / ${m15.length} 15m`,"Costs: 0.05% fee + 0.03% slippage per side; funding excluded.","","| Model | All trades | Net R | PF | OOS trades | OOS win rate | OOS Net R | OOS PF | OOS Max DD R |","|---|---:|---:|---:|---:|---:|---:|---:|---:|",...rows,"","Important: simulation only. No funding or liquidation model. Same-candle stop/target ambiguity is resolved conservatively as stop first. OOS is a chronological holdout, not proof of future profitability."].join("\n");
+ const md=["# BTCUSDT — Current production engine with +25% margin ROE take-profit","",`Take profit: ${TARGET_MARGIN_ROE*100}% margin ROE at ${LEVERAGE}x = ${TARGET_PRICE_MOVE*100}% underlying BTC move; close full position; current engine stop unchanged.`,"",`Period: ${report.period.from} to ${report.period.to} (180 days)`,`Out-of-sample: final 60 days from ${report.split.outOfSampleFrom}`,`Candles: ${h1.length} 1h / ${h4.length} 4h / ${m15.length} 15m`,"Costs: 0.05% fee + 0.03% slippage per side; funding excluded. TP is triggered at +2.5% favorable BTC price move before exit costs.","","| Model | All trades | Net R | PF | OOS trades | OOS win rate | OOS Net R | OOS PF | OOS Max DD R |","|---|---:|---:|---:|---:|---:|---:|---:|---:|",...rows,"","Important: simulation only. No funding or liquidation model. Same-candle stop/target ambiguity is resolved conservatively as stop first. OOS is a chronological holdout, not proof of future profitability."].join("\n");
  await writeFile("artifacts/btcusdt-current-engine-historical-180d.md",md);
  console.log(JSON.stringify({ok:true,...report,artifacts:["artifacts/btcusdt-current-engine-historical-180d.json","artifacts/btcusdt-current-engine-historical-180d.md"]},null,2));
 }
