@@ -47,7 +47,7 @@ test("candidate model identifies a sustained bullish trend only when its filters
 });
 
 test("candidate model identifies a sustained bearish trend only when its filters align",()=>{
-  const data=candles(260,i=>200*Math.pow(0.998,i));
+  const data=candles(260,i=>i<240?200-0.1*i:176-0.5*(i-240));
   const signal=candidateSignal(data);
   assert.equal(signal?.side,"SHORT");
   assert.ok(signal.atr>0);
