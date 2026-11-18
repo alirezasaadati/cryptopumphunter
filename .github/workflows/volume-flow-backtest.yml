@@ -1,6 +1,13 @@
 name: Volume Flow Historical Backtest
 
 on:
+  push:
+    branches:
+      - "feature/volume-flow-signal-engine"
+    paths:
+      - "src/volume-flow-engine.js"
+      - "scripts/backtest-volume-flow.mjs"
+      - ".github/workflows/volume-flow-backtest.yml"
   pull_request:
     paths:
       - "src/volume-flow-engine.js"
