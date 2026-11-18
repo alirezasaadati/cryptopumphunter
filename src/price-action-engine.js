@@ -1,4 +1,4 @@
-// Pure Price Action engine. No indicators are used for signal decisions.
+// Price Action engine with optional, independently testable momentum and relative-volume confirmations.
 export const PA_CONFIG = Object.freeze({
   MIN_CANDLES_4H: 30,
   MIN_CANDLES_1H: 40,
@@ -82,13 +82,44 @@ export function calculateATR(candles, period=14) {
   for (let i=period;i<tr.length;i++) atr=((atr*(period-1))+tr[i])/period;
   return Number.isFinite(atr)&&atr>0?atr:null;
 }
-export function volumeConfirmed(candles, multiplier=0.9) {
-  if (!Array.isArray(candles) || candles.length<21) return true;
+export function relativeVolumeRatio(candles, period=20) {
+  if (!Array.isArray(candles) || candles.length<period+1) return null;
   const current=Number(candles.at(-1)?.volume);
-  const baseline=candles.slice(-21,-1).map(x=>Number(x.volume)).filter(x=>Number.isFinite(x)&&x>0);
-  if (!(current>0) || !baseline.length) return true; // unavailable volume must not fabricate a rejection
-  const average=baseline.reduce((s,x)=>s+x,0)/baseline.length;
-  return current>=average*multiplier;
+  const baseline=candles.slice(-(period+1),-1).map(x=>Number(x.volume));
+  if (!(current>0) || baseline.length!==period || baseline.some(x=>!Number.isFinite(x)||x<=0)) return null;
+  const average=baseline.reduce((s,x)=>s+x,0)/period;
+  return average>0?current/average:null;
+}
+export function volumeConfirmed(candles, multiplier=0.9) {
+  const ratio=relativeVolumeRatio(candles);
+  return ratio===null ? true : ratio>=multiplier;
+}
+export function calculateMACD(candles, fast=12, slow=26, signal=9) {
+  if (!Array.isArray(candles) || candles.length<slow+signal+5) return null;
+  const ema=(values,period)=>{
+    const alpha=2/(period+1); let value=values[0];
+    const out=[value];
+    for(let i=1;i<values.length;i++){value=values[i]*alpha+value*(1-alpha);out.push(value);}
+    return out;
+  };
+  const closes=candles.map(c=>Number(c.close));
+  if(closes.some(x=>!Number.isFinite(x)||x<=0)) return null;
+  const fastEma=ema(closes,fast), slowEma=ema(closes,slow);
+  const line=closes.map((_,i)=>fastEma[i]-slowEma[i]);
+  const signalLine=ema(line,signal);
+  const macd=line.at(-1), signalValue=signalLine.at(-1);
+  return {macd,signal:signalValue,histogram:macd-signalValue};
+}
+function confirmationPassed(candles, side, mode="baseline") {
+  const volumeMultiplier=mode==="volume"||mode==="macd_volume"?1.2:0.9;
+  const ratio=relativeVolumeRatio(candles);
+  if (ratio===null || ratio<volumeMultiplier) return false;
+  if (mode==="macd"||mode==="macd_volume") {
+    const momentum=calculateMACD(candles);
+    if(!momentum) return false;
+    return side==="LONG"?momentum.macd>momentum.signal:momentum.macd<momentum.signal;
+  }
+  return true;
 }
 function recentMedianRange(candles) {
   return median(candles.slice(-20).map(range).filter(x=>x>0));
@@ -118,8 +149,7 @@ function bestSwing(swings, side, beforeIndex=Infinity) {
 function lastClosed(candles) { return candles[candles.length-1]; }
 function scoreBase(...checks) { return Math.min(95, 50+checks.filter(Boolean).length*15); }
 
-function structureStrategy({symbol, oneHour, fourHour, fifteenMin}) {
-  if (!volumeConfirmed(fifteenMin)) return null;
+function structureStrategy({symbol, oneHour, fourHour, fifteenMin, confirmationMode="baseline"}) {
   const s1=describeStructure(oneHour), s4=describeStructure(fourHour);
   const swings=findSwings(oneHour), prev=oneHour.at(-2), last=lastClosed(oneHour), trigger=lastClosed(fifteenMin);
   const high=swings.highs.at(-1), low=swings.lows.at(-1);
@@ -131,12 +161,11 @@ function structureStrategy({symbol, oneHour, fourHour, fifteenMin}) {
   }
   if (!side) return null;
   const swing=bestSwing(swings,side,oneHour.length-1);
-  if (!swing) return null;
+  if (!swing || !confirmationPassed(fifteenMin,side,confirmationMode)) return null;
   return makePlan({symbol,side,strategyId:"market_structure",strategyName:"ساختار بازار",score:scoreBase(body(trigger)/Math.max(range(trigger),Number.EPSILON)>=0.45,sideMatchesStructure(s1.direction,side),sideMatchesStructure(s4.direction,side)),reason:evidence,entry:trigger.close,invalidation:side==="LONG"?swing.price-levelBuffer(fifteenMin,trigger.close):swing.price+levelBuffer(fifteenMin,trigger.close),context:{oneHourStructure:s1.direction,fourHourStructure:s4.direction,triggerTime:trigger.time}});
 }
 
-function rejectionStrategy({symbol, oneHour, fourHour, fifteenMin}) {
-  if (!volumeConfirmed(fifteenMin)) return null;
+function rejectionStrategy({symbol, oneHour, fourHour, fifteenMin, confirmationMode="baseline"}) {
   const swings=findSwings(oneHour), c=lastClosed(fifteenMin), prev=fifteenMin.at(-2);
   const s1=describeStructure(oneHour).direction,s4=describeStructure(fourHour).direction;
   const candidates=[
@@ -151,13 +180,12 @@ function rejectionStrategy({symbol, oneHour, fourHour, fifteenMin}) {
   if (!hit) return null;
   const bullish=hit.side==="LONG" && lowerWick(c)>body(c)*1.5 && c.close>c.open;
   const bearish=hit.side==="SHORT" && upperWick(c)>body(c)*1.5 && c.close<c.open;
-  if (!(bullish||bearish)) return null;
+  if (!(bullish||bearish) || !confirmationPassed(fifteenMin,hit.side,confirmationMode)) return null;
   const pad=levelBuffer(fifteenMin,c.close);
   return makePlan({symbol,side:hit.side,strategyId:"sr_rejection",strategyName:"برگشت از حمایت/مقاومت",score:scoreBase((hit.side==="LONG"?lowerWick(c):upperWick(c))>=body(c)*2,sideMatchesStructure(s1,hit.side),sideMatchesStructure(s4,hit.side),candleDirection(prev)===hit.side),reason:"واکنش و سایه رد قیمت در سطح ساختاری 1H همراه با بسته‌شدن تأییدی 15M",entry:c.close,invalidation:hit.side==="LONG"?Math.min(c.low,hit.level)-pad:Math.max(c.high,hit.level)+pad,context:{level:hit.level,triggerTime:c.time}});
 }
 
-function breakoutRetestStrategy({symbol, oneHour, fourHour, fifteenMin}) {
-  if (!volumeConfirmed(fifteenMin)) return null;
+function breakoutRetestStrategy({symbol, oneHour, fourHour, fifteenMin, confirmationMode="baseline"}) {
   const swings=findSwings(oneHour), c=lastClosed(fifteenMin), h=swings.highs.at(-1), l=swings.lows.at(-1);
   if (!h||!l||oneHour.length<3) return null;
   const last=lastClosed(oneHour), prev=oneHour.at(-2);
@@ -168,13 +196,12 @@ function breakoutRetestStrategy({symbol, oneHour, fourHour, fifteenMin}) {
   else if (prev.close>=l.price && last.close<l.price &&
       c.high>=l.price*(1-PA_CONFIG.LEVEL_TOLERANCE_PCT) &&
       c.close<l.price && candleDirection(c)==="SHORT") {side="SHORT";level=l.price;}
-  if (!side) return null;
+  if (!side || !confirmationPassed(fifteenMin,side,confirmationMode)) return null;
   const pad=levelBuffer(fifteenMin,c.close);
   return makePlan({symbol,side,strategyId:"breakout_retest",strategyName:"شکست و پولبک",score:scoreBase(sideMatchesStructure(describeStructure(oneHour).direction,side),Math.abs(c.close-level)/level<=0.005,body(c)/Math.max(range(c),Number.EPSILON)>=0.35),reason:"شکست تثبیت‌شده سطح 1H، بازآزمایی سطح و بسته‌شدن 15M در جهت شکست",entry:c.close,invalidation:side==="LONG"?Math.min(c.low,level)-pad:Math.max(c.high,level)+pad,context:{level,triggerTime:c.time}});
 }
 
-function candlestickStrategy({symbol, oneHour, fourHour, fifteenMin}) {
-  if (!volumeConfirmed(fifteenMin)) return null;
+function candlestickStrategy({symbol, oneHour, fourHour, fifteenMin, confirmationMode="baseline"}) {
   const swings=findSwings(oneHour), c=lastClosed(fifteenMin), p=fifteenMin.at(-2);
   const support=swings.lows.at(-1), resistance=swings.highs.at(-1);
   const bullEngulf=c.close>c.open && p.close<p.open && c.open<=p.close && c.close>=p.open;
@@ -184,7 +211,7 @@ function candlestickStrategy({symbol, oneHour, fourHour, fifteenMin}) {
   let side=null, anchor=null, pattern="";
   if ((bullEngulf||bullPin)&&support&&near(c.low,support.price)) {side="LONG";anchor=support.price;pattern=bullEngulf?"Bullish Engulfing":"Bullish Pin Bar";}
   if ((bearEngulf||bearPin)&&resistance&&near(c.high,resistance.price)) {side="SHORT";anchor=resistance.price;pattern=bearEngulf?"Bearish Engulfing":"Bearish Pin Bar";}
-  if (!side) return null;
+  if (!side || !confirmationPassed(fifteenMin,side,confirmationMode)) return null;
   const pad=levelBuffer(fifteenMin,c.close);
   return makePlan({symbol,side,strategyId:"candlestick",strategyName:"الگوهای کندلی",score:scoreBase((bullEngulf||bearEngulf)?body(c)/Math.max(range(c),Number.EPSILON)>=0.35:(bullPin||bearPin),Math.abs((side==="LONG"?c.low:c.high)-anchor)/anchor<=PA_CONFIG.LEVEL_TOLERANCE_PCT,sideMatchesStructure(describeStructure(oneHour).direction,side),sideMatchesStructure(describeStructure(fourHour).direction,side)),reason:pattern+" در مجاورت سطح ساختاری 1H",entry:c.close,invalidation:side==="LONG"?Math.min(c.low,anchor)-pad:Math.max(c.high,anchor)+pad,context:{pattern,level:anchor,triggerTime:c.time}});
 }
@@ -253,7 +280,9 @@ function directionalRejection(candidate, oneHourStructure, fourHourStructure) {
   return null;
 }
 
-export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, livePrice, strategyIds}) {
+export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, livePrice, strategyIds, confirmationMode="baseline"}) {
+  const validModes=["baseline","macd","volume","macd_volume"];
+  if(!validModes.includes(confirmationMode)) throw new Error(`Unknown confirmation mode: ${confirmationMode}`);
   if (!validateCandles(oneHour,PA_CONFIG.MIN_CANDLES_1H) ||
       !validateCandles(fourHour,PA_CONFIG.MIN_CANDLES_4H) ||
       !validateCandles(fifteenMin,PA_CONFIG.MIN_CANDLES_15M)) {
@@ -273,7 +302,7 @@ export function analyzePriceAction({symbol, oneHour, fourHour, fifteenMin, liveP
     ? STRATEGIES.filter(strategy=>strategyIds.includes(strategy.id)) : STRATEGIES;
   const evaluated=activeStrategies.map(strategy=>{
     try {
-      const candidate=strategy.fn({symbol,oneHour,fourHour,fifteenMin});
+      const candidate=strategy.fn({symbol,oneHour,fourHour,fifteenMin,confirmationMode});
       if(candidate) candidate.context={
         ...(candidate.context||{}),oneHourStructure,fourHourStructure
       };
