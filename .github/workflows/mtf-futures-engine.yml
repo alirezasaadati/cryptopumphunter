@@ -23,16 +23,57 @@ jobs:
       - run: node --check src/mtf-futures-engine.js
       - run: node --check scripts/backtest-mtf-futures.mjs
       - run: node --test scripts/mtf-futures-engine.test.mjs
-      - name: 30-day historical backtest
+      - name: 30-day baseline backtest
         run: BACKTEST_DAYS=30 BACKTEST_SYMBOLS=10 node scripts/backtest-mtf-futures.mjs
-      - name: Preserve 30-day report
+      - name: Preserve 30-day baseline report
         run: mkdir -p artifacts/30d && cp artifacts/mtf-futures-backtest.* artifacts/30d/
-      - name: 90-day historical backtest
+      - name: 90-day baseline backtest
         run: BACKTEST_DAYS=90 BACKTEST_SYMBOLS=10 node scripts/backtest-mtf-futures.mjs
-      - name: Preserve 90-day report
+      - name: Preserve 90-day baseline report
         run: mkdir -p artifacts/90d && cp artifacts/mtf-futures-backtest.* artifacts/90d/
       - uses: actions/upload-artifact@v4
         with:
-          name: mtf-futures-backtest-reports
+          name: mtf-futures-baseline-reports
           path: artifacts/
+          retention-days: 30
+  entry-ablation:
+    needs: validate-and-backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - name: baseline
+            mode: BOTH
+            volume: '1.15'
+          - name: volume_1_00
+            mode: BOTH
+            volume: '1.00'
+          - name: volume_1_30
+            mode: BOTH
+            volume: '1.30'
+          - name: breakout_only
+            mode: BREAKOUT
+            volume: '1.15'
+          - name: reclaim_only
+            mode: RECLAIM
+            volume: '1.15'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 90-day entry variant backtest
+        env:
+          BACKTEST_DAYS: '90'
+          BACKTEST_SYMBOLS: '10'
+          MTF_ENTRY_MODE: ${{ matrix.mode }}
+          MTF_MIN_VOLUME_RATIO: ${{ matrix.volume }}
+        run: node scripts/backtest-mtf-futures.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtf-entry-${{ matrix.name }}
+          path: artifacts/mtf-futures-backtest.*
           retention-days: 30
