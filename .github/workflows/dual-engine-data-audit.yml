@@ -1,0 +1,38 @@
+name: Dual-engine Kraken 15m data audit
+
+on:
+  push:
+    branches:
+      - feature/dual-engine-ab
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/kraken-15m-data-audit.mjs"
+      - ".github/workflows/dual-engine-data-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch and validate 90 days of 15m candles
+        run: node scripts/kraken-15m-data-audit.mjs
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kraken-15m-data-audit
+          path: artifacts/kraken-15m-data-audit.json
+          if-no-files-found: warn
+          retention-days: 14

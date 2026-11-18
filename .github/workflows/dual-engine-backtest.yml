@@ -1,0 +1,50 @@
+name: Dual-engine historical paper backtest
+
+on:
+  push:
+    branches:
+      - feature/dual-engine-ab
+    paths:
+      - "src/engines/**"
+      - "scripts/dual-engine-backtest.mjs"
+      - "scripts/dual-engine.test.mjs"
+      - ".github/workflows/dual-engine-backtest.yml"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Historical lookback days"
+        required: false
+        default: "90"
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BACKTEST_DAYS: ${{ github.event.inputs.days || '90' }}
+      ENTRY_NOTIONAL_USD: "100"
+      FEE_RATE: "0.0005"
+      SLIPPAGE_BPS: "2"
+      MAX_HOLD_BARS: "500"
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run test suite
+        run: npm test
+      - name: Fetch candles and run isolated A/B paper backtest
+        run: node scripts/dual-engine-backtest.mjs
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dual-engine-backtest
+          path: artifacts/dual-engine-backtest.json
+          if-no-files-found: warn
+          retention-days: 14

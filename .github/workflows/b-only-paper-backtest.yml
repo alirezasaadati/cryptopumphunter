@@ -1,0 +1,62 @@
+name: Engine B structure ablation and portfolio capital replay
+
+on:
+  push:
+    branches:
+      - feature/dual-engine-ab
+    paths:
+      - "src/engines/engine-b.js"
+      - "src/engines/market-structure.js"
+      - "src/engines/portfolio-replay.js"
+      - "scripts/market-structure.test.mjs"
+      - "scripts/portfolio-replay.test.mjs"
+      - "scripts/portfolio-capital-replay.mjs"
+      - "scripts/dual-engine-backtest.mjs"
+      - ".github/workflows/b-only-paper-backtest.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  b-only-ablation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        structure_mode: [off, structure, trendline, liquidity, combined]
+    env:
+      BACKTEST_DAYS: "90"
+      DIRECTIONAL_MODE: "B_ONLY"
+      B_STRUCTURE_MODE: ${{ matrix.structure_mode }}
+      ENTRY_NOTIONAL_USD: "100"
+      FEE_RATE: "0.0005"
+      SLIPPAGE_BPS: "2"
+      MAX_HOLD_BARS: "500"
+      PORTFOLIO_INITIAL_CAPITAL_USD: "10"
+      PORTFOLIO_MARGIN_PER_TRADE_USD: "1"
+      PORTFOLIO_LEVERAGE: "10"
+      PORTFOLIO_MAX_CONCURRENT: "2"
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run test suite
+        run: npm test
+      - name: Run isolated B-only historical simulation
+        run: node scripts/dual-engine-backtest.mjs
+      - name: Run shared-capital portfolio replay
+        run: node scripts/portfolio-capital-replay.mjs
+      - name: Upload strategy and portfolio reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b-only-capital-${{ matrix.structure_mode }}
+          path: |
+            artifacts/dual-engine-backtest.json
+            artifacts/portfolio-capital-replay.json
+          if-no-files-found: warn
+          retention-days: 14
