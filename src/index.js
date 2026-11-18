@@ -767,8 +767,6 @@ async function configureTelegramMenu(env, chatId) {
   const tasks = [
     telegram("setMyCommands", env, { commands }),
     telegram("setChatMenuButton", env, { chat_id: chatId, menu_button: { type: "commands" } }),
-    telegram("setMyDescription", env, { description: "🤖 تریدیار | ربات تخصصی سیگنال‌دهی فیوچرز\n📊 شناسایی فرصت‌های LONG و SHORT در بازار Kraken Derivatives\n⏱ بررسی روند در تایم‌فریم‌های 1H و 4H\n🎯 ارائه نقاط ورود، حد ضرر و اهداف معاملاتی\n⚠️ سیگنال‌ها تحلیلی‌اند؛ ربات سفارش واقعی ثبت نمی‌کند." }),
-    telegram("setMyShortDescription", env, { short_description: "ربات شناسایی سیگنال‌های LONG و SHORT فیوچرز" })
   ];
   const results = await Promise.allSettled(tasks);
   const failed = results.filter(x => x.status === "rejected");
