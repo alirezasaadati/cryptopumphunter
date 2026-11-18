@@ -140,8 +140,8 @@ test("target weights close the configured fraction of the position, not the rema
   const signal=paperSignal({entry2:null,context:{},targets:[102,104,106]});
   const result=simulatePaperTrade(paperArgs(signal,[
     bar(2000,{high:102.5,low:99,close:102}),
-    bar(29000,{high:104.5,low:101,close:104}),
-    bar(56000,{high:106.5,low:103,close:106})
+    bar(29000,{open:102.5,high:104.5,low:101,close:104}),
+    bar(56000,{open:104.5,high:106.5,low:103,close:106})
   ]));
   assert.equal(result.status,"closed");
   assert.equal(result.exits.length,3);
