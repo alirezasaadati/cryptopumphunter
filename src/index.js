@@ -11,8 +11,57 @@ const CONFIG = {
 
 
 const TELEGRAM_API = "https://api.telegram.org";
+
 const seenUpdates = new Set();
 let telegramKvDedupeUnavailable = false;
+
+function quotaDayKey(now = Date.now()) { return new Date(now).toISOString().slice(0, 10); }
+function isKvDailyWriteQuotaError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return message.includes("limit exceeded for the day") || (message.includes("quota") && (message.includes("put") || message.includes("delete")));
+}
+async function kvWriteGate(env, action, error = null) {
+  if (!env.SIGNAL_DELIVERY) return { allowed: true };
+  try {
+    const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global-kv-write-quota"));
+    const response = await stub.fetch("https://signal-delivery.internal/kv-write/" + action, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET || "" },
+      body: JSON.stringify({ day: quotaDayKey(), message: error ? String(error?.message || error).slice(0, 300) : undefined })
+    });
+    if (!response.ok) return { allowed: true };
+    return await response.json();
+  } catch (gateError) {
+    console.error("KV quota gate unavailable; allowing the KV operation:", String(gateError?.message || gateError));
+    return { allowed: true };
+  }
+}
+function withQuotaAwareKV(env) {
+  if (!env.APP_KV || !env.SIGNAL_DELIVERY) return env;
+  const raw = env.APP_KV;
+  const guarded = new Proxy(raw, {
+    get(target, property) {
+      if (property === "put" || property === "delete") return async (...args) => {
+        const gate = await kvWriteGate(env, "allow");
+        if (gate?.allowed === false) {
+          console.warn("KV write suppressed by daily quota circuit breaker.");
+          return;
+        }
+        try { return await target[property](...args); }
+        catch (error) {
+          if (isKvDailyWriteQuotaError(error)) {
+            await kvWriteGate(env, "pause", error);
+            console.error("KV daily write quota reached; writes paused until the next UTC day.");
+          }
+          throw error;
+        }
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }
+  });
+  return { ...env, APP_KV: guarded };
+}
 
 const ABOUT_TEXT =
   "🤖 تریدیار | دستیار معامله‌گر فیوچرز\n\n" +
@@ -55,10 +104,12 @@ const BACK_MENU = {
 
 export default {
   async scheduled(event, env, ctx) {
+    env = withQuotaAwareKV(env);
     ctx.waitUntil(runAutomaticFuturesAlertScan(env));
   },
 
   async fetch(request, env, ctx) {
+    env = withQuotaAwareKV(env);
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/") {
@@ -1527,7 +1578,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/scan-lock/acquire","/scan-lock/release"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=this.env.SIGNAL_DELIVERY_SECRET;
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -1535,6 +1586,18 @@ export class SignalDeliveryCoordinator {
     try{payload=await request.json()}catch{return Response.json({ok:false,error:"Invalid JSON payload."},{status:400});}
     return this.serial(async()=>{
       try{
+        if(url.pathname==="/kv-write/allow"){
+          const today=quotaDayKey();
+          const paused=await this.ctx.storage.get("kv-daily-write-pause");
+          if(paused?.day===today)return Response.json({ok:true,allowed:false,day:today});
+          if(paused?.day&&paused.day!==today)await this.ctx.storage.delete("kv-daily-write-pause");
+          return Response.json({ok:true,allowed:true,day:today});
+        }
+        if(url.pathname==="/kv-write/pause"){
+          const today=quotaDayKey();
+          await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
+          return Response.json({ok:true,allowed:false,day:today});
+        }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
           const now=Date.now();
