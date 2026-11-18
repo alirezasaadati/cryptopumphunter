@@ -8,8 +8,8 @@ export function buildEngineATargets(reference, side) {
 
 // Channel-inspired model. Entry 2 is conditional; all price plans expose
 // separate levels for the one-fill and two-fill scenarios.
-export function analyzeEngineA({symbol,candles,quoteVolume}) {
-  if (!validateCandles(candles) || !Number.isFinite(Number(quoteVolume)) || Number(quoteVolume)<ENGINE_CONFIG.MIN_QUOTE_VOLUME) return null;
+export function analyzeEngineA({symbol,candles,quoteVolume,skipLiquidityCheck=false}) {
+  if (!validateCandles(candles) || (!skipLiquidityCheck && (!Number.isFinite(Number(quoteVolume)) || Number(quoteVolume)<ENGINE_CONFIG.MIN_QUOTE_VOLUME))) return null;
   const closes=candles.map(c=>c.close), last=candles.at(-1), prior=candles.at(-2);
   const fast=ema(closes,20), slow=ema(closes,50), momentum=rsi(closes,14);
   const volatility=atr(candles,14), vol=volumeRatio(candles,20), levels=swings(candles,20);
