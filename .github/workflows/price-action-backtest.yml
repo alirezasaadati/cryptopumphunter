@@ -21,8 +21,8 @@ jobs:
       - name: Run historical Price Action backtest
         run: node scripts/backtest-price-action.mjs
         env:
-          PA_BACKTEST_DAYS: "10"
-          PA_BACKTEST_SYMBOLS: "3"
+          PA_BACKTEST_DAYS: "14"
+          PA_BACKTEST_SYMBOLS: "5"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
