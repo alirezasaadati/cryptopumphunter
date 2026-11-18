@@ -56,3 +56,16 @@ test("archive supports multiple symbols without cross-contaminating symbol histo
   assert.deepEqual(await listArchivedSymbols(env,789),["BTC","ETH"]);
   assert.equal((await listArchivedSignals(env,789,"ETH","archive")).records[0].signalId,"b");
 });
+
+test("archive pagination returns newest signals first and isolates each page",async()=>{
+  const env={APP_KV:new MemoryKV()};
+  for(let i=1;i<=4;i++){
+    await archivePublishedSignal(env,111,{id:"p"+i,symbol:"BTCUSDT",side:"LONG",entry:100,stop:95,target1:105,target2:110,target3:115},null,`2026-11-18T0${i}:00:00.000Z`);
+  }
+  const first=await listArchivedSignals(env,111,"BTC","archive",2);
+  assert.deepEqual(first.records.map(x=>x.signalId),["p4","p3"]);
+  assert.ok(first.cursor);
+  const second=await listArchivedSignals(env,111,"BTC","archive",2,first.cursor);
+  assert.deepEqual(second.records.map(x=>x.signalId),["p2","p1"]);
+  assert.equal(second.cursor,null);
+});
