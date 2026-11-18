@@ -120,17 +120,18 @@ function summarize(trades) {
     profitFactor:gl?gw/gl:gw?null:0,maxDrawdownR:dd};
 }
 function timing(base,fast) {
-  const used=new Set(), leads=[];
+  const used=new Set(), deltas=[];
   for(const b of base){
     let best=-1, distance=Infinity;
     fast.forEach((f,i)=>{if(used.has(i)||f.symbol!==b.symbol||f.side!==b.side)return;
       const d=f.signalTime-b.signalTime;
       if(Math.abs(d)<=DAY&&Math.abs(d)<distance){best=i;distance=Math.abs(d);}
     });
-    if(best>=0){used.add(best);leads.push(fast[best].signalTime-b.signalTime);}
+    if(best>=0){used.add(best);deltas.push(fast[best].signalTime-b.signalTime);}
   }
-  const minutes=leads.map(x=>x/60000);
-  return {matched:minutes.length,baselineSignals:base.length,averageLeadMinutes:minutes.length?avg(minutes):null,earlySignals:minutes.filter(x=>x<0).length,lateSignals:minutes.filter(x=>x>0).length};
+  const minutes=deltas.map(x=>x/60000);
+  return {matched:minutes.length,baselineSignals:base.length,averageDeltaMinutes:minutes.length?avg(minutes):null,
+    earlierThanBaseline:minutes.filter(x=>x<0).length,laterThanBaseline:minutes.filter(x=>x>0).length,sameTime:minutes.filter(x=>x===0).length};
 }
 
 async function main() {
@@ -141,7 +142,7 @@ async function main() {
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if(!universe.length) throw new Error("No eligible Kraken perpetual contracts");
 
-  const baseline=[], fast=[], symbolReports=[];
+  const baseline=[], fastPullback=[], fastMomentum=[], symbolReports=[];
   for(const ticker of universe){
     const [m15,h1,h4]=await Promise.all([
       fetchCandles(ticker.symbol,"15m",warmup,end),
@@ -171,74 +172,95 @@ async function main() {
       baseline.push(tr); nextBaseTime=tr.exitTime;
     }
 
-    // Faster path: use the last fully closed 1h/4h engine snapshot for direction and
-    // exact existing SL/TP levels, but permit the 4h trend to be non-confirming (not opposing)
-    // through the engine's experimentalEligible path. Trigger and fill are 15m.
-    let h1Index=-1, nextFastTime=0, cachedIndex=-1, cachedSignal=null;
+    // Experimental direction/levels come from the same hourly engine. In this path,
+    // 4h opposition is a score penalty, not a hard veto. Production calls use default options.
+    let h1Index=-1, nextPullbackTime=0, nextMomentumTime=0, cachedIndex=-1, cachedSignal=null;
     for(let i=60;i<m15.length-1;i++){
       const bar=m15[i], signalTime=bar.time+INTERVALS["15m"];
-      if(signalTime<start||signalTime<=nextFastTime) continue;
+      if(signalTime<start) continue;
       while(h1Index+1<h1.length&&h1[h1Index+1].time+HOUR<=signalTime) h1Index++;
       if(h1Index<59) continue;
       if(cachedIndex!==h1Index){
         const hourClose=h1[h1Index].time+HOUR;
         const closed4=h4.filter(c=>c.time+4*HOUR<=hourClose);
         const t={...ticker,priceChangePercent:change24h(h1,h1Index),quoteVolume:Number(ticker.volumeQuote)||0,premium:{lastFundingRate:null}};
-        cachedSignal=closed4.length>=FUTURES_CONFIG.MIN_CANDLES?analyzeFuturesSymbol(t,h1.slice(0,h1Index+1),closed4):null;
+        cachedSignal=closed4.length>=FUTURES_CONFIG.MIN_CANDLES
+          ?analyzeFuturesSymbol(t,h1.slice(0,h1Index+1),closed4,{allowCounterTrend4h:true}):null;
         cachedIndex=h1Index;
       }
       const s=cachedSignal;
       if(!s||(!s.eligible&&!s.experimentalEligible)) continue;
       const m15Slice=m15.slice(Math.max(0,i-60),i+1);
-      const e15=ema(m15Slice.map(c=>c.close),20), a15=atr(m15Slice,14);
-      if(!Number.isFinite(e15)||!Number.isFinite(a15)||a15<=0) continue;
-      if(!hasPullbackOrBreakout({side:s.side,candles:m15Slice,ema20:e15,atr:a15,lookback:20})) continue;
+      const closes=m15Slice.map(c=>c.close), e9=ema(closes,9), e20=ema(closes,20), a15=atr(m15Slice,14);
+      if(!Number.isFinite(e9)||!Number.isFinite(e20)||!Number.isFinite(a15)||a15<=0) continue;
       const volAvg=avg(m15Slice.slice(-21,-1).map(c=>c.volume));
       const volRatio=volAvg>0?bar.volume/volAvg:0;
-      if(volRatio<1.0) continue;
+      const range=bar.high-bar.low, closeLoc=range>0?(bar.close-bar.low)/range:0;
+      const momentum=s.side==="LONG"
+        ?e9>e20&&bar.close>e9&&bar.close>bar.open&&closeLoc>=0.60
+        :e9<e20&&bar.close<e9&&bar.close<bar.open&&closeLoc<=0.40;
+      const pullback=hasPullbackOrBreakout({side:s.side,candles:m15Slice,ema20:e20,atr:a15,lookback:20});
       const next=m15[i+1], dir=s.side==="LONG"?1:-1;
       const entry=next.open*(1+dir*SLIPPAGE);
       const valid=s.side==="LONG"?s.stop<entry&&entry<s.target1:s.stop>entry&&entry>s.target1;
       if(!valid) continue;
       const bars=m15.slice(i+1,Math.min(m15.length,i+1+MAX_HOLD_HOURS*4+1));
-      const tr=simulate({side:s.side,entry,stop:s.stop,targets:[s.target1,s.target2,s.target3],candles:bars,startIndex:0,maxBars:MAX_HOLD_HOURS*4});
-      if(!tr) continue;
-      Object.assign(tr,{symbol:ticker.symbol,signalTime,signalEntry:s.entry,volume15mRatio:volRatio,sourceHourTime:h1[h1Index].time});
-      fast.push(tr); nextFastTime=tr.exitTime;
+      const makeTrade=(variant, maxBars)=>{
+        const tr=simulate({side:s.side,entry,stop:s.stop,targets:[s.target1,s.target2,s.target3],candles:bars,startIndex:0,maxBars});
+        if(tr) Object.assign(tr,{symbol:ticker.symbol,signalTime,signalEntry:s.entry,volume15mRatio:volRatio,sourceHourTime:h1[h1Index].time});
+        return tr;
+      };
+      if(signalTime>nextPullbackTime&&pullback&&volRatio>=1.0){
+        const tr=makeTrade("pullback",MAX_HOLD_HOURS*4);
+        if(tr){fastPullback.push(tr);nextPullbackTime=tr.exitTime;}
+      }
+      if(signalTime>nextMomentumTime&&momentum&&volRatio>=0.75){
+        const tr=makeTrade("momentum",MAX_HOLD_HOURS*4);
+        if(tr){fastMomentum.push(tr);nextMomentumTime=tr.exitTime;}
+      }
     }
     symbolReports.push({symbol:ticker.symbol,candles15m:m15.length,candles1h:h1.length,candles4h:h4.length,
-      baselineTrades:baseline.filter(x=>x.symbol===ticker.symbol).length,fastTrades:fast.filter(x=>x.symbol===ticker.symbol).length});
+      baselineTrades:baseline.filter(x=>x.symbol===ticker.symbol).length,
+      pullbackTrades:fastPullback.filter(x=>x.symbol===ticker.symbol).length,
+      momentumTrades:fastMomentum.filter(x=>x.symbol===ticker.symbol).length});
   }
 
-  baseline.sort((a,b)=>a.entryTime-b.entryTime); fast.sort((a,b)=>a.entryTime-b.entryTime);
+  baseline.sort((a,b)=>a.entryTime-b.entryTime);
+  fastPullback.sort((a,b)=>a.entryTime-b.entryTime);
+  fastMomentum.sort((a,b)=>a.entryTime-b.entryTime);
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
     period:{from:new Date(start).toISOString(),to:new Date(end).toISOString(),days:DAYS},
     settings:{symbols:universe.map(x=>x.symbol),feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,maxHoldHours:MAX_HOLD_HOURS,
       baselineEntry:"next 1h candle open plus adverse slippage",
-      fastEntry:"15m breakout/retest confirmation + 15m volume >= 1.0x; fill at next 15m open plus adverse slippage",
-      fastDirection:"last closed 1h engine signal; existing 4h non-opposition/score context retained, strict 4h agreement not required",
-      exits:"For both paths, stop and all three target price levels are copied unchanged from analyzeFuturesSymbol; same weights and stop-first simulator",
+      pullbackEntry:"15m pullback/retest or breakout + 15m volume >= 1.0x; next 15m open fill",
+      momentumEntry:"15m EMA9/EMA20 directional momentum + volume >= 0.75x; next 15m open fill",
+      fastDirection:"last fully closed 1h engine direction; 4h opposition is a soft -8 score penalty only in experimental mode",
+      exits:"All stop and TP price levels are copied unchanged from analyzeFuturesSymbol; same weights and stop-first simulator",
       funding:"historical funding excluded"},
     baseline:{metrics:summarize(baseline),trades:baseline},
-    fast15m:{metrics:summarize(fast),timing:timing(baseline,fast),trades:fast},
+    fast15mPullback:{metrics:summarize(fastPullback),timing:timing(baseline,fastPullback),trades:fastPullback},
+    fast15mMomentum:{metrics:summarize(fastMomentum),timing:timing(baseline,fastMomentum),trades:fastMomentum},
     symbols:symbolReports};
+
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/kraken-fast-15m-entry.json",JSON.stringify(report,null,2));
   const rows=[
-    "# Kraken Futures — Faster 15m Entry Experiment","",
+    "# Kraken Futures — Faster 15m Entry Experiments","",
     "Period: "+report.period.from+" to "+report.period.to+" ("+DAYS+" days)",
     "Symbols: "+universe.map(x=>x.symbol).join(", "),
     "Costs: "+(FEE*100).toFixed(3)+"% fee + "+(SLIPPAGE*100).toFixed(3)+"% slippage per side.","",
     "| Variant | Trades | Win rate | Net R | Expectancy | Profit factor | Max DD |",
     "|---|---:|---:|---:|---:|---:|---:|",
-    ...[["Current 1h/4h baseline",report.baseline.metrics],["Fast 15m entry",report.fast15m.metrics]].map(([n,m])=>"| "+n+" | "+m.trades+" | "+m.winRatePct.toFixed(2)+"% | "+m.netR.toFixed(2)+" | "+m.expectancyR.toFixed(3)+" | "+(m.profitFactor===null?"n/a":m.profitFactor.toFixed(2))+" | "+m.maxDrawdownR.toFixed(2)+" |"),
+    ...[["Current 1h/4h baseline",report.baseline.metrics],["15m pullback/breakout",report.fast15mPullback.metrics],["15m momentum",report.fast15mMomentum.metrics]].map(([n,m])=>"| "+n+" | "+m.trades+" | "+m.winRatePct.toFixed(2)+"% | "+m.netR.toFixed(2)+" | "+m.expectancyR.toFixed(3)+" | "+(m.profitFactor===null?"n/a":m.profitFactor.toFixed(2))+" | "+m.maxDrawdownR.toFixed(2)+" |"),
     "",
-    "Fast path timing vs baseline (nearest same-symbol/same-side match within 24h): "+JSON.stringify(report.fast15m.timing),
+    "Timing delta vs baseline (negative = earlier; nearest same-symbol/same-side match within 24h):",
+    "15m pullback: "+JSON.stringify(report.fast15mPullback.timing),
+    "15m momentum: "+JSON.stringify(report.fast15mMomentum.timing),
     "",
-    "Important: historical simulation only; 15m entry uses next-bar open and adverse slippage. Existing production stop/target price levels and weights are reused unchanged. Historical funding is excluded."
+    "Important: historical simulation only. Entries use next 15m bar open plus adverse slippage. Existing production stop/target price levels and weights are reused unchanged. In experimental mode only, 4h opposition is a soft score penalty, not a hard veto. Historical funding is excluded."
   ];
   await writeFile("artifacts/kraken-fast-15m-entry.md",rows.join("\n"));
-  console.log(JSON.stringify({ok:true,period:report.period,baseline:report.baseline.metrics,fast15m:report.fast15m.metrics,timing:report.fast15m.timing,symbols:symbolReports,
+  console.log(JSON.stringify({ok:true,period:report.period,baseline:report.baseline.metrics,fast15mPullback:report.fast15mPullback.metrics,pullbackTiming:report.fast15mPullback.timing,fast15mMomentum:report.fast15mMomentum.metrics,momentumTiming:report.fast15mMomentum.timing,symbols:symbolReports,
     artifacts:["artifacts/kraken-fast-15m-entry.json","artifacts/kraken-fast-15m-entry.md"]},null,2));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
