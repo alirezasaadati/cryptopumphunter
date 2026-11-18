@@ -210,3 +210,15 @@ test("late-entry filtering happens before conflict resolution",()=>{
   assert.equal(result.signals.length,1);
   assert.equal(result.signals[0].side,"LONG");
 });
+
+test("isolated strategy mode evaluates only the requested Price Action strategy",()=>{
+  const oneHour=structuralCandles();
+  const fifteenMin=triggerCandles({open:101.1,high:101.6,low:101,close:101.4});
+  const result=analyzePriceAction({
+    symbol:"PF_TESTUSD",oneHour,fourHour,fifteenMin,livePrice:101.4,
+    strategyIds:["market_structure"]
+  });
+  assert.deepEqual(result.diagnostics.map(x=>x.strategyId),["market_structure"]);
+  assert.ok(result.signals.length>0);
+  assert.ok(result.signals.every(x=>x.strategyId==="market_structure"));
+});
