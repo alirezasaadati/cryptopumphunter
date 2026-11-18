@@ -65,7 +65,17 @@ async function getJson(url) {
   throw error;
 }
 
-async function fetchFunding(symbol){\n  const payload=await getJson(`https://futures.kraken.com/derivatives/api/v3/historical-funding-rates?symbol=${encodeURIComponent(symbol)}`);\n  const rates=new Map();\n  for(const item of payload.rates??[]){\n    const time=Date.parse(item.timestamp), rate=Number(item.relativeFundingRate);\n    if(Number.isFinite(time)&&Number.isFinite(rate)) rates.set(time,rate);\n  }\n  return rates;\n}\n\nasync function fetchCandles(symbol){
+async function fetchFunding(symbol){
+  const payload=await getJson(`https://futures.kraken.com/derivatives/api/v3/historical-funding-rates?symbol=${encodeURIComponent(symbol)}`);
+  const rates=new Map();
+  for(const item of payload.rates??[]){
+    const time=Date.parse(item.timestamp), rate=Number(item.relativeFundingRate);
+    if(Number.isFinite(time)&&Number.isFinite(rate)) rates.set(time,rate);
+  }
+  return rates;
+}
+
+async function fetchCandles(symbol){
   const byTime=new Map();
   for(let from=start;from<end;from+=7*24*60*60*1000){
     const to=Math.min(end,from+7*24*60*60*1000);
@@ -125,7 +135,8 @@ for(const symbol of SYMBOLS){
       if(delta>INTERVAL_MS) gaps.push({from:valid[i-1].time,to:valid[i].time,count:Math.round(delta/INTERVAL_MS)-1});
     }
     report.data.push({symbol,candles:valid.length,first:valid[0]?.time??null,last:valid.at(-1)?.time??null,
-      gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0,\n      fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError});
+      gapCount:gaps.length,missingIntervals:gaps.reduce((s,g)=>s+g.count,0),errors:valid.length!==candles.length?candles.length-valid.length:0,
+      fundingRecords:fundingRates.size,fundingSettlementsInWindow:fundingSettlements,fundingError});
     for(const engine of ["A","B"]){
       const analyze=engine==="A"?analyzeEngineA:analyzeEngineB;
       const weights=engine==="A"?A_WEIGHTS:B_WEIGHTS;
