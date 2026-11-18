@@ -2,7 +2,7 @@ name: Code checks
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/permanent-signal-ledger]
   pull_request:
   workflow_dispatch:
 
