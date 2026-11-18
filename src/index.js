@@ -1409,6 +1409,159 @@ async function handleTradeAction(action,chatId,env){const[,op]=action.split(":")
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت دستی معامله در نسخه جدید غیرفعال است؛ سیگنال‌های صادرشده خودکار در دفتر ارزیابی ثبت می‌شوند.")}
 async function showOpenFuturesTrades(env,chatId){try{await refreshTrackedFuturesTrades(env,chatId)}catch(error){console.error("Open trade refresh failed:",String(error?.stack||error))}const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));if(!list.length)return sendMessage(env,chatId,"📭 معامله بازی در دفتر پیگیری ثبت نشده است.",BACK_MENU);const body=list.slice(0,15).map(t=>{const p=priceChangePercent(t.side,t.actualEntry,t.lastPrice);return`${t.side==="LONG"?"🟢 LONG":"🔴 SHORT"} ${t.symbol} | ${t.exchange||"Kraken"}\nورود سیگنال: ${formatPrice(t.actualEntry)} | قیمت آخر: ${formatPrice(t.lastPrice)}\nبازده فعلی قیمتی: ${Number.isFinite(p)?(p>=0?"+":"")+p.toFixed(2)+"%":"—"}\nحد ضرر: ${formatPrice(t.currentStop)}\nاهداف: ${formatPrice(t.target1)} / ${formatPrice(t.target2)} / ${formatPrice(t.target3)}\nاهداف لمس‌شده: ${t.tpHits.join(", ")||"—"}`}).join("\n\n");return sendLongMessage(env,chatId,"📌 معاملات باز / سیگنال‌های در حال ارزیابی\n━━━━━━━━━━━━━━━━━━\n"+body+"\n\n⚠️ این دفتر ارزیابی است؛ سفارش واقعی ثبت نمی‌شود.")}
 async function showFuturesTradeHistory(env,chatId){const list=(await readTradeList(env,FUTURES_CLOSED_KEY)).filter(t=>String(t.chatId)===String(chatId)).slice(0,50);if(!list.length)return sendMessage(env,chatId,"📚 هنوز معامله بسته‌شده‌ای ثبت نشده است.",BACK_MENU);const wins=list.filter(t=>Number(t.outcomePercent)>0).length,losses=list.filter(t=>Number(t.outcomePercent)<0).length,breakeven=list.length-wins-losses,winRate=list.length?wins/list.length*100:0,tp1=list.filter(t=>t.tpHits?.includes("TP1")).length,tp2=list.filter(t=>t.tpHits?.includes("TP2")).length,tp3=list.filter(t=>t.tpHits?.includes("TP3")).length,avg=list.reduce((s,t)=>s+Number(t.outcomePercent||0),0)/list.length,total=list.reduce((s,t)=>s+Number(t.outcomePercent||0),0);const summary=`📊 آمار عملکرد سیگنال‌ها\n━━━━━━━━━━━━━━━━━━\nکل سیگنال‌های بسته‌شده: ${list.length}\nبرد: ${wins} | باخت: ${losses} | سر‌به‌سر: ${breakeven}\n🏆 Win Rate: ${winRate.toFixed(1)}%\n📈 میانگین نتیجه هر سیگنال: ${avg>=0?"+":""}${avg.toFixed(2)}%\n💰 مجموع نتیجه قیمتی مدل: ${total>=0?"+":""}${total.toFixed(2)}%\n🎯 رسیدن به TP1: ${tp1} | TP2: ${tp2} | TP3: ${tp3}\n\n`;const body=list.slice(0,15).map(t=>`${t.symbol} | ${t.side}\nورود: ${formatPrice(t.actualEntry)} | خروج: ${formatPrice(t.exitPrice)}\nنتیجه: ${Number(t.outcomePercent)>=0?"+":""}${Number(t.outcomePercent).toFixed(2)}% | ${Number(t.outcomeR).toFixed(2)}R\nTPها: ${t.tpHits.join(", ")||"—"} | ${t.closeReason==="STOP_LOSS"?"استاپ":"TP3"}`).join("\n\n");return sendLongMessage(env,chatId,summary+"📚 تاریخچه معاملات\n━━━━━━━━━━━━━━━━━━\n"+body)}
+async function runAutomaticFuturesAlertScan(env) {
+  if (!env.APP_KV) throw new Error("APP_KV binding is required for automatic alerts.");
+  const lockKey = "futures:auto-alerts:scan-lock";
+  if (await env.APP_KV.get(lockKey)) return { skipped: true, reason: "scan already running" };
+  await env.APP_KV.put(lockKey, String(Date.now()), { expirationTtl: 240 });
+  try {
+    const tracking = await refreshTrackedFuturesTrades(env);
+    const result = await runFuturesSignalScan(env);
+    return { scanned: true, signals: (result.signals || []).length, checkedTrades: tracking.checked, closedTrades: tracking.closed };
+  } finally {
+    await env.APP_KV.delete(lockKey);
+  }
+}
+
+async function filterActiveDuplicateFuturesSignals(env, candidates) {
+  const now = Date.now();
+  const [pending, open] = await Promise.all([
+    readTradeList(env, FUTURES_PENDING_KEY),
+    readTradeList(env, FUTURES_OPEN_KEY)
+  ]);
+  const activeKeys = new Set();
+
+  // A pending signal blocks another signal for the same contract and direction
+  // until its entry window expires, regardless of the candle fingerprint.
+  for (const signal of pending) {
+    if (signal?.expiresAt > now && signal?.symbol && ['LONG', 'SHORT'].includes(signal?.side)) {
+      activeKeys.add(String(signal.symbol).trim().toUpperCase() + '|' + signal.side);
+    }
+  }
+
+  // An accepted/open paper trade continues to block repeats even after
+  // the original signal's entry window has expired.
+  for (const trade of open) {
+    if (trade?.status === 'OPEN' && trade?.symbol && ['LONG', 'SHORT'].includes(trade?.side)) {
+      activeKeys.add(String(trade.symbol).trim().toUpperCase() + '|' + trade.side);
+    }
+  }
+
+  const seenThisScan = new Set();
+  return (Array.isArray(candidates) ? candidates : []).filter(signal => {
+    if (!signal?.symbol || !['LONG', 'SHORT'].includes(signal?.side)) return false;
+    const key = String(signal.symbol).trim().toUpperCase() + '|' + signal.side;
+    if (activeKeys.has(key) || seenThisScan.has(key)) return false;
+    seenThisScan.add(key);
+    return true;
+  });
+}
+
+async function runFuturesSignalScan(env, options = {}) {
+  const started = Date.now();
+  const universe = await getKrakenFuturesUniverse();
+  if (!universe.length) {
+    return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [] };
+  }
+  const analyzed = await mapLimit(universe, FUTURES_CONFIG.CONCURRENCY, async ticker => {
+    try {
+      const [oneHour, fourHour] = await Promise.all([
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.INTERVAL),
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL)
+      ]);
+      return analyzeFuturesSymbol(ticker, oneHour, fourHour);
+    } catch (error) {
+      return { symbol: ticker.symbol, rejected: error.message || "خطای تحلیل" };
+    }
+  });
+  const createdAt = Date.now();
+  const eligibleCandidates = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score);
+  const nonDuplicateCandidates = await filterActiveDuplicateFuturesSignals(env, eligibleCandidates);
+  const generatedSignals = nonDuplicateCandidates.slice(0, 8)
+    .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
+  const signals = await savePendingFuturesSignals(env, generatedSignals);
+  if (env.APP_KV) {
+    try {
+      await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
+    } catch (error) {
+      console.error("Immediate futures alert dispatch failed:", String(error?.stack || error?.message || error));
+    }
+  }
+  const validData = analyzed.filter(x => x && x.score !== undefined).length;
+  const rejected = analyzed.filter(x => x?.rejected).slice(0, 8);
+  let report = `📈 CRYPTO PUMP HUNTER V${CONFIG.VERSION} — KRAKEN FUTURES\n` +
+    "━━━━━━━━━━━━━━━━━━\n" +
+    "🏦 بازار: Kraken Derivatives Perpetual\n" +
+    "⏱ تایم‌فریم: 1h با تأیید روند 4h\n" +
+    `📥 نمادهای پرحجم بررسی‌شده: ${universe.length}\n` +
+    `📊 تحلیل‌های معتبر: ${validData}\n` +
+    `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n\n`;
+  if (signals.length) {
+    report += "🎯 سیگنال‌های فعلی\n━━━━━━━━━━━━━━━━━━\n\n";
+    for (const item of signals) report += formatFuturesSignal(item) + "\n━━━━━━━━━━━━━━━━━━\n\n";
+  } else {
+    report += "⚠️ در این بررسی سیگنالی به حداقل امتیاز و شرایط ورود نرسید. برای جلوگیری از سیگنال ضعیف، موردی صادر نشد.\n\n";
+  }
+  if (rejected.length) {
+    report += "🧪 نمونه دلایل رد نمادها\n";
+    for (const item of rejected) report += `• ${item.symbol}: ${item.rejected}\n`;
+  }
+  report += `\n🕒 زمان تهیه گزارش: ${new Date().toISOString()}\n` +
+    `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} ثانیه\n` +
+    "📡 منبع داده: API عمومی Kraken Derivatives Futures\n" +
+    "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست. قیمت ممکن است پس از بسته‌شدن کندل تغییر کند.";
+
+  if (env.APP_KV) {
+    try {
+      await env.APP_KV.put("last_futures_scan", JSON.stringify({
+        version: "3.8.2-engine",
+        timestamp: Date.now(),
+        report,
+        signals: signals.map(x => ({
+          symbol: x.symbol, side: x.side, score: x.score, entry: x.entry,
+          stop: x.stop, target1: x.target1, target2: x.target2, target3: x.target3
+        }))
+      }));
+    } catch (error) {
+      report += `\n⚠️ ذخیره گزارش فیوچرز ناموفق بود: ${String(error.message || "KV error")}`;
+    }
+  }
+  return { report, signals };
+}
+
+async function runFuturesSignalsForChat(env, chatId) {
+  if (!(await isApproved(chatId, env))) {
+    await sendMessage(env, chatId, "⛔ دسترسی شما فعال نیست.");
+    return;
+  }
+  try {
+    const result = await runFuturesSignalScan(env, { excludeChatId: chatId });
+    const signals = result.signals || [];
+    if (!signals.length) {
+      await sendMessage(env, chatId, "در حال حاضر سیگنال معتبری وجود ندارد.", menuForChat(env, chatId));
+      return;
+    }
+    for (let i = 0; i < signals.length; i++) {
+      const signal = signals[i];
+      await sendMessage(env, chatId, formatFuturesSignal(signal, i + 1));
+      await registerTrackedSignal(env, chatId, signal);
+    }
+  } catch (error) {
+    const diagnostic = String(error?.stack || error?.message || error).slice(0, 1800);
+    console.error("Manual futures scan failed:", diagnostic);
+    // Keep the normal user-facing message concise; expose the exact failure only to the configured owner.
+    if (String(chatId) === String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
+      try {
+        await sendMessage(env, chatId, "🧪 خطای فنی اسکن فیوچرز (فقط مدیر):\n" + diagnostic);
+      } catch (diagnosticError) {
+        console.error("Could not deliver futures scan diagnostic:", String(diagnosticError?.message || diagnosticError));
+      }
+    }
+    await sendMessage(env, chatId, "⚠️ در حال حاضر دریافت سیگنال ممکن نیست. لطفاً کمی بعد دوباره تلاش کن.", menuForChat(env, chatId));
+  }
+}
+
+
 // ---------------- CONCURRENCY ----------------
 
 async function mapLimit(items, limit, callback) {
