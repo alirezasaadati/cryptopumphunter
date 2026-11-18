@@ -176,11 +176,11 @@ async function main() {
       if (stopHit && targetHit) ambiguousBars++;
       if (stopHit) {
         const px = stopGap ? bar.open : trade.signal.stop;
-        closed.push(settle(trade, px, "STOP", stopGap));
+        closed.push(settle({ ...trade, exitTime: time }, px, "STOP", stopGap));
         active.delete(key);
       } else if (targetHit) {
         const px = targetGap ? bar.open : trade.targetTrigger;
-        closed.push(settle(trade, px, "TARGET_25_MARGIN", false));
+        closed.push(settle({ ...trade, exitTime: time }, px, "TARGET_25_MARGIN", false));
         active.delete(key);
       }
     }
@@ -274,7 +274,7 @@ async function main() {
     trades: closed.map(t => ({
       symbol: t.symbol, side: t.side, score: t.score,
       signalTime: new Date(t.signalTime).toISOString(),
-      exitTime: new Date(t.signalTime).toISOString(), // replaced below for compact reporting
+      exitTime: new Date(t.exitTime).toISOString()
       entry: t.signal.entry, stop: t.signal.stop, targetTrigger: t.targetTrigger,
       exitPrice: t.exitPrice, exitReason: t.exitReason, marginRoiPct: t.marginRoiPct,
       netR: t.netR, gapExit: t.gapExit
