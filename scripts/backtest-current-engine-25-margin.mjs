@@ -4,6 +4,7 @@ import { analyzeFuturesSymbol, getKrakenFuturesUniverse } from "../src/index.js"
 const DAYS = Number(process.env.BACKTEST_DAYS || 90);
 const LEVERAGE = 10;
 const TARGET_MARGIN_ROI = 0.25;
+const VOLUME_THRESHOLD = Number(process.env.VOLUME_THRESHOLD ?? 0.75);
 const FEE = 0.0005;       // assumed taker fee per side
 const SLIPPAGE = 0.0003;  // assumed adverse slippage per side
 const H1 = 60 * 60 * 1000;
@@ -275,7 +276,7 @@ async function main() {
       const e20_4h = ema(closes4h, 20), e50_4h = ema(closes4h, 50);
       const strictLong = e20_1h > e50_1h && last.close > e20_1h && e20_4h > e50_4h && signal?.side === "LONG" && signal.rsi >= 48 && signal.rsi <= 69;
       const strictShort = e20_1h < e50_1h && last.close < e20_1h && e20_4h < e50_4h && signal?.side === "SHORT" && signal.rsi >= 31 && signal.rsi <= 52;
-      if ((strictLong || strictShort) && signal.score >= 72) noVolumeCandidates.push(signal);
+      if ((strictLong || strictShort) && signal.score >= 72 && signal.volumeRatio >= VOLUME_THRESHOLD) noVolumeCandidates.push(signal);
       const relaxedEligible = signal?.eligible ||
         (signal?.experimentalEligible && signal.score >= 60 && signal.volumeRatio >= 0.5);
       if (relaxedEligible) experimentalCandidates.push(signal);
@@ -394,7 +395,8 @@ async function main() {
     signalCount: issued,
     averageSignalsPerDay: issued / DAYS,
     withoutVolumeThreshold: {
-      rules: "same strict production setup and score >= 72; removes only the hard volumeRatio >= 0.75 eligibility gate; volume still contributes its existing score points",
+      rules: `same strict production setup and score >= 72; hard volumeRatio threshold >= ${VOLUME_THRESHOLD}; volume still contributes its existing score points`,
+      volumeThreshold: VOLUME_THRESHOLD,
       signalCount: noVolumeIssued,
       averageSignalsPerDay: noVolumeIssued / DAYS,
       additionalSignals: noVolumeIssued - issued,
@@ -449,7 +451,7 @@ async function main() {
   await mkdir("artifacts", { recursive: true });
   await writeFile("artifacts/current-engine-25-margin-backtest.json", JSON.stringify(summary, null, 2));
   await writeFile("artifacts/current-engine-25-margin-backtest.md", [
-    "# Production engine — 25% margin ROI backtest",
+    `# Production engine — 25% margin ROI backtest (volume threshold ${VOLUME_THRESHOLD})`,
     "",
     "```json",
     JSON.stringify({ ...summary, trades: undefined }, null, 2),
