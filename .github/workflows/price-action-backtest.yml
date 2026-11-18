@@ -22,6 +22,7 @@ jobs:
         run: node scripts/backtest-price-action.mjs
         env:
           PA_BACKTEST_DAYS: "14"
+          PA_BACKTEST_OFFSET_DAYS: "14"
           PA_BACKTEST_SYMBOLS: "5"
           PA_BACKTEST_STRATEGIES: "market_structure"
       - uses: actions/upload-artifact@v4
