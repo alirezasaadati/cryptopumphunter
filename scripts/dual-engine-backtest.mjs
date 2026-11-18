@@ -18,12 +18,13 @@ const A_WEIGHTS = [0.2,0.2,0.2,0.2,0.2];
 const B_WEIGHTS = [0.4,0.35,0.25];
 const end = Math.floor(Date.now()/INTERVAL_MS)*INTERVAL_MS;
 const start = end - DAYS*24*60*60*1000;
+const splitAt = start + Math.floor(DAYS*2/3)*24*60*60*1000;
 
 const report = {
   generatedAt: new Date().toISOString(),
   source: "Kraken Futures public 15m OHLC candles",
   timeframe: "15m",
-  window: {start:new Date(start).toISOString(),end:new Date(end).toISOString(),days:DAYS},
+  window: {start:new Date(start).toISOString(),end:new Date(end).toISOString(),days:DAYS,splitAt:new Date(splitAt).toISOString()},
   universe: SYMBOLS,
   methodology: {
     signalTiming: "Signal is evaluated using the just-closed candle; execution starts no earlier than the next candle.",
@@ -43,6 +44,7 @@ const report = {
     maxHoldBars: MAX_HOLD_BARS,
     portfolio: "Trades are sequential per engine/symbol; cross-symbol portfolio exposure, correlation, and concurrent capital constraints are not modeled.",
     drawdown: "Max drawdown is a closed-trade equity-curve proxy sorted by exit timestamp, not a true portfolio drawdown because cross-symbol overlap and capital allocation are not modeled.",
+    walkForward: "Fixed parameters are evaluated separately on the first two-thirds development window and final one-third holdout window; no tuning is performed on the holdout.",
     intrabar: "Stop-first; ambiguous Entry 2 versus TP1 resolves TP1-first/cancel Entry 2 and is recorded."
   },
   data: [],
@@ -123,8 +125,7 @@ function summarize(trades,skipped){
     equity+=trade.netPnl; peak=Math.max(peak,equity);
     maxDrawdown=Math.max(maxDrawdown,peak-equity);
   }
-  return {
-    signals:trades.length+skipped,executed:trades.length,skipped,closed:closed.length,open:trades.filter(t=>t.status==="open").length,
+  const sideStats=side=>{\n    const subset=closed.filter(t=>t.side===side), sideWins=subset.filter(t=>t.netPnl>0), sideLosses=subset.filter(t=>t.netPnl<0);\n    const profit=sideWins.reduce((s,t)=>s+t.netPnl,0), loss=Math.abs(sideLosses.reduce((s,t)=>s+t.netPnl,0));\n    return {closed:subset.length,netPnlUsd:Number(subset.reduce((s,t)=>s+t.netPnl,0).toFixed(6)),\n      winRatePct:subset.length?Number((sideWins.length/subset.length*100).toFixed(2)):null,\n      profitFactor:loss?Number((profit/loss).toFixed(4)):profit?null:0};\n  };\n  return {\n    signals:trades.length+skipped,executed:trades.length,skipped,closed:closed.length,open:trades.filter(t=>t.status==="open").length,
     wins:wins.length,losses:losses.length,
     winRatePct:closed.length?Number((wins.length/closed.length*100).toFixed(2)):null,
     netPnlUsd:Number(trades.reduce((s,t)=>s+t.netPnl,0).toFixed(6)),
@@ -136,10 +137,7 @@ function summarize(trades,skipped){
     fundingUsd:Number(trades.reduce((s,t)=>s+(t.funding??0),0).toFixed(6)),
     ambiguousBars:trades.reduce((s,t)=>s+t.ambiguousEvents.length,0),
     entry2FillRatePct:trades.length?Number((trades.filter(t=>t.entry2Filled).length/trades.length*100).toFixed(2)):0,
-    bySide:{
-      LONG:closed.filter(t=>t.side==="LONG").length,
-      SHORT:closed.filter(t=>t.side==="SHORT").length
-    }
+    bySide:{LONG:sideStats("LONG"),SHORT:sideStats("SHORT")}
   };
 }
 
@@ -212,8 +210,7 @@ for(const symbol of SYMBOLS){
     console.log(`failed ${symbol}: ${String(error?.message??error)}`);
   }
 }
-report.engines.A.summary=summarize(report.engines.A.trades,report.engines.A.skipped.length);
-report.engines.B.summary=summarize(report.engines.B.trades,report.engines.B.skipped.length);
+for(const engine of ["A","B"]){\n  const item=report.engines[engine];\n  item.summary=summarize(item.trades,item.skipped.length);\n  item.summary.periods={\n    development:summarize(item.trades.filter(t=>t.candleTime<splitAt),item.skipped.filter(t=>t.candleTime<splitAt).length),\n    holdout:summarize(item.trades.filter(t=>t.candleTime>=splitAt),item.skipped.filter(t=>t.candleTime>=splitAt).length)\n  };\n}
 await fs.mkdir("artifacts",{recursive:true});
 await fs.writeFile("artifacts/dual-engine-backtest.json",JSON.stringify(report,null,2));
 console.log(JSON.stringify({
