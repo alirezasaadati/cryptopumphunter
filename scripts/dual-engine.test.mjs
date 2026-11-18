@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeEngineA } from "../src/engines/engine-a.js";
+import { analyzeEngineA, buildEngineATargets } from "../src/engines/engine-a.js";
 import { analyzeEngineB } from "../src/engines/engine-b.js";
 import { ENGINE_CONFIG, validateCandles, ema, rsi, atr, volumeRatio } from "../src/engines/engine-utils.js";
 
@@ -55,4 +55,15 @@ test("both engines reject symbols below the liquidity floor",()=>{
   assert.equal(analyzeEngineB({symbol:"PF_TESTUSD",candles}),null);
   assert.equal(analyzeEngineB({symbol:"PF_TESTUSD",candles,quoteVolume:Infinity}),null);
   assert.equal(ENGINE_CONFIG.INTERVAL,"15m");
+});
+
+test("Engine A target ladders are calculated independently for one-fill and two-fill averages",()=>{
+  const oneFill=buildEngineATargets(100,"LONG");
+  const twoFill=buildEngineATargets(98.6,"LONG");
+  assert.deepEqual(oneFill,[101,103,106,110,114]);
+  assert.deepEqual(twoFill,[99.586,101.558,104.516,108.46,112.404]);
+  assert.ok(oneFill[0]>twoFill[0]);
+  assert.deepEqual(buildEngineATargets(100,"SHORT"),[99,97,94,90,86]);
+  assert.deepEqual(buildEngineATargets(0,"LONG"),[]);
+  assert.deepEqual(buildEngineATargets(100,"SIDEWAYS"),[]);
 });
