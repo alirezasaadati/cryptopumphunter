@@ -1434,6 +1434,7 @@ async function registerTrackedSignal(env,chatId,signal){
   if(existing){
     // Backfill the permanent ledger for a trade created before the archive write completed.
     await saveIssuedSignal(env.APP_KV,chatId,signal,existing);
+    await updateIssuedSignal(env.APP_KV,chatId,existing);
     return false;
   }
   const trade=createTrackedFuturesTrade(signal,chatId);
@@ -1446,6 +1447,7 @@ async function registerTrackedSignal(env,chatId,signal){
   return true
 }
 async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMarkup=null){
+  if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
   if(!env.APP_KV)throw new Error("APP_KV is required for durable signal delivery.");
   const key=signalOutboxKey(chatId,signal.id);
   let record=await env.APP_KV.get(key,"json");
