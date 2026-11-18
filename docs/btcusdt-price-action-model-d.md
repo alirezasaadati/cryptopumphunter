@@ -17,3 +17,6 @@ Model D is an independent paper-only BTCUSDT strategy. It does not call the prod
 
 ## State
 The four-engine run uses `artifacts/btcusdt-four-engine-state.json` and a separate GitHub Actions cache namespace so it cannot reuse or overwrite the three-model run's ledger.
+
+
+Implementation status: the engine is integrated into the isolated four-model paper runner; automated checks are being rerun after fixture corrections.
