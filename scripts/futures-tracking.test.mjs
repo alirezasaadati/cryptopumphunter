@@ -7,6 +7,7 @@ import {
   targetReached,
   stopReached,
   getNewClosedFuturesCandles,
+  ensureTradeTrackingCheckpoint,
   isValidFuturesSignalLevels
 } from "../src/index.js";
 
@@ -116,4 +117,13 @@ test("a candle spanning both stop and target is identifiable as ambiguous", () =
   assert.equal(targetReached("LONG", high, 105), true);
   assert.equal(stopReached("SHORT", high, 105), true);
   assert.equal(targetReached("SHORT", low, 95), true);
+});
+
+test("legacy open trades start tracking from now instead of replaying old candles", () => {
+  const trade = { id: "legacy-1", actualEntry: 100 };
+  const now = 1801234567890;
+  assert.equal(ensureTradeTrackingCheckpoint(trade, now), true);
+  assert.equal(trade.lastCheckedCandleTime, Math.floor(now / 60000) * 60000);
+  assert.equal(trade.trackingMode, "LEGACY_CONTINUED");
+  assert.equal(ensureTradeTrackingCheckpoint(trade, now + 60000), false);
 });
