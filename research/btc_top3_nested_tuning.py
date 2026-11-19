@@ -155,12 +155,12 @@ def main():
           "predicted_coverage":float(np.average([r["predicted_coverage"] for r in rr],weights=w)),
           "predicted_switches":sum(r["predicted_switches"] for r in rr)})
     summary.sort(key=lambda z:-z["balanced_accuracy"])
-    out={"symbol":"BTCUSDT","interval":"4h","primary_horizon":f"{HORIZON*4}h","label":"forward {HORIZON*4}h return; bull/bear threshold=max(0.4%, 0.75x trailing 24h realized volatility)",
+    out={"symbol":"BTCUSDT","interval":"4h","primary_horizon":f"{HORIZON*4}h","label":f"forward {HORIZON*4}h return; bull/bear threshold=max(0.4%, 0.75x trailing 24h realized volatility)",
          "method":"Nested chronological walk-forward; per-fold 80/20 train-validation split; 12-bar purge; validation-only parameter selection; final test windows never used for tuning",
          "test_fold_rows":rows,"selected_parameters":selected,"ranking":summary,
          "limitations":"Single BTCUSDT USD-M perpetual series; fixed label definition; short one-year sample; tuning choices are constrained grids, not exhaustive optimization."}
     path=ART/f"btc-top3-nested-tuning-{HORIZON}bars.json";path.write_text(json.dumps(out,indent=2))
-    print("FINAL TEST RANKING ({HORIZON*4}h)")
+    print(f"FINAL TEST RANKING ({HORIZON*4}h)")
     for r in summary: print(f'{r["method"]}: balanced_accuracy={r["balanced_accuracy"]:.4f}, accuracy={r["accuracy"]:.4f}, coverage={r["predicted_coverage"]:.3f}, n={r["n"]}')
     print("FOLD PARAMETER SELECTION")
     for x in selected: print(json.dumps(x,sort_keys=True))
