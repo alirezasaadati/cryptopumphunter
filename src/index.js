@@ -647,6 +647,7 @@ async function handleAdminMembershipCallback(query, env) {
       );
 
       await env.APP_KV.delete(pendingKey(applicantId));
+      await restoreArchiveMemberEligibility(env, applicantId);
 
       await sendMessage(
         env,
