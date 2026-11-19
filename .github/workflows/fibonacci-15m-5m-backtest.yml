@@ -1,0 +1,32 @@
+name: Fibonacci 1h + 15m breakout + 5m confirmation backtest
+on:
+  push:
+    branches: [fib-1h-15m-5m-backtest]
+    paths:
+      - '.github/workflows/fibonacci-15m-5m-backtest.yml'
+      - 'scripts/fibonacci-15m-5m-backtest.mjs'
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run comparative one-year backtest
+        env:
+          BACKTEST_START: '2025-11-19T00:00:00Z'
+          BACKTEST_END: '2026-11-19T00:00:00Z'
+          BACKTEST_DAYS: '365'
+          BACKTEST_SYMBOLS: '8'
+          BACKTEST_FEE: '0.0005'
+          BACKTEST_SLIPPAGE: '0.0003'
+        run: node scripts/fibonacci-15m-5m-backtest.mjs
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fibonacci-15m-5m-comparison
+          path: artifacts/
+          if-no-files-found: warn
