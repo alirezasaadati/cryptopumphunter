@@ -67,6 +67,7 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
   assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
   assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.35);
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,1.25);
   assert.equal("ENTRY_INTERVAL" in FUTURES_CONFIG,false);
 });
 
@@ -175,7 +176,7 @@ test("late-entry filter rejects an overextended price versus hourly EMA20",()=>{
   assert.match(result.rejected,/ورود دیرهنگام/);
 });
 
-test("15m confirmation rejects opposite momentum",()=>{
+test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const altered=fifteenMinute.map(c=>({...c}));
   altered[altered.length-1].open=altered.at(-1).close+0.5;
@@ -185,11 +186,11 @@ test("15m confirmation rejects opposite momentum",()=>{
     ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
     referencePrice:oneHour.at(-1).close,ema20,atr
   });
-  assert.equal(result.ok,false);
-  assert.match(result.rejected,/۱۵دقیقه‌ای/);
+  assert.equal(result.ok,true);
+  assert.equal(result.momentumConfirmed,false);
 });
 
-test("15m pullback filter rejects a trend continuation without a pullback touch",()=>{
+test("missing 15m pullback is diagnostic and does not suppress a candidate",()=>{
   const {ticker,oneHour}=makeSetup("LONG");
   const altered=makeCandles({count:120,slope:0.1,base:100}).map(c=>({...c,low:c.close-0.001}));
   const priorEma9=testEma(altered.slice(0,-1).map(c=>c.close),9);
@@ -201,6 +202,6 @@ test("15m pullback filter rejects a trend continuation without a pullback touch"
     ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
     referencePrice:oneHour.at(-1).close,ema20,atr
   });
-  assert.equal(result.ok,false);
-  assert.match(result.rejected,/پولبک معتبر/);
+  assert.equal(result.ok,true);
+  assert.equal(result.pullbackConfirmed,false);
 });
