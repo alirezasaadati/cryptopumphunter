@@ -11,6 +11,7 @@ on:
     paths:
       - "engine-v5/**"
       - ".github/workflows/engine-v5-tests.yml"
+  workflow_dispatch:
 
 jobs:
   engine-v5-tests:
@@ -27,3 +28,18 @@ jobs:
         run: node --check src/index.js
       - name: Run Engine V5 tests
         run: node --test tests/*.test.mjs
+
+  public-exchange-smoke:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine-v5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run read-only public API smoke tests
+        run: npm run smoke
+        timeout-minutes: 3
