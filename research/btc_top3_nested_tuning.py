@@ -80,7 +80,7 @@ def state_map(states,y):
         ix=np.where((states==s)&(y!=99))[0]
         # Future direction labels are used only within the training segment to assign state meaning.
         ret.append(float(np.mean(y[ix])) if len(ix) else 0.)
-    order=np.argsort(ret);return {int(order[0]):-1,int(order[len(order)//2]):0,int(order[-1]):1}
+    order=np.argsort(ret); mapping={int(order[0]):-1,int(order[-1]):1}\n    for s in order[1:-1]: mapping[int(s)]=0\n    return mapping
 
 def hmm_predictions(X, y_train, k, iters, train_end, eval_end):
     # X is already standardized using train-only statistics.
