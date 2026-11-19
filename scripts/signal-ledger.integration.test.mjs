@@ -179,7 +179,7 @@ test("coordinator rejects missing or incorrect internal authentication secret", 
   assert.equal((await response.json()).error, "Unauthorized.");
 });
 
-test("owner reconciliation confirms uncertain delivery and archives the signal idempotently", async () => {
+test("owner reconciliation confirms uncertain delivery without creating a duplicate KV ledger entry", async () => {
   const kv = memoryKV();
   const pending = signal("uncertain-confirm");
   const key = "futures:signal-outbox:v1:909:uncertain-confirm";
@@ -199,7 +199,7 @@ test("owner reconciliation confirms uncertain delivery and archives the signal i
   const saved = await kv.get(key, "json");
   assert.equal(saved.status, "ARCHIVED");
   assert.ok(saved.manualConfirmedAt);
-  assert.equal((await listIssuedSignals(kv, "909")).length, 1);
+  assert.equal((await listIssuedSignals(kv, "909")).length, 0);
   const second = await coordinator.fetch(request());
   assert.equal(second.status, 200);
   assert.equal((await second.json()).result.alreadyArchived, true);
@@ -243,7 +243,7 @@ test("concurrent duplicate deliveries through the coordinator send one Telegram 
     assert.equal(sendCalls, 1);
     assert.equal(results.filter(x => x.ok && x.result.duplicate === false).length, 1);
     assert.equal(results.filter(x => x.ok && x.result.duplicate === true).length, 1);
-    assert.equal((await listIssuedSignals(kv, "911")).length, 1);
+    assert.equal((await listIssuedSignals(kv, "911")).length, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -276,7 +276,7 @@ test("owner-authorized retry sends an uncertain signal once and archives it", as
     assert.equal((await response.json()).ok, true);
     assert.equal(sendCalls, 1);
     assert.equal((await kv.get(key, "json")).status, "ARCHIVED");
-    assert.equal((await listIssuedSignals(kv, "912")).length, 1);
+    assert.equal((await listIssuedSignals(kv, "912")).length, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
