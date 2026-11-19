@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nested walk-forward tuning of BTC trend classifiers. Validation selects parameters; test folds stay untouched. v3 with purged validation boundary."""
+"""Nested walk-forward tuning of BTC trend classifiers. Validation selects parameters; test folds stay untouched. v4 with purged validation boundary."""
 import json, math
 from pathlib import Path
 import numpy as np
@@ -119,7 +119,8 @@ def main():
             candidates.append((metric(y[val_idx],p[val_idx]),{"lookback":lb,"threshold":th}))
         best_r=max(candidates,key=lambda z:z[0])
         # HMM: fit only on the pre-validation training segment, score on validation.
-        X=base.features(ind,0,tr_end)
+        val_train_end=val_start-PURGE
+        X=base.features(ind,0,val_train_end)
         hmm_candidates=[]
         for k in (2,3,4):
           for iters in (20,35):
