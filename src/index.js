@@ -2113,10 +2113,8 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
     const levels=[["TP1",t.target1],["TP2",t.target2],["TP3",t.target3]],hits=[];
     for(const [key,target] of levels)if(!t.tpHits.includes(key)&&targetReached(t.side,price,target)){t.tpHits.push(key);hits.push(key);}
     for(const hit of hits) {
-      if(hit==="TP1"||hit==="TP2") {
-        const target=hit==="TP1"?t.target1:t.target2;
-        await notifyTradeMilestone(env,t,hit,target);
-      }
+      const target=hit==="TP1"?t.target1:hit==="TP2"?t.target2:t.target3;
+      await notifyTradeMilestone(env,t,hit,target);
     }
     if(t.tpHits.includes("TP3")) {
       t.status="CLOSED_TARGETS";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,false);t.outcomePercent=tradeOutcomePercent(t,price);t.closeReason="TP3";
