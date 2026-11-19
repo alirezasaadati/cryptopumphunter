@@ -32,3 +32,5 @@ jobs:
           if-no-files-found: warn
 
 # Re-trigger on the latest isolated backtest implementation.
+
+# Include bounded pivot scanning revision.
