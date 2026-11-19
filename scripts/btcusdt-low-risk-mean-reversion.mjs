@@ -7,14 +7,16 @@ const SYMBOL="BTCUSDT", INTERVAL="15m", STEP=15*60*1000, HOUR=4*STEP;
 const END=Date.UTC(2026,10,20), DAYS=365, START=END-DAYS*24*60*60*1000;
 const FEE=.0005, SLIPPAGE=.0003, MAX_HOLD=24;
 const VARIANTS=[
-  {id:"A_indicators",label:"ADX + BB(20,2.5) + RSI(25/75)",smc:"none",tp:"0.3R"},
-  {id:"A_indicators_05R",label:"ADX + BB + RSI, TP 0.5R",smc:"none",tp:"0.5R"},
-  {id:"B_sweep",label:"Indicators + Liquidity Sweep",smc:"sweep",tp:"0.3R"},
-  {id:"B_sweep_05R",label:"Sweep, TP 0.5R",smc:"sweep",tp:"0.5R"},
-  {id:"C_choch",label:"Indicators + CHoCH",smc:"choch",tp:"0.3R"},
-  {id:"C_choch_05R",label:"CHoCH, TP 0.5R",smc:"choch",tp:"0.5R"},
-  {id:"D_sweep_choch",label:"Indicators + Sweep + CHoCH",smc:"both",tp:"0.3R"},
-  {id:"D_sweep_choch_05R",label:"Sweep + CHoCH, TP 0.5R",smc:"both",tp:"0.5R"}
+  {id:"strict_original",label:"Strict: ADX<20, BB2.5, RSI25/75, close outside",smc:"none",tp:"0.3R",adxMax:20,bbMult:2.5,rsiLong:25,rsiShort:75,entryMode:"outside"},
+  {id:"moderate_reclaim",label:"Moderate: ADX<25, BB2.0, RSI30/70, band reclaim",smc:"none",tp:"0.3R",adxMax:25,bbMult:2,rsiLong:30,rsiShort:70,entryMode:"reclaim"},
+  {id:"moderate_reclaim_05R",label:"Moderate reclaim, TP 0.5R",smc:"none",tp:"0.5R",adxMax:25,bbMult:2,rsiLong:30,rsiShort:70,entryMode:"reclaim"},
+  {id:"moderate_sweep",label:"Moderate reclaim + Liquidity Sweep",smc:"sweep",tp:"0.3R",adxMax:25,bbMult:2,rsiLong:30,rsiShort:70,entryMode:"reclaim"},
+  {id:"moderate_sweep_05R",label:"Sweep, TP 0.5R",smc:"sweep",tp:"0.5R",adxMax:25,bbMult:2,rsiLong:30,rsiShort:70,entryMode:"reclaim"},
+  {id:"moderate_choch",label:"Moderate reclaim + CHoCH",smc:"choch",tp:"0.3R",adxMax:25,bbMult:2,rsiLong:30,rsiShort:70,entryMode:"reclaim"},
+  {id:"moderate_choch_05R",label:"CHoCH, TP 0.5R",smc:"choch",tp:"0.5R",adxMax:25,bbMult:2,rsiLong:30,rsiShort:70,entryMode:"reclaim"},
+  {id:"moderate_both",label:"Moderate reclaim + Sweep + CHoCH",smc:"both",tp:"0.3R",adxMax:25,bbMult:2,rsiLong:30,rsiShort:70,entryMode:"reclaim"},
+  {id:"moderate_both_05R",label:"Sweep + CHoCH, TP 0.5R",smc:"both",tp:"0.5R",adxMax:25,bbMult:2,rsiLong:30,rsiShort:70,entryMode:"reclaim"},
+  {id:"active_reclaim",label:"Active: ADX<30, BB2.0, RSI35/65, band reclaim",smc:"none",tp:"0.3R",adxMax:30,bbMult:2,rsiLong:35,rsiShort:65,entryMode:"reclaim"}
 ];
 const finite=x=>Number.isFinite(x);
 async function archiveCsv(url,dir){
@@ -156,23 +158,31 @@ function simulate(bars,i,side,entry,stop,target,emaTarget){
 }
 function mainBacktest(bars,variant,ind){
  const trades=[];let nextAllowed=0,lastSweepLong=-999,lastSweepShort=-999,lastChochLong=-999,lastChochShort=-999;
+ const counts={indicatorSetups:0,smcPassed:0,riskAccepted:0};
  for(let i=ind.warmup;i<bars.length-2;i++){
   if(i<nextAllowed)continue;
-  const b=bars[i],prev=bars[i-1],r=ind.rsi[i],a=ind.adxAt[i],lo=ind.bb.lower[i],up=ind.bb.upper[i],atr15=ind.atr[i],pH=ind.piv.hi[i],pL=ind.piv.lo[i];
+  const b=bars[i],prev=bars[i-1],r=ind.rsi[i],a=ind.adxAt[i],band=ind.bb[variant.bbMult],lo=band.lower[i],up=band.upper[i],atr15=ind.atr[i],pH=ind.piv.hi[i],pL=ind.piv.lo[i];
   if(!finite(r)||!finite(a)||!finite(lo)||!finite(up)||!finite(atr15)||!pH||!pL)continue;
   const sweepLong=b.low<pL.price&&b.close>pL.price,sweepShort=b.high>pH.price&&b.close<pH.price;
   if(sweepLong)lastSweepLong=i;if(sweepShort)lastSweepShort=i;
   const chochLong=prev.close<=pH.price&&b.close>pH.price,chochShort=prev.close>=pL.price&&b.close<pL.price;
   if(chochLong)lastChochLong=i;if(chochShort)lastChochShort=i;
-  if(a>=20)continue;
+  if(a>=variant.adxMax)continue;
   let side=null;
-  if(b.close<lo&&r<25&&b.close>b.open)side="LONG";
-  else if(b.close>up&&r>75&&b.close<b.open)side="SHORT";
+  if(variant.entryMode==="reclaim"){
+   if(b.low<lo&&b.close>lo&&r<variant.rsiLong&&b.close>b.open)side="LONG";
+   else if(b.high>up&&b.close<up&&r>variant.rsiShort&&b.close<b.open)side="SHORT";
+  }else{
+   if(b.close<lo&&r<variant.rsiLong&&b.close>b.open)side="LONG";
+   else if(b.close>up&&r>variant.rsiShort&&b.close<b.open)side="SHORT";
+  }
   if(!side)continue;
+  counts.indicatorSetups++;
   const sweep=side==="LONG"?lastSweepLong:lastSweepShort,choch=side==="LONG"?lastChochLong:lastChochShort;
   if(variant.smc==="sweep"&&i-sweep>8)continue;
   if(variant.smc==="choch"&&i-choch>8)continue;
   if(variant.smc==="both"&&(i-sweep>8||i-choch>8||choch<sweep))continue;
+  counts.smcPassed++;
   const entry=bars[i+1].open*(1+(side==="LONG"?1:-1)*SLIPPAGE);
   const dir=side==="LONG"?1:-1;
   const recent=bars.slice(Math.max(0,i-7),i+1);
@@ -180,18 +190,18 @@ function mainBacktest(bars,variant,ind){
   const stop=side==="LONG"?extreme-atr15*.15:extreme+atr15*.15;
   const risk=side==="LONG"?entry-stop:stop-entry;
   if(!(risk>atr15*.25&&risk<atr15*2.5))continue;
+  counts.riskAccepted++;
   const target=entry+dir*risk*(variant.tp==="0.3R"?.3:.5);
-  const emaTarget=variant.tp==="EMA20";
-  const t=simulate(bars,i,side,entry,stop,target,emaTarget);
+  const t=simulate(bars,i,side,entry,stop,target,false);
   if(t){trades.push(t);let exitIdx=i+1;while(exitIdx<bars.length&&bars[exitIdx].time<t.exitTime)exitIdx++;nextAllowed=Math.max(i+2,exitIdx+1);}
  }
- return trades;
+ return {trades,counts};
 }
 async function main(){
  console.log("Loading one year of BTCUSDT 15m futures candles...");
  const raw=await loadCandles();if(raw.length<30000)throw new Error("Insufficient candles: "+raw.length);
  const bars=raw.filter(x=>x.time>=START&&x.time<END),h1=aggregate1h(raw);
- const closes=bars.map(x=>x.close),bb=bollinger(closes),rs=rsi(closes),atr15=atr(bars),piv=pivots(bars),h1adx=adx(h1);
+ const closes=bars.map(x=>x.close),bb={2:bollinger(closes,20,2),2.5:bollinger(closes,20,2.5)},rs=rsi(closes),atr15=atr(bars),piv=pivots(bars),h1adx=adx(h1);
  let h=0;const adxAt=bars.map(b=>{while(h+1<h1.length&&h1[h+1].closeTime<=b.closeTime)h++;return h1[h]?.closeTime<=b.closeTime?h1adx[h]:null;});
  const ema20=ema(closes,20);bars.forEach((b,i)=>b._ema20=ema20[i]);
  const warmup=200,split=START+Math.floor(DAYS*.7)*24*60*60*1000;
