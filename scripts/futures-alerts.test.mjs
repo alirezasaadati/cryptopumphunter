@@ -69,6 +69,12 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   assert.match(risky, /^🟠 سیگنال پر ریسک/);
   assert.match(risky, /⛔ حد ضرر:/);
   assert.doesNotMatch(short, /PF_|BTCUSD/);
+  const krakenXbt = formatFuturesSignalAlert({...signal, symbol:"PF_XBTUSD"}, 4);
+  const krakenNvdx = formatFuturesSignalAlert({...signal, symbol:"PF_NVDXUSD"}, 5);
+  const lowercase = formatFuturesSignalAlert({...signal, symbol:"pf_adausd"}, 6);
+  assert.match(krakenXbt, /نماد: <b>BTC<\/b>/);
+  assert.match(krakenNvdx, /نماد: <b>NVDA<\/b>/);
+  assert.match(lowercase, /نماد: <b>ADA<\/b>/);
 });
 test("numeric candle timestamps in seconds and milliseconds produce the same identity", () => {
   const seconds = 1794906900;
