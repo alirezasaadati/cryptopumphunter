@@ -12,7 +12,14 @@ export async function fetchKrakenFuturesCandles({symbol,resolution="5m",days=90,
   const response=await fetchImpl(url,{headers:{accept:"application/json"}});
   if(response.status===429){const retry=Number(response.headers.get("retry-after"));await sleep(Number.isFinite(retry)&&retry>0?retry*1000:2000);continue;}
   if(!response.ok)throw new Error(`Kraken Futures candles HTTP ${response.status} for ${symbol}`);
-  const body=await response.json();if(!Array.isArray(body.candles))throw new Error(`Malformed Kraken Futures candles response for ${symbol}`);
+  const raw=await response.text();
+  let body;
+  try{body=JSON.parse(raw);}catch{
+   const contentType=response.headers.get("content-type")||"unknown";
+   const preview=raw.replace(/\\s+/g," ").slice(0,220);
+   throw new Error(`Kraken Futures candles returned non-JSON for ${symbol}; HTTP ${response.status}; content-type ${contentType}; body: ${preview}`);
+  }
+  if(!Array.isArray(body.candles))throw new Error(`Malformed Kraken Futures candles response for ${symbol}`);
   if(!body.candles.length)break;
   const page=body.candles.map(c=>({openTime:Number(c.time),open:Number(c.open),high:Number(c.high),low:Number(c.low),close:Number(c.close),volume:Number(c.volume)})).filter(c=>Number.isFinite(c.openTime)&&[c.open,c.high,c.low,c.close,c.volume].every(Number.isFinite)).sort((a,b)=>a.openTime-b.openTime);
   if(!page.length)throw new Error(`No valid Kraken candles for ${symbol}`);
