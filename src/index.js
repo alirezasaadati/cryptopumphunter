@@ -1818,6 +1818,14 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
           return Response.json({ok:true,allowed:false,day:today});
         }
+        if(url.pathname==="/signals/list"){
+          const now=Date.now();
+          const current=await this.ctx.storage.get("active-futures-pending")||[];
+          const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side))
+            .sort((a,b)=>Number(b?.createdAt||0)-Number(a?.createdAt||0));
+          const limit=Math.max(1,Math.min(20,Number(payload.limit)||15));
+          return Response.json({ok:true,signals:active.slice(0,limit)});
+        }
         if(url.pathname==="/signals/register"){
           const now=Date.now();
           const current=await this.ctx.storage.get("active-futures-pending")||[];
