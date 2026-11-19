@@ -2096,21 +2096,33 @@ async function runFuturesSignalsForChat(env, chatId) {
 
 async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
   if (!Array.isArray(signals) || !signals.length) return { newSignals: 0, recipients: 0, delivered: 0, failed: 0 };
-  if (!env.APP_KV) throw new Error("APP_KV membership reads are required to enforce approved-recipient delivery.");
   const recipients = new Set();
-  if (env.OWNER_TELEGRAM_ID || env.OWNER_ID) recipients.add(String(env.OWNER_TELEGRAM_ID || env.OWNER_ID));
-  let cursor;
-  do {
-    const page = await env.APP_KV.list({ prefix: "member:", limit: 1000, ...(cursor ? { cursor } : {}) });
-    for (const item of page.keys || []) {
-      const chatId = item.name.slice("member:".length);
-      const member = await env.APP_KV.get(item.name, "json");
-      if (member && member.approved !== false && member.revoked !== true) recipients.add(String(chatId));
+  const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
+  if (ownerId) recipients.add(String(ownerId));
+  // KV is used only to read the allow-list. Any read/quota outage must not
+  // prevent delivery to the owner, and must never broaden access to users.
+  if (env.APP_KV) {
+    try {
+      let cursor;
+      do {
+        const page = await env.APP_KV.list({ prefix: "member:", limit: 1000, ...(cursor ? { cursor } : {}) });
+        for (const item of page.keys || []) {
+          const chatId = item.name.slice("member:".length);
+          const member = await env.APP_KV.get(item.name, "json");
+          if (member && member.approved !== false && member.revoked !== true) recipients.add(String(chatId));
+        }
+        cursor = page.list_complete === false ? page.cursor : null;
+      } while (cursor);
+      const legacyMembers = await env.APP_KV.get("v1:members", "json") || {};
+      for (const [chatId, legacy] of Object.entries(legacyMembers)) {
+        if (legacy?.status !== "active") continue;
+        const modern = await env.APP_KV.get(memberKey(chatId), "json");
+        if (!modern) recipients.add(String(chatId));
+      }
+    } catch (error) {
+      console.error("Approved-member read failed; continuing with owner delivery only:", String(error?.message || error));
     }
-    cursor = page.list_complete === false ? page.cursor : null;
-  } while (cursor);
-  const legacyMembers = await env.APP_KV.get("v1:members", "json") || {};
-  for (const [chatId, member] of Object.entries(legacyMembers)) if (member?.status === "active") recipients.add(String(chatId));
+  }
   const targets = [...recipients].filter(id => excludeChatId == null || String(id) !== String(excludeChatId));
   let delivered = 0, failed = 0;
   await mapLimit(targets, 4, async chatId => {
