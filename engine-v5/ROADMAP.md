@@ -21,7 +21,7 @@ Acceptance: no files in the production bot entry point or production Wrangler co
 Acceptance: deployable in a non-production environment with no KV binding and no secrets for live trading.
 
 ## Stage 2 — Exchange data adapters
-- Implement read-only public market data adapters.
+- Implement read-only public market data adapters for OKX and Kraken only. Binance and Bybit are excluded.
 - Start with instrument metadata, ticker, candles, trades, order book, funding, and open interest only where the exchange exposes reliable endpoints.
 - Normalize timestamps, symbols, market types, precision, and errors.
 - Add per-exchange rate budgets, backoff, circuit breakers, staleness checks, and replayable fixtures.
