@@ -87,11 +87,11 @@ function scoreSignal({ candles, volumes, i, h1, h4, h1e20, h1e50, h4e20, h4e50, 
     const tr=recent.slice(1).map((x,j)=>Math.max(x.high-x.low,Math.abs(x.high-recent[j].close),Math.abs(x.low-recent[j].close)));
     const currentAtr=tr.length?tr.reduce((a,b)=>a+b,0)/tr.length:0;
     const stop=direction==="long" ? Math.min(...recent.map(x=>x.low))-currentAtr*(profile.atrBuffer ?? 0.15) : Math.max(...recent.map(x=>x.high))+currentAtr*(profile.atrBuffer ?? 0.15);
-    const entry=c.close*(direction==="long" ? 1+SLIPPAGE_RATE : 1-SLIPPAGE_RATE);
-    const risk=direction==="long" ? entry-stop : stop-entry;
-    const riskPct=risk/entry;
-    if (!(risk>0) || riskPct<(profile.minRiskPct ?? 0.002) || riskPct>(profile.maxRiskPct ?? 0.02)) continue;
-    return { direction, entry, stop, target: direction==="long" ? entry+risk*profile.rewardR : entry-risk*profile.rewardR, risk };
+    const referenceEntry=c.close;
+    const referenceRisk=direction==="long" ? referenceEntry-stop : stop-referenceEntry;
+    const riskPct=referenceRisk/referenceEntry;
+    if (!(referenceRisk>0) || riskPct<(profile.minRiskPct ?? 0.002) || riskPct>(profile.maxRiskPct ?? 0.02)) continue;
+    return { direction, stop, rewardR:profile.rewardR };
   }
   return null;
 }
@@ -120,7 +120,15 @@ function runProfile(symbol, candles, profile) {
       continue;
     }
     const signal=scoreSignal({ candles,volumes,i,h1,h4,h1e20,h1e50,h4e20,h4e50,profile });
-    if (signal) active={...signal,entryIndex:i,entryTime:c.closeTime};
+    const next=candles[i+1];
+    if (signal && next) {
+      const entry=next.open*(signal.direction==="long" ? 1+SLIPPAGE_RATE : 1-SLIPPAGE_RATE);
+      const risk=signal.direction==="long" ? entry-signal.stop : signal.stop-entry;
+      const riskPct=risk/entry;
+      if (risk>0 && riskPct>=(profile.minRiskPct ?? 0.002) && riskPct<=(profile.maxRiskPct ?? 0.02)) {
+        active={...signal,entry,risk,target:signal.direction==="long" ? entry+risk*profile.rewardR : entry-risk*profile.rewardR,entryIndex:i+1,entryTime:next.openTime};
+      }
+    }
   }
   return trades;
 }
@@ -149,5 +157,5 @@ export function runHistoricalComparison(dataset) {
     const sorted=candles.slice().sort((a,b)=>a.openTime-b.openTime);
     for (const profile of profiles) all.push(...runProfile(symbol,sorted,profile));
   }
-  return { generatedAt:new Date().toISOString(), candleInterval:"5m", feeRate:FEE_RATE, slippageRate:SLIPPAGE_RATE, assumptions:{ stopWinsWhenStopAndTargetTouchSameCandle:true, portfolioRiskPerTradePct:1, maxHoldingCandles:48, overlappingTradesPerSymbolAndModel:false, riskPerTradeNotional:"1% equity risk per trade; simultaneous cross-symbol portfolio cap not modeled",higherTimeframeCandlesMustBeComplete:true }, models:[summarize("A",all.filter(t=>t.model==="A")),summarize("B",all.filter(t=>t.model==="B"))], trades:all };
+  return { generatedAt:new Date().toISOString(), candleInterval:"5m", feeRate:FEE_RATE, slippageRate:SLIPPAGE_RATE, assumptions:{ stopWinsWhenStopAndTargetTouchSameCandle:true, portfolioRiskPerTradePct:1, maxHoldingCandles:48, overlappingTradesPerSymbolAndModel:false, riskPerTradeNotional:"1% equity risk per trade; simultaneous cross-symbol portfolio cap not modeled",higherTimeframeCandlesMustBeComplete:true,entryOnNext5mOpenAfterSignalClose:true }, models:[summarize("A",all.filter(t=>t.model==="A")),summarize("B",all.filter(t=>t.model==="B"))], trades:all };
 }
