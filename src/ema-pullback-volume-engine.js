@@ -13,6 +13,7 @@ export const EMA_PULLBACK_CONFIG = Object.freeze({
   PULLBACK_VOLUME_MAX_RATIO: 0.85,
   TRIGGER_VOLUME_BARS: 20,
   TRIGGER_VOLUME_MIN_RATIO: 1.5,
+  REQUIRE_TRIGGER_VOLUME_EXPANSION: true,
   MIN_TRIGGER_BODY_RATIO: 0.55,
   PINBAR_WICK_BODY_RATIO: 2.0,
   MIN_RR: 2,
@@ -121,7 +122,7 @@ export function evaluateEmaPullback({higherTimeframe,entryTimeframe,symbol="BTCU
   if(!trigger||(engulfing&&body<cfg.MIN_TRIGGER_BODY_RATIO)||!strongClose)
     return reject("REVERSAL_TRIGGER_NOT_STRONG",{trend,body,strongClose,trigger});
   const volumeBase=mean(bars.slice(i-cfg.TRIGGER_VOLUME_BARS,i).map(x=>x.volume));
-  if(!(volumeBase>0)||c.volume<volumeBase*cfg.TRIGGER_VOLUME_MIN_RATIO)
+  if(cfg.REQUIRE_TRIGGER_VOLUME_EXPANSION && (!(volumeBase>0)||c.volume<volumeBase*cfg.TRIGGER_VOLUME_MIN_RATIO))
     return reject("TRIGGER_VOLUME_NOT_EXPANDING",{trend,triggerVolume:c.volume,baselineVolume:volumeBase});
   const entry=c.close, direction=bullish?1:-1;
   const zoneExtreme=bullish
