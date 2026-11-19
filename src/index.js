@@ -1361,8 +1361,12 @@ function average(values) {
 const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
-  MAX_SYMBOLS: 24,
+  // Scan all liquid perpetuals, stopping only when the safe execution budget is reached.
   CONCURRENCY: 3,
+  MAX_SCAN_DURATION_MS: 180000,
+  SCAN_FINALIZATION_RESERVE_MS: 45000,
+  REQUEST_TIMEOUT_MS: 12000,
+  MAX_SIGNALS_PER_SCAN: 20,
   MIN_QUOTE_VOLUME: 5_000_000,
   KLINE_LIMIT: 120,
   MIN_CANDLES: 60,
@@ -1381,7 +1385,8 @@ const FUTURES_PROVIDER_ORDER = ["Kraken"];
 
 async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL) {
   const response = await fetch(`${baseUrl}${path}`, {
-    headers: { Accept: "application/json" }
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(FUTURES_CONFIG.REQUEST_TIMEOUT_MS)
   });
   const body = await response.text();
   let data;
@@ -1418,7 +1423,6 @@ async function getKrakenFuturesUniverse() {
   return data.tickers
     .filter(isKrakenPerpetualTicker)
     .sort((a, b) => Number(b.volumeQuote) - Number(a.volumeQuote))
-    .slice(0, FUTURES_CONFIG.MAX_SYMBOLS)
     .map(t => ({
       ...t,
       priceChangePercent: Number(t.change24h) || 0,
@@ -1814,14 +1818,6 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
           return Response.json({ok:true,allowed:false,day:today});
         }
-        if(url.pathname==="/signals/list"){
-          const now=Date.now();
-          const current=await this.ctx.storage.get("active-futures-pending")||[];
-          const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side))
-            .sort((a,b)=>Number(b?.createdAt||0)-Number(a?.createdAt||0));
-          const limit=Math.max(1,Math.min(20,Number(payload.limit)||15));
-          return Response.json({ok:true,signals:active.slice(0,limit)});
-        }
         if(url.pathname==="/signals/register"){
           const now=Date.now();
           const current=await this.ctx.storage.get("active-futures-pending")||[];
@@ -1973,6 +1969,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
   }
 }
 
+
 function outboxSelectionKey(ownerId,token){return "admin:outbox-selection:"+ownerId+":"+token;}
 
 async function showUncertainSignalOutbox(env,ownerId){
@@ -2047,6 +2044,7 @@ async function runFuturesSignalScan(env, options = {}) {
   if (!universe.length) {
     return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [] };
   }
+  const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   const analyzed = await mapLimit(universe, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
       const [oneHour, fourHour, fifteenMinute] = await Promise.all([
@@ -2058,12 +2056,12 @@ async function runFuturesSignalScan(env, options = {}) {
     } catch (error) {
       return { symbol: ticker.symbol, rejected: error.message || "خطای تحلیل" };
     }
-  });
+  }, () => Date.now() < analysisDeadline);
   const createdAt = Date.now();
   const eligibleCandidates = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score);
   const experimentalCandidates = analyzed.filter(x => x?.experimentalEligible)
     .sort((a, b) => b.score - a.score).slice(0, 3);
-  const generatedSignals = eligibleCandidates.slice(0, 8)
+  const generatedSignals = eligibleCandidates.slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
   const signals = await registerPendingFuturesSignals(env, generatedSignals);
 
@@ -2080,7 +2078,8 @@ async function runFuturesSignalScan(env, options = {}) {
     "━━━━━━━━━━━━━━━━━━\n" +
     "🏦 بازار: Kraken Derivatives Perpetual\n" +
     "⏱ تایم‌فریم: 1h با تأیید روند 4h\n" +
-    `📥 نمادهای پرحجم بررسی‌شده: ${universe.length}\n` +
+    `📥 نمادهای بررسی‌شده: ${analyzed.filter(Boolean).length} از ${universe.length}\n` +
+    (analyzed.filter(Boolean).length < universe.length ? "⏱ ادامه بررسی به‌دلیل بودجه امن زمان به چرخه بعد موکول شد.\n" : "") +
     `📊 تحلیل‌های معتبر: ${validData}\n` +
     `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n\n`;
   if (signals.length) {
@@ -2185,12 +2184,13 @@ async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
 
 // ---------------- CONCURRENCY ----------------
 
-async function mapLimit(items, limit, callback) {
+async function mapLimit(items, limit, callback, shouldContinue = () => true) {
   const results = new Array(items.length);
   let index = 0;
 
   async function worker() {
     while (true) {
+      if (!shouldContinue()) return;
       const currentIndex = index++;
       if (currentIndex >= items.length) return;
 
@@ -2217,4 +2217,4 @@ async function mapLimit(items, limit, callback) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
+export { FUTURES_CONFIG, mapLimit, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
