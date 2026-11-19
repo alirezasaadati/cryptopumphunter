@@ -1,4 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const SYMBOL = "BTCUSDT";
 const INTERVAL = 15 * 60 * 1000;
@@ -7,43 +10,70 @@ const DAYS = 365;
 const FEE = 0.0005;
 const SLIPPAGE = 0.0003;
 const H4_ORDER = 5;
-const M15_ORDER = 3;
-const MIN_RR = 2;
-const MAX_HOLD_BARS = 72 * 4;
-const BASE = "https://api.binance.com/api/v3/klines";
-
-async function fetchKlines() {
+constasync function fetchKlines() {
   const end = Date.now();
   const start = end - DAYS * 86400000;
+  const fromDate = new Date(start);
+  const now = new Date(end);
+  const months = [];
+  let y = fromDate.getUTCFullYear(), m = fromDate.getUTCMonth() + 1;
+  while (y < now.getUTCFullYear() || (y === now.getUTCFullYear() && m <= now.getUTCMonth())) {
+    months.push({y,m});
+    m++;
+    if (m===13) {m=1;y++;}
+  }
   const rows = [];
-  let cursor = start;
-  while (cursor < end) {
-    const url = new URL(BASE);
-    url.searchParams.set("symbol", SYMBOL);
-    url.searchParams.set("interval", "15m");
-    url.searchParams.set("startTime", String(cursor));
-    url.searchParams.set("endTime", String(end));
-    url.searchParams.set("limit", "1000");
-    let response, data;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
-      if (response.ok) { data = await response.json(); break; }
-      if (response.status === 429 || response.status >= 500) {
-        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-        continue;
+  async function downloadCsv(url) {
+    const response = await fetch(url, {headers:{accept:"application/zip"},signal:AbortSignal.timeout(45000)});
+    if (response.status===404) return null;
+    if (!response.ok) throw new Error("Archive HTTP "+response.status+" for "+url);
+    const buffer=Buffer.from(await response.arrayBuffer());
+    const path=join(tmpdir(),"btc-klines-"+Date.now()+"-"+Math.random().toString(16).slice(2)+".zip");
+    const {writeFile:writeTmp,unlink}=await import("node:fs/promises");
+    await writeTmp(path,buffer);
+    try { return execFileSync("unzip",["-p",path],{maxBuffer:80*1024*1024,encoding:"utf8"}); }
+    finally { await unlink(path).catch(()=>{}); }
+  }
+  function parseCsv(csv) {
+    if (!csv) return;
+    for (const line of csv.trim().split(/\r?\n/)) {
+      if (!line) continue;
+      const x=line.split(",");
+      if (x.length<7) continue;
+      let t=Number(x[0]);
+      if (t>1e14) t=Math.floor(t/1000);
+      const rawCloseTime=Number(x[6]);
+      const c={time:t,open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+x[5],closeTime:rawCloseTime>1e14?Math.floor(rawCloseTime/1000):rawCloseTime};
+      if (c.time>=start && c.closeTime<end && Number.isFinite(c.close) && c.close>0) rows.push(c);
+    }
+  }
+  for (const {y,m} of months) {
+    const mm=String(m).padStart(2,"0");
+    const name=SYMBOL+"-15m-"+y+"-"+mm+".zip";
+    const url="https://data.binance.vision/data/spot/monthly/klines/"+SYMBOL+"/15m/"+name;
+    const csv=await downloadCsv(url);
+    if (csv===null) {
+      const daysInMonth=new Date(Date.UTC(y,m,0)).getUTCDate();
+      for(let d=1;d<=daysInMonth;d++) {
+        const date=y+"-"+mm+"-"+String(d).padStart(2,"0");
+        const daily="https://data.binance.vision/data/spot/daily/klines/"+SYMBOL+"/15m/"+SYMBOL+"-15m-"+date+".zip";
+        parseCsv(await downloadCsv(daily));
       }
-      throw new Error("Binance HTTP " + response.status + ": " + (await response.text()).slice(0, 300));
-    }
-    if (!Array.isArray(data)) throw new Error("Binance returned invalid klines");
-    if (!data.length) break;
-    for (const x of data) {
-      const c = { time:+x[0], open:+x[1], high:+x[2], low:+x[3], close:+x[4], volume:+x[5], closeTime:+x[6] };
-      if (c.closeTime < end && c.time >= start) rows.push(c);
-    }
-    const next = Number(data[data.length - 1][0]) + INTERVAL;
-    if (next <= cursor) throw new Error("Binance pagination did not advance");
-    cursor = next;
-    await new Promise(r => setTimeout(r, 120));
+    } else parseCsv(csv);
+    await new Promise(r=>setTimeout(r,100));
+  }
+  const cy=now.getUTCFullYear(), cm=now.getUTCMonth()+1;
+  const lastDay=new Date(Date.UTC(cy,cm-1,now.getUTCDate()-1)).getUTCDate();
+  const cmm=String(cm).padStart(2,"0");
+  for(let d=1;d<=lastDay;d++) {
+    const date=cy+"-"+cmm+"-"+String(d).padStart(2,"0");
+    const url="https://data.binance.vision/data/spot/daily/klines/"+SYMBOL+"/15m/"+SYMBOL+"-15m-"+date+".zip";
+    parseCsv(await downloadCsv(url));
+    await new Promise(r=>setTimeout(r,80));
+  }
+  const map=new Map(rows.map(x=>[x.time,x]));
+  return [...map.values()].sort((a,b)=>a.time-b.time);
+} 120));
   }
   const map = new Map(rows.map(x => [x.time, x]));
   return [...map.values()].sort((a,b)=>a.time-b.time);
