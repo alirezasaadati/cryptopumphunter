@@ -1872,7 +1872,8 @@ export class SignalDeliveryCoordinator {
           if(!["SENDING","UNCERTAIN"].includes(record.status))throw new Error("Only SENDING or UNCERTAIN records can be retried.");
           if(!record.signal||typeof record.messageText!=="string")throw new Error("This older outbox record has no retry payload.");
           await this.env.APP_KV.put(key,JSON.stringify({...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
-          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,chatId,record.signal,record.messageText,record.replyMarkup??null,record.parseMode??"HTML");
+          await this.ctx.storage.put("signal-outbox:"+key,{...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString()});
+          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,this.ctx,chatId,record.signal,record.messageText,record.replyMarkup??null,record.parseMode??"HTML");
           return Response.json({ok:true,result});
         }
         throw new Error("Unknown reconciliation action.");
