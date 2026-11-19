@@ -1,0 +1,31 @@
+name: Standalone Fibonacci two-model backtest
+on:
+  push:
+    branches: [fib-only-two-models]
+    paths:
+      - '.github/workflows/fibonacci-only-backtest.yml'
+      - 'scripts/fibonacci-only-backtest.mjs'
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run one-year standalone Fibonacci comparison
+        env:
+          BACKTEST_START: '2025-11-19T00:00:00Z'
+          BACKTEST_END: '2026-11-19T00:00:00Z'
+          BACKTEST_SYMBOLS: '8'
+          BACKTEST_FEE: '0.0005'
+          BACKTEST_SLIPPAGE: '0.0003'
+        run: node scripts/fibonacci-only-backtest.mjs
+      - name: Upload standalone Fibonacci reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fibonacci-only-comparison
+          path: artifacts/
+          if-no-files-found: warn
