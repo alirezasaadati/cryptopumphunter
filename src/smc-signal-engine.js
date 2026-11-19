@@ -158,8 +158,13 @@ function findLtfChoch(candles,side){
     const prefix=candles.slice(0,i+1);
     const pivots=confirmedPivots(prefix);
     const atr=calculateATR(prefix).at(-1);
+    // A CHOCH must reverse the immediately preceding confirmed LTF structure,
+    // not merely break structure in the already prevailing direction.
+    const priorTrend=classifyStructure(prefix.slice(0,-1)).direction;
+    const requiredPrior=side==="LONG"?"BEARISH":"BULLISH";
+    if(priorTrend!==requiredPrior)continue;
     const event=structureBreak(prefix,side,pivots,atr);
-    if(event)return{...event,index:i,pivots,atr};
+    if(event)return{...event,index:i,pivots,atr,priorTrend};
   }
   return null;
 }
