@@ -1,0 +1,30 @@
+name: BTCUSDT mean-reversion exit and stop comparison
+on:
+  push:
+    branches: [experiment/meanrev-exits-stop-comparison]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Repository tests
+        run: npm test
+      - name: Validate benchmark script
+        run: node --check scripts/btcusdt-meanrev-exit-stop-comparison.mjs
+      - name: Run one-year BTCUSDT exit and stop comparison
+        run: node scripts/btcusdt-meanrev-exit-stop-comparison.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: btcusdt-meanrev-exit-stop-comparison
+          path: artifacts/btcusdt-low-risk-mean-reversion.*
+          if-no-files-found: warn
+          retention-days: 30
