@@ -1272,9 +1272,9 @@ const FUTURES_CONFIG = {
   ENTRY_CONFIRM_INTERVAL: "15m",
   SIGNAL_TTL_MINUTES: 60,
   MAX_ENTRY_DRIFT_PCT: 0.35,
-  MAX_ENTRY_EMA_DISTANCE_ATR: 0.85,
+  MAX_ENTRY_EMA_DISTANCE_ATR: 1.25,
   MAX_PULLBACK_DISTANCE_ATR: 0.35,
-  MAX_RECLAIM_EXTENSION_ATR: 0.85
+  MAX_RECLAIM_EXTENSION_ATR: 1.25
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
@@ -1396,8 +1396,9 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
     return { ok: false, rejected: "ورود دیرهنگام است؛ قیمت بیش از حد از EMA20 فاصله دارد", driftPct, emaDistanceAtr };
   }
 
-  if (!Array.isArray(candles15m) || candles15m.length < FUTURES_CONFIG.MIN_CANDLES) {
-    return { ok: false, rejected: "داده کندل ۱۵دقیقه‌ای برای تأیید ورود کافی نیست", driftPct, emaDistanceAtr };
+  const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
+  if (!has15mData) {
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
   }
   const closes15m = candles15m.map(c => c.close);
   const ema9_15m = ema(closes15m, 9);
@@ -1406,31 +1407,25 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
   const last15m = candles15m[candles15m.length - 1];
   const recentPullback = candles15m.slice(-9, -1);
   if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) {
-    return { ok: false, rejected: "اندیکاتورهای تأیید ۱۵دقیقه‌ای معتبر نیستند", driftPct, emaDistanceAtr };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
   }
 
   const aligned = side === "LONG"
     ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open
     : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open;
-  if (!aligned) {
-    return { ok: false, rejected: "جهت حرکت و مومنتوم ۱۵دقیقه‌ای ورود را تأیید نمی‌کند", driftPct, emaDistanceAtr };
-  }
-
   const touchedPullbackZone = side === "LONG"
     ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR)
     : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
-  if (!touchedPullbackZone) {
-    return { ok: false, rejected: "پولبک معتبر به محدوده EMA21 در تایم‌فریم ۱۵دقیقه تشکیل نشده است", driftPct, emaDistanceAtr };
-  }
 
   const reclaimExtensionAtr = side === "LONG"
     ? (last15m.close - ema9_15m) / atr15m
     : (ema9_15m - last15m.close) / atr15m;
   if (reclaimExtensionAtr > FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR) {
-    return { ok: false, rejected: "قیمت پس از پولبک بیش از حد از نقطه تأیید فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
+    return { ok: false, rejected: "قیمت پس از حرکت تأییدی بیش از حد از محدوده ورود فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
   }
 
-  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m };
+  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
+    momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
 }
 
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m) {
@@ -1512,7 +1507,11 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m) {
   }
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
-  reasons.push("روند و پولبک ۱۵دقیقه‌ای تأیید شدند");
+  if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
+    reasons.push("مومنتوم و پولبک ۱۵دقیقه‌ای تأیید شدند");
+  } else {
+    reasons.push("تأیید ۱۵دقیقه‌ای کامل نبود؛ سیگنال به‌دلیل آن حذف نشد");
+  }
 
   const entry = Number(ticker.last);
   const swing = candles1h.slice(-8, -1);
@@ -2031,7 +2030,7 @@ async function runFuturesSignalScan(env, options = {}) {
       const [oneHour, fourHour, fifteenMinute] = await Promise.all([
         getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.INTERVAL),
         getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL),
-        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL)
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL).catch(() => [])
       ]);
       return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute);
     } catch (error) {
