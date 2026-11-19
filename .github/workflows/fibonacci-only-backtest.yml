@@ -30,4 +30,4 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
 
-# Trigger corrected one-entry-per-swing validation run.
+# Trigger final corrected one-entry-per-swing validation run.
