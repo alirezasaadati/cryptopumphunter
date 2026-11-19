@@ -12,9 +12,10 @@ for (const symbol of symbols) {
   console.log(`  complete: ${dataset[symbol].length} candles`);
   if (dataset[symbol].length < 5000) throw new Error(`Insufficient historical candles for ${symbol}`);
 }
-const report = runHistoricalComparison(dataset);
+const splitTime = endTime - Math.floor(days / 2) * 86400000;
+const report = runHistoricalComparison(dataset, splitTime);
 const file = "historical-backtest-report.json";
 await writeFile(file, JSON.stringify(report,null,2));
 console.log("\nHISTORICAL BACKTEST SUMMARY");
-console.log(JSON.stringify({ periodDays:days, symbols, candleCounts:Object.fromEntries(Object.entries(dataset).map(([k,v])=>[k,v.length])), models:report.models, assumptions:report.assumptions },null,2));
+console.log(JSON.stringify({ periodDays:days, symbols, candleCounts:Object.fromEntries(Object.entries(dataset).map(([k,v])=>[k,v.length])), models:report.models, walkForward:report.walkForward, assumptions:report.assumptions },null,2));
 console.log(`Full trade-level report: ${file}`);
