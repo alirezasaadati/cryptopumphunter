@@ -125,7 +125,7 @@ function metrics(trades){
   return{trades:trades.length,wins:wins.length,losses:losses.length,breakeven:trades.length-wins.length-losses.length,
     winRatePct:trades.length?100*wins.length/trades.length:0,netR:trades.reduce((s,t)=>s+t.netR,0),
     expectancyR:trades.length?trades.reduce((s,t)=>s+t.netR,0)/trades.length:0,
-    profitFactor:grossLoss?grossWin/grossLoss:grossWin?null:0,maxDrawdownR:maxDD,
+    profitFactor:trades.length===0?null:grossLoss?grossWin/grossLoss:grossWin?null:0,maxDrawdownR:maxDD,
     targetHits:trades.reduce((s,t)=>s+t.targetHits,0)};
 }
 async function main(){
@@ -196,7 +196,7 @@ async function main(){
     "## Data & execution","",
     "- Binance Spot public klines; "+m5.length+" M5, "+m15.length+" M15, "+h4.length+" H4 candles",
     "- H4 trend / M15 liquidity + OB / M5 CHOCH + FVG",
-    "- Entry next M5 open; fee 0.05% and slippage 0.03% per side",
+    "- OB/FVG midpoint limit entry; wait up to 12 M5 bars; favorable gap fills at open; fee 0.05% and slippage 0.03% per side",
     "- Partial exits 40% / 35% / 25%; stop-first ambiguity; max hold 72h",
     "- News layer bypassed as CLEAR; this is technical-only and does not validate news filter","",
     "## Results","",
