@@ -1,4 +1,4 @@
-name: Current engine indicator benchmark
+name: SMC and Lorentzian deep benchmark
 on:
   push:
     branches: [experiment/current-engine-indicator-benchmark, experiment/smc-lorentzian-deep-benchmark]
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: btcusdt-indicator-benchmark
-          path: artifacts/btcusdt-indicator-benchmark.*
+          name: btcusdt-smc-lorentzian-deep
+          path: artifacts/btcusdt-smc-lorentzian-deep.*
           if-no-files-found: warn
           retention-days: 30
