@@ -14,6 +14,18 @@ This directory is a standalone, isolated engine project. It is not imported by t
 - Paper mode only; no live trading or order placement
 - The health endpoint is the only implemented route
 
+## Public exchange adapters
+
+Read-only adapters are implemented under `src/exchanges/` for:
+- Binance Spot and USDⓈ-M perpetual markets
+- Bybit Spot and Linear markets
+- OKX Spot and SWAP markets
+- Kraken Spot and Futures public market data
+
+They normalize instrument metadata and 24-hour ticker snapshots. Selective enrichment methods exist for some derivatives metrics and order-book reads. These adapters are not yet connected to a scheduled scanner or D1 persistence. Kraken Futures symbol mapping and every live response shape still require read-only smoke tests before broad collection.
+
+The HTTP layer has bounded request timeouts and classifies rate limits; it intentionally does not retry 429 responses automatically. A future scheduler must respect each exchange's retry-after/rate-limit headers and request budget.
+
 ## Local checks
 
 From this directory:
