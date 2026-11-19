@@ -111,7 +111,11 @@ async function runSymbol(t,from,to){
     for(let evalNow=setupTime+M1+1;evalNow<=end;evalNow+=M1){
       const quoteTime=evalNow-1,qi=firstAtOrAfter(m1,quoteTime);
       if(qi<0||m1[qi].time!==quoteTime)continue;
-      result=evaluateShortTfConfirmation({side:liveCandidate.side,candles1m:m1,candles5m:m5,candles15m:m15,setupTime,now:evalNow,referencePrice:m1[qi].open,maxSetupAgeMs:MAX_SETUP_AGE});
+      const q5=firstAtOrAfter(m5,evalNow),q15=firstAtOrAfter(m15,evalNow);
+      const hist1=m1.slice(Math.max(0,qi-80),qi+1);
+      const hist5=m5.slice(Math.max(0,(q5<0?m5.length:q5)-80),q5<0?m5.length:q5+1);
+      const hist15=m15.slice(Math.max(0,(q15<0?m15.length:q15)-80),q15<0?m15.length:q15+1);
+      result=evaluateShortTfConfirmation({side:liveCandidate.side,candles1m:hist1,candles5m:hist5,candles15m:hist15,setupTime,now:evalNow,referencePrice:m1[qi].open,maxSetupAgeMs:MAX_SETUP_AGE});
       if(result.status==="CONFIRMED"){refIndex=qi;break;}
       if(result.status==="EXPIRED"){if(result.reason==="ENTRY_TOO_FAR_NO_CHASE")counts.noChase++;break;}
       if(String(result.reason||"").startsWith("EXPIRED_"))break;
