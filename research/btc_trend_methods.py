@@ -34,6 +34,26 @@ def fetch_month(year, month):
         except Exception: pass
     return rows
 
+def fetch_day(year, month, day):
+    name=f"{SYMBOL}-{INTERVAL}-{year}-{month:02d}-{day:02d}.zip"
+    url=f"https://data.binance.vision/data/futures/um/daily/klines/{SYMBOL}/{INTERVAL}/{name}"
+    req=urllib.request.Request(url,headers={"User-Agent":"BTC-trend-research/1.0"})
+    try:
+        with urllib.request.urlopen(req,timeout=30) as r: raw=r.read()
+    except Exception as e:
+        print(f"DATA_WARNING {name}: {e}")
+        return []
+    with zipfile.ZipFile(io.BytesIO(raw)) as z: text=z.read(z.namelist()[0]).decode("utf-8")
+    rows=[]
+    for row in csv.reader(io.StringIO(text)):
+        if len(row)<7 or not row[0].isdigit(): continue
+        try:
+            t=int(row[0]);vals=[float(row[i]) for i in range(1,6)];close_t=int(row[6])
+            if vals[0]>0 and vals[1]>=vals[2]>0 and vals[3]>0:
+                rows.append([t,vals[0],vals[1],vals[2],vals[3],vals[4],close_t])
+        except Exception: pass
+    return rows
+
 def load_data():
     now=int(time.time()*1000); start=now-370*86400000
     d=datetime.fromtimestamp(start/1000,timezone.utc); end=datetime.fromtimestamp(now/1000,timezone.utc)
@@ -41,6 +61,12 @@ def load_data():
     while (y,m)<=(end.year,end.month):
         rows.extend(fetch_month(y,m)); m+=1
         if m==13: y,m=y+1,1
+    # Binance's monthly archive for the current month is not published until month-end.
+    # Fill the current month from daily archives so the sample reaches the latest closed 4h candle.
+    day=datetime(end.year,end.month,1,tzinfo=timezone.utc)
+    while day<=end:
+        rows.extend(fetch_day(day.year,day.month,day.day))
+        day=day.replace(day=day.day+1) if day.day<28 else (day+__import__("datetime").timedelta(days=1))
     by_time={r[0]:r for r in rows if start<=r[0]<now and r[6]<now}
     data=sorted(by_time.values(),key=lambda r:r[0])
     if len(data)<1200: raise RuntimeError(f"Insufficient BTC 4h history: {len(data)} rows")
