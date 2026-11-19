@@ -1557,9 +1557,12 @@ async function savePendingFuturesSignals(env,fresh){
 const tradeDir=side=>side==="LONG"?1:-1;
 const targetReached=(side,p,t)=>side==="LONG"?p>=t:p<=t;
 const stopReached=(side,p,t)=>side==="LONG"?p<=t:p>=t;
+const FUTURES_DISPLAY_LEVERAGE=10;
 function priceChangePercent(side,entry,exit){const e=Number(entry),x=Number(exit);return Number.isFinite(e)&&e>0&&Number.isFinite(x)?tradeDir(side)*(x-e)/e*100:null}
+function leveragedPriceChangePercent(side,entry,exit){const p=priceChangePercent(side,entry,exit);return p===null?null:p*FUTURES_DISPLAY_LEVERAGE}
+function formatOutcomePercent(value){const n=Number(value);if(!Number.isFinite(n))return "—";const label=n>0?"سود":n<0?"زیان":"سر‌به‌سر";return `${Math.abs(n).toFixed(2)}٪ ${label}`}
 function tradeResultR(t,includeRemainder){const risk=Number(t.initialRisk),entry=Number(t.actualEntry);if(!Number.isFinite(risk)||risk<=0||!Number.isFinite(entry)||entry<=0)return null;const levels=[["TP1",.4,Number(t.target1)],["TP2",.35,Number(t.target2)],["TP3",.25,Number(t.target3)]];let r=0,weight=0;for(const[k,w,target]of levels)if((t.tpHits||[]).includes(k)&&Number.isFinite(target)){r+=w*tradeDir(t.side)*(target-entry)/risk;weight+=w}if(includeRemainder)r+=(1-weight)*tradeDir(t.side)*(Number(t.currentStop)-entry)/risk;return r}
-function tradeOutcomePercent(t,exitPrice){const e=Number(t.actualEntry);if(!Number.isFinite(e)||e<=0)return null;const levels=[["TP1",.4,t.target1],["TP2",.35,t.target2],["TP3",.25,t.target3]];let out=0,w=0;for(const[k,wt,target]of levels)if((t.tpHits||[]).includes(k)&&Number.isFinite(Number(target))){const p=priceChangePercent(t.side,e,target);if(p!==null){out+=wt*p;w+=wt}}if(w<1){const p=priceChangePercent(t.side,e,exitPrice);if(p!==null)out+=(1-w)*p}return out}
+function tradeOutcomePercent(t,exitPrice){const e=Number(t.actualEntry??t.entry);if(!Number.isFinite(e)||e<=0)return null;const levels=[["TP1",.4,t.target1],["TP2",.35,t.target2],["TP3",.25,t.target3]];let out=0,w=0;for(const[k,wt,target]of levels)if((t.tpHits||[]).includes(k)&&Number.isFinite(Number(target))){const p=priceChangePercent(t.side,e,target);if(p!==null){out+=wt*p;w+=wt}}if(w<1){const p=priceChangePercent(t.side,e,exitPrice);if(p!==null)out+=(1-w)*p}return out*FUTURES_DISPLAY_LEVERAGE}
 function getNewClosedFuturesCandles(candles,lastCheckedCandleTime=0){return(Array.isArray(candles)?candles:[]).filter(c=>Number(c.time)>Number(lastCheckedCandleTime||0)).sort((a,b)=>a.time-b.time)}
 function ensureTradeTrackingCheckpoint(trade,now=Date.now()){if(!Number.isFinite(Number(trade?.lastCheckedCandleTime))||Number(trade.lastCheckedCandleTime)<=0){trade.lastCheckedCandleTime=Math.floor(now/60000)*60000;trade.trackingMode=trade.trackingMode||"LEGACY_CONTINUED";return true}return false}
 function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),targets=[Number(signal?.target1),Number(signal?.target2),Number(signal?.target3)];if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,...targets].every(Number.isFinite)||![entry,stop,...targets].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<targets[0]&&targets[0]<targets[1]&&targets[1]<targets[2]:stop>entry&&entry>targets[0]&&targets[0]>targets[1]&&targets[1]>targets[2]}
@@ -1840,10 +1843,10 @@ async function refreshTrackedFuturesTrades(env,chatId=null){
   return{checked,closed:closedCount};
 }
 async function notifyTradeMilestone(env,trade,key,target){
-  const p=priceChangePercent(trade.side,trade.actualEntry,target);
+  const p=leveragedPriceChangePercent(trade.side,trade.actualEntry,target);
   const labels={TP1:"🎯 هدف اول",TP2:"🎯 هدف دوم",TP3:"🎯 هدف سوم"};
   const direction=trade.side==="LONG"?"🟢 لانگ / Long":"🔴 شورت / Short";
-  const profit=p===null?"—":`${Math.abs(Number(p)*10).toFixed(2)}٪`;
+  const profit=p===null?"—":`${Math.abs(Number(p)).toFixed(2)}٪`;
   await sendMessage(env,trade.chatId,
     `${labels[key]||key} ${formatFuturesSymbol(trade.symbol)} لمس شد.\nجهت معامله: ${direction}\nقیمت هدف: ${formatPrice(target)}\n🥳 درصد سود: ${profit}`);
 }
@@ -1890,10 +1893,10 @@ async function showOpenFuturesTrades(env,chatId){
   const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));
   if(!list.length)return sendMessage(env,chatId,"📭 معامله بازی در دفتر پیگیری ثبت نشده است.",BACK_MENU);
   const body=list.slice(0,15).map(t=>{
-    const p=priceChangePercent(t.side,t.actualEntry,t.lastPrice);
+    const p=leveragedPriceChangePercent(t.side,t.actualEntry,t.lastPrice);
     const label=t.tier==="EXPERIMENTAL"?"🟠 سیگنال پر ریسک":"🟢 سیگنال معتبر";
     const direction=t.side==="LONG"?"🟢 لانگ / Long":"🔴 شورت / Short";
-    return `${label}\nنماد: ${formatFuturesSymbol(t.symbol)}\nجهت معامله: ${direction}\nورود: ${formatPrice(t.actualEntry)}\nقیمت فعلی: ${formatPrice(t.lastPrice)}\nبازده فعلی: ${Number.isFinite(p)?(p>=0?"+":"")+p.toFixed(2)+"%":"—"}\n\n🎯 تارگت اول: ${formatPrice(t.target1)}\n🎯 تارگت دوم: ${formatPrice(t.target2)}\n🎯 تارگت سوم: ${formatPrice(t.target3)}\n\n⛔ حد ضرر: ${formatPrice(t.currentStop)}\nاهداف لمس‌شده: ${t.tpHits.join(", ")||"—"}`;
+    return `${label}\nنماد: ${formatFuturesSymbol(t.symbol)}\nجهت معامله: ${direction}\nورود: ${formatPrice(t.actualEntry)}\nقیمت فعلی: ${formatPrice(t.lastPrice)}\nدرصد سود/زیان فعلی: ${formatOutcomePercent(p)}\n\n🎯 تارگت اول: ${formatPrice(t.target1)}\n🎯 تارگت دوم: ${formatPrice(t.target2)}\n🎯 تارگت سوم: ${formatPrice(t.target3)}\n\n⛔ حد ضرر: ${formatPrice(t.currentStop)}\nاهداف لمس‌شده: ${t.tpHits.join(", ")||"—"}`;
   }).join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
   return sendLongMessage(env,chatId,"📌 معاملات باز / سیگنال‌های در حال ارزیابی\n━━━━━━━━━━━━━━━━━━\n\n"+body+"\n\n⚠️ این دفتر ارزیابی است؛ سفارش واقعی ثبت نمی‌شود.");
 }
@@ -2098,7 +2101,7 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
       t.status="CLOSED_STOP";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,true);t.outcomePercent=tradeOutcomePercent(t,price);t.closeReason="STOP_LOSS";
       closed.unshift(t);
       await updateIssuedSignal(env.APP_KV,t.chatId,t);
-      await sendMessage(env,chatId,`🛑 ${formatFuturesSymbol(t.symbol)} به حد ضرر فعلی رسید. نتیجه نظری: ${t.outcomeR.toFixed(2)}R | اهداف لمس‌شده: ${t.tpHits.join(",")||"هیچ‌کدام"}`);
+      await sendMessage(env,chatId,`🛑 ${formatFuturesSymbol(t.symbol)} به حد ضرر فعلی رسید. نتیجه: ${formatOutcomePercent(t.outcomePercent)} | نتیجه بر اساس ریسک: ${t.outcomeR.toFixed(2)}R | اهداف لمس‌شده: ${t.tpHits.join(",")||"هیچ‌کدام"}`);
       continue;
     }
     const favorableR=tradeDir(t.side)*(price-t.actualEntry)/t.initialRisk;
@@ -2115,7 +2118,7 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
     }
     if(t.tpHits.includes("TP3")) {
       t.status="CLOSED_TARGETS";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,false);t.outcomePercent=tradeOutcomePercent(t,price);t.closeReason="TP3";
-      closed.unshift(t);await updateIssuedSignal(env.APP_KV,t.chatId,t);await sendMessage(env,chatId,`🏁 هر سه هدف ${formatFuturesSymbol(t.symbol)} لمس شد. نتیجه نظری پیش از کارمزد: +${t.outcomeR.toFixed(2)}R.`);continue;
+      closed.unshift(t);await updateIssuedSignal(env.APP_KV,t.chatId,t);await sendMessage(env,chatId,`🏁 هر سه هدف ${formatFuturesSymbol(t.symbol)} لمس شد. نتیجه: ${formatOutcomePercent(t.outcomePercent)} | نتیجه بر اساس ریسک: ${t.outcomeR.toFixed(2)}R.`);continue;
     }
     await updateIssuedSignal(env.APP_KV,t.chatId,t);
     remaining.push(t);
