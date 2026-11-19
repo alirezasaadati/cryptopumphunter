@@ -190,8 +190,8 @@ test("15m confirmation rejects opposite momentum",()=>{
 });
 
 test("15m pullback filter rejects a trend continuation without a pullback touch",()=>{
-  const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
-  const altered=fifteenMinute.map(c=>({...c,low:c.close-0.001}));
+  const {ticker,oneHour}=makeSetup("LONG");
+  const altered=makeCandles({count:120,slope:0.03,base:100}).map(c=>({...c,low:c.close-0.001}));
   const priorEma9=testEma(altered.slice(0,-1).map(c=>c.close),9);
   altered.at(-1).close=priorEma9+0.05;
   altered.at(-1).open=priorEma9+0.02;
