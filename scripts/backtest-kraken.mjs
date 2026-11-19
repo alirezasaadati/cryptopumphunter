@@ -125,8 +125,8 @@ function metrics(trades) {
 
 function simulate(candles, entryIndex, side, entry, stop, target) {
   const dir=side==="LONG"?1:-1;
-  const risk=dir===1?entry-stop:stop-entry;
   const entryFill=entry*(1+dir*SLIPPAGE);
+  const risk=dir===1?entryFill-stop:stop-entryFill;
   const end=Math.min(candles.length-1,entryIndex+MAX_HOLD_BARS);
   for (let i=entryIndex;i<=end;i++) {
     const c=candles[i];
@@ -158,7 +158,7 @@ function runBacktest(m15,h4) {
   const h4Swings=findSwings(h4,H4_ORDER);
   const m15Swings=findSwings(m15,M15_ORDER);
   let h4Ptr=0,m15Ptr=0,h4Highs=[],h4Lows=[],mHighs=[],mLows=[];
-  let h4Index=-1, activeUntil=-1, signals=0, invalidRR=0;
+  let h4Index=-1, activeUntil=-1, signals=0, invalidRR=0, rrQualified=0, overlapSkipped=0;
   const trades=[];
   const signalRows=[];
   for (let i=0;i<m15.length-1;i++) {
@@ -201,12 +201,14 @@ function runBacktest(m15,h4) {
     const next=m15[i+1];
     const entry=next.open;
     const dir=side==="LONG"?1:-1;
-    const risk=dir===1?entry-stop:stop-entry;
-    const reward=dir===1?target-entry:entry-target;
+    const entryFill=entry*(1+dir*SLIPPAGE);
+    const risk=dir===1?entryFill-stop:stop-entryFill;
+    const reward=dir===1?target-entryFill:entryFill-target;
     if (!(risk>0 && reward>0 && reward/risk>=MIN_RR)) {invalidRR++;continue;}
+    rrQualified++;
     const signalId=side+":"+m15[i].time+":"+broken+":"+correctionPivot;
-    signalRows.push({time:m15[i].time,side,entry,stop,target,rr:reward/risk,signalId});
-    if (i+1<=activeUntil) continue;
+    signalRows.push({time:m15[i].time,side,entry:entryFill,stop,target,rr:reward/risk,signalId});
+    if (i+1<=activeUntil) {overlapSkipped++;continue;}
     const trade=simulate(m15,i+1,side,entry,stop,target);
     if (trade) {
       trade.signalTime=m15[i].time;
@@ -216,7 +218,7 @@ function runBacktest(m15,h4) {
       activeUntil=exitIndex;
     }
   }
-  return {signals,invalidRR,executed:trades.length,trades,metrics:metrics(trades),signalRows};
+  return {signals,invalidRR,rrQualified,overlapSkipped,executed:trades.length,trades,metrics:metrics(trades),signalRows};
 }
 
 function periodSummary(trades) {
@@ -241,7 +243,7 @@ async function main() {
     period:{from:new Date(candles[0].time).toISOString(),to:new Date(candles[candles.length-1].time+INTERVAL).toISOString(),days:DAYS},
     data:{m15Candles:candles.length,h4Candles:h4.length,missing15mIntervals:gaps.length,missingSamples:gaps.slice(0,10)},
     parameters:{h4SwingOrder:H4_ORDER,m15SwingOrder:M15_ORDER,minRiskReward:MIN_RR,feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,maxHoldingHours:72,entry:"next 15m candle open",sameCandleStopTarget:"stop first",capitalAllocation:"1R normalized; no compounding"},
-    summary:{signals:result.signals,signalsRejectedByRR:result.invalidRR,executedTrades:result.executed,overall:result.metrics,
+    summary:{signals:result.signals,signalsRejectedByRR:result.invalidRR,rrQualified:result.rrQualified,skippedDueToOpenTrade:result.overlapSkipped,executedTrades:result.executed,overall:result.metrics,
       long:metrics(long),short:metrics(short),monthly:periodSummary(result.trades)},
     trades:result.trades,signals:result.signalRows
   };
@@ -264,7 +266,7 @@ async function main() {
     "| SL exits | "+result.metrics.stopExits+" | "+metrics(long).stopExits+" | "+metrics(short).stopExits+" |",
     "| Time exits | "+result.metrics.timeExits+" | "+metrics(long).timeExits+" | "+metrics(short).timeExits+" |",
     "",
-    "Signals detected: "+result.signals+"; rejected by RR at next-open execution: "+result.invalidRR+".",
+    "Signals detected: "+result.signals+"; rejected by RR at next-open execution: "+result.invalidRR+"; RR-qualified: "+result.rrQualified+"; skipped because another trade was open: "+result.overlapSkipped+".",
     "Assumptions: entry at next 15m open; 0.05% fee and 0.03% slippage each side; full exit at one H4 swing target; 72h max hold; stop-first when SL and TP touch in the same candle; one open trade at a time. Results are normalized in R and exclude funding.",
     "",
     "## Monthly",
