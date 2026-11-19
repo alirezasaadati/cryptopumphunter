@@ -1839,7 +1839,17 @@ async function refreshTrackedFuturesTrades(env,chatId=null){
   }
   return{checked,closed:closedCount};
 }
-async function notifyTradeMilestone(env,trade,key,target){const p=priceChangePercent(trade.side,trade.actualEntry,target),labels={TP1:"🥇 هدف اول",TP2:"🥈 هدف دوم",TP3:"🥉 هدف سوم"},weight={TP1:"۴۰٪",TP2:"۳۵٪",TP3:"۲۵٪"};await sendMessage(env,trade.chatId,`${labels[key]||key} ${formatFuturesSymbol(trade.symbol)} لمس شد.\nقیمت هدف: ${formatPrice(target)}\nبازده قیمتی تا این هدف: ${p>=0?"+":""}${Number(p).toFixed(2)}%\nسهم مدل: ${weight[key]||"—"}\nمعامله هنوز باز است و حد ضرر اولیه دست‌نخورده باقی می‌ماند.`)}
+async function notifyTradeMilestone(env,trade,key,target){
+  const p=priceChangePercent(trade.side,trade.actualEntry,target);
+  const labels={TP1:"🎯 هدف اول",TP2:"🎯 هدف دوم",TP3:"🎯 هدف سوم"};
+  const closed={TP1:40,TP2:75,TP3:100}[key] ?? 0;
+  const remaining=Math.max(0,100-closed);
+  const status=remaining>0
+    ? `${remaining}٪ از حجم معامله همچنان باز است.\nحد ضرر اولیه بدون تغییر باقی مانده است.`
+    : "کل حجم معامله بسته شد و معامله تکمیل شد.";
+  await sendMessage(env,trade.chatId,
+    `${labels[key]||key} ${formatFuturesSymbol(trade.symbol)} لمس شد.\nقیمت هدف: ${formatPrice(target)}\nبازده قیمتی: ${p>=0?"+":""}${Number(p).toFixed(2)}%\nدرصد حجم بسته‌شده: ${closed}٪\n${status}`);
+}
 async function handleTradeAction(action,chatId,env){const[,op]=action.split(":");if(op==="be")return sendMessage(env,chatId,"ℹ️ در نسخه جدید حد ضرر سیگنال خودکار جابه‌جا نمی‌شود؛ برای ارزیابی منصفانه حد ضرر اولیه ثابت می‌ماند.");if(op==="skip"||op==="enter")return sendMessage(env,chatId,"ℹ️ این نسخه هر سیگنال صادرشده را خودکار در دفتر ارزیابی ثبت می‌کند؛ ثبت دستی لازم نیست.")}
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت دستی معامله در نسخه جدید غیرفعال است؛ سیگنال‌های صادرشده خودکار در دفتر ارزیابی ثبت می‌شوند.")}
 async function showIssuedSignalSymbols(env,chatId,view="archive"){
@@ -2103,9 +2113,10 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
     const levels=[["TP1",t.target1],["TP2",t.target2],["TP3",t.target3]],hits=[];
     for(const [key,target] of levels)if(!t.tpHits.includes(key)&&targetReached(t.side,price,target)){t.tpHits.push(key);hits.push(key);}
     for(const hit of hits) {
-      if(hit==="TP1")await sendMessage(env,chatId,`🎯 هدف اول ${formatFuturesSymbol(t.symbol)} لمس شد. ۴۰٪ حجم در مدل ثبت شد. اگر واقعاً بخشی از معامله را بسته‌ای، حد ضرر باقی‌مانده را در صرافی به نقطه ورود منتقل کن و سپس تأیید کن.`,
-        {inline_keyboard:[[{text:"✅ حد ضرر را به ورود منتقل کردم",callback_data:`trade:be:${t.id}`}]]});
-      if(hit==="TP2")await sendMessage(env,chatId,`🥈 هدف دوم ${formatFuturesSymbol(t.symbol)} لمس شد؛ ۳۵٪ دیگر در مدل ثبت شد.`);
+      if(hit==="TP1"||hit==="TP2") {
+        const target=hit==="TP1"?t.target1:t.target2;
+        await notifyTradeMilestone(env,t,hit,target);
+      }
     }
     if(t.tpHits.includes("TP3")) {
       t.status="CLOSED_TARGETS";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,false);t.outcomePercent=tradeOutcomePercent(t,price);t.closeReason="TP3";
