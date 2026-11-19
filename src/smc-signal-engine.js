@@ -140,12 +140,15 @@ function fvgAfterChoch(candles,side,fromIndex){
   return null;
 }
 function findLtfChoch(candles,side){
-  const pivots=confirmedPivots(candles);
-  const atrs=calculateATR(candles);
-  const atr=atrs.at(-1);
-  const breakEvent=structureBreak(candles,side,pivots,atr);
-  if(!breakEvent)return null;
-  return{...breakEvent,index:candles.length-1,pivots,atr};
+  // Search only closed prefixes; a later FVG must form after this CHOCH.
+  for(let i=candles.length-1;i>=SMC_CONFIG.MIN_CANDLES;i--){
+    const prefix=candles.slice(0,i+1);
+    const pivots=confirmedPivots(prefix);
+    const atr=calculateATR(prefix).at(-1);
+    const event=structureBreak(prefix,side,pivots,atr);
+    if(event)return{...event,index:i,pivots,atr};
+  }
+  return null;
 }
 
 function normalizeNews(news){
@@ -187,11 +190,16 @@ export function analyzeSMCSignal({symbol,higherTimeframe,structureTimeframe,entr
   const side=ht.direction==="BULLISH"?"LONG":"SHORT";
   const sAtr=calculateATR(structureTimeframe).at(-1);
   const pivots=confirmedPivots(structureTimeframe);
-  const sweep=liquidityEvent(structureTimeframe,side,pivots,sAtr);
+  let sweep=null;
+  for(let i=Math.max(SMC_CONFIG.MIN_CANDLES,structureTimeframe.length-16);i<structureTimeframe.length-1;i++){
+    const prefix=structureTimeframe.slice(0,i+1);
+    const event=liquidityEvent(prefix,side,confirmedPivots(prefix),calculateATR(prefix).at(-1));
+    if(event){sweep={...event,index:i};break;}
+  }
   if(!sweep)return empty("جمع‌آوری نقدینگی معتبر در تایم‌فریم ساختار مشاهده نشد.",{higherTrend:ht.direction});
   const bos=structureBreak(structureTimeframe,side,pivots,sAtr);
-  if(!bos)return empty("شکست ساختار با بسته‌شدن بدنه و جابه‌جایی ATR تأیید نشد.",{liquiditySweep:sweep});
-  const ob=findOrderBlock(structureTimeframe,side,bos.pivotIndex);
+  if(!bos||sweep.index>=structureTimeframe.length-1)return empty("شکست ساختار با بسته‌شدن بدنه و جابه‌جایی ATR پس از sweep تأیید نشد.",{liquiditySweep:sweep});
+  const ob=findOrderBlock(structureTimeframe,side,structureTimeframe.length-1);
   if(!ob)return empty("اردربلاک معتبر پیش از شکست ساختار پیدا نشد.",{bos});
   const distance=side==="LONG"?Math.max(0,ob.low-structureTimeframe.at(-1).close,structureTimeframe.at(-1).close-ob.high):
     Math.max(0,ob.low-structureTimeframe.at(-1).close,structureTimeframe.at(-1).close-ob.high);
@@ -199,7 +207,7 @@ export function analyzeSMCSignal({symbol,higherTimeframe,structureTimeframe,entr
   const ltf=entryTimeframe;
   const choch=findLtfChoch(ltf,side);
   if(!choch)return empty("تغییر ساختار تایم پایین (LTF CHOCH) تأیید نشد.",{ob,liquiditySweep:sweep,bos});
-  const fvg=fvgAfterChoch(ltf,side,Math.max(2,choch.index-8));
+  const fvg=fvgAfterChoch(ltf,side,choch.index+1);
   if(!fvg)return empty("پس از CHOCH، شکاف ارزش منصفانه (FVG) معتبر تشکیل نشد.",{ob,choch});
   const obLtf={low:ob.low,high:ob.high};
   const fvgOverlapsOb=overlaps(fvg,obLtf);
@@ -211,6 +219,8 @@ export function analyzeSMCSignal({symbol,higherTimeframe,structureTimeframe,entr
   const usableZone=entryZone.low<=entryZone.high?entryZone:fvg;
   const entry=(usableZone.low+usableZone.high)/2;
   const eAtr=calculateATR(ltf).at(-1);
+  if(!eAtr||Math.abs(lastPrice-entry)>eAtr*SMC_CONFIG.OB_MAX_DISTANCE_ATR)
+    return empty("قیمت فعلی بیش از حد از ناحیه ورود FVG/OB فاصله گرفته است.",{ob,fvg,choch,entryZone:usableZone});
   const pad=eAtr*SMC_CONFIG.STOP_BUFFER_ATR;
   const stop=side==="LONG"?Math.min(ob.low,ltf.at(-1).low)-pad:Math.max(ob.high,ltf.at(-1).high)+pad;
   const riskPerUnit=side==="LONG"?entry-stop:stop-entry;
