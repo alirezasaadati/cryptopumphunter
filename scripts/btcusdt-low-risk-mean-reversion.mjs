@@ -140,19 +140,19 @@ function summarize(ts){
 }
 function simulate(bars,i,side,entry,stop,target,emaTarget){
  const dir=side==="LONG"?1:-1,risk=dir===1?entry-stop:stop-entry;if(!(risk>0))return null;
- let exit=null,reason="TIME_EXIT",gross=0;
- for(let j=i+1;j<=Math.min(bars.length-1,i+MAX_HOLD);j++){
+ let exit=null,reason="TIME_EXIT",gross=0,exitIdx=Math.min(bars.length-1,i+MAX_HOLD);
+ for(let j=i+1;j<=exitIdx;j++){
   const b=bars[j],stopHit=dir===1?b.low<=stop:b.high>=stop;
-  if(stopHit){exit=stop;reason="STOP";break;}
+  if(stopHit){exit=stop;reason="STOP";exitIdx=j;break;}
   const tp=emaTarget?b._ema20:target;
   const tpHit=finite(tp)&&(dir===1?b.high>=tp:b.low<=tp);
-  if(tpHit){exit=tp;reason=emaTarget?"EMA20":"TP";break;}
+  if(tpHit){exit=tp;reason=emaTarget?"EMA20":"TP";exitIdx=j;break;}
  }
- if(exit===null){exit=bars[Math.min(bars.length-1,i+MAX_HOLD)].close;reason="TIME_EXIT";}
+ if(exit===null){exit=bars[exitIdx].close;reason="TIME_EXIT";}
  const fill=exit*(1-dir*SLIPPAGE),entryFill=entry;
  gross=dir*(fill-entryFill)/risk;
  const feeR=FEE*(entryFill+fill)/risk;
- return{side,entry:entryFill,stop,target,exit:fill,netR:gross-feeR,exitReason:reason,signalTime:bars[i].time,exitTime:bars[Math.min(bars.length-1,i+MAX_HOLD)].time};
+ return{side,entry:entryFill,stop,target,exit:fill,netR:gross-feeR,exitReason:reason,signalTime:bars[i].time,exitTime:bars[exitIdx].time};
 }
 function mainBacktest(bars,variant,ind){
  const trades=[];let nextAllowed=0,lastSweepLong=-999,lastSweepShort=-999,lastChochLong=-999,lastChochShort=-999;
