@@ -111,6 +111,7 @@ function runVariant(symbol,bars,variant,level=null){
     const swing=confirmedSwing(history,closeTime);
     if(!swing)continue;
     if(swing.key!==lastSwingKey)lastSwingKey=swing.key;
+    if(consumedSwings.has(swing.key))continue;
     if(swing.endTime<=swing.anchorTime)continue;
     const eligible=variant==="all_levels"?touchedLevel(bar,levelPrice(swing,level)):touchedZone(bar,swing);
     if(!eligible)continue;
