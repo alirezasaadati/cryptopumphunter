@@ -12,6 +12,12 @@ jobs:
   tune:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        horizon_bars: [3, 6, 12]
+    env:
+      HORIZON_BARS: ${{ matrix.horizon_bars }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,6 +33,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: btc-top3-nested-tuning
-          path: research/artifacts/btc-top3-nested-tuning.json
+          name: btc-top3-nested-tuning-${{ matrix.horizon_bars }}bars
+          path: research/artifacts/btc-top3-nested-tuning-${{ matrix.horizon_bars }}bars.json
           if-no-files-found: error
