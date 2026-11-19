@@ -147,7 +147,7 @@ function summarize(model, trades) {
   return { model, trades:trades.length, wins:wins.length, losses:losses.length, winRatePct:trades.length?wins.length/trades.length*100:null, netReturnPct:netPct, assumedRiskPerTradePct:1, profitFactor:grossLoss?grossWin/grossLoss:(grossWin?null:0), maxDrawdownPct:maxDrawdown*100, expectancyPct:trades.length?trades.reduce((s,t)=>s+t.netReturnPct,0)/trades.length:null, averageR:trades.length?trades.reduce((s,t)=>s+t.rMultiple,0)/trades.length:null, longTrades:trades.filter(t=>t.direction==="long").length, shortTrades:trades.filter(t=>t.direction==="short").length };
 }
 
-export function runHistoricalComparison(dataset) {
+export function runHistoricalComparison(dataset, splitTime = null) {
   const profiles=[
     { id:"A", relativeVolume:1.35, require1h:true, rewardR:2.4, fibLookback:12, stopLookback:12, atrBuffer:0.15, minRiskPct:0.002, maxRiskPct:0.018 },
     { id:"B", relativeVolume:1.05, require1h:false, rewardR:2.1, fibLookback:12, stopLookback:12, atrBuffer:0.15, minRiskPct:0.002, maxRiskPct:0.022 }
@@ -157,5 +157,11 @@ export function runHistoricalComparison(dataset) {
     const sorted=candles.slice().sort((a,b)=>a.openTime-b.openTime);
     for (const profile of profiles) all.push(...runProfile(symbol,sorted,profile));
   }
-  return { generatedAt:new Date().toISOString(), candleInterval:"5m", feeRate:FEE_RATE, slippageRate:SLIPPAGE_RATE, assumptions:{ stopWinsWhenStopAndTargetTouchSameCandle:true, portfolioRiskPerTradePct:1, maxHoldingCandles:48, overlappingTradesPerSymbolAndModel:false, riskPerTradeNotional:"1% equity risk per trade; simultaneous cross-symbol portfolio cap not modeled",higherTimeframeCandlesMustBeComplete:true,entryOnNext5mOpenAfterSignalClose:true }, models:[summarize("A",all.filter(t=>t.model==="A")),summarize("B",all.filter(t=>t.model==="B"))], trades:all };
+  const models=["A","B"];
+  const walkForward=splitTime ? {
+    splitTime,
+    training:models.map(model=>summarize(model,all.filter(t=>t.model===model && t.entryTime<splitTime))),
+    holdout:models.map(model=>summarize(model,all.filter(t=>t.model===model && t.entryTime>=splitTime)))
+  } : null;
+  return { generatedAt:new Date().toISOString(), candleInterval:"5m", feeRate:FEE_RATE, slippageRate:SLIPPAGE_RATE, assumptions:{ stopWinsWhenStopAndTargetTouchSameCandle:true, portfolioRiskPerTradePct:1, maxHoldingCandles:48, overlappingTradesPerSymbolAndModel:false, riskPerTradeNotional:"1% equity risk per trade; simultaneous cross-symbol portfolio cap not modeled",higherTimeframeCandlesMustBeComplete:true,entryOnNext5mOpenAfterSignalClose:true,walkForwardSplit:"first half training; second half holdout; no parameter selection is automated" }, models:models.map(model=>summarize(model,all.filter(t=>t.model===model))), walkForward, trades:all };
 }
