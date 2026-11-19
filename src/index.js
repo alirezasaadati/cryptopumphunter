@@ -93,7 +93,7 @@ const CAPITAL_MANAGEMENT_TEXT =
   "🔹 اگر قیمت به تارگت اول رسیده است، از ورود دیرهنگام به همان سیگنال خودداری کنید.\n\n\n" +
   "<b>5️⃣ سیو سود و مدیریت حد ضرر</b>\n\n\n" +
   "🔹 در تارگت‌ها بخشی از حجم معامله را ببندید و سود را ذخیره کنید.\n\n\n" +
-  "🔹 برای تارگت اول، می‌توانید بخش قابل‌توجهی از حجم را خارج کنید و باقی‌مانده را برای اهداف بعدی نگه دارید.\n\n\n" +
+  "🔹 برای تارگت اول، می‌توانید بخش قابل‌توجهی از حجم را خارج کنید و باقی‌مانده را برای تارگت‌های بعدی نگه دارید.\n\n\n" +
   "🔹 پس از حرکت قیمت در جهت معامله، حد ضرر را متناسب با شرایط به نقطه ورود یا محدوده‌ای محافظت‌شده منتقل کنید.\n\n\n" +
   "🔹 میزان خروج در هر تارگت باید طوری تنظیم شود که مجموع حجم‌های بسته‌شده از ۱۰۰٪ بیشتر نشود.\n\n" +
   "⚠️ <b>حفظ سرمایه مهم‌تر از کسب سود است.</b>\n" +
@@ -1844,11 +1844,11 @@ async function refreshTrackedFuturesTrades(env,chatId=null){
 }
 async function notifyTradeMilestone(env,trade,key,target){
   const p=leveragedPriceChangePercent(trade.side,trade.actualEntry,target);
-  const labels={TP1:"🎯 هدف اول",TP2:"🎯 هدف دوم",TP3:"🎯 هدف سوم"};
+  const labels={TP1:"🎯 تارگت اول",TP2:"🎯 تارگت دوم",TP3:"🎯 تارگت سوم"};
   const direction=trade.side==="LONG"?"🟢 لانگ / Long":"🔴 شورت / Short";
   const profit=p===null?"—":`${Math.abs(Number(p)).toFixed(2)}٪`;
   await sendMessage(env,trade.chatId,
-    `${labels[key]||key} ${formatFuturesSymbol(trade.symbol)} لمس شد.\nجهت معامله: ${direction}\nقیمت هدف: ${formatPrice(target)}\n🥳 درصد سود: ${profit}`);
+    `${labels[key]||key} ${formatFuturesSymbol(trade.symbol)} لمس شد.\nجهت معامله: ${direction}\nقیمت تارگت: ${formatPrice(target)}\n🥳 درصد سود: ${profit}`);
 }
 async function handleTradeAction(action,chatId,env){const[,op]=action.split(":");if(op==="be")return sendMessage(env,chatId,"ℹ️ در نسخه جدید حد ضرر سیگنال خودکار جابه‌جا نمی‌شود؛ برای ارزیابی منصفانه حد ضرر اولیه ثابت می‌ماند.");if(op==="skip"||op==="enter")return sendMessage(env,chatId,"ℹ️ این نسخه هر سیگنال صادرشده را خودکار در دفتر ارزیابی ثبت می‌کند؛ ثبت دستی لازم نیست.")}
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت دستی معامله در نسخه جدید غیرفعال است؛ سیگنال‌های صادرشده خودکار در دفتر ارزیابی ثبت می‌شوند.")}
@@ -1876,7 +1876,7 @@ async function showIssuedSignalDetails(env,chatId,selection,view){
     const date=d.toLocaleString("fa-IR",{timeZone:"Asia/Tehran"});
     const status=String(x.status||"OPEN").startsWith("CLOSED")?(x.closeReason==="STOP_LOSS"?"🛑 STOP / استاپ":x.closeReason==="TP3"?"🏁 FULL TARGET / فول تارگت":"بسته‌شده"):"🟢 باز";
     const milestones=(x.tpHits||[]).map(k=>({TP1:"TP1 / تارگت یک",TP2:"TP2 / تارگت دو",TP3:"TP3 / تارگت سه"}[k]||k));
-    return `🪙 ${formatFuturesSymbol(x.symbol)} | ${x.side}\n🕒 ${date}\nوضعیت: ${status}\nورود: ${formatPrice(x.entry)} | استاپ: ${formatPrice(x.stop)}\nTP1: ${formatPrice(x.target1)} | TP2: ${formatPrice(x.target2)} | TP3: ${formatPrice(x.target3)}\nاهداف لمس‌شده: ${milestones.join("، ")||"هیچ‌کدام"}${x.exitPrice!==null&&x.exitPrice!==undefined?"\nنتیجه: "+formatOutcomePercent(tradeOutcomePercent({...x,actualEntry:x.entry},x.exitPrice)):""}`;
+    return `🪙 ${formatFuturesSymbol(x.symbol)} | ${x.side}\n🕒 ${date}\nوضعیت: ${status}\nورود: ${formatPrice(x.entry)} | استاپ: ${formatPrice(x.stop)}\nTP1: ${formatPrice(x.target1)} | TP2: ${formatPrice(x.target2)} | TP3: ${formatPrice(x.target3)}\nتارگت‌های لمس‌شده: ${milestones.join("، ")||"هیچ‌کدام"}${x.exitPrice!==null&&x.exitPrice!==undefined?"\nنتیجه: "+formatOutcomePercent(tradeOutcomePercent({...x,actualEntry:x.entry},x.exitPrice)):""}`;
   }).join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
   const keyboard=[];
   const nav=[];
@@ -1896,7 +1896,7 @@ async function showOpenFuturesTrades(env,chatId){
     const p=leveragedPriceChangePercent(t.side,t.actualEntry,t.lastPrice);
     const label=t.tier==="EXPERIMENTAL"?"🟠 سیگنال پر ریسک":"🟢 سیگنال معتبر";
     const direction=t.side==="LONG"?"🟢 لانگ / Long":"🔴 شورت / Short";
-    return `${label}\nنماد: ${formatFuturesSymbol(t.symbol)}\nجهت معامله: ${direction}\nورود: ${formatPrice(t.actualEntry)}\nقیمت فعلی: ${formatPrice(t.lastPrice)}\nدرصد سود/زیان فعلی: ${formatOutcomePercent(p)}\n\n🎯 تارگت اول: ${formatPrice(t.target1)}\n🎯 تارگت دوم: ${formatPrice(t.target2)}\n🎯 تارگت سوم: ${formatPrice(t.target3)}\n\n⛔ حد ضرر: ${formatPrice(t.currentStop)}\nاهداف لمس‌شده: ${t.tpHits.join(", ")||"—"}`;
+    return `${label}\nنماد: ${formatFuturesSymbol(t.symbol)}\nجهت معامله: ${direction}\nورود: ${formatPrice(t.actualEntry)}\nقیمت فعلی: ${formatPrice(t.lastPrice)}\nدرصد سود/زیان فعلی: ${formatOutcomePercent(p)}\n\n🎯 تارگت اول: ${formatPrice(t.target1)}\n🎯 تارگت دوم: ${formatPrice(t.target2)}\n🎯 تارگت سوم: ${formatPrice(t.target3)}\n\n⛔ حد ضرر: ${formatPrice(t.currentStop)}\nتارگت‌های لمس‌شده: ${t.tpHits.join(", ")||"—"}`;
   }).join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
   return sendLongMessage(env,chatId,"📌 معاملات باز / سیگنال‌های در حال ارزیابی\n━━━━━━━━━━━━━━━━━━\n\n"+body+"\n\n⚠️ این دفتر ارزیابی است؛ سفارش واقعی ثبت نمی‌شود.");
 }
@@ -2101,13 +2101,13 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
       t.status="CLOSED_STOP";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,true);t.outcomePercent=tradeOutcomePercent(t,price);t.closeReason="STOP_LOSS";
       closed.unshift(t);
       await updateIssuedSignal(env.APP_KV,t.chatId,t);
-      await sendMessage(env,chatId,`🛑 ${formatFuturesSymbol(t.symbol)} به حد ضرر فعلی رسید 😞.\nنتیجه: ${formatOutcomePercent(t.outcomePercent)}\nنتیجه بر اساس ریسک: ${t.outcomeR.toFixed(2)}R\nاهداف لمس‌شده: ${t.tpHits.join(",")||"هیچ‌کدام"}\n\n😞 بزودی سیگنال جبرانی صادر خواهد شد.`);
+      await sendMessage(env,chatId,`🛑 ${formatFuturesSymbol(t.symbol)} به حد ضرر فعلی رسید 😞.\nنتیجه: ${formatOutcomePercent(t.outcomePercent)}\nنتیجه بر اساس ریسک: ${t.outcomeR.toFixed(2)}R\n\n😞 بزودی سیگنال جبرانی صادر خواهد شد.`);
       continue;
     }
     const favorableR=tradeDir(t.side)*(price-t.actualEntry)/t.initialRisk;
     if(favorableR>=0.75&&!t.protectionAlerted&&!t.breakEvenConfirmed) {
       t.protectionAlerted=true;
-      await sendMessage(env,chatId,`🛡️ قیمت ${formatFuturesSymbol(t.symbol)} به +0.75R رسیده؛ یعنی نصف مسیر هدف اول. برای جلوگیری از تبدیل سود شناور به زیان، انتقال حد ضرر باقی‌مانده به نقطه ورود را بررسی کن. اگر واقعاً در صرافی انجامش دادی، تأیید کن.`,
+      await sendMessage(env,chatId,`🛡️ قیمت ${formatFuturesSymbol(t.symbol)} به +0.75R رسیده؛ یعنی نصف مسیر تارگت اول. برای جلوگیری از تبدیل سود شناور به زیان، انتقال حد ضرر باقی‌مانده به نقطه ورود را بررسی کن. اگر واقعاً در صرافی انجامش دادی، تأیید کن.`,
         {inline_keyboard:[[{text:"✅ حد ضرر را به ورود منتقل کردم",callback_data:`trade:be:${t.id}`}]]});
     }
     const levels=[["TP1",t.target1],["TP2",t.target2],["TP3",t.target3]],hits=[];
@@ -2118,7 +2118,7 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
     }
     if(t.tpHits.includes("TP3")) {
       t.status="CLOSED_TARGETS";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,false);t.outcomePercent=tradeOutcomePercent(t,price);t.closeReason="TP3";
-      closed.unshift(t);await updateIssuedSignal(env.APP_KV,t.chatId,t);await sendMessage(env,chatId,`🏁 هر سه هدف ${formatFuturesSymbol(t.symbol)} لمس شد. نتیجه: ${formatOutcomePercent(t.outcomePercent)} | نتیجه بر اساس ریسک: ${t.outcomeR.toFixed(2)}R.`);continue;
+      closed.unshift(t);await updateIssuedSignal(env.APP_KV,t.chatId,t);await sendMessage(env,chatId,`🏁 هر سه تارگت ${formatFuturesSymbol(t.symbol)} لمس شد. نتیجه: ${formatOutcomePercent(t.outcomePercent)} | نتیجه بر اساس ریسک: ${t.outcomeR.toFixed(2)}R.`);continue;
     }
     await updateIssuedSignal(env.APP_KV,t.chatId,t);
     remaining.push(t);
