@@ -96,15 +96,14 @@ async function runSymbol(t,from,to){
     const tk={symbol:t.symbol,last:n.open,quoteVolume:Number(t.volumeQuote)||0,priceChangePercent:change(h1,i),premium:{lastFundingRate:null}};
     const candidate=analyzeFuturesSymbol(tk,h1.slice(0,i+1),h4c,past,{skipEntryFilters:true});
     if(!candidate?.eligible)continue;
+    const liveCandidate=analyzeFuturesSymbol(tk,h1.slice(0,i+1),h4c,past);
+    if(!liveCandidate?.eligible)continue;
     counts.eligibleSetups++;
     const setupTime=n.time,baseIndex=firstAtOrAfter(m15,setupTime);
     if(baseIndex<0)continue;
     if(setupTime>=busyBase){
-      const live=analyzeFuturesSymbol(tk,h1.slice(0,i+1),h4c,past);
-      if(live?.eligible){
-        const l=levels(candidate,n.open,h1,i);
-        if(l){const tr=simulate(candidate.side,l,m15,baseIndex,HOLD_M15,M15);if(tr){tr.symbol=t.symbol;baseline.push(tr);busyBase=tr.exitTime;counts.baselineEntries++;}}
-      }
+      const l=levels(liveCandidate,n.open,h1,i);
+      if(l){const tr=simulate(liveCandidate.side,l,m15,baseIndex,HOLD_M15,M15);if(tr){tr.symbol=t.symbol;baseline.push(tr);busyBase=tr.exitTime;counts.baselineEntries++;}}
     }
     if(setupTime<busyConfirm)continue;
     let result=null,refIndex=-1;
@@ -112,15 +111,15 @@ async function runSymbol(t,from,to){
     for(let evalNow=setupTime+M1+1;evalNow<=end;evalNow+=M1){
       const quoteTime=evalNow-1,qi=firstAtOrAfter(m1,quoteTime);
       if(qi<0||m1[qi].time!==quoteTime)continue;
-      result=evaluateShortTfConfirmation({side:candidate.side,candles1m:m1,candles5m:m5,candles15m:m15,setupTime,now:evalNow,referencePrice:m1[qi].open,maxSetupAgeMs:MAX_SETUP_AGE});
+      result=evaluateShortTfConfirmation({side:liveCandidate.side,candles1m:m1,candles5m:m5,candles15m:m15,setupTime,now:evalNow,referencePrice:m1[qi].open,maxSetupAgeMs:MAX_SETUP_AGE});
       if(result.status==="CONFIRMED"){refIndex=qi;break;}
       if(result.status==="EXPIRED"){if(result.reason==="ENTRY_TOO_FAR_NO_CHASE")counts.noChase++;break;}
       if(String(result.reason||"").startsWith("EXPIRED_"))break;
     }
     if(result?.status==="CONFIRMED"&&refIndex>=0){
-      const l=levels(candidate,result.entryReference,h1,i),entryIndex=firstAtOrAfter(m1,result.triggerTime+M1);
+      const l=levels(liveCandidate,result.entryReference,h1,i),entryIndex=firstAtOrAfter(m1,result.triggerTime+M1);
       if(!l||entryIndex<0){counts.riskRejected++;continue;}
-      const tr=simulate(candidate.side,l,m1,entryIndex,HOLD_M1,M1);
+      const tr=simulate(liveCandidate.side,l,m1,entryIndex,HOLD_M1,M1);
       if(tr){tr.symbol=t.symbol;tr.triggerTime=result.triggerTime;tr.pullback15mTime=result.pullback15mTime;tr.confirmation5mTime=result.confirmation5mTime;confirmed.push(tr);busyConfirm=tr.exitTime;counts.confirmedEntries++;}
     }else counts.expiredOrMissed++;
   }
