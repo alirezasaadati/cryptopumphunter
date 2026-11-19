@@ -178,19 +178,22 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     };
     for (const mode of ["baseline","current"]) {
       const state=strategies[mode];
-      if (i < nextAvailable[mode]) continue;
       const candidate = mode === "baseline"
         ? analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m,{skipEntryFilters:true})
         : analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m);
       if (!candidate || (!candidate.eligible && !candidate.experimentalEligible)) {
-        if (mode === "current" && candidate?.rejected) {
+        if (mode === "current" && candidate?.rejected &&
+            /قیمت لحظه‌ای|ورود دیرهنگام|حرکت تأییدی/.test(candidate.rejected)) {
           state.rejected++;
           state.rejectReasons[candidate.rejected]=(state.rejectReasons[candidate.rejected]||0)+1;
         }
         continue;
       }
+      // Count every hourly signal opportunity before applying trade-overlap rules.
+      // This makes baseline/current signal frequency directly comparable at identical timestamps.
       state.signals++;
       if (candidate.eligible) state.valid++; else state.risky++;
+      if (i < nextAvailable[mode]) continue;
       const direction=candidate.side==="LONG"?1:-1;
       const entry = candidate.entry * (1 + direction * SLIPPAGE_PER_SIDE);
       const tradeCandles=oneHour.slice(i+1,Math.min(oneHour.length,i+1+MAX_HOLD_HOURS+1));
@@ -255,7 +258,7 @@ async function main() {
     "| Signals | "+report.baseline.signals+" | "+report.current.signals+" |",
     "| Valid signals | "+report.baseline.valid+" | "+report.current.valid+" |",
     "| Risky signals | "+report.baseline.risky+" | "+report.current.risky+" |",
-    "| Trades | "+report.baseline.metrics.trades+" | "+report.current.metrics.trades+" |",
+    "| Executed non-overlapping trades | "+report.baseline.metrics.trades+" | "+report.current.metrics.trades+" |",
     "| Win rate | "+report.baseline.metrics.winRatePct.toFixed(2)+"% | "+report.current.metrics.winRatePct.toFixed(2)+"% |",
     "| Expectancy | "+report.baseline.metrics.expectancyR.toFixed(3)+"R | "+report.current.metrics.expectancyR.toFixed(3)+"R |",
     "| Profit factor | "+(report.baseline.metrics.profitFactor??"n/a")+" | "+(report.current.metrics.profitFactor??"n/a")+" |",
