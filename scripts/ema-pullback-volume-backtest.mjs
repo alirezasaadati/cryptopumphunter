@@ -57,14 +57,18 @@ function runPair(htf,ltf,label,htfMs,ltfMs,engineConfig={}){
 async function main(){
  const m5=await load5m();if(m5.length<100000)throw new Error("Incomplete M5 dataset: "+m5.length);
  const m15=aggregate(m5,15*60000,3),h1=aggregate(m5,60*60000,12),h4=aggregate(m5,4*60*60000,48);
- const results=[
-  runPair(h1,m15,"H1 trend + M15 entry | trigger-volume ON",60*60000,15*60000,{REQUIRE_TRIGGER_VOLUME_EXPANSION:true}),
-  runPair(h1,m15,"H1 trend + M15 entry | trigger-volume OFF",60*60000,15*60000,{REQUIRE_TRIGGER_VOLUME_EXPANSION:false}),
-  runPair(h4,m5,"H4 trend + M5 entry | trigger-volume ON",4*60*60000,FIVE,{REQUIRE_TRIGGER_VOLUME_EXPANSION:true}),
-  runPair(h4,m5,"H4 trend + M5 entry | trigger-volume OFF",4*60*60000,FIVE,{REQUIRE_TRIGGER_VOLUME_EXPANSION:false})
+ const variants=[
+  ["Pinbar only",{CANDLE_PATTERN_MODE:"PINBAR"}],
+  ["Engulfing only",{CANDLE_PATTERN_MODE:"ENGULFING"}],
+  ["Pinbar OR Engulfing",{CANDLE_PATTERN_MODE:"ANY"}]
  ];
+ const results=[];
+ for(const [name,config] of variants){
+  results.push(runPair(h1,m15,"H1 trend + M15 entry | "+name+" | trigger-volume ON",60*60000,15*60000,{REQUIRE_TRIGGER_VOLUME_EXPANSION:true,...config}));
+  results.push(runPair(h4,m5,"H4 trend + M5 entry | "+name+" | trigger-volume ON",4*60*60000,FIVE,{REQUIRE_TRIGGER_VOLUME_EXPANSION:true,...config}));
+ }
  const report={symbol:SYMBOL,period:{start:new Date(START).toISOString(),end:new Date(END).toISOString()},candles:{m5:m5.length,m15:m15.length,h1:h1.length,h4:h4.length},
-  assumptions:{trend:"HTF close vs EMA50 and EMA20 vs EMA50",entry:"pullback volume contraction + confirmed pivot or EMA20-50 band + engulfing/pinbar; compare trigger-volume expansion ON vs OFF",
+  assumptions:{trend:"HTF close vs EMA50 and EMA20 vs EMA50",entry:"pullback volume contraction + confirmed pivot or EMA20-50 band + trigger-volume expansion ON; isolate Pinbar only vs Engulfing only vs either pattern",
    execution:"next entry timeframe open; 0.03% slippage each side; 0.05% fee each side; 50% exit at 2R and 50% at 3R; stop-first on ambiguous candles; max hold 7 days; one position at a time",
    limitation:"No funding, spread, market impact or historical news filter."},results};
  await mkdir("artifacts",{recursive:true});await writeFile("artifacts/ema-pullback-volume-backtest.json",JSON.stringify(report,null,2));
