@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nested walk-forward tuning of BTC trend classifiers. Validation selects parameters; test folds stay untouched. v2."""
+"""Nested walk-forward tuning of BTC trend classifiers. Validation selects parameters; test folds stay untouched. v3 with purged validation boundary."""
 import json, math
 from pathlib import Path
 import numpy as np
@@ -123,7 +123,7 @@ def main():
         hmm_candidates=[]
         for k in (2,3,4):
           for iters in (20,35):
-            pred=hmm_predictions(X,y,k,iters,val_start,val_idx[-1]+1)
+            pred=hmm_predictions(X,y,k,iters,val_train_end,val_idx[-1]+1)
             hmm_candidates.append((metric(y[val_idx],pred[val_idx]),{"states":k,"iterations":iters}))
         best_h=max(hmm_candidates,key=lambda z:z[0])
         # Refit selected HMM on all history up to the purged test boundary.
