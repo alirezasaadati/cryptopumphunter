@@ -1700,12 +1700,6 @@ function formatFuturesSymbol(symbol) {
 }
 
 
-// V4.6: automatic signal-outcome tracking.
-const FUTURES_PENDING_KEY="futures_pending_signals";
-const FUTURES_OPEN_KEY="futures_open_trades";
-const FUTURES_CLOSED_KEY="futures_closed_trades";
-async function readTradeList(env,key){if(!env.APP_KV)throw new Error("APP_KV binding is missing");const raw=await env.APP_KV.get(key);if(!raw)return[];try{const v=JSON.parse(raw);return Array.isArray(v)?v:[]}catch{return[]}}
-async function writeTradeList(env,key,value){if(!env.APP_KV)throw new Error("APP_KV binding is missing");await env.APP_KV.put(key,JSON.stringify(value))}
 async function registerPendingFuturesSignals(env, candidates) {
   if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) throw new Error("Durable signal storage is required.");
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
@@ -1942,19 +1936,7 @@ async function reconcileSignalOutbox(env,ownerId,token,action){
   await sendMessage(env,ownerId,action==="confirm_delivered"?"✅ سیگنال به‌عنوان ارسال‌شده در آرشیو ثبت شد.":"🔁 تلاش مجدد انجام شد و نتیجه در آرشیو ثبت شد.");
   await showUncertainSignalOutbox(env,ownerId);
 }
-async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت دستی معامله در نسخه جدید غیرفعال است؛ سیگنال‌های صادرشده خودکار در دفتر ارزیابی ثبت می‌شوند.")}
-async function showOpenFuturesTrades(env,chatId){
-  try{await refreshTrackedFuturesTrades(env,chatId)}catch(error){console.error("Open trade refresh failed:",String(error?.stack||error))}
-  const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));
-  if(!list.length)return sendMessage(env,chatId,"📭 معامله بازی در دفتر پیگیری ثبت نشده است.",BACK_MENU);
-  const body=list.slice(0,15).map(t=>{
-    const p=leveragedPriceChangePercent(t.side,t.actualEntry,t.lastPrice);
-    const label=t.tier==="EXPERIMENTAL"?"🟠 سیگنال پر ریسک":"🟢 سیگنال معتبر";
-    const direction=t.side==="LONG"?"🟢 لانگ / Long":"🔴 شورت / Short";
-    return `${label}\nنماد: ${formatFuturesSymbol(t.symbol)}\nجهت معامله: ${direction}\nورود: ${formatPrice(t.actualEntry)}\nقیمت فعلی: ${formatPrice(t.lastPrice)}\nدرصد سود/زیان فعلی: ${formatOutcomePercent(p)}\n\n🎯 تارگت اول: ${formatPrice(t.target1)}\n🎯 تارگت دوم: ${formatPrice(t.target2)}\n🎯 تارگت سوم: ${formatPrice(t.target3)}\n\n⛔ حد ضرر: ${formatPrice(t.currentStop)}\nتارگت‌های لمس‌شده: ${t.tpHits.join(", ")||"—"}`;
-  }).join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
-  return sendLongMessage(env,chatId,"📌 معاملات باز / سیگنال‌های در حال ارزیابی\n━━━━━━━━━━━━━━━━━━\n\n"+body+"\n\n⚠️ این دفتر ارزیابی است؛ سفارش واقعی ثبت نمی‌شود.");
-}
+async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت و پیگیری نتایج معاملات در این نسخه غیرفعال است.")}
 async function runAutomaticFuturesAlertScan(env) {
   if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) {
     throw new Error("SIGNAL_DELIVERY and SIGNAL_DELIVERY_SECRET are required for scan coordination.");
@@ -1972,29 +1954,6 @@ async function runAutomaticFuturesAlertScan(env) {
     const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
     if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
   }
-}
-
-async function filterActiveDuplicateFuturesSignals(env, candidates) {
-  const now = Date.now();
-  const pending = await readTradeList(env, FUTURES_PENDING_KEY);
-  const activeKeys = new Set();
-
-  // A pending signal blocks another signal for the same contract and direction
-  // until its entry window expires, regardless of the candle fingerprint.
-  for (const signal of pending) {
-    if (signal?.expiresAt > now && signal?.symbol && ['LONG', 'SHORT'].includes(signal?.side)) {
-      activeKeys.add(String(signal.symbol).trim().toUpperCase() + '|' + signal.side);
-    }
-  }
-
-  const seenThisScan = new Set();
-  return (Array.isArray(candidates) ? candidates : []).filter(signal => {
-    if (!signal?.symbol || !['LONG', 'SHORT'].includes(signal?.side)) return false;
-    const key = String(signal.symbol).trim().toUpperCase() + '|' + signal.side;
-    if (activeKeys.has(key) || seenThisScan.has(key)) return false;
-    seenThisScan.add(key);
-    return true;
-  });
 }
 
 async function runFuturesSignalScan(env, options = {}) {
