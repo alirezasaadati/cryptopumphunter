@@ -209,6 +209,11 @@ export default {
         }
       }
 
+      if(update.chat_join_request){
+        ctx.waitUntil(handleArchiveJoinRequest(update.chat_join_request,env));
+        return new Response("OK");
+      }
+
       if (update.callback_query) {
         ctx.waitUntil(handleCallback(update.callback_query, env));
         return new Response("OK");
@@ -403,16 +408,60 @@ async function migrateLegacyMembership(env) {
 
 async function isApproved(chatId, env) {
   if (isOwner(chatId, env)) return true;
-
   if (!(env.OWNER_TELEGRAM_ID || env.OWNER_ID) || !env.APP_KV) return false;
-
   try {
     await migrateLegacyMembership(env);
     const member = await env.APP_KV.get(memberKey(chatId), "json");
     return Boolean(member && member.approved !== false && member.revoked !== true);
-  } catch {
-    return false;
+  } catch { return false; }
+}
+function archiveChannelId(env) {
+  const id = String(env.SIGNAL_ARCHIVE_CHANNEL_ID || "").trim();
+  return /^-100\\d+$/.test(id) ? id : null;
+}
+async function sendArchiveAccessLink(env, userId) {
+  const channelId = archiveChannelId(env);
+  if (!channelId) return sendMessage(env,userId,"⚠️ اتصال آرشیو هنوز کامل تنظیم نشده است.",BACK_MENU);
+  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ دسترسی شما به آرشیو فعال نیست.",BACK_MENU);
+  try {
+    const key="signal-archive:join-request-link";
+    let link=env.APP_KV?await env.APP_KV.get(key):null;
+    if(!link){
+      const result=await telegram("createChatInviteLink",env,{chat_id:channelId,name:"Crypto Pump Hunter members",creates_join_request:true});
+      link=result?.result?.invite_link;
+      if(!link)throw new Error("Telegram did not return invite link");
+      if(env.APP_KV)await env.APP_KV.put(key,link);
+    }
+    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\\n\\n"+link,BACK_MENU);
+  } catch(error) {
+    console.error("Archive invite link failed:",String(error?.message||error));
+    await sendMessage(env,userId,"⚠️ ساخت لینک ورود به آرشیو فعلاً ممکن نشد.",BACK_MENU);
   }
+}
+async function handleArchiveJoinRequest(request,env) {
+  const channelId=archiveChannelId(env);
+  if(!channelId||String(request?.chat?.id)!==channelId)return false;
+  const userId=request?.from?.id;if(!userId)return true;
+  try {
+    if(await isApproved(userId,env)){
+      await telegram("approveChatJoinRequest",env,{chat_id:channelId,user_id:userId});
+      await sendMessage(env,userId,"✅ درخواست ورود به کانال آرشیو تأیید شد.");
+    } else {
+      await telegram("declineChatJoinRequest",env,{chat_id:channelId,user_id:userId});
+      await sendMessage(env,userId,"⛔ فقط اعضای تأییدشده ربات می‌توانند وارد آرشیو شوند.");
+    }
+  } catch(error){console.error("Archive join request failed:",String(error?.message||error));}
+  return true;
+}
+async function removeArchiveMember(env,userId) {
+  const channelId=archiveChannelId(env);if(!channelId||!userId||isOwner(userId,env))return;
+  try{await telegram("banChatMember",env,{chat_id:channelId,user_id:Number(userId),revoke_messages:false});}
+  catch(error){console.error("Archive removal failed:",String(error?.message||error));}
+}
+async function restoreArchiveMemberEligibility(env,userId) {
+  const channelId=archiveChannelId(env);if(!channelId||!userId||isOwner(userId,env))return;
+  try{await telegram("unbanChatMember",env,{chat_id:channelId,user_id:Number(userId),only_if_banned:true});}
+  catch(error){console.error("Archive unban failed:",String(error?.message||error));}
 }
 
 async function requestMembership(env, chatId, message) {
@@ -694,6 +743,7 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
         revokedAt: new Date().toISOString(), revokedBy: String(chatId) };
       await env.APP_KV.put(memberKey(targetId), JSON.stringify(member));
       await env.APP_KV.delete(pendingKey(targetId));
+      await removeArchiveMember(env,targetId);
       await sendMessage(env, targetId, "⛔ دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر لغو شد.");
       await sendMessage(env, chatId, `🚫 دسترسی کاربر ${targetId} لغو شد.`);
     }
@@ -750,6 +800,7 @@ async function changeMemberAccess(env,ownerId,id,allow) {
   if(!m){await sendMessage(env,ownerId,"عضو پیدا نشد.");return;}
   const next=allow?{...m,approved:true,revoked:false,allowedAt:new Date().toISOString(),allowedBy:String(ownerId)}:{...m,approved:false,revoked:true,revokedAt:new Date().toISOString(),revokedBy:String(ownerId)};
   await env.APP_KV.put(memberKey(id),JSON.stringify(next));
+  if(allow)await restoreArchiveMemberEligibility(env,id);else await removeArchiveMember(env,id);
   try{await sendMessage(env,id,allow?"🎉 دسترسی شما دوباره فعال شد.":"⛔ دسترسی شما توسط مدیر لغو شد.");}catch{}
   await showMemberProfile(env,ownerId,id);
 }
@@ -953,10 +1004,7 @@ async function handleCallback(query, env) {
       return;
     }
     if (action === "open_trades") return showOpenFuturesTrades(env, chatId);
-    if (action === "trade_history") return showIssuedSignalSymbols(env, chatId, "history");
-    if (action === "issued_signals") return showIssuedSignalSymbols(env, chatId, "archive");
-    if (action === "ledger:archive") return showIssuedSignalSymbols(env, chatId, "archive");
-    if (action === "ledger:history") return showIssuedSignalSymbols(env, chatId, "history");
+    if (action === "trade_history" || action === "issued_signals" || action === "ledger:archive" || action === "ledger:history") return sendArchiveAccessLink(env,chatId);
     if (action.startsWith("ledger:a:")) return showIssuedSignalDetails(env, chatId, action.slice(9), "archive");
     if (action.startsWith("ledger:h:")) return showIssuedSignalDetails(env, chatId, action.slice(9), "history");
     if (action.startsWith("trade:")) return handleTradeAction(action, chatId, env);
@@ -1177,7 +1225,7 @@ async function registerWebhook(request, env) {
   try {
     const body = {
       url: webhookUrl,
-      allowed_updates: ["message", "callback_query"],
+      allowed_updates: ["message", "callback_query", "chat_join_request"],
       max_connections: 5
     };
 
@@ -1189,7 +1237,7 @@ async function registerWebhook(request, env) {
       ok: true,
       result: result.result,
       description: result.description || "Webhook registered",
-      allowed_updates: ["message", "callback_query"]
+      allowed_updates: ["message", "callback_query", "chat_join_request"]
     });
   } catch (error) {
     return json({ ok: false, error: error.message }, 500);
@@ -1675,6 +1723,7 @@ async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText
     record={...record,status:"SENDING",attemptedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     await env.APP_KV.put(key,JSON.stringify(record));
     try{
+      await publishSignalToArchive(env,signal,messageText,parseMode);
       const response=await sendMessage(env,chatId,messageText,replyMarkup,parseMode);
       record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
       await env.APP_KV.put(key,JSON.stringify(record));
@@ -1691,6 +1740,18 @@ async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText
   return{delivered:true,duplicate:false};
 }
 
+async function publishSignalToArchive(env,signal,messageText,parseMode="HTML") {
+  const channelId=archiveChannelId(env);if(!channelId)return {skipped:true};
+  if(!env.SIGNAL_DELIVERY||!env.SIGNAL_DELIVERY_SECRET)throw new Error("Archive publishing requires SIGNAL_DELIVERY coordination.");
+  const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:signal-archive-publisher"));
+  const response=await stub.fetch("https://signal-delivery.internal/archive-publish",{
+    method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},
+    body:JSON.stringify({channelId,signalId:String(signal.id),messageText,parseMode})
+  });
+  const payload=await response.json();
+  if(!response.ok||!payload?.ok)throw new Error(payload?.error||"Archive publishing failed.");
+  return payload.result;
+}
 async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
   if(!signal?.id)throw new Error("Signal id is required for coordinated delivery.");
   if(!env.SIGNAL_DELIVERY)throw new Error("SIGNAL_DELIVERY Durable Object binding is required; refusing an uncoordinated send.");
@@ -1717,7 +1778,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=this.env.SIGNAL_DELIVERY_SECRET;
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -1751,6 +1812,17 @@ export class SignalDeliveryCoordinator {
         if(url.pathname==="/scan-lock/release"){
           await this.ctx.storage.delete("automatic-futures-scan-lock");
           return Response.json({ok:true,released:true});
+        }
+        if(url.pathname==="/archive-publish"){
+          const key="published-signal:"+String(payload.signalId||"");
+          const old=await this.ctx.storage.get(key);
+          if(old)return Response.json({ok:true,result:{published:false,duplicate:true,messageId:old.messageId}});
+          if(!archiveChannelId(this.env)||String(payload.channelId)!==archiveChannelId(this.env))throw new Error("Archive channel ID mismatch.");
+          if(!payload.signalId||typeof payload.messageText!=="string")throw new Error("Invalid archive payload.");
+          const sent=await telegram("sendMessage",this.env,{chat_id:payload.channelId,text:payload.messageText,parse_mode:payload.parseMode||"HTML",disable_web_page_preview:true,protect_content:true});
+          const messageId=sent?.result?.message_id??null;
+          await this.ctx.storage.put(key,{messageId,publishedAt:new Date().toISOString()});
+          return Response.json({ok:true,result:{published:true,messageId}});
         }
         if(url.pathname==="/deliver"){
           const result=await sendAndArchiveFuturesSignalUnlocked(this.env,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null,payload.parseMode??"HTML");
