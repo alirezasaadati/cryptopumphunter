@@ -403,10 +403,14 @@ async function isApproved(chatId, env) {
   if (isOwner(chatId, env)) return true;
   if (!(env.OWNER_TELEGRAM_ID || env.OWNER_ID) || !env.APP_KV) return false;
   try {
-    await migrateLegacyMembership(env);
     const member = await env.APP_KV.get(memberKey(chatId), "json");
-    return Boolean(member && member.approved !== false && member.revoked !== true);
-  } catch { return false; }
+    if (member) return Boolean(member.approved !== false && member.revoked !== true);
+    const legacy = await env.APP_KV.get("v1:members", "json") || {};
+    return legacy[String(chatId)]?.status === "active";
+  } catch (error) {
+    console.error("Read-only membership check failed:", String(error?.message || error));
+    return false;
+  }
 }
 function archiveChannelId(env) {
   const id = String(env.SIGNAL_ARCHIVE_CHANNEL_ID || "").trim();
@@ -1696,21 +1700,16 @@ function formatFuturesSymbol(symbol) {
 }
 
 
-// V4.6: automatic signal-outcome tracking.
-const FUTURES_PENDING_KEY="futures_pending_signals";
-const FUTURES_OPEN_KEY="futures_open_trades";
-const FUTURES_CLOSED_KEY="futures_closed_trades";
-async function readTradeList(env,key){if(!env.APP_KV)throw new Error("APP_KV binding is missing");const raw=await env.APP_KV.get(key);if(!raw)return[];try{const v=JSON.parse(raw);return Array.isArray(v)?v:[]}catch{return[]}}
-async function writeTradeList(env,key,value){if(!env.APP_KV)throw new Error("APP_KV binding is missing");await env.APP_KV.put(key,JSON.stringify(value))}
-async function savePendingFuturesSignals(env,fresh){
-  const now=Date.now(),old=await readTradeList(env,FUTURES_PENDING_KEY),m=new Map();
-  for(const x of old.filter(v=>v.expiresAt>now)){const f=futuresSignalFingerprint(x);if(f&&!m.has(f))m.set(f,x)}
-  for(const x of fresh){const f=futuresSignalFingerprint(x);if(f&&!m.has(f))m.set(f,x)}
-  const merged=[...m.values()].slice(0,150);
-  // A scheduled scan runs every five minutes. Do not spend a KV Put when the
-  // pending-signal snapshot is byte-for-byte unchanged.
-  if(JSON.stringify(merged)!==JSON.stringify(old))await writeTradeList(env,FUTURES_PENDING_KEY,merged);
-  return fresh.map(x=>m.get(futuresSignalFingerprint(x))).filter(Boolean)
+async function registerPendingFuturesSignals(env, candidates) {
+  if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) throw new Error("Durable signal storage is required.");
+  const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
+  const response = await stub.fetch("https://signal-delivery.internal/signals/register", {
+    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET },
+    body: JSON.stringify({ signals: Array.isArray(candidates) ? candidates : [] })
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload?.ok || !Array.isArray(payload.signals)) throw new Error(payload?.error || "Durable pending-signal registration failed.");
+  return payload.signals;
 }
 const tradeDir=side=>side==="LONG"?1:-1;
 const targetReached=(side,p,t)=>side==="LONG"?p>=t:p<=t;
@@ -1725,47 +1724,33 @@ function getNewClosedFuturesCandles(candles,lastCheckedCandleTime=0){return(Arra
 function ensureTradeTrackingCheckpoint(trade,now=Date.now()){if(!Number.isFinite(Number(trade?.lastCheckedCandleTime))||Number(trade.lastCheckedCandleTime)<=0){trade.lastCheckedCandleTime=Math.floor(now/60000)*60000;trade.trackingMode=trade.trackingMode||"LEGACY_CONTINUED";return true}return false}
 function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),targets=[Number(signal?.target1),Number(signal?.target2),Number(signal?.target3)];if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,...targets].every(Number.isFinite)||![entry,stop,...targets].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<targets[0]&&targets[0]<targets[1]&&targets[1]<targets[2]:stop>entry&&entry>targets[0]&&targets[0]>targets[1]&&targets[1]>targets[2]}
 function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:signal.tier==="EXPERIMENTAL"?"EXPERIMENTAL":"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
-async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
+async function sendAndArchiveFuturesSignalUnlocked(env,ctx,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
   if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
   if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
-  if(!env.APP_KV)throw new Error("APP_KV is required for durable signal delivery.");
-  const key=signalOutboxKey(chatId,signal.id);
-  let record=await env.APP_KV.get(key,"json");
-  const action=signalOutboxAction(record);
-  if(action==="done")return{delivered:true,duplicate:true};
-  if(action==="reconcile"){
-    throw new Error(`Signal delivery requires reconciliation (${record.status}): ${signal.symbol} ${signal.id}`);
+  const key="signal-outbox:"+signalOutboxKey(chatId,signal.id);
+  let record=await ctx.storage.get(key);
+  if(record?.status==="SENT"||record?.status==="ARCHIVED")return{delivered:true,duplicate:true};
+  if(record?.status==="SENDING"||record?.status==="UNCERTAIN")throw new Error("Signal delivery is uncertain and requires manual reconciliation; automatic resend is blocked.");
+  record={version:2,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,signal,messageText,replyMarkup,parseMode,status:"SENDING",createdAt:record?.createdAt||new Date().toISOString(),attemptedAt:new Date().toISOString()};
+  await ctx.storage.put(key,record);
+  let response;
+  try {
+    response=await sendMessage(env,chatId,messageText,replyMarkup,parseMode);
+  } catch(error) {
+    await ctx.storage.put(key,{...record,status:"UNCERTAIN",error:String(error?.message||error).slice(0,500),updatedAt:new Date().toISOString()});
+    throw error;
   }
-  if(!record){
-    record={version:1,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,signal,messageText,replyMarkup,parseMode,status:"QUEUED",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-    await env.APP_KV.put(key,JSON.stringify(record));
+  record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString()};
+  await ctx.storage.put(key,record);
+  try {
+    const archiveResult=await publishSignalToArchive(env,signal,messageText,parseMode);
+    record={...record,archivePublished:archiveResult?.published!==false,archiveMessageId:archiveResult?.messageId??null};
+  } catch(error) {
+    record={...record,archivePublished:false,archivePublishError:String(error?.message||error).slice(0,500)};
+    console.error("Archive failed; private signal delivery remains successful:",signal.symbol,String(error?.message||error));
   }
-  if(signalOutboxAction(record)==="send"){
-    record={...record,status:"SENDING",attemptedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-    await env.APP_KV.put(key,JSON.stringify(record));
-    try{
-      // Deliver the private alert first. Archive outages must never block the user-facing signal.
-      const response=await sendMessage(env,chatId,messageText,replyMarkup,parseMode);
-      record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-      await env.APP_KV.put(key,JSON.stringify(record));
-    }catch(error){
-      // Network failures can be ambiguous: do not blindly resend and risk duplicate alerts.
-      record={...record,status:"UNCERTAIN",error:String(error?.message||error).slice(0,500),updatedAt:new Date().toISOString()};
-      try{await env.APP_KV.put(key,JSON.stringify(record));}catch(storeError){console.error("Could not persist uncertain signal outbox state:",String(storeError?.message||storeError));}
-      throw error;
-    }
-    try{
-      const archiveResult=await publishSignalToArchive(env,signal,messageText,parseMode);
-      record={...record,archivePublished:archiveResult?.published!==false,archiveMessageId:archiveResult?.messageId??null,archivePublishedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-    }catch(archiveError){
-      record={...record,archivePublished:false,archivePublishError:String(archiveError?.message||archiveError).slice(0,500),updatedAt:new Date().toISOString()};
-      console.error("Signal archive publishing failed; direct delivery remains successful:",signal.symbol,String(archiveError?.message||archiveError));
-    }
-    try{await env.APP_KV.put(key,JSON.stringify(record));}
-    catch(storeError){console.error("Could not persist signal archive publishing status:",String(storeError?.message||storeError));}
-  }
-  record={...record,status:"ARCHIVED",archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-  await env.APP_KV.put(key,JSON.stringify(record));
+  record={...record,status:"ARCHIVED",archivedAt:new Date().toISOString()};
+  await ctx.storage.put(key,record);
   return{delivered:true,duplicate:false};
 }
 
@@ -1807,7 +1792,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=this.env.SIGNAL_DELIVERY_SECRET;
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -1827,9 +1812,22 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
           return Response.json({ok:true,allowed:false,day:today});
         }
-        if((url.pathname==="/deliver"||url.pathname==="/reconcile") && this.env.SIGNAL_DELIVERY){
-          const gate=await kvWriteGate(this.env,"allow");
-          if(gate?.allowed===false)throw new Error("KV daily write quota is paused until the next UTC day.");
+        if(url.pathname==="/signals/register"){
+          const now=Date.now();
+          const current=await this.ctx.storage.get("active-futures-pending")||[];
+          const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side));
+          const activeKeys=new Set(active.map(x=>String(x.symbol).trim().toUpperCase()+"|"+x.side));
+          const seen=new Set();
+          const fresh=[];
+          for(const signal of Array.isArray(payload.signals)?payload.signals:[]){
+            if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
+            const key=String(signal.symbol).trim().toUpperCase()+"|"+signal.side;
+            if(activeKeys.has(key)||seen.has(key))continue;
+            seen.add(key);fresh.push(signal);
+          }
+          const merged=[...active,...fresh].slice(-150);
+          await this.ctx.storage.put("active-futures-pending",merged);
+          return Response.json({ok:true,signals:fresh});
         }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
@@ -1854,7 +1852,7 @@ export class SignalDeliveryCoordinator {
           return Response.json({ok:true,result:{published:true,messageId}});
         }
         if(url.pathname==="/deliver"){
-          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null,payload.parseMode??"HTML");
+          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,this.ctx,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null,payload.parseMode??"HTML");
           return Response.json({ok:true,result});
         }
         if(!this.env.APP_KV)throw new Error("APP_KV is required for reconciliation.");
@@ -1874,7 +1872,8 @@ export class SignalDeliveryCoordinator {
           if(!["SENDING","UNCERTAIN"].includes(record.status))throw new Error("Only SENDING or UNCERTAIN records can be retried.");
           if(!record.signal||typeof record.messageText!=="string")throw new Error("This older outbox record has no retry payload.");
           await this.env.APP_KV.put(key,JSON.stringify({...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
-          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,chatId,record.signal,record.messageText,record.replyMarkup??null,record.parseMode??"HTML");
+          await this.ctx.storage.put("signal-outbox:"+key,{...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString()});
+          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,this.ctx,chatId,record.signal,record.messageText,record.replyMarkup??null,record.parseMode??"HTML");
           return Response.json({ok:true,result});
         }
         throw new Error("Unknown reconciliation action.");
@@ -1938,19 +1937,7 @@ async function reconcileSignalOutbox(env,ownerId,token,action){
   await sendMessage(env,ownerId,action==="confirm_delivered"?"✅ سیگنال به‌عنوان ارسال‌شده در آرشیو ثبت شد.":"🔁 تلاش مجدد انجام شد و نتیجه در آرشیو ثبت شد.");
   await showUncertainSignalOutbox(env,ownerId);
 }
-async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت دستی معامله در نسخه جدید غیرفعال است؛ سیگنال‌های صادرشده خودکار در دفتر ارزیابی ثبت می‌شوند.")}
-async function showOpenFuturesTrades(env,chatId){
-  try{await refreshTrackedFuturesTrades(env,chatId)}catch(error){console.error("Open trade refresh failed:",String(error?.stack||error))}
-  const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));
-  if(!list.length)return sendMessage(env,chatId,"📭 معامله بازی در دفتر پیگیری ثبت نشده است.",BACK_MENU);
-  const body=list.slice(0,15).map(t=>{
-    const p=leveragedPriceChangePercent(t.side,t.actualEntry,t.lastPrice);
-    const label=t.tier==="EXPERIMENTAL"?"🟠 سیگنال پر ریسک":"🟢 سیگنال معتبر";
-    const direction=t.side==="LONG"?"🟢 لانگ / Long":"🔴 شورت / Short";
-    return `${label}\nنماد: ${formatFuturesSymbol(t.symbol)}\nجهت معامله: ${direction}\nورود: ${formatPrice(t.actualEntry)}\nقیمت فعلی: ${formatPrice(t.lastPrice)}\nدرصد سود/زیان فعلی: ${formatOutcomePercent(p)}\n\n🎯 تارگت اول: ${formatPrice(t.target1)}\n🎯 تارگت دوم: ${formatPrice(t.target2)}\n🎯 تارگت سوم: ${formatPrice(t.target3)}\n\n⛔ حد ضرر: ${formatPrice(t.currentStop)}\nتارگت‌های لمس‌شده: ${t.tpHits.join(", ")||"—"}`;
-  }).join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
-  return sendLongMessage(env,chatId,"📌 معاملات باز / سیگنال‌های در حال ارزیابی\n━━━━━━━━━━━━━━━━━━\n\n"+body+"\n\n⚠️ این دفتر ارزیابی است؛ سفارش واقعی ثبت نمی‌شود.");
-}
+async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت و پیگیری نتایج معاملات در این نسخه غیرفعال است.")}
 async function runAutomaticFuturesAlertScan(env) {
   if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) {
     throw new Error("SIGNAL_DELIVERY and SIGNAL_DELIVERY_SECRET are required for scan coordination.");
@@ -1968,29 +1955,6 @@ async function runAutomaticFuturesAlertScan(env) {
     const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
     if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
   }
-}
-
-async function filterActiveDuplicateFuturesSignals(env, candidates) {
-  const now = Date.now();
-  const pending = await readTradeList(env, FUTURES_PENDING_KEY);
-  const activeKeys = new Set();
-
-  // A pending signal blocks another signal for the same contract and direction
-  // until its entry window expires, regardless of the candle fingerprint.
-  for (const signal of pending) {
-    if (signal?.expiresAt > now && signal?.symbol && ['LONG', 'SHORT'].includes(signal?.side)) {
-      activeKeys.add(String(signal.symbol).trim().toUpperCase() + '|' + signal.side);
-    }
-  }
-
-  const seenThisScan = new Set();
-  return (Array.isArray(candidates) ? candidates : []).filter(signal => {
-    if (!signal?.symbol || !['LONG', 'SHORT'].includes(signal?.side)) return false;
-    const key = String(signal.symbol).trim().toUpperCase() + '|' + signal.side;
-    if (activeKeys.has(key) || seenThisScan.has(key)) return false;
-    seenThisScan.add(key);
-    return true;
-  });
 }
 
 async function runFuturesSignalScan(env, options = {}) {
@@ -2015,39 +1979,16 @@ async function runFuturesSignalScan(env, options = {}) {
   const eligibleCandidates = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score);
   const experimentalCandidates = analyzed.filter(x => x?.experimentalEligible)
     .sort((a, b) => b.score - a.score).slice(0, 3);
-  const nonDuplicateCandidates = await filterActiveDuplicateFuturesSignals(env, eligibleCandidates);
-  const generatedSignals = nonDuplicateCandidates.slice(0, 8)
+  const generatedSignals = eligibleCandidates.slice(0, 8)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
-  const signals = await savePendingFuturesSignals(env, generatedSignals);
+  const signals = await registerPendingFuturesSignals(env, generatedSignals);
 
-  // Experimental candidates are delivered only to the owner, clearly labelled,
-  // and rate-limited per symbol/direction. They never enter the production signal queue.
-  const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
-  let experimentalSent = 0;
-  if (env.APP_KV && ownerId) {
-    for (const candidate of experimentalCandidates) {
-      const key = `futures:experimental:sent:${candidate.symbol}:${candidate.side}`;
-      if (await env.APP_KV.get(key)) continue;
-      const signal = {
-        ...candidate, id: crypto.randomUUID(), tier: "EXPERIMENTAL",
-        createdAt: Date.now(), expiresAt: Date.now() + 60 * 60 * 1000
-      };
-      try {
-        await sendAndArchiveFuturesSignal(env, ownerId, signal, formatExperimentalFuturesSignal(signal));
-        await env.APP_KV.put(key, "sent", { expirationTtl: 3600 });
-        experimentalSent++;
-      } catch (error) {
-        console.error("Experimental futures alert failed:", signal.symbol, String(error?.message || error));
-      }
-    }
-  }
-
-  if (env.APP_KV) {
-    try {
-      await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
-    } catch (error) {
-      console.error("Immediate futures alert dispatch failed:", String(error?.stack || error?.message || error));
-    }
+  // Experimental alerts and trade-outcome tracking are intentionally disabled.
+  const experimentalSent = 0;
+  try {
+    await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
+  } catch (error) {
+    console.error("Immediate futures alert dispatch failed:", String(error?.stack || error?.message || error));
   }
   const validData = analyzed.filter(x => x && x.score !== undefined).length;
   const rejected = analyzed.filter(x => x?.rejected).slice(0, 8);
@@ -2073,21 +2014,6 @@ async function runFuturesSignalScan(env, options = {}) {
     "📡 منبع داده: API عمومی Kraken Derivatives Futures\n" +
     "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست. قیمت ممکن است پس از بسته‌شدن کندل تغییر کند.";
 
-  if (env.APP_KV) {
-    try {
-      await env.APP_KV.put("last_futures_scan", JSON.stringify({
-        version: "3.8.2-engine",
-        timestamp: Date.now(),
-        report,
-        signals: signals.map(x => ({
-          symbol: x.symbol, side: x.side, score: x.score, entry: x.entry,
-          stop: x.stop, target1: x.target1, target2: x.target2, target3: x.target3
-        }))
-      }));
-    } catch (error) {
-      report += `\n⚠️ ذخیره گزارش فیوچرز ناموفق بود: ${String(error.message || "KV error")}`;
-    }
-  }
   return { report, signals, experimentalSent };
 }
 
@@ -2129,54 +2055,48 @@ async function runFuturesSignalsForChat(env, chatId) {
 
 
 async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
-  if (!env.APP_KV) throw new Error("APP_KV binding is required for automatic alerts.");
-  const queueKey = "futures:auto-alerts:pending-broadcasts";
-  let queue = await env.APP_KV.get(queueKey, "json") || [];
-  if (!Array.isArray(queue)) queue = [];
-  const queuedFingerprints = new Set(queue.map(item => item.fingerprint));
-  const fresh = selectUnnotifiedFuturesSignals(signals || [], queuedFingerprints);
-  queue = [...queue, ...fresh.map(item => ({ ...item, queuedAt: Date.now() }))].slice(-100);
-  if (queue.length && JSON.stringify(queue)!==JSON.stringify(await env.APP_KV.get(queueKey,"json")||[])) {
-    await env.APP_KV.put(queueKey, JSON.stringify(queue), { expirationTtl: 86400 });
-  }
-  if (!queue.length) return { newSignals: 0, recipients: 0, delivered: 0, failed: 0 };
-
-  await migrateLegacyMembership(env);
+  if (!Array.isArray(signals) || !signals.length) return { newSignals: 0, recipients: 0, delivered: 0, failed: 0 };
   const recipients = new Set();
-  if (env.OWNER_TELEGRAM_ID || env.OWNER_ID) recipients.add(String(env.OWNER_TELEGRAM_ID || env.OWNER_ID));
-  let cursor;
-  do {
-    const page = await env.APP_KV.list({ prefix: "member:", limit: 1000, ...(cursor ? { cursor } : {}) });
-    for (const item of page.keys || []) {
-      const chatId = item.name.slice("member:".length);
-      const member = await env.APP_KV.get(item.name, "json");
-      if (member && member.approved !== false && member.revoked !== true) recipients.add(String(chatId));
-    }
-    cursor = page.list_complete === false ? page.cursor : null;
-  } while (cursor);
-
-  let delivered = 0, failed = 0;
-  await mapLimit([...recipients].filter(id => excludeChatId == null || String(id) !== String(excludeChatId)), 4, async chatId => {
-    const pending = [];
-    for (const item of queue) {
-      const key = futuresAlertStorageKey(chatId, item.fingerprint);
-      if (!(await env.APP_KV.get(key))) pending.push({ ...item, key });
-    }
-    if (!pending.length) return;
+  const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
+  if (ownerId) recipients.add(String(ownerId));
+  // KV is used only to read the allow-list. Any read/quota outage must not
+  // prevent delivery to the owner, and must never broaden access to users.
+  if (env.APP_KV) {
     try {
-      for (let i = 0; i < pending.length; i++) {
-        const item = pending[i];
-        await sendAndArchiveFuturesSignal(env, chatId, item.signal, formatFuturesSignalAlert(item.signal, i + 1));
-        await env.APP_KV.put(item.key, "sent", { expirationTtl: ALERT_TTL_SECONDS });
+      let cursor;
+      do {
+        const page = await env.APP_KV.list({ prefix: "member:", limit: 1000, ...(cursor ? { cursor } : {}) });
+        for (const item of page.keys || []) {
+          const chatId = item.name.slice("member:".length);
+          const member = await env.APP_KV.get(item.name, "json");
+          if (member && member.approved !== false && member.revoked !== true) recipients.add(String(chatId));
+        }
+        cursor = page.list_complete === false ? page.cursor : null;
+      } while (cursor);
+      const legacyMembers = await env.APP_KV.get("v1:members", "json") || {};
+      for (const [chatId, legacy] of Object.entries(legacyMembers)) {
+        if (legacy?.status !== "active") continue;
+        const modern = await env.APP_KV.get(memberKey(chatId), "json");
+        if (!modern) recipients.add(String(chatId));
       }
-      delivered++;
     } catch (error) {
-      failed++;
-      console.error("Immediate futures alert delivery failed", chatId, String(error?.message || error));
+      console.error("Approved-member read failed; continuing with owner delivery only:", String(error?.message || error));
+    }
+  }
+  const targets = [...recipients].filter(id => excludeChatId == null || String(id) !== String(excludeChatId));
+  let delivered = 0, failed = 0;
+  await mapLimit(targets, 4, async chatId => {
+    for (let i = 0; i < signals.length; i++) {
+      try {
+        await sendAndArchiveFuturesSignal(env, chatId, signals[i], formatFuturesSignalAlert(signals[i], i + 1));
+        delivered++;
+      } catch (error) {
+        failed++;
+        console.error("Immediate futures alert delivery failed", chatId, signals[i].symbol, String(error?.message || error));
+      }
     }
   });
-  if (failed === 0 && recipients.size > 0) await env.APP_KV.delete(queueKey);
-  return { newSignals: fresh.length, queuedSignals: queue.length, recipients: recipients.size, delivered, failed };
+  return { newSignals: signals.length, recipients: targets.length, delivered, failed };
 }
 
 // ---------------- CONCURRENCY ----------------
