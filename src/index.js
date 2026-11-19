@@ -454,14 +454,32 @@ async function handleArchiveJoinRequest(request,env) {
   return true;
 }
 async function removeArchiveMember(env,userId) {
-  const channelId=archiveChannelId(env);if(!channelId||!userId||isOwner(userId,env))return;
-  try{await telegram("banChatMember",env,{chat_id:channelId,user_id:Number(userId),revoke_messages:false});}
-  catch(error){console.error("Archive removal failed:",String(error?.message||error));}
+  const channelId=archiveChannelId(env);
+  if(!channelId||!userId||isOwner(userId,env)) {
+    return {ok:false,error:"شناسه کانال آرشیو یا شناسه عضو معتبر نیست."};
+  }
+  try {
+    await telegram("banChatMember",env,{chat_id:channelId,user_id:Number(userId),revoke_messages:false});
+    return {ok:true};
+  } catch(error) {
+    const message=String(error?.message||error);
+    console.error("Archive removal failed:",message);
+    return {ok:false,error:message};
+  }
 }
 async function restoreArchiveMemberEligibility(env,userId) {
-  const channelId=archiveChannelId(env);if(!channelId||!userId||isOwner(userId,env))return;
-  try{await telegram("unbanChatMember",env,{chat_id:channelId,user_id:Number(userId),only_if_banned:true});}
-  catch(error){console.error("Archive unban failed:",String(error?.message||error));}
+  const channelId=archiveChannelId(env);
+  if(!channelId||!userId||isOwner(userId,env)) {
+    return {ok:false,error:"شناسه کانال آرشیو یا شناسه عضو معتبر نیست."};
+  }
+  try {
+    await telegram("unbanChatMember",env,{chat_id:channelId,user_id:Number(userId),only_if_banned:true});
+    return {ok:true};
+  } catch(error) {
+    const message=String(error?.message||error);
+    console.error("Archive unban failed:",message);
+    return {ok:false,error:message};
+  }
 }
 
 async function requestMembership(env, chatId, message) {
@@ -798,12 +816,42 @@ async function showMemberProfile(env, ownerId, id) {
 async function changeMemberAccess(env,ownerId,id,allow) {
   if(!isOwner(ownerId,env)||!env.APP_KV||!/^-?\d+$/.test(id))return;
   if(String(id)===String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))){await sendMessage(env,ownerId,"دسترسی مدیر اصلی قابل تغییر نیست.");return;}
-  const m=await env.APP_KV.get(memberKey(id),"json");
+  let m;
+  try {
+    m=await env.APP_KV.get(memberKey(id),"json");
+  } catch(error) {
+    const message=String(error?.message||error);
+    console.error("Member access lookup failed:",message);
+    await sendMessage(env,ownerId,"❌ اطلاعات عضو از KV خوانده نشد؛ هیچ تغییری اعمال نشد.\nعلت: "+message.slice(0,500));
+    return;
+  }
   if(!m){await sendMessage(env,ownerId,"عضو پیدا نشد.");return;}
   const next=allow?{...m,approved:true,revoked:false,allowedAt:new Date().toISOString(),allowedBy:String(ownerId)}:{...m,approved:false,revoked:true,revokedAt:new Date().toISOString(),revokedBy:String(ownerId)};
-  await env.APP_KV.put(memberKey(id),JSON.stringify(next));
-  if(allow)await restoreArchiveMemberEligibility(env,id);else await removeArchiveMember(env,id);
-  try{await sendMessage(env,id,allow?"🎉 دسترسی شما دوباره فعال شد.":"⛔ دسترسی شما توسط مدیر لغو شد.");}catch{}
+  try {
+    await env.APP_KV.put(memberKey(id),JSON.stringify(next));
+  } catch(error) {
+    const message=String(error?.message||error);
+    console.error("Member access KV write failed:",message);
+    await sendMessage(env,ownerId,"❌ تغییر دسترسی ذخیره نشد؛ هیچ تغییری در وضعیت عضو تأیید نمی‌شود.\nعلت: "+message.slice(0,500));
+    return;
+  }
+  const archiveResult=allow
+    ? await restoreArchiveMemberEligibility(env,id)
+    : await removeArchiveMember(env,id);
+  try {
+    await sendMessage(env,id,allow?"🎉 دسترسی شما دوباره فعال شد.":"⛔ دسترسی شما توسط مدیر لغو شد.");
+  } catch(error) {
+    console.warn("Member access notification failed:",String(error?.message||error));
+  }
+  if(!archiveResult?.ok) {
+    await sendMessage(env,ownerId,
+      "⚠️ وضعیت دسترسی در ربات ذخیره شد، اما تغییر دسترسی کانال آرشیو ناموفق بود.\n"+
+      "علت: "+String(archiveResult?.error||"خطای نامشخص").slice(0,500));
+  } else {
+    await sendMessage(env,ownerId,allow
+      ?"✅ دسترسی عضو در ربات فعال شد و محدودیت کانال آرشیو برداشته شد."
+      :"✅ دسترسی عضو در ربات لغو شد و عضویت او در کانال آرشیو مسدود شد.");
+  }
   await showMemberProfile(env,ownerId,id);
 }
 
