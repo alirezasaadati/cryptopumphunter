@@ -109,6 +109,134 @@ function summarizeExcursions(trades) {
   }));
 }
 
+
+function aggregate15mFrom1m(candles) {
+  const groups=new Map();
+  for(const x of candles){
+    const time=Math.floor(x.time/FIFTEEN_MINUTES)*FIFTEEN_MINUTES;
+    const g=groups.get(time);
+    if(!g) groups.set(time,{time,open:x.open,high:x.high,low:x.low,close:x.close,count:1});
+    else {g.high=Math.max(g.high,x.high);g.low=Math.min(g.low,x.low);g.close=x.close;g.count++;}
+  }
+  return [...groups.values()].filter(x=>x.count===15).sort((a,b)=>a.time-b.time);
+}
+function findAlternativeEntries(trade, minuteCandles) {
+  const bars15=aggregate15mFrom1m(minuteCandles);
+  const dir=trade.side==="LONG"?1:-1, end=trade.entryTime+60*ONE_MINUTE;
+  let breakout=null;
+  for(let i=1;i<bars15.length;i++){
+    const b=bars15[i],prev=bars15[i-1];
+    if(b.time< trade.entryTime || b.time+FIFTEEN_MINUTES>end) continue;
+    const confirmed=dir===1?b.close>prev.high:b.close<prev.low;
+    if(confirmed){breakout={level:dir===1?prev.high:prev.low,closeTime:b.time+FIFTEEN_MINUTES};break;}
+  }
+  if(!breakout) return {confirmation:null,pullback:null};
+  const nextAt=t=>minuteCandles.find(x=>x.time===t);
+  const confirmationBar=nextAt(breakout.closeTime);
+  let confirmation=null;
+  if(confirmationBar){
+    const p=confirmationBar.open*(1+dir*SLIPPAGE_PER_SIDE);
+    if((dir===1&&p<trade.target1&&p>trade.stop)||(dir===-1&&p>trade.target1&&p<trade.stop))
+      confirmation={time:confirmationBar.time,entry:p,breakoutLevel:breakout.level};
+  }
+  let pullback=null;
+  for(const b of minuteCandles){
+    if(b.time<breakout.closeTime || b.time>=end-ONE_MINUTE) continue;
+    const tolerance=trade.risk*0.10;
+    const retested=dir===1?b.low<=breakout.level+tolerance:b.high>=breakout.level-tolerance;
+    const reclaimed=dir===1?b.close>breakout.level:b.close<breakout.level;
+    if(!retested||!reclaimed) continue;
+    const next=nextAt(b.time+ONE_MINUTE);
+    if(!next) continue;
+    const p=next.open*(1+dir*SLIPPAGE_PER_SIDE);
+    if((dir===1&&p<trade.target1&&p>trade.stop)||(dir===-1&&p>trade.target1&&p<trade.stop)){
+      pullback={time:next.time,entry:p,breakoutLevel:breakout.level};break;
+    }
+  }
+  return {confirmation,pullback};
+}
+function simulateFromMinuteEntry(trade, entryModel, minuteCandles, hourlyCandles) {
+  const dir=trade.side==="LONG"?1:-1, entry=entryModel.entry;
+  const risk=dir===1?entry-trade.stop:trade.stop-entry;
+  if(!(risk>0)) return null;
+  const start=entryModel.time, cutoff=start+MAX_HOLD_HOURS*HOUR;
+  const bars=[...minuteCandles.filter(x=>x.time>=start && x.time<minuteCandles[0].time+60*ONE_MINUTE),
+    ...hourlyCandles.filter(x=>x.time>=minuteCandles[0].time+60*ONE_MINUTE && x.time<cutoff)]
+    .sort((a,b)=>a.time-b.time);
+  if(!bars.length) return null;
+  let remaining=1,netR=0,tp1=false,tp2=false,tp3=false,exitTime=null,exitReason=null;
+  const levels=[trade.target1,trade.target2,trade.target3],weights=[.4,.35,.25],used=[false,false,false];
+  for(const b of bars){
+    if(b.time>=cutoff) break;
+    const gap=dir===1?b.open<=trade.stop:b.open>=trade.stop;
+    const stopped=dir===1?b.low<=trade.stop:b.high>=trade.stop;
+    if(gap||stopped){
+      const px=gap?b.open:trade.stop, fill=px*(1-dir*SLIPPAGE_PER_SIDE);
+      netR+=remaining*(dir*(fill-entry)/risk-FEE_PER_SIDE*(entry+fill)/risk);
+      remaining=0;exitTime=b.time;exitReason="STOP";break;
+    }
+    for(let k=0;k<3&&remaining>0;k++){
+      const hit=dir===1?b.high>=levels[k]:b.low<=levels[k];
+      if(!used[k]&&hit){
+        const fill=levels[k]*(1-dir*SLIPPAGE_PER_SIDE);
+        netR+=weights[k]*(dir*(fill-entry)/risk-FEE_PER_SIDE*(entry+fill)/risk);
+        remaining-=weights[k];used[k]=true;
+        if(k===0)tp1=true;if(k===1)tp2=true;if(k===2)tp3=true;
+      }
+    }
+    if(remaining<=1e-9){remaining=0;exitTime=b.time;exitReason="TARGETS";break;}
+  }
+  if(remaining>0){
+    const b=bars[bars.length-1],fill=b.close*(1-dir*SLIPPAGE_PER_SIDE);
+    netR+=remaining*(dir*(fill-entry)/risk-FEE_PER_SIDE*(entry+fill)/risk);
+    exitTime=b.time;exitReason="TIME_EXIT";
+  }
+  return {...trade,entry,entryTime:start,risk,netR,target1Hit:tp1,target2Hit:tp2,target3Hit:tp3,exitTime,exitReason};
+}
+function nonOverlapping(trades) {
+  const nextBySymbol=new Map(),out=[];
+  for(const t of [...trades].sort((a,b)=>a.entryTime-b.entryTime)){
+    if(t.entryTime<(nextBySymbol.get(t.symbol)||0)) continue;
+    out.push(t);nextBySymbol.set(t.symbol,t.exitTime||t.entryTime);
+  }
+  return out;
+}
+async function compareEntryModels(trades) {
+  const cache=new Map();
+  const minuteRows=await mapLimit(trades,5,async t=>{
+    const k=t.symbol+"|"+t.entryTime;
+    const m=await fetchHistoricalCandles(t.symbol,"1m",t.entryTime,t.entryTime+61*ONE_MINUTE,ONE_MINUTE);
+    const h=await fetchHistoricalCandles(t.symbol,"1h",t.entryTime+60*ONE_MINUTE,t.entryTime+MAX_HOLD_HOURS*HOUR,HOUR);
+    return {key:k,minute:m,hourly:h};
+  });
+  for(const x of minuteRows) if(!x.error) cache.set(x.key,x);
+  const confirmation=[],pullback=[];
+  for(const t of trades){
+    const data=cache.get(t.symbol+"|"+t.entryTime);if(!data) continue;
+    const entries=findAlternativeEntries(t,data.minute);
+    if(entries.confirmation){
+      const sim=simulateFromMinuteEntry(t,entries.confirmation,data.minute,data.hourly);
+      if(sim) confirmation.push(sim);
+    }
+    if(entries.pullback){
+      const sim=simulateFromMinuteEntry(t,entries.pullback,data.minute,data.hourly);
+      if(sim) pullback.push(sim);
+    }
+  }
+  const baseline=nonOverlapping(trades),confirmed=nonOverlapping(confirmation),retested=nonOverlapping(pullback);
+  return {
+    rules:{
+      baseline:"Current entry at next 1h candle open",
+      confirmation:"Wait for a completed 15m candle to close beyond the previous 15m candle high/low; enter at next 1m open, within 60m",
+      pullback:"After that 15m breakout, wait for a 1m retest within 0.10R of breakout level and close back beyond it; enter next 1m open, within 60m",
+      exits:"Original absolute stop/targets, 40/35/25 partial exits, 0.05% fee and 0.03% slippage per side; stop-first ambiguity"
+    },
+    data:{tradesRequested:trades.length,minuteAndHourlyLoaded:cache.size,failed:minuteRows.filter(x=>x.error).length},
+    baseline:summarize(baseline),confirmation:summarize(confirmed),pullback:summarize(retested),
+    attempted:{confirmation:confirmation.length,pullback:pullback.length},
+    samples:{confirmation:confirmed.length,pullback:retested.length}
+  };
+}
 async function addMinuteExcursions(trades) {
   const requests = trades.map((trade,index)=>({trade,index}));
   const rows = await mapLimit(requests, 5, async ({trade,index}) => {
@@ -199,7 +327,8 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
   }
   if (position.remaining > 0) closeTrade(position, candles[endIndex].close, "TIME_EXIT", candles[endIndex].time, config);
   return {
-    side, entry, stop, risk, netR: position.realizedR, targetHits: position.targetHits,
+    side, entry, stop, risk, target1: targets[0], target2: targets[1], target3: targets[2],
+    netR: position.realizedR, targetHits: position.targetHits,
     target1Hit: position.target1Hit, target2Hit: position.target2Hit, target3Hit: position.target3Hit,
     exitReason: position.exitReason, entryTime: candles[startIndex].time, exitTime: position.exitTime
   };
@@ -295,11 +424,13 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       const direction=candidate.side==="LONG"?1:-1;
       const entry = candidate.entry * (1 + direction * SLIPPAGE_PER_SIDE);
       const tradeCandles=oneHour.slice(i+1,Math.min(oneHour.length,i+1+MAX_HOLD_HOURS+1));
+      const tradeTargets=[candidate.target1,candidate.target2,candidate.target3];
       const trade=simulateTrade({
         side:candidate.side,entry,stop:candidate.stop,
-        targets:[candidate.target1,candidate.target2,candidate.target3],
+        targets:[...tradeTargets],
         candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
       });
+      [trade.target1,trade.target2,trade.target3]=tradeTargets;
       trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
       trade.entryModel=mode === "baseline" ? "last_1h_close" : "next_1h_open";
       state.trades.push(trade);
@@ -331,6 +462,7 @@ async function main() {
   const allBaseline=results.flatMap(r=>r.trades?.baseline||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const allCurrent=results.flatMap(r=>r.trades?.current||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const minuteDataStatus = await addMinuteExcursions(allCurrent);
+  const entryModelComparison = await compareEntryModels(allCurrent);
   const excursionAnalysis = {
     dataStatus: minuteDataStatus,
     all: summarizeExcursions(allCurrent),
@@ -367,6 +499,7 @@ async function main() {
     baseline:{signals:sum("baseline","signals"),valid:sum("baseline","valid"),risky:sum("baseline","risky"),metrics:summarize(allBaseline)},
     current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent)},
     minuteExcursions: excursionAnalysis,
+    entryModelComparison,
     signalCountChangePct:sum("baseline","signals")?((sum("current","signals")/sum("baseline","signals"))-1)*100:0,
     symbols:results.map(({trades,...r})=>r),trades:{baseline:allBaseline,current:allCurrent}
   };
