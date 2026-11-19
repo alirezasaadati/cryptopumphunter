@@ -1,6 +1,12 @@
 name: Entry timing historical lab
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/entry-timing-backtest.mjs"
+      - ".github/workflows/entry-timing-historical-lab.yml"
+      - "src/index.js"
   push:
     branches: [entry-timing-historical-lab]
     paths:
