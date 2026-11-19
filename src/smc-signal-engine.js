@@ -1,6 +1,7 @@
 // Experimental, pure Smart Money signal engine. No network calls or order execution.
 export const SMC_CONFIG = Object.freeze({
   MIN_CANDLES: 60,
+  CHOCH_LOOKBACK: 12,
   PIVOT_LEFT: 3,
   PIVOT_RIGHT: 3,
   ATR_PERIOD: 14,
@@ -154,7 +155,7 @@ function fvgAfterChoch(candles,side,fromIndex){
 }
 function findLtfChoch(candles,side){
   // Search only closed prefixes; a later FVG must form after this CHOCH.
-  for(let i=candles.length-1;i>=SMC_CONFIG.MIN_CANDLES;i--){
+  for(let i=candles.length-1;i>=Math.max(SMC_CONFIG.MIN_CANDLES,candles.length-SMC_CONFIG.CHOCH_LOOKBACK);i--){
     const prefix=candles.slice(0,i+1);
     const pivots=confirmedPivots(prefix);
     const atr=calculateATR(prefix).at(-1);
@@ -209,10 +210,11 @@ export function analyzeSMCSignal({symbol,higherTimeframe,structureTimeframe,entr
   const sAtr=calculateATR(structureTimeframe).at(-1);
   const pivots=confirmedPivots(structureTimeframe);
   let sweep=null;
+  // Keep the most recent valid sweep before the current structure candle.
   for(let i=Math.max(SMC_CONFIG.MIN_CANDLES,structureTimeframe.length-16);i<structureTimeframe.length-1;i++){
     const prefix=structureTimeframe.slice(0,i+1);
     const event=liquidityEvent(prefix,side,confirmedPivots(prefix),calculateATR(prefix).at(-1));
-    if(event){sweep={...event,index:i};break;}
+    if(event)sweep={...event,index:i};
   }
   if(!sweep)return empty("جمع‌آوری نقدینگی معتبر در تایم‌فریم ساختار مشاهده نشد.",{higherTrend:ht.direction});
   const bos=structureBreak(structureTimeframe,side,pivots,sAtr);
@@ -225,7 +227,8 @@ export function analyzeSMCSignal({symbol,higherTimeframe,structureTimeframe,entr
   const ltf=entryTimeframe;
   const choch=findLtfChoch(ltf,side);
   if(!choch)return empty("تغییر ساختار تایم پایین (LTF CHOCH) تأیید نشد.",{ob,liquiditySweep:sweep,bos});
-  const fvg=fvgAfterChoch(ltf,side,choch.index+1);
+  // The CHOCH candle itself may be the third candle of a valid three-candle FVG.
+  const fvg=fvgAfterChoch(ltf,side,choch.index);
   if(!fvg)return empty("پس از CHOCH، شکاف ارزش منصفانه (FVG) معتبر تشکیل نشد.",{ob,choch});
   const obLtf={low:ob.low,high:ob.high};
   const fvgOverlapsOb=overlaps(fvg,obLtf);
