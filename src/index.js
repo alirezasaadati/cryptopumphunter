@@ -131,10 +131,13 @@ const BACK_MENU = {
 export default {
   async scheduled(event, env, ctx) {
     env = withQuotaAwareKV(env);
-    ctx.waitUntil(runAutomaticFuturesAlertScan(env));
-    if (String(env.ENTRY_SHADOW_ENABLED).toLowerCase() === "true") {
-      ctx.waitUntil(runEntryShadowScan(env).catch(error => console.error("Entry shadow scan failed:", String(error?.stack || error?.message || error))));
+    if (event?.cron === "*/10 * * * *") {
+      if (String(env.ENTRY_SHADOW_ENABLED).toLowerCase() === "true") {
+        ctx.waitUntil(runEntryShadowScan(env).catch(error => console.error("Entry shadow scan failed:", String(error?.stack || error?.message || error))));
+      }
+      return;
     }
+    ctx.waitUntil(runAutomaticFuturesAlertScan(env));
   },
 
   async fetch(request, env, ctx) {
