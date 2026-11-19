@@ -130,7 +130,7 @@ async function main(){
       higherTimeframe:h4.slice(Math.max(0,p4-100),p4),
       structureTimeframe:m15.slice(Math.max(0,p15-120),p15),
       entryTimeframe:m5.slice(Math.max(0,i-64),i+1),
-      // News is deliberately neutralized for this technical-only test; news performance is NOT tested.
+      // News is deliberately neutralized for this technical-only test; news performance is NOT tested. // CHOCH v2: reversal-only trigger.
       news:{status:"CLEAR",highImpact:false,score:100,reason:"News layer bypassed: no historical news archive in this test."},
       riskConfig:{maxRiskPct:0.04}
     });
