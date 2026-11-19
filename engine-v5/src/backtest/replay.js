@@ -134,17 +134,32 @@ function runProfile(symbol, candles, profile) {
 }
 
 function summarize(model, trades) {
-  const wins=trades.filter(t=>t.netReturnPct>0), losses=trades.filter(t=>t.netReturnPct<=0);
-  const grossWin=wins.reduce((s,t)=>s+t.netReturnPct,0);
-  const grossLoss=Math.abs(losses.reduce((s,t)=>s+t.netReturnPct,0));
+  const ordered=trades.slice().sort((a,b)=>a.exitTime-b.exitTime);
+  const wins=ordered.filter(t=>t.rMultiple>0), losses=ordered.filter(t=>t.rMultiple<=0);
+  const grossWin=wins.reduce((s,t)=>s+t.rMultiple,0);
+  const grossLoss=Math.abs(losses.reduce((s,t)=>s+t.rMultiple,0));
   let equity=1, peak=1, maxDrawdown=0;
-  for (const t of trades.sort((a,b)=>a.exitTime-b.exitTime)) {
+  for (const t of ordered) {
     equity*=1+(t.rMultiple*0.01);
     peak=Math.max(peak,equity);
     maxDrawdown=Math.max(maxDrawdown,(peak-equity)/peak);
   }
-  const netPct=(equity-1)*100;
-  return { model, trades:trades.length, wins:wins.length, losses:losses.length, winRatePct:trades.length?wins.length/trades.length*100:null, netReturnPct:netPct, assumedRiskPerTradePct:1, profitFactor:grossLoss?grossWin/grossLoss:(grossWin?null:0), maxDrawdownPct:maxDrawdown*100, expectancyPct:trades.length?trades.reduce((s,t)=>s+t.netReturnPct,0)/trades.length:null, averageR:trades.length?trades.reduce((s,t)=>s+t.rMultiple,0)/trades.length:null, longTrades:trades.filter(t=>t.direction==="long").length, shortTrades:trades.filter(t=>t.direction==="short").length };
+  return {
+    model,
+    trades:ordered.length,
+    wins:wins.length,
+    losses:losses.length,
+    winRatePct:ordered.length?wins.length/ordered.length*100:null,
+    netReturnPct:(equity-1)*100,
+    assumedRiskPerTradePct:1,
+    profitFactor:grossLoss?grossWin/grossLoss:(grossWin?null:0),
+    maxDrawdownPct:maxDrawdown*100,
+    expectancyR:ordered.length?ordered.reduce((s,t)=>s+t.rMultiple,0)/ordered.length:null,
+    averageTradeReturnPct:ordered.length?ordered.reduce((s,t)=>s+t.netReturnPct,0)/ordered.length:null,
+    averageR:ordered.length?ordered.reduce((s,t)=>s+t.rMultiple,0)/ordered.length:null,
+    longTrades:ordered.filter(t=>t.direction==="long").length,
+    shortTrades:ordered.filter(t=>t.direction==="short").length
+  };
 }
 
 export function runHistoricalComparison(dataset, splitTime = null) {
