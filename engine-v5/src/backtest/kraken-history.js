@@ -7,7 +7,7 @@ export async function fetchKrakenFuturesCandles({symbol,resolution="5m",days=90,
  const intervalMs=300000,startMs=endTime-days*86400000,endSec=Math.floor(endTime/1000);
  let cursor=Math.floor(startMs/1000),previousLast=0;const rows=[];
  while(cursor<endSec){
-  const url=new URL(`/trade/${encodeURIComponent(symbol)}/${resolution}`,BASE);
+  const url=new URL(`trade/${encodeURIComponent(symbol)}/${resolution}`,`${BASE}/`);
   url.searchParams.set("from",String(cursor));url.searchParams.set("to",String(endSec));
   const response=await fetchImpl(url,{headers:{accept:"application/json"}});
   if(response.status===429){const retry=Number(response.headers.get("retry-after"));await sleep(Number.isFinite(retry)&&retry>0?retry*1000:2000);continue;}
