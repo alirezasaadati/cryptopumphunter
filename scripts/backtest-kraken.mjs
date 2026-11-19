@@ -2,9 +2,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 const SYMBOL = "BTCUSDT";
 const INTERVAL = 15 * 60 * 1000;
@@ -13,7 +10,11 @@ const DAYS = 365;
 const FEE = 0.0005;
 const SLIPPAGE = 0.0003;
 const H4_ORDER = 5;
-constasync function fetchKlines() {
+const M15_ORDER = 3;
+const MIN_RR = 2;
+const MAX_HOLD_BARS = 72 * 4;
+
+async function fetchKlines() {
   const end=Date.now(), start=end-DAYS*86400000;
   const now=new Date(end), from=new Date(start), rows=[];
   const months=[];
