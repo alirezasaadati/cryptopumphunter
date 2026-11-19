@@ -185,10 +185,10 @@ async function main(){
     "| Signals | "+signals+" |","| Rejected evaluations | "+rejected+" |","| Skipped (position open) | "+overlapSkipped+" |",
     "| Executed trades | "+trades.length+" |","| Win rate | "+pct(report.overall.winRatePct)+" |",
     "| Net result | "+report.overall.netR.toFixed(2)+"R |","| Expectancy | "+report.overall.expectancyR.toFixed(3)+"R |",
-    "| Profit factor | "+report.overall.profitFactor.toFixed(3)+" |","| Max drawdown | "+report.overall.maxDrawdownR.toFixed(2)+"R |","",
+    "| Profit factor | "+(report.overall.profitFactor===null?"n/a":report.overall.profitFactor.toFixed(3))+" |","| Max drawdown | "+report.overall.maxDrawdownR.toFixed(2)+"R |","",
     "## Long / Short","",
     "| Side | Trades | Win rate | Net R | Expectancy | PF |","|---|---:|---:|---:|---:|---:|",
-    ...["LONG","SHORT"].map(k=>{const x=bySide[k];return "| "+k+" | "+x.trades+" | "+pct(x.winRatePct)+" | "+x.netR.toFixed(2)+" | "+x.expectancyR.toFixed(3)+" | "+x.profitFactor.toFixed(3)+" |";}),
+    ...["LONG","SHORT"].map(k=>{const x=bySide[k];return "| "+k+" | "+x.trades+" | "+pct(x.winRatePct)+" | "+x.netR.toFixed(2)+" | "+x.expectancyR.toFixed(3)+" | "+(x.profitFactor===null?"n/a":x.profitFactor.toFixed(3))+" |";}),
     "","Caution: the news layer is not historically tested; results must not be treated as a fully validated live strategy.",
     "Full trade-level data: btc-smc-one-year.json",""].join("\n");
   await writeFile("artifacts/btc-smc-one-year.md",lines);
