@@ -2,7 +2,9 @@ import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
 import { mkdir, writeFile } from "node:fs/promises";
 
 const BASE="https://futures.kraken.com", H=3600000, H4=14400000, M15=900000, M5=300000;
-const DAYS=Math.max(30,Math.min(180,Number(process.env.BACKTEST_DAYS||90)));\nconst END_AT=process.env.BACKTEST_END?Date.parse(process.env.BACKTEST_END):Date.now();\nif(!Number.isFinite(END_AT))throw Error("Invalid BACKTEST_END");
+const DAYS=Math.max(30,Math.min(180,Number(process.env.BACKTEST_DAYS||90)));
+const END_AT=process.env.BACKTEST_END?Date.parse(process.env.BACKTEST_END):Date.now();
+if(!Number.isFinite(END_AT))throw Error("Invalid BACKTEST_END");
 const LIMIT=Math.max(1,Math.min(24,Number(process.env.BACKTEST_SYMBOLS||12)));
 const FEE=Number(process.env.BACKTEST_FEE??0.0005), SLIP=Number(process.env.BACKTEST_SLIPPAGE??0.0003);
 const HOLD15=72*4, HOLD5=72*12, ENTRY_WINDOW15=8, ENTRY_WINDOW5=24, WEIGHTS=[0.4,0.35,0.25];
