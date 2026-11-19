@@ -30,7 +30,7 @@ jobs:
         run: node --test tests/*.test.mjs
 
   public-exchange-smoke:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -43,3 +43,27 @@ jobs:
       - name: Run read-only public API smoke tests
         run: npm run smoke
         timeout-minutes: 3
+
+  historical-backtest:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine-v5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 90-day historical paper backtest
+        run: npm run backtest
+        env:
+          BACKTEST_DAYS: "90"
+          BACKTEST_SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT"
+        timeout-minutes: 15
+      - name: Upload historical backtest report
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-v5-historical-backtest-90d
+          path: engine-v5/historical-backtest-report.json
+          if-no-files-found: error
