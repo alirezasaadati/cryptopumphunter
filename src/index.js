@@ -1,4 +1,6 @@
 import { runSpotScan } from "./spot-engine.js";
+import { evaluateShortTfConfirmation } from "./short-tf-confirmation.js";
+import { ENTRY_SHADOW_CONFIG, shadowSetupId, buildShadowLevels, advanceShadowTrade } from "./entry-shadow.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
@@ -130,6 +132,9 @@ export default {
   async scheduled(event, env, ctx) {
     env = withQuotaAwareKV(env);
     ctx.waitUntil(runAutomaticFuturesAlertScan(env));
+    if (String(env.ENTRY_SHADOW_ENABLED).toLowerCase() === "true") {
+      ctx.waitUntil(runEntryShadowScan(env).catch(error => console.error("Entry shadow scan failed:", String(error?.stack || error?.message || error))));
+    }
   },
 
   async fetch(request, env, ctx) {
@@ -1796,7 +1801,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/shadow/lock/acquire","/shadow/lock/release","/shadow/meta/start","/shadow/list","/shadow/upsert"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=this.env.SIGNAL_DELIVERY_SECRET;
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -1815,6 +1820,45 @@ export class SignalDeliveryCoordinator {
           const today=quotaDayKey();
           await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
           return Response.json({ok:true,allowed:false,day:today});
+        }
+        if(url.pathname==="/shadow/lock/acquire"){
+          const current=await this.ctx.storage.get("entry-shadow-lock"),now=Date.now();
+          if(current&&Number(current.expiresAt)>now)return Response.json({ok:true,acquired:false});
+          await this.ctx.storage.put("entry-shadow-lock",{acquiredAt:now,expiresAt:now+240000});
+          return Response.json({ok:true,acquired:true});
+        }
+        if(url.pathname==="/shadow/lock/release"){
+          await this.ctx.storage.delete("entry-shadow-lock");
+          return Response.json({ok:true,released:true});
+        }
+        if(url.pathname==="/shadow/meta/start"){
+          let meta=await this.ctx.storage.get("entry-shadow-meta");
+          const now=Date.now();
+          if(!meta)meta={startedAt:now,endsAt:now+ENTRY_SHADOW_CONFIG.durationMs,status:"RUNNING",version:1};
+          if(meta.status==="RUNNING"&&now>=Number(meta.endsAt))meta={...meta,status:"COMPLETED",completedAt:now};
+          if(meta.status==="RUNNING")await this.ctx.storage.put("entry-shadow-meta",meta);
+          else if(meta.status==="COMPLETED")await this.ctx.storage.put("entry-shadow-meta",meta);
+          return Response.json({ok:true,meta});
+        }
+        if(url.pathname==="/shadow/list"){
+          const values=await this.ctx.storage.list({prefix:"entry-shadow:"});
+          const records=[...values.values()].sort((a,b)=>Number(a.createdAt||0)-Number(b.createdAt||0));
+          return Response.json({ok:true,records:records.slice(-1200),meta:await this.ctx.storage.get("entry-shadow-meta")||null});
+        }
+        if(url.pathname==="/shadow/upsert"){
+          const incoming=Array.isArray(payload.records)?payload.records:[];
+          let saved=0;
+          for(const record of incoming){
+            if(!record?.id||!["WAITING","OPEN","CLOSED","EXPIRED","INVALID"].includes(record.status))continue;
+            await this.ctx.storage.put("entry-shadow:"+String(record.id),record);
+            saved++;
+          }
+          const values=await this.ctx.storage.list({prefix:"entry-shadow:"});
+          if(values.size>1200){
+            const ordered=[...values.entries()].sort((a,b)=>Number(a[1]?.createdAt||0)-Number(b[1]?.createdAt||0));
+            for(const [key] of ordered.slice(0,values.size-1200))await this.ctx.storage.delete(key);
+          }
+          return Response.json({ok:true,saved});
         }
         if(url.pathname==="/signals/list"){
           const now=Date.now();
@@ -2041,6 +2085,89 @@ async function runAutomaticFuturesAlertScan(env) {
   } finally {
     const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
     if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
+  }
+}
+
+async function entryShadowRequest(env,path,payload={}){
+  if(!env.SIGNAL_DELIVERY||!env.SIGNAL_DELIVERY_SECRET)throw new Error("Durable Object shadow storage is unavailable.");
+  const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:entry-shadow-test"));
+  const response=await stub.fetch("https://entry-shadow.internal"+path,{method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},body:JSON.stringify(payload)});
+  const data=await response.json();
+  if(!response.ok||!data?.ok)throw new Error(data?.error||"Entry shadow storage request failed.");
+  return data;
+}
+
+async function runEntryShadowScan(env){
+  const lock=await entryShadowRequest(env,"/shadow/lock/acquire");
+  if(!lock.acquired)return {skipped:true,reason:"shadow scan already running"};
+  try{
+    const started=await entryShadowRequest(env,"/shadow/meta/start");
+    if(started.meta?.status!=="RUNNING")return {completed:true,meta:started.meta};
+    const stored=await entryShadowRequest(env,"/shadow/list");
+    const records=Array.isArray(stored.records)?stored.records:[];
+    const byId=new Map(records.map(x=>[x.id,x]));
+    const now=Date.now(),updates=[];
+    const active=records.filter(x=>x.status==="OPEN");
+    const openSymbols=[...new Set(active.map(x=>x.symbol))];
+    for(const symbol of openSymbols){
+      try{
+        const candles=await getKrakenFuturesCandles(symbol,"1m");
+        for(const trade of active.filter(x=>x.symbol===symbol)){
+          const advanced=advanceShadowTrade(trade,candles,now);
+          if(advanced!==trade)updates.push(advanced);
+        }
+      }catch(error){console.error("Shadow outcome update failed:",symbol,String(error?.message||error));}
+    }
+    const universe=(await getKrakenFuturesUniverse()).slice(0,ENTRY_SHADOW_CONFIG.maxSymbols);
+    for(const ticker of universe){
+      try{
+        const [h1,h4,m15]=await Promise.all([
+          getKrakenFuturesCandles(ticker.symbol,"1h"),
+          getKrakenFuturesCandles(ticker.symbol,"4h"),
+          getKrakenFuturesCandles(ticker.symbol,"15m")
+        ]);
+        if(h1.length<FUTURES_CONFIG.MIN_CANDLES||h4.length<FUTURES_CONFIG.MIN_CANDLES)continue;
+        const candidate=analyzeFuturesSymbol(ticker,h1,h4,m15);
+        if(!candidate?.eligible)continue;
+        const setupTime=Number(candidate.candleTime)+3600000;
+        const id=shadowSetupId(candidate.symbol,candidate.side,candidate.candleTime);
+        const old=byId.get(id);
+        if(old&&["OPEN","CLOSED","EXPIRED"].includes(old.status))continue;
+        if(now-setupTime>ENTRY_SHADOW_CONFIG.maxSetupAgeMs){
+          updates.push({id,symbol:candidate.symbol,side:candidate.side,score:candidate.score,setupTime,
+            status:"EXPIRED",reason:"SETUP_WINDOW_EXPIRED",createdAt:old?.createdAt||now,updatedAt:now});
+          continue;
+        }
+        const [m1,m5]=await Promise.all([
+          getKrakenFuturesCandles(candidate.symbol,"1m"),
+          getKrakenFuturesCandles(candidate.symbol,"5m")
+        ]);
+        const confirmation=evaluateShortTfConfirmation({side:candidate.side,candles1m:m1,candles5m:m5,candles15m:m15,
+          setupTime,now,referencePrice:Number(ticker.last),maxSetupAgeMs:ENTRY_SHADOW_CONFIG.maxSetupAgeMs});
+        if(confirmation.status==="CONFIRMED"){
+          const levels=buildShadowLevels(candidate,h1,confirmation.entryReference);
+          if(!levels){
+            updates.push({id,symbol:candidate.symbol,side:candidate.side,score:candidate.score,setupTime,status:"INVALID",
+              reason:"INVALID_SHADOW_RISK",createdAt:old?.createdAt||now,updatedAt:now});
+            continue;
+          }
+          updates.push({id,symbol:candidate.symbol,side:candidate.side,score:candidate.score,setupTime,status:"OPEN",
+            entry:levels.entry,stop:levels.stop,risk:levels.risk,target1:levels.target1,target2:levels.target2,target3:levels.target3,
+            entryTime:confirmation.triggerTime+60000,lastProcessedCandleTime:confirmation.triggerTime,
+            remaining:1,realizedR:0,targetHits:[],maxMaeR:0,timeToProfitMin:null,
+            pullback15mTime:confirmation.pullback15mTime,confirmation5mTime:confirmation.confirmation5mTime,
+            confirmation1mTime:confirmation.confirmation1mTime,score:candidate.score,volumeRatio:candidate.volumeRatio,
+            createdAt:old?.createdAt||now,updatedAt:now});
+        }else{
+          updates.push({id,symbol:candidate.symbol,side:candidate.side,score:candidate.score,setupTime,status:"WAITING",
+            reason:confirmation.reason||"WAITING_FOR_CONFIRMATION",createdAt:old?.createdAt||now,updatedAt:now});
+        }
+      }catch(error){console.error("Shadow candidate failed:",ticker.symbol,String(error?.message||error));}
+    }
+    if(updates.length)await entryShadowRequest(env,"/shadow/upsert",{records:updates});
+    return {scanned:true,symbols:universe.length,updated:updates.length,openTrades:active.length};
+  }finally{
+    await entryShadowRequest(env,"/shadow/lock/release").catch(error=>console.error("Shadow lock release failed:",String(error?.message||error)));
   }
 }
 
