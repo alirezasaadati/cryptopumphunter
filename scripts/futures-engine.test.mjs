@@ -7,7 +7,9 @@ import {
   calculateAtr,
   evaluateFuturesEntryFilters,
   analyzeFuturesSymbol,
-  getKrakenFuturesCandles
+  getKrakenFuturesCandles,
+  getKrakenFuturesUniverse,
+  mapLimit
 } from "../src/index.js";
 
 function makeCandles({count=120,slope=0.015,base=100,volume=100}={}) {
@@ -58,7 +60,6 @@ function makeSetup(side="LONG") {
   };
 }
 
-
 test("admin signal listing returns recent unexpired signals from Durable Object without writes",async()=>{
   const now=Date.now();
   const stored=[
@@ -97,8 +98,12 @@ test("admin signal listing endpoint rejects requests without the Durable Object 
 });
 
 test("v3.8.2 configuration is preserved",()=>{
-  assert.equal(FUTURES_CONFIG.MAX_SYMBOLS,24);
+  assert.equal("MAX_SYMBOLS" in FUTURES_CONFIG,false);
   assert.equal(FUTURES_CONFIG.CONCURRENCY,3);
+  assert.equal(FUTURES_CONFIG.MAX_SCAN_DURATION_MS,180000);
+  assert.equal(FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS,45000);
+  assert.equal(FUTURES_CONFIG.REQUEST_TIMEOUT_MS,12000);
+  assert.equal(FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN,20);
   assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME,5_000_000);
   assert.equal(FUTURES_CONFIG.MIN_CANDLES,60);
   assert.equal(FUTURES_CONFIG.MIN_SCORE,72);
@@ -108,6 +113,36 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.35);
   assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,3.0);
   assert.equal("ENTRY_INTERVAL" in FUTURES_CONFIG,false);
+});
+
+
+test("Kraken universe is not truncated by a fixed symbol count",async()=>{
+  const originalFetch=globalThis.fetch;
+  const tickers=Array.from({length: 30},(_,i)=>({
+    tag:"perpetual",symbol:`PF_TEST${String(i).padStart(2,"0")}USD`,
+    volumeQuote:10_000_000+i,last:100+i,suspended:false
+  }));
+  globalThis.fetch=async url=>{
+    assert.match(String(url),/derivatives\/api\/v3\/tickers/);
+    return new Response(JSON.stringify({tickers}),{status:200});
+  };
+  try{
+    const universe=await getKrakenFuturesUniverse();
+    assert.equal(universe.length,30);
+    assert.equal(universe[0].symbol,"PF_TEST29USD");
+  }finally{globalThis.fetch=originalFetch;}
+});
+
+test("mapLimit stops assigning new symbols when the safe time budget ends",async()=>{
+  const processed=[];
+  const results=await mapLimit([1,2,3,4],1,async value=>{
+    processed.push(value);
+    return value;
+  },()=>processed.length<2);
+  assert.deepEqual(processed,[1,2]);
+  assert.deepEqual(results.slice(0,2),[1,2]);
+  assert.equal(results[2],undefined);
+  assert.equal(results[3],undefined);
 });
 
 test("Kraken perpetual filter accepts only liquid PI/PF USD perpetuals",()=>{
