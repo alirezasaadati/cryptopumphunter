@@ -134,7 +134,9 @@ function buildTrades(symbol,h1,m15,m5,model){
     const zone=inFibZone(swing.side,swing.low,swing.high,bar.close);
     if(zone)fibTouchedUntil=closeTime+60*M5;
     const fibRequired=model!=="breakout15_5";
-    if(fibRequired&&closeTime>fibTouchedUntil)continue;
+    // Track completed 15m breakouts continuously for every model. Apply the Fibonacci
+    // eligibility gate only after breakout state is updated, so fib15_5 cannot
+    // retroactively detect a breakout merely because price later entered the zone.
     const bars15=latestBars(m15,closeTime,M15);
     if(bars15.length<5)continue;
     const current15=bars15.at(-1);
@@ -154,6 +156,7 @@ function buildTrades(symbol,h1,m15,m5,model){
       confirmed=direction===1?bar.close>pending15.level:bar.close<pending15.level;
       level=pending15.level;
     }
+    if(fibRequired&&closeTime>fibTouchedUntil)continue;
     if(!confirmed)continue;
     const breakKey=swingKey+"|"+bar.time+"|"+model;
     if(breakKey===last5BreakKey)continue;
