@@ -2022,10 +2022,6 @@ async function refreshTrackedFuturesTrades(env,chatId=null){
   }
   if(openListDirty)await writeTradeList(env,FUTURES_OPEN_KEY,remaining.filter(t=>!closedIds.has(t.id)).slice(0,300));
   if(closedListDirty)await writeTradeList(env,FUTURES_CLOSED_KEY,closed.slice(0,500));
-  for(const x of results.filter(v=>v.closed)){
-    const t=x.trade,o=Number(t.outcomePercent),label=o>0?"سود":o<0?"ضرر":"سر‌به‌سر";
-
-  }
   return{checked,closed:closedCount};
 }
 async function handleTradeAction(action,chatId,env){const[,op]=action.split(":");if(op==="be")return sendMessage(env,chatId,"ℹ️ در نسخه جدید حد ضرر سیگنال خودکار جابه‌جا نمی‌شود؛ برای ارزیابی منصفانه حد ضرر اولیه ثابت می‌ماند.");if(op==="skip"||op==="enter")return sendMessage(env,chatId,"ℹ️ این نسخه هر سیگنال صادرشده را خودکار در دفتر ارزیابی ثبت می‌کند؛ ثبت دستی لازم نیست.")}
@@ -2290,10 +2286,6 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
     }
     const levels=[["TP1",t.target1],["TP2",t.target2],["TP3",t.target3]],hits=[];
     for(const [key,target] of levels)if(!t.tpHits.includes(key)&&targetReached(t.side,price,target)){t.tpHits.push(key);hits.push(key);}
-    for(const hit of hits) {
-      const target=hit==="TP1"?t.target1:hit==="TP2"?t.target2:t.target3;
-      await notifyTradeMilestone(env,t,hit,target);
-    }
     if(t.tpHits.includes("TP3")) {
       t.status="CLOSED_TARGETS";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,false);t.outcomePercent=tradeOutcomePercent(t,price);t.closeReason="TP3";
       closed.unshift(t);await updateIssuedSignal(env.APP_KV,t.chatId,t);continue;
