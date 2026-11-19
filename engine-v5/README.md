@@ -4,37 +4,37 @@ This directory is a standalone, isolated engine project. It is not imported by t
 
 ## Current status
 
-**Foundation only — not deployed and not scanning markets.**
+**Foundation and read-only exchange adapters — not deployed and not scanning markets.**
 
 - Separate Worker name: `cryptopumphunter-engine-v5`
-- Separate entry point: `engine-v5/src/index.js`
 - Dedicated D1 binding: `ENGINE_DB`
 - Dedicated R2 binding: `ENGINE_ARCHIVE`
 - No KV namespace binding and no KV dependency
 - Paper mode only; no live trading or order placement
-- The health endpoint is the only implemented route
+- The health endpoint is the only implemented Worker route
 
-## Public exchange adapters
+## Supported public exchanges
 
-Read-only adapters are implemented under `src/exchanges/` for:
-- Binance Spot and USDⓈ-M perpetual markets
-- Bybit Spot and Linear markets
-- OKX Spot and SWAP markets
-- Kraken Spot and Futures public market data
+Only these two exchanges are currently included:
+- **OKX:** Spot and SWAP public market data
+- **Kraken:** Spot and Futures public market data
 
-They normalize instrument metadata and 24-hour ticker snapshots. Selective enrichment methods exist for some derivatives metrics and order-book reads. These adapters are not yet connected to a scheduled scanner or D1 persistence. Kraken Futures symbol mapping and every live response shape still require read-only smoke tests before broad collection.
+Binance and Bybit adapters have been removed from V5. The historical replay data source is handled separately and is not an enabled live exchange adapter.
+
+Adapters normalize instrument metadata and 24-hour ticker snapshots. Selective enrichment methods exist for derivatives metrics and order-book reads. They are not yet connected to a scheduled scanner or D1 persistence. Live response validation is still required before broad collection.
 
 The HTTP layer has bounded request timeouts and classifies rate limits; it intentionally does not retry 429 responses automatically. A future scheduler must respect each exchange's retry-after/rate-limit headers and request budget.
 
-## Local checks
+## Checks
 
 From this directory:
 
 ```bash
 npm test
+npm run smoke
 ```
 
-The current tests cover only the foundation health endpoint and 404 handling. They do not test market data, exchange adapters, strategy logic, or trading performance.
+The unit tests use mocked API responses. The smoke test contacts public endpoints and may fail because of regional restrictions, exchange outages, or API changes. A successful smoke test is required before enabling collection.
 
 ## Before any Cloudflare deployment
 
@@ -50,5 +50,6 @@ Do not reuse the current bot's KV, D1, R2, secrets, Durable Objects, or Worker.
 ## Design documents
 
 - [Architecture](ARCHITECTURE.md)
+- [Data sources](DATA_SOURCES.md)
 - [Implementation roadmap](ROADMAP.md)
 - [Initial D1 schema](migrations/0001_initial.sql)
