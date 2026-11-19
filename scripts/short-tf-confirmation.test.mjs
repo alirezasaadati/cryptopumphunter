@@ -13,7 +13,7 @@ function trend(interval,count,{base=100,step=0.04,side="LONG",range=0.02}={}) {
 
 function fixture(side) {
   const sign=side==="LONG"?1:-1;
-  const m15=trend(M15,45,{base:100,step:0.2,side,range:0.04});
+  const m15=trend(M15,45,{base:100,step:sign*0.2,side,range:0.04});
   const closes=m15.slice(0,44).map(c=>c.close);
   let e=closes.slice(0,21).reduce((a,b)=>a+b,0)/21;
   const k=2/(21+1);
@@ -30,6 +30,7 @@ function fixture(side) {
   const m1=trend(M1,700,{base:100,step:sign*0.001,side,range:0.02});
   const triggerIndex=680;
   const prev=m1[triggerIndex-1], t=m1[triggerIndex];
+  m1[triggerIndex-1]={...prev,high:side==="LONG"?prev.close+0.002:prev.high,low:side==="SHORT"?prev.close-0.002:prev.low};
   const triggerClose=prev.close+sign*0.006;
   m1[triggerIndex]={...t,open:prev.close-sign*0.001,high:Math.max(triggerClose,prev.close)+0.005,low:Math.min(triggerClose,prev.close)-0.015,close:triggerClose};
 
