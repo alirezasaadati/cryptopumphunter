@@ -28,5 +28,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: btc-top3-nested-tuning
-          path: artifacts/btc-top3-nested-tuning.json
+          path: research/artifacts/btc-top3-nested-tuning.json
           if-no-files-found: error
