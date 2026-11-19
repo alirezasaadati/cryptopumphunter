@@ -22,7 +22,8 @@ configs = {
  "m15_default": {},
  "m15_no_kernel": {"use_kernel_filter": False},
 }
-configs = {k:v for k,v in configs.items() if k.startswith(timeframe + "_")}\nout = {"bar_count": len(bars), "variants": {}}
+configs = {k:v for k,v in configs.items() if k.startswith(timeframe + "_")}
+out = {"bar_count": len(bars), "variants": {}}
 for name, overrides in configs.items():
     settings = Settings.from_mapping(overrides)
     results = calculate(bars, settings)
