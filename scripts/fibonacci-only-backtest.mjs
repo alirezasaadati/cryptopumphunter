@@ -103,7 +103,7 @@ function simulate(bars,startIndex,swing,entryRaw,model,levelLabel){
     entry,stop,risk,targets,target1Hit:hit[0],target2Hit:hit[1],target3Hit:hit[2],netR,exitReason,exitTime};
 }
 function runVariant(symbol,bars,variant,level=null){
-  const trades=[];let nextFree=0,lastSwingKey="";
+  const trades=[];let nextFree=0,lastSwingKey="";const consumedSwings=new Set();
   for(let i=1;i<bars.length-1;i++){
     const bar=bars[i],closeTime=bar.time+H1;
     if(closeTime<START||closeTime>=END||bar.time<nextFree)continue;
@@ -118,7 +118,7 @@ function runVariant(symbol,bars,variant,level=null){
     const label=variant==="all_levels"?String(level):"0.5-0.618";
     const t=simulate(bars,entryIndex,swing,bars[entryIndex].open,variant,label);
     if(!t)continue;
-    t.symbol=symbol;trades.push(t);nextFree=t.exitTime+H1;
+    t.symbol=symbol;trades.push(t);consumedSwings.add(swing.key);nextFree=t.exitTime+H1;
   }
   return trades;
 }
@@ -151,10 +151,10 @@ async function main(){
   summary.golden_zone={label:"Fib 0.5-0.618 zone",metrics:metrics(zoneRows),trades:zoneRows};
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures public historical OHLC",period:{from:new Date(START).toISOString(),to:new Date(END).toISOString()},
     rules:{timeframe:"1h only; no lower-timeframe confirmation or additional indicators",pivot:"confirmed pivot: 3 candles left + 3 candles right; usable only after third right candle closes; latest alternating confirmed pivots define impulse",
-      model1:"five independent tests: 0.236, 0.382, 0.5, 0.618, 0.786; first candle touching the level triggers entry at next 1h open",
-      model2:"first candle intersecting the 0.5-0.618 retracement band triggers entry at next 1h open",
+      model1:"five independent tests: 0.236, 0.382, 0.5, 0.618, 0.786; first candle touching the level triggers one entry per confirmed swing at next 1h open",
+      model2:"first candle intersecting the 0.5-0.618 retracement band triggers one entry per confirmed swing at next 1h open",
       stop:"impulse anchor pivot",targets:"1R/2R/3R; partial exits 40%/35%/25%",feePerSidePct:FEE*100,slippagePerSidePct:SLIP*100,
-      maxHoldHours:72,sameCandleAmbiguity:"stop first",funding:"excluded",nonOverlap:"one open trade at a time per symbol, independently for each level/variant",
+      maxHoldHours:72,sameCandleAmbiguity:"stop first",funding:"excluded",nonOverlap:"one entry per confirmed swing per symbol and per level/variant; one open trade at a time",
       important:"Model 1 levels are separate independent portfolios; do not sum their trades or Net R into one portfolio."},
     symbols:{requested:universe.length,tested:good.length,failed},results:Object.fromEntries(Object.entries(summary).map(([k,v])=>[k,{label:v.label,metrics:v.metrics}])),
     trades:Object.fromEntries(Object.entries(summary).map(([k,v])=>[k,v.trades]))};
