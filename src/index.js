@@ -275,12 +275,18 @@ async function fetchJson(url, label) {
 async function telegram(method, env, body) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN تنظیم نشده است.");
 
+  // Protect all bot-authored messages (including direct futures signals) from
+  // Telegram's native forwarding and saving actions where the client supports it.
+  const protectedBody = method === "sendMessage"
+    ? { ...body, protect_content: true }
+    : body;
+
   const response = await fetch(
     `${TELEGRAM_API}/bot${(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)}/${method}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(protectedBody)
     }
   );
 
