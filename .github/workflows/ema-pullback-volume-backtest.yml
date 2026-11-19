@@ -36,3 +36,5 @@ jobs:
           if-no-files-found: error
 
 # Re-run after correcting timeframe-normalized maximum holding duration.
+
+# Trigger run after correcting the script newline.
