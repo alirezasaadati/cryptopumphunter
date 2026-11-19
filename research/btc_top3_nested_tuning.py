@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nested walk-forward tuning of BTC trend classifiers. Validation selects parameters; test folds stay untouched."""
+"""Nested walk-forward tuning of BTC trend classifiers. Validation selects parameters; test folds stay untouched. v2."""
 import json, math
 from pathlib import Path
 import numpy as np
