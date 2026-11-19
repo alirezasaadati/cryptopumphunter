@@ -1,6 +1,5 @@
 import { runSpotScan } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
-import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals, issuedSignalSymbols } from "./signal-ledger.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
 
@@ -1040,8 +1039,6 @@ async function handleCallback(query, env) {
       return;
     }
     if (action === "issued_signals" || action === "ledger:archive" || action === "ledger:history") return sendArchiveAccessLink(env,chatId);
-    if (action.startsWith("ledger:a:")) return showIssuedSignalDetails(env, chatId, action.slice(9), "archive");
-    if (action.startsWith("ledger:h:")) return showIssuedSignalDetails(env, chatId, action.slice(9), "history");
     if (action === "capital_guide") {
       await telegram("sendMessage", env, {
         chat_id: chatId,
@@ -1719,11 +1716,6 @@ function getNewClosedFuturesCandles(candles,lastCheckedCandleTime=0){return(Arra
 function ensureTradeTrackingCheckpoint(trade,now=Date.now()){if(!Number.isFinite(Number(trade?.lastCheckedCandleTime))||Number(trade.lastCheckedCandleTime)<=0){trade.lastCheckedCandleTime=Math.floor(now/60000)*60000;trade.trackingMode=trade.trackingMode||"LEGACY_CONTINUED";return true}return false}
 function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),targets=[Number(signal?.target1),Number(signal?.target2),Number(signal?.target3)];if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,...targets].every(Number.isFinite)||![entry,stop,...targets].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<targets[0]&&targets[0]<targets[1]&&targets[1]<targets[2]:stop>entry&&entry>targets[0]&&targets[0]>targets[1]&&targets[1]>targets[2]}
 function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:signal.tier==="EXPERIMENTAL"?"EXPERIMENTAL":"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
-async function registerTrackedSignal(env,chatId,signal){
-  if(!env.APP_KV||!signal?.id)return false;
-  // Keep the issued-signal archive only; no open/closed trade tracking is created.
-  return saveIssuedSignal(env.APP_KV,chatId,signal,null);
-}
 async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
   if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
   if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
@@ -1763,7 +1755,6 @@ async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText
     try{await env.APP_KV.put(key,JSON.stringify(record));}
     catch(storeError){console.error("Could not persist signal archive publishing status:",String(storeError?.message||storeError));}
   }
-  await registerTrackedSignal(env,chatId,signal);
   record={...record,status:"ARCHIVED",archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
   await env.APP_KV.put(key,JSON.stringify(record));
   return{delivered:true,duplicate:false};
@@ -1866,7 +1857,6 @@ export class SignalDeliveryCoordinator {
           if(record.status==="ARCHIVED")return Response.json({ok:true,result:{alreadyArchived:true}});
           if(!["SENDING","UNCERTAIN","SENT"].includes(record.status))throw new Error("This signal is not awaiting delivery reconciliation.");
           if(!record.signal)throw new Error("This older outbox record has no signal snapshot; it cannot be safely archived automatically.");
-          await registerTrackedSignal(this.env,chatId,record.signal);
           const confirmed={...record,status:"ARCHIVED",archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),manualConfirmedAt:new Date().toISOString()};
           await this.env.APP_KV.put(key,JSON.stringify(confirmed));
           return Response.json({ok:true,result:{confirmed:true}});
@@ -1940,42 +1930,6 @@ async function reconcileSignalOutbox(env,ownerId,token,action){
   await showUncertainSignalOutbox(env,ownerId);
 }
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت دستی معامله در نسخه جدید غیرفعال است؛ سیگنال‌های صادرشده خودکار در دفتر ارزیابی ثبت می‌شوند.")}
-async function showIssuedSignalSymbols(env,chatId,view="archive"){
-  if(!env.APP_KV)return sendMessage(env,chatId,"❌ حافظه دائمی در دسترس نیست.",BACK_MENU);
-  const records=await listIssuedSignals(env.APP_KV,chatId,{status:view==="history"?undefined:undefined});
-  const filtered=view==="history"?records.filter(x=>String(x.status||"").startsWith("CLOSED")):records;
-  const symbols=issuedSignalSymbols(filtered);
-  if(!symbols.length)return sendMessage(env,chatId,view==="history"?"📚 هنوز سیگنال تکمیل‌شده‌ای در تاریخچه ثبت نشده است.":"🗂 هنوز سیگنالی در آرشیو ثبت نشده است.",BACK_MENU);
-  const keyboard=[];
-  for(let i=0;i<symbols.length;i+=2)keyboard.push(symbols.slice(i,i+2).map(symbol=>({text:"🪙 "+formatFuturesSymbol(symbol),callback_data:`ledger:${view==="history"?"h":"a"}:${symbol}`})));
-  keyboard.push([{text:"🏠 منوی اصلی",callback_data:"menu"}]);
-  return sendMessage(env,chatId,view==="history"?"📚 تاریخچه معاملات — انتخاب نماد":"🗂 آرشیو سیگنال‌های صادرشده — انتخاب نماد", {inline_keyboard:keyboard});
-}
-async function showIssuedSignalDetails(env,chatId,selection,view){
-  const [symbol,pageRaw]=String(selection||"").split(":");
-  const page=Math.max(0,Number(pageRaw)||0);
-  const records=await listIssuedSignals(env.APP_KV,chatId,{symbol});
-  const filtered=view==="history"?records.filter(x=>String(x.status||"").startsWith("CLOSED")):records;
-  const pageSize=8,totalPages=Math.max(1,Math.ceil(filtered.length/pageSize));
-  const items=filtered.slice(page*pageSize,(page+1)*pageSize);
-  if(!items.length)return sendMessage(env,chatId,"برای این نماد در این بخش موردی ثبت نشده است.",{inline_keyboard:[[{text:"⬅️ بازگشت به نمادها",callback_data:view==="history"?"ledger:history":"ledger:archive"}],[{text:"🏠 منوی اصلی",callback_data:"menu"}]]});
-  const body=items.map(x=>{
-    const d=new Date(x.publishedAt||x.createdAt);
-    const date=d.toLocaleString("fa-IR",{timeZone:"Asia/Tehran"});
-    const status=String(x.status||"OPEN").startsWith("CLOSED")?(x.closeReason==="STOP_LOSS"?"🛑 STOP / استاپ":x.closeReason==="TP3"?"🏁 FULL TARGET / فول تارگت":"بسته‌شده"):"🟢 باز";
-    const milestones=(x.tpHits||[]).map(k=>({TP1:"TP1 / تارگت یک",TP2:"TP2 / تارگت دو",TP3:"TP3 / تارگت سه"}[k]||k));
-    return `🪙 ${formatFuturesSymbol(x.symbol)} | ${x.side}\n🕒 ${date}\nوضعیت: ${status}\nورود: ${formatPrice(x.entry)} | استاپ: ${formatPrice(x.stop)}\nTP1: ${formatPrice(x.target1)} | TP2: ${formatPrice(x.target2)} | TP3: ${formatPrice(x.target3)}\nتارگت‌های لمس‌شده: ${milestones.join("، ")||"هیچ‌کدام"}${x.exitPrice!==null&&x.exitPrice!==undefined?"\nنتیجه: "+formatOutcomePercent(tradeOutcomePercent({...x,actualEntry:x.entry},x.exitPrice)):""}`;
-  }).join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
-  const keyboard=[];
-  const nav=[];
-  if(page>0)nav.push({text:"⬅️ قبلی",callback_data:`ledger:${view==="history"?"h":"a"}:${symbol}:${page-1}`});
-  if(page+1<totalPages)nav.push({text:"بعدی ➡️",callback_data:`ledger:${view==="history"?"h":"a"}:${symbol}:${page+1}`});
-  if(nav.length)keyboard.push(nav);
-  keyboard.push([{text:"⬅️ بازگشت به نمادها",callback_data:view==="history"?"ledger:history":"ledger:archive"}]);
-  keyboard.push([{text:"🏠 منوی اصلی",callback_data:"menu"}]);
-  const heading=view==="history"?"📚 تاریخچه تکمیل‌شده ":"🗂 آرشیو سیگنال‌های صادرشده ";
-  return sendMessage(env,chatId,heading+formatFuturesSymbol(symbol)+` | صفحه ${page+1} از ${totalPages}\n━━━━━━━━━━━━━━━━━━\n`+body,{inline_keyboard:keyboard});
-}
 async function showOpenFuturesTrades(env,chatId){
   try{await refreshTrackedFuturesTrades(env,chatId)}catch(error){console.error("Open trade refresh failed:",String(error?.stack||error))}
   const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));
