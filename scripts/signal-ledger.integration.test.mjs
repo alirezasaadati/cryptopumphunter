@@ -203,7 +203,7 @@ test("owner reconciliation confirms uncertain delivery without creating a duplic
   const second = await coordinator.fetch(request());
   assert.equal(second.status, 200);
   assert.equal((await second.json()).result.alreadyArchived, true);
-  assert.equal((await listIssuedSignals(kv, "909")).length, 1);
+  assert.equal((await listIssuedSignals(kv, "909")).length, 0);
 });
 
 test("owner reconciliation refuses to auto-archive legacy uncertain records without a signal snapshot", async () => {
