@@ -1,0 +1,38 @@
+name: Entry timing historical lab
+on:
+  workflow_dispatch:
+  push:
+    branches: [entry-timing-historical-lab]
+    paths:
+      - "scripts/entry-timing-backtest.mjs"
+      - ".github/workflows/entry-timing-historical-lab.yml"
+      - "src/index.js"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm install
+      - name: Check script syntax
+        run: node --check scripts/entry-timing-backtest.mjs
+      - name: Run historical entry timing comparison
+        env:
+          BACKTEST_DAYS: "90"
+          BACKTEST_SYMBOLS: "12"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+        run: node scripts/entry-timing-backtest.mjs
+      - name: Upload historical report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: entry-timing-historical-report
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
