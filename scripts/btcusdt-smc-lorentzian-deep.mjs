@@ -102,8 +102,8 @@ async function main(){const now=Date.now(),start=now-DAYS*24*HOUR,from=start-WAR
 const csvFor=bars=>"time,open,high,low,close\n"+bars.map(c=>[new Date(c.time).toISOString(),c.open,c.high,c.low,c.close].join(",")).join("\n")+"\n";
 await writeFile(h1csv,csvFor(h1));await writeFile(m15csv,csvFor(m15));
 try{
-execFileSync("python3",["scripts/run-lorentzian-series.py",h1csv,lorJson],{stdio:"inherit",env:{...process.env,PYTHONPATH:"scripts/vendor"}});const h1Lor=JSON.parse(await readFile(lorJson,"utf8"));
-const lorM15Json=join(tmp,"lorentzian-m15.json");execFileSync("python3",["scripts/run-lorentzian-series.py",m15csv,lorM15Json],{stdio:"inherit",env:{...process.env,PYTHONPATH:"scripts/vendor"}});const m15Lor=JSON.parse(await readFile(lorM15Json,"utf8"));
+execFileSync("python3",["scripts/run-lorentzian-series.py",h1csv,lorJson,"h1"],{stdio:"inherit",env:{...process.env,PYTHONPATH:"scripts/vendor"}});const h1Lor=JSON.parse(await readFile(lorJson,"utf8"));
+const lorM15Json=join(tmp,"lorentzian-m15.json");execFileSync("python3",["scripts/run-lorentzian-series.py",m15csv,lorM15Json,"m15"],{stdio:"inherit",env:{...process.env,PYTHONPATH:"scripts/vendor"}});const m15Lor=JSON.parse(await readFile(lorM15Json,"utf8"));
 const smcH1=new Map([5,10,20,50].map(n=>[n,buildSmcStructure(h1,n)])),smcM15=new Map([5,10].map(n=>[n,buildSmcStructure(m15,n)]));
 const m15IndexAt=t=>{let lo=0,hi=m15.length-1,ans=-1;while(lo<=hi){const mid=(lo+hi)>>1;if(m15[mid].closeTime<=t){ans=mid;lo=mid+1;}else hi=mid-1;}return ans;};
 const sideDir=side=>side==="LONG"?1:-1;
