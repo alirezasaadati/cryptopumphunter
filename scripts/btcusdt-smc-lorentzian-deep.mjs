@@ -21,10 +21,7 @@ const VARIANTS=[
 {id:"lor_h1_entry_event",label:"Lorentzian jdehorty H1 — fresh buy/sell event",lor:{tf:"h1",key:"h1_default",mode:"event"}},
 {id:"lor_h1_no_kernel",label:"Lorentzian H1 — kernel filter OFF",lor:{tf:"h1",key:"h1_no_kernel",mode:"direction"}},
 {id:"lor_h1_k12",label:"Lorentzian H1 — 12 neighbors",lor:{tf:"h1",key:"h1_k12",mode:"direction"}},
-{id:"lor_h1_k5",label:"Lorentzian H1 — 5 neighbors",lor:{tf:"h1",key:"h1_k5",mode:"direction"}},
 {id:"lor_h1_features4",label:"Lorentzian H1 — 4 features",lor:{tf:"h1",key:"h1_features4",mode:"direction"}},
-{id:"lor_h1_regime_off",label:"Lorentzian H1 — regime filter OFF",lor:{tf:"h1",key:"h1_regime_off",mode:"direction"}},
-{id:"lor_h1_adx20",label:"Lorentzian H1 — ADX filter ON (20)",lor:{tf:"h1",key:"h1_adx20",mode:"direction"}},
 {id:"lor_m15_default",label:"Lorentzian jdehorty M15 — defaults",lor:{tf:"m15",key:"m15_default",mode:"direction"}},
 {id:"lor_m15_no_kernel",label:"Lorentzian M15 — kernel filter OFF",lor:{tf:"m15",key:"m15_no_kernel",mode:"direction"}},
 {id:"lor_h1_m15_align",label:"Lorentzian H1 + M15 directional alignment",lorCombo:["h1_default","m15_default"]}
