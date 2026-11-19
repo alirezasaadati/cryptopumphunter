@@ -52,25 +52,23 @@ test("per-chat storage keys are distinct and stable", () => {
   assert.notEqual(futuresAlertStorageKey("123", fp), futuresAlertStorageKey("456", fp));
 });
 
-test("each alert is numbered simply, strips USDT, and shows Persian direction with colored emoji", () => {
-  const signal = {...base, entry: 65000, stop: 66000, target1: 63500, target2: 62800, target3: 62000};
-  const first = formatFuturesSignalAlert(signal, 1);
-  const second = formatFuturesSignalAlert({...signal, symbol:"ETH-USDT", side:"LONG"}, 2);
-  assert.match(first, /^🎯 سیگنال ۱/);
-  assert.doesNotMatch(first, /سیگنال جدیدی شکل گرفته|از 2/);
-  assert.match(first, /نماد: BTC/);
-  assert.match(first, /جهت معامله: 🔴 شورت/);
-  assert.match(first, /📍 ورود: 65000/);
-  assert.match(first, /🛑 حد ضرر: 66000/);
-  assert.match(first, /🎯 تارگت ۱: 63500/);
-  assert.match(first, /🎯 تارگت ۲: 62800/);
-  assert.match(first, /🎯 تارگت ۳: 62000/);
-  assert.doesNotMatch(first, /نقطه ورود/);
-  assert.equal(first.split("\n").filter(line => /^(📍 ورود|🛑 حد ضرر|🎯 تارگت)/.test(line)).length, 5);
-  assert.match(second, /^🎯 سیگنال ۲/);
-  assert.match(second, /نماد: ETH/);
-  assert.match(second, /جهت معامله: 🟢 لانگ/);
-  assert.doesNotMatch(first, /ETH/);
+test("signal alert uses the approved HTML layout, bold prices, spacing and direction label", () => {
+  const signal = {...base, symbol:"PF_BTCUSD", entry: 65000, stop: 66000, target1: 63500, target2: 62800, target3: 62000};
+  const short = formatFuturesSignalAlert(signal, 1);
+  const long = formatFuturesSignalAlert({...signal, symbol:"PF_ETHUSD", side:"LONG"}, 2);
+  assert.match(short, /^🟢 سیگنال معتبر\n\n/);
+  assert.match(short, /نماد: <b>BTC<\/b>/);
+  assert.match(short, /جهت معامله: 🔴 شورت \/ Short/);
+  assert.match(short, /جهت معامله: 🔴 شورت \/ Short\n\nقیمت ورود:/);
+  assert.match(short, /قیمت ورود: <b>65,000\.00<\/b>\n\n🎯 تارگت اول: <b>63,500\.00<\/b>/);
+  assert.match(short, /🎯 تارگت سوم: <b>62,000\.00<\/b>\n\n⛔ حد ضرر: <b>66,000\.00<\/b>$/);
+  assert.match(long, /^🟢 سیگنال معتبر/);
+  assert.match(long, /نماد: <b>ETH<\/b>/);
+  assert.match(long, /جهت معامله: 🟢 لانگ \/ Long/);
+  const risky = formatFuturesSignalAlert({...signal, tier:"EXPERIMENTAL"}, 3);
+  assert.match(risky, /^🟠 سیگنال پر ریسک/);
+  assert.match(risky, /⛔ حد ضرر:/);
+  assert.doesNotMatch(short, /PF_|BTCUSD/);
 });
 test("numeric candle timestamps in seconds and milliseconds produce the same identity", () => {
   const seconds = 1794906900;
