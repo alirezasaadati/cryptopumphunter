@@ -14,6 +14,7 @@ export const EMA_PULLBACK_CONFIG = Object.freeze({
   TRIGGER_VOLUME_BARS: 20,
   TRIGGER_VOLUME_MIN_RATIO: 1.5,
   REQUIRE_TRIGGER_VOLUME_EXPANSION: true,
+  CANDLE_PATTERN_MODE: "ANY", // PINBAR, ENGULFING, or ANY
   MIN_TRIGGER_BODY_RATIO: 0.55,
   PINBAR_WICK_BODY_RATIO: 2.0,
   MIN_RR: 2,
@@ -115,12 +116,13 @@ export function evaluateEmaPullback({higherTimeframe,entryTimeframe,symbol="BTCU
     : c.high>=emaLow-a*cfg.ZONE_ATR_TOLERANCE && c.low<=emaHigh+a*cfg.ZONE_ATR_TOLERANCE;
   if(!pivotTouched&&!emaTouched) return reject("NO_SUPPORT_RESISTANCE_OR_EMA_ZONE_TOUCH",{trend,ema20:fast[i],ema50:slow[i],pivot:latestPivot});
   const range=c.high-c.low, body=range>0?Math.abs(c.close-c.open)/range:0;
-  const trigger=bullish?(isBullEngulf(prev,c)||isBullPin(c,cfg.PINBAR_WICK_BODY_RATIO)):
-    (isBearEngulf(prev,c)||isBearPin(c,cfg.PINBAR_WICK_BODY_RATIO));
-  const strongClose=bullish?(c.close>=c.low+range*0.75):(c.close<=c.high-range*0.75);
+  const pinbar=bullish?isBullPin(c,cfg.PINBAR_WICK_BODY_RATIO):isBearPin(c,cfg.PINBAR_WICK_BODY_RATIO);
   const engulfing=bullish?isBullEngulf(prev,c):isBearEngulf(prev,c);
+  const patternMode=cfg.CANDLE_PATTERN_MODE||"ANY";
+  const trigger=patternMode==="PINBAR"?pinbar:patternMode==="ENGULFING"?engulfing:(pinbar||engulfing);
+  const strongClose=bullish?(c.close>=c.low+range*0.75):(c.close<=c.high-range*0.75);
   if(!trigger||(engulfing&&body<cfg.MIN_TRIGGER_BODY_RATIO)||!strongClose)
-    return reject("REVERSAL_TRIGGER_NOT_STRONG",{trend,body,strongClose,trigger});
+    return reject("REVERSAL_TRIGGER_NOT_STRONG",{trend,body,strongClose,trigger,patternMode,pinbar,engulfing});
   const volumeBase=mean(bars.slice(i-cfg.TRIGGER_VOLUME_BARS,i).map(x=>x.volume));
   if(cfg.REQUIRE_TRIGGER_VOLUME_EXPANSION && (!(volumeBase>0)||c.volume<volumeBase*cfg.TRIGGER_VOLUME_MIN_RATIO))
     return reject("TRIGGER_VOLUME_NOT_EXPANDING",{trend,triggerVolume:c.volume,baselineVolume:volumeBase});
@@ -136,5 +138,5 @@ export function evaluateEmaPullback({higherTimeframe,entryTimeframe,symbol="BTCU
   return {eligible:true,signal:{symbol,side,entry,stop,target1:targets[0],target2:targets[1],risk,riskReward:targets[0]?direction*(targets[0]-entry)/risk:null,time:c.time,score:100},
     diagnostics:{trend,ema20:fast[i],ema50:slow[i],atr:a,pullbackVolume:pullVol,baselinePullbackVolume:baseVol,
       triggerVolume:c.volume,triggerVolumeBaseline:volumeBase,zone:pivotTouched?"PIVOT":"EMA_BAND",pivot:latestPivot,
-      trigger:isBullEngulf(prev,c)?"ENGULFING":isBullPin(c,cfg.PINBAR_WICK_BODY_RATIO)?"PIN_BAR":"UNKNOWN",bodyRatio:body}};
+      trigger:engulfing?"ENGULFING":pinbar?"PIN_BAR":"UNKNOWN",patternMode,bodyRatio:body}};
 }
