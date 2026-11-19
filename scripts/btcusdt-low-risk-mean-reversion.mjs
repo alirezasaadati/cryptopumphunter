@@ -105,7 +105,7 @@ function adx(bars,n=14){
  if(bars.length<2*n+1)return out;
  let st=tr.slice(1,n+1).reduce((a,b)=>a+b,0),sp=pdm.slice(1,n+1).reduce((a,b)=>a+b,0),sm=mdm.slice(1,n+1).reduce((a,b)=>a+b,0),dx=[];
  for(let i=n+1;i<bars.length;i++){
-  if(i>n+1){st=st-st/n+tr[i];sp=sp-sp/n+pdm[i];sm=sm-sm/n+mdm[i];}
+  if(i>n){st=st-st/n+tr[i];sp=sp-sp/n+pdm[i];sm=sm-sm/n+mdm[i];}
   const plus=st?100*sp/st:0,minus=st?100*sm/st:0,den=plus+minus;
   dx[i]=den?100*Math.abs(plus-minus)/den:0;
   if(i===2*n){let v=0;for(let j=n+1;j<=2*n;j++)v+=dx[j]||0;out[i]=v/n;}
@@ -143,7 +143,7 @@ function simulate(bars,i,side,entry,stop,target,emaTarget){
  let exit=null,reason="TIME_EXIT",gross=0,exitIdx=Math.min(bars.length-1,i+MAX_HOLD);
  for(let j=i+1;j<=exitIdx;j++){
   const b=bars[j],stopHit=dir===1?b.low<=stop:b.high>=stop;
-  if(stopHit){exit=stop;reason="STOP";exitIdx=j;break;}
+  if(stopHit){const gap=dir===1?b.open<=stop:b.open>=stop;exit=gap?b.open:stop;reason=gap?"STOP_GAP":"STOP";exitIdx=j;break;}
   const tp=emaTarget?b._ema20:target;
   const tpHit=finite(tp)&&(dir===1?b.high>=tp:b.low<=tp);
   if(tpHit){exit=tp;reason=emaTarget?"EMA20":"TP";exitIdx=j;break;}
