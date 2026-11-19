@@ -1725,7 +1725,7 @@ async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText
     record={...record,status:"SENDING",attemptedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     await env.APP_KV.put(key,JSON.stringify(record));
     try{
-      await publishSignalToArchive(env,signal,messageText,parseMode);
+      // Deliver the private alert first. Archive outages must never block the user-facing signal.
       const response=await sendMessage(env,chatId,messageText,replyMarkup,parseMode);
       record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
       await env.APP_KV.put(key,JSON.stringify(record));
@@ -1735,6 +1735,15 @@ async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText
       try{await env.APP_KV.put(key,JSON.stringify(record));}catch(storeError){console.error("Could not persist uncertain signal outbox state:",String(storeError?.message||storeError));}
       throw error;
     }
+    try{
+      const archiveResult=await publishSignalToArchive(env,signal,messageText,parseMode);
+      record={...record,archivePublished:archiveResult?.published!==false,archiveMessageId:archiveResult?.messageId??null,archivePublishedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+    }catch(archiveError){
+      record={...record,archivePublished:false,archivePublishError:String(archiveError?.message||archiveError).slice(0,500),updatedAt:new Date().toISOString()};
+      console.error("Signal archive publishing failed; direct delivery remains successful:",signal.symbol,String(archiveError?.message||archiveError));
+    }
+    try{await env.APP_KV.put(key,JSON.stringify(record));}
+    catch(storeError){console.error("Could not persist signal archive publishing status:",String(storeError?.message||storeError));}
   }
   await registerTrackedSignal(env,chatId,signal);
   record={...record,status:"ARCHIVED",archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
