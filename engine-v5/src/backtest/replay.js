@@ -3,22 +3,27 @@ const SLIPPAGE_RATE = 0.0003;
 
 export function aggregateCandles(candles, bucketMs) {
   const out = [];
+  const expected = bucketMs / 300000;
   let current = null;
   for (const c of candles) {
     const bucket = Math.floor(c.openTime / bucketMs) * bucketMs;
     if (!current || current.openTime !== bucket) {
-      if (current) out.push(current);
-      current = { openTime: bucket, closeTime: bucket + bucketMs - 1, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume };
+      if (current && current.count === expected && !current.gap && current.lastCloseTime === current.closeTime) out.push(stripAggregate(current));
+      current = { openTime: bucket, closeTime: bucket + bucketMs - 1, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume, count: 1, lastCloseTime: c.closeTime };
     } else {
+      if (c.openTime !== current.lastCloseTime + 1) current.gap = true;
       current.high = Math.max(current.high, c.high);
       current.low = Math.min(current.low, c.low);
       current.close = c.close;
       current.volume += c.volume;
+      current.count += 1;
+      current.lastCloseTime = c.closeTime;
     }
   }
-  if (current) out.push(current);
+  if (current && current.count === expected && !current.gap && current.lastCloseTime === current.closeTime) out.push(stripAggregate(current));
   return out;
 }
+function stripAggregate(c) { const {count,gap,lastCloseTime,...row}=c; return row; }
 
 function ema(values, period) {
   const out = Array(values.length).fill(null);
@@ -50,8 +55,8 @@ function closedIndex(candles, time) {
   return ans;
 }
 
-function fibZone(candles, end, direction) {
-  const start = Math.max(0, end-11);
+function fibZone(candles, end, direction, lookback = 12) {
+  const start = Math.max(0, end-lookback+1);
   let high=-Infinity, low=Infinity;
   for (let i=start;i<=end;i++) { high=Math.max(high,candles[i].high); low=Math.min(low,candles[i].low); }
   const range=high-low;
@@ -65,24 +70,27 @@ function scoreSignal({ candles, volumes, i, h1, h4, h1e20, h1e50, h4e20, h4e50, 
   const c=candles[i], prev=candles[i-1];
   const h4i=closedIndex(h4,c.openTime), h1i=closedIndex(h1,c.openTime);
   if (h4i<50 || h1i<50) return null;
-  const bullish4=h4e20[h4i]!==null && h4e20[h4i]>h4e50[h4i];
-  const bearish4=h4e20[h4i]!==null && h4e20[h4i]<h4e50[h4i];
-  const bullish1=h1e20[h1i]!==null && h1e20[h1i]>h1e50[h1i];
-  const bearish1=h1e20[h1i]!==null && h1e20[h1i]<h1e50[h1i];
+  const bullish4=h4e20[h4i]!==null && h4e20[h4i]>h4e50[h4i] && h4[h4i].close>h4e20[h4i];
+  const bearish4=h4e20[h4i]!==null && h4e20[h4i]<h4e50[h4i] && h4[h4i].close<h4e20[h4i];
+  const bullish1=h1e20[h1i]!==null && h1e20[h1i]>h1e50[h1i] && h1[h1i].close>h1e20[h1i];
+  const bearish1=h1e20[h1i]!==null && h1e20[h1i]<h1e50[h1i] && h1[h1i].close<h1e20[h1i];
   const volAvg=average(volumes,i-1,20);
   if (!volAvg || c.volume < volAvg*profile.relativeVolume) return null;
   for (const direction of ["long","short"]) {
     if (direction==="long" && !(bullish4 && (profile.require1h ? bullish1 : true))) continue;
     if (direction==="short" && !(bearish4 && (profile.require1h ? bearish1 : true))) continue;
-    const zone=fibZone(h4,h4i,direction);
-    if (!zone || c.close<zone.low || c.close>zone.high) continue;
+    const zone=fibZone(h4,h4i,direction,profile.fibLookback || 12);
+    if (!zone || c.low>zone.high || c.close<zone.low || c.close>zone.high) continue;
     const trigger=direction==="long" ? c.close>prev.high && c.close>c.open : c.close<prev.low && c.close<c.open;
     if (!trigger) continue;
-    const recent=candles.slice(Math.max(0,i-12),i+1);
-    const stop=direction==="long" ? Math.min(...recent.map(x=>x.low)) : Math.max(...recent.map(x=>x.high));
+    const recent=candles.slice(Math.max(0,i-(profile.stopLookback || 12)+1),i+1);
+    const tr=recent.slice(1).map((x,j)=>Math.max(x.high-x.low,Math.abs(x.high-recent[j].close),Math.abs(x.low-recent[j].close)));
+    const currentAtr=tr.length?tr.reduce((a,b)=>a+b,0)/tr.length:0;
+    const stop=direction==="long" ? Math.min(...recent.map(x=>x.low))-currentAtr*(profile.atrBuffer ?? 0.15) : Math.max(...recent.map(x=>x.high))+currentAtr*(profile.atrBuffer ?? 0.15);
     const entry=c.close*(direction==="long" ? 1+SLIPPAGE_RATE : 1-SLIPPAGE_RATE);
     const risk=direction==="long" ? entry-stop : stop-entry;
-    if (!(risk>0) || risk/entry>0.025) continue;
+    const riskPct=risk/entry;
+    if (!(risk>0) || riskPct<(profile.minRiskPct ?? 0.002) || riskPct>(profile.maxRiskPct ?? 0.02)) continue;
     return { direction, entry, stop, target: direction==="long" ? entry+risk*profile.rewardR : entry-risk*profile.rewardR, risk };
   }
   return null;
@@ -133,13 +141,13 @@ function summarize(model, trades) {
 
 export function runHistoricalComparison(dataset) {
   const profiles=[
-    { id:"A", relativeVolume:1.5, require1h:true, rewardR:2 },
-    { id:"B", relativeVolume:1.1, require1h:false, rewardR:1.8 }
+    { id:"A", relativeVolume:1.35, require1h:true, rewardR:2.4, fibLookback:12, stopLookback:12, atrBuffer:0.15, minRiskPct:0.002, maxRiskPct:0.018 },
+    { id:"B", relativeVolume:1.05, require1h:false, rewardR:2.1, fibLookback:12, stopLookback:12, atrBuffer:0.15, minRiskPct:0.002, maxRiskPct:0.022 }
   ];
   const all=[];
   for (const [symbol,candles] of Object.entries(dataset)) {
     const sorted=candles.slice().sort((a,b)=>a.openTime-b.openTime);
     for (const profile of profiles) all.push(...runProfile(symbol,sorted,profile));
   }
-  return { generatedAt:new Date().toISOString(), candleInterval:"5m", feeRate:FEE_RATE, slippageRate:SLIPPAGE_RATE, assumptions:{ stopWinsWhenStopAndTargetTouchSameCandle:true, portfolioRiskPerTradePct:1, maxHoldingCandles:48, overlappingTradesPerSymbolAndModel:false, riskPerTradeNotional:"not compounded position sizing; returns are per-trade percentage" }, models:[summarize("A",all.filter(t=>t.model==="A")),summarize("B",all.filter(t=>t.model==="B"))], trades:all };
+  return { generatedAt:new Date().toISOString(), candleInterval:"5m", feeRate:FEE_RATE, slippageRate:SLIPPAGE_RATE, assumptions:{ stopWinsWhenStopAndTargetTouchSameCandle:true, portfolioRiskPerTradePct:1, maxHoldingCandles:48, overlappingTradesPerSymbolAndModel:false, riskPerTradeNotional:"1% equity risk per trade; simultaneous cross-symbol portfolio cap not modeled",higherTimeframeCandlesMustBeComplete:true }, models:[summarize("A",all.filter(t=>t.model==="A")),summarize("B",all.filter(t=>t.model==="B"))], trades:all };
 }
