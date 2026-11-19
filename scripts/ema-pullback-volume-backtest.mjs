@@ -35,7 +35,7 @@ function runPair(htf,ltf,label,htfMs,ltfMs){
   const s=result.signal,key=s.side+"|"+s.time;if(key===lastKey)continue;lastKey=key;signals++;if(i+1<=busyUntil)continue;
   const dir=s.side==="LONG"?1:-1,first=ltf[i+1],entry=fill(first.open,dir,true),stop=s.stop,risk=dir*(entry-stop);if(!(risk>0))continue;
   const targets=[entry+dir*risk*2,entry+dir*risk*3];let remaining=1,netR=0,exitReason="TIME_EXIT",exitTime=null,targetHits=0;
-  const end=Math.min(ltf.length-1,i+1+MAX_HOLD);
+  const maxHoldBars=Math.floor(7*24*60*60*1000/ltfMs);\n  const end=Math.min(ltf.length-1,i+1+maxHoldBars);
   for(let j=i+1;j<=end&&remaining>1e-9;j++){
    const b=ltf[j],gap=dir===1?b.open<=stop:b.open>=stop,touched=dir===1?b.low<=stop:b.high>=stop;
    if(gap||touched){const px=fill(gap?b.open:stop,dir,false);netR+=remaining*(dir*(px-entry)/risk-FEE*(entry+px)/risk);remaining=0;exitReason="STOP";exitTime=b.time;break;}
