@@ -1921,6 +1921,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
       return;
     }
     const fmt=value=>{
+      if(value===null||value===undefined||value==="")return "—";
       const n=Number(value);
       return Number.isFinite(n)?n.toLocaleString("en-US",{maximumFractionDigits:8}):"—";
     };
