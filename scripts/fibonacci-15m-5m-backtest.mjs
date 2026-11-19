@@ -119,29 +119,49 @@ function metrics(rows){
 function sideMetrics(rows){const w=rows.filter(x=>x.netR>0),l=rows.filter(x=>x.netR<0),gw=w.reduce((s,x)=>s+x.netR,0),gl=Math.abs(l.reduce((s,x)=>s+x.netR,0));return{trades:rows.length,winRatePct:rows.length?w.length/rows.length*100:0,netR:rows.reduce((s,x)=>s+x.netR,0),expectancyR:rows.length?rows.reduce((s,x)=>s+x.netR,0)/rows.length:0,profitFactor:gl?gw/gl:gw?null:0};}
 function latestBars(bars,time,interval){let lo=0,hi=bars.length;while(lo<hi){const mid=(lo+hi)>>1;if(bars[mid].time+interval<=time)lo=mid+1;else hi=mid;}return bars.slice(0,lo);}
 function buildTrades(symbol,h1,m15,m5,model){
-  const trades=[];let nextFree=0,lastSetupKey="";
-  for(let i=60;i<h1.length;i++){
-    const h=h1[i],hClose=h.time+HOUR;if(hClose<START||hClose>=END)continue;
-    const hs=h1.slice(0,i+1);const swing=pivots(hs,hClose);if(!swing)continue;
-    const zone=inFibZone(swing.side,swing.low,swing.high,h.close);
-    const bars15=latestBars(m15,hClose,M15),bars5=latestBars(m5,hClose,M5);
-    if(bars15.length<10||bars5.length<20)continue;
+  const trades=[];let nextFree=0,last15Time=-1,lastSwingKey="",pending15=null,fibTouchedUntil=0,last5BreakKey="";
+  for(let i=20;i<m5.length-1;i++){
+    const bar=m5[i],closeTime=bar.time+M5;
+    if(closeTime<START||closeTime>=END||closeTime<nextFree)continue;
+    const hs=latestBars(h1,closeTime,HOUR);
+    if(hs.length<60)continue;
+    const swing=pivots(hs,closeTime);
+    if(!swing){pending15=null;continue;}
+    const swingKey=swing.side+"|"+swing.anchorTime+"|"+swing.pivotTime;
+    if(swingKey!==lastSwingKey){lastSwingKey=swingKey;pending15=null;fibTouchedUntil=0;last5BreakKey="";}
     const direction=swing.side==="LONG"?1:-1;
+    const zone=inFibZone(swing.side,swing.low,swing.high,bar.close);
+    if(zone)fibTouchedUntil=closeTime+60*M5;
     const fibRequired=model!=="breakout15_5";
-    if(fibRequired&&!zone)continue;
-    const last15=bars15.at(-1),prev15=bars15.slice(0,-1);
-    const breakout15=direction===1?last15.close>maxHigh(prev15,4):last15.close<minLow(prev15,4);
-    if(model!=="fib_5_only"&&!breakout15)continue;
-    const last5=bars5.at(-1),prev5=bars5.slice(-5,-1);
-    const confirm5=direction===1?last5.close>maxHigh(prev5,3):last5.close<minLow(prev5,3);
-    if(!confirm5)continue;
-    const key=swing.side+"|"+swing.anchorTime+"|"+swing.pivotTime+"|"+last15.time;
-    if(key===lastSetupKey)continue;lastSetupKey=key;
-    const signalTime=last5.time+M5,entryIndex=m5.findIndex(x=>x.time===signalTime);
-    if(entryIndex<0||entryIndex>=m5.length-1||signalTime<nextFree)continue;
+    if(fibRequired&&closeTime>fibTouchedUntil)continue;
+    const bars15=latestBars(m15,closeTime,M15);
+    if(bars15.length<5)continue;
+    const current15=bars15.at(-1);
+    if(current15.time!==last15Time){
+      last15Time=current15.time;
+      const prior15=bars15.slice(0,-1);
+      const broke=direction===1?current15.close>maxHigh(prior15,4):current15.close<minLow(prior15,4);
+      if(broke)pending15={level:direction===1?maxHigh(prior15,4):minLow(prior15,4),time:current15.time+M15,side:swing.side};
+    }
+    const prev5=m5.slice(Math.max(0,i-3),i);
+    if(prev5.length<3)continue;
+    let confirmed=false,level=null;
+    if(model==="fib_5_only"){
+      confirmed=direction===1?bar.close>maxHigh(prev5,3):bar.close<minLow(prev5,3);
+      level=direction===1?maxHigh(prev5,3):minLow(prev5,3);
+    } else if(pending15&&pending15.side===swing.side&&closeTime>pending15.time&&closeTime-pending15.time<=60*M5){
+      confirmed=direction===1?bar.close>pending15.level:bar.close<pending15.level;
+      level=pending15.level;
+    }
+    if(!confirmed)continue;
+    const breakKey=swingKey+"|"+bar.time+"|"+model;
+    if(breakKey===last5BreakKey)continue;
+    last5BreakKey=breakKey;
+    const entryIndex=i+1;
+    if(entryIndex>=m5.length)continue;
     const stop=direction===1?swing.low:swing.high;
-    const trade=simulate(swing.side,m5[entryIndex].open,stop,m5,entryIndex,signalTime,symbol,model);
-    if(trade){trades.push(trade);nextFree=trade.exitTime+M5;}
+    const trade=simulate(swing.side,m5[entryIndex].open,stop,m5,entryIndex,closeTime,symbol,model);
+    if(trade){trade.breakoutLevel=level;trade.fibZoneTouched=Boolean(fibTouchedUntil);trades.push(trade);nextFree=trade.exitTime+M5;pending15=null;}
   }
   return trades;
 }
