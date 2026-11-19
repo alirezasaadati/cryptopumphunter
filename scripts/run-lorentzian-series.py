@@ -13,10 +13,7 @@ configs = {
  "h1_default": {},
  "h1_no_kernel": {"use_kernel_filter": False},
  "h1_k12": {"neighbors_count": 12},
- "h1_k5": {"neighbors_count": 5},
  "h1_features4": {"feature_count": 4},
- "h1_regime_off": {"use_regime_filter": False},
- "h1_adx20": {"use_adx_filter": True, "adx_threshold": 20},
  "m15_default": {},
  "m15_no_kernel": {"use_kernel_filter": False},
 }
