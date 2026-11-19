@@ -42,7 +42,13 @@ export function formatFuturesSignalAlert(signal, index = 1) {
 }
 
 function formatFuturesSymbol(symbol) {
-  return String(symbol || "—").toUpperCase().replace(/^PF_/, "").replace(/\.P$/, "").replace(/[-_/]?(?:USDT|USD)$/, "");
+  const normalized = String(symbol || "—").trim().toUpperCase()
+    .replace(/^PF_/, "")
+    .replace(/\.P$/, "")
+    .replace(/[-_/]?(?:USDT|USD)$/, "");
+  if (normalized === "XBT") return "BTC";
+  if (normalized === "NVDX") return "NVDA";
+  return normalized;
 }
 
 function escapeTelegramHtml(value) {
