@@ -45,13 +45,16 @@ function fail(reason, extra={}) { return { status:"WAIT", reason, ...extra }; }
  */
 export function evaluateShortTfConfirmation({
   side, candles1m, candles5m, candles15m, setupTime, now=Date.now(), referencePrice=null,
-  max15mAge=4, max5mWait=6, max1mWait=5, maxDriftPct=0.35
+  max15mAge=4, max5mWait=6, max1mWait=5, maxDriftPct=0.35, maxSetupAgeMs=90*60_000
 }={}) {
   if (side !== "LONG" && side !== "SHORT") return { status:"INVALID", reason:"INVALID_SIDE" };
   if (!Number.isFinite(Number(setupTime)) || Number(setupTime)<0 || Number(setupTime)>now) {
     return { status:"INVALID", reason:"INVALID_SETUP_TIME" };
   }
   const signalTime=Number(setupTime);
+  if (Number.isFinite(maxSetupAgeMs) && maxSetupAgeMs>=0 && now-signalTime>maxSetupAgeMs) {
+    return {status:"EXPIRED",reason:"SIGNAL_SETUP_EXPIRED",ageMs:now-signalTime};
+  }
   const c1=closedCandles(candles1m,INTERVALS["1m"],now);
   const c5=closedCandles(candles5m,INTERVALS["5m"],now);
   const c15=closedCandles(candles15m,INTERVALS["15m"],now);
@@ -114,7 +117,7 @@ export function evaluateShortTfConfirmation({
   const live=Number(referencePrice);
   const drift=Number.isFinite(live)&&live>0?Math.abs(live-trigger.close)/trigger.close*100:0;
   if(drift>maxDriftPct) return {status:"EXPIRED",reason:"ENTRY_TOO_FAR_NO_CHASE",driftPct:drift,triggerTime:trigger.time};
-  return {status:"CONFIRMED",reason:"ALL_TIMEFRAMES_CONFIRMED",side,entryReference:trigger.close,triggerTime:trigger.time,
+  return {status:"CONFIRMED",reason:"ALL_TIMEFRAMES_CONFIRMED",side,entryReference:Number.isFinite(live)&&live>0?live:trigger.close,triggerClose:trigger.close,triggerTime:trigger.time,
     pullback15mTime:pullback.time,confirmation5mTime:confirm5.time,confirmation1mTime:trigger.time,
     driftPct:drift,extensionAtr:trigger.extensionAtr,diagnostics:{closedCandles:{m1:c1.length,m5:c5.length,m15:c15.length}}};
 }
