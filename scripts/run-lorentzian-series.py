@@ -4,7 +4,7 @@ import csv, json, sys
 from pathlib import Path
 from lorentzian_classification import Bar, Settings, calculate
 
-src, dst = sys.argv[1], sys.argv[2]
+src, dst, timeframe = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(src, newline="") as f:
     rows = list(csv.DictReader(f))
 bars = [Bar(time=str(x["time"]), open=float(x["open"]), high=float(x["high"]),
@@ -22,7 +22,7 @@ configs = {
  "m15_default": {},
  "m15_no_kernel": {"use_kernel_filter": False},
 }
-out = {"bar_count": len(bars), "variants": {}}
+configs = {k:v for k,v in configs.items() if k.startswith(timeframe + "_")}\nout = {"bar_count": len(bars), "variants": {}}
 for name, overrides in configs.items():
     settings = Settings.from_mapping(overrides)
     results = calculate(bars, settings)
