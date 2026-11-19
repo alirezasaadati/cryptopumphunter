@@ -31,3 +31,8 @@ test("comparison returns both independent model summaries",()=>{
   assert.equal(result.candleInterval,"5m");
   assert.equal(result.assumptions.stopWinsWhenStopAndTargetTouchSameCandle,true);
 });
+
+test("does not promote incomplete higher-timeframe candles",()=>{
+  const rows=Array.from({length:11},(_,i)=>({openTime:i*300000,closeTime:(i+1)*300000-1,open:100,high:102,low:99,close:101,volume:1}));
+  assert.equal(aggregateCandles(rows,3600000).length,0);
+});
