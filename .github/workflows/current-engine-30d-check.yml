@@ -1,4 +1,4 @@
-name: Experimental entry models 60-day validation
+name: Experimental entry models — historical bull-market validation
 on:
   push:
     branches: [daily-4h-15m-backtest]
@@ -15,8 +15,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run 60-day entry model validation
+      - name: Run fixed historical bull-market entry model validation
         env:
+          BACKTEST_START: '2025-04-10T00:00:00Z'
+          BACKTEST_END: '2025-06-09T00:00:00Z'
           BACKTEST_DAYS: '60'
           BACKTEST_SYMBOLS: '24'
           BACKTEST_FEE: '0.0005'
@@ -26,6 +28,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: current-strategy-30d
+          name: bull-market-entry-model-comparison-2025
           path: artifacts/
           if-no-files-found: warn
