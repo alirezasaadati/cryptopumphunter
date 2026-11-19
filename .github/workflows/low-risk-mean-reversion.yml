@@ -1,0 +1,30 @@
+name: Low-risk mean-reversion BTCUSDT benchmark
+on:
+  push:
+    branches: [experiment/low-risk-mean-reversion-engine]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Repository tests
+        run: npm test
+      - name: Validate benchmark script
+        run: node --check scripts/btcusdt-low-risk-mean-reversion.mjs
+      - name: Run one-year BTCUSDT mean-reversion benchmark
+        run: node scripts/btcusdt-low-risk-mean-reversion.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: btcusdt-low-risk-mean-reversion
+          path: artifacts/btcusdt-low-risk-mean-reversion.*
+          if-no-files-found: warn
+          retention-days: 30
