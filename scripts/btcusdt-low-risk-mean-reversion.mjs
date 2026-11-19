@@ -208,11 +208,11 @@ async function main(){
  const ind={bb,rsi:rs,atr:atr15,piv,adxAt,warmup};
  const results=[];
  for(const v of VARIANTS){
-  const trades=mainBacktest(bars,v,ind);
+  const run=mainBacktest(bars,v,ind),trades=run.trades;
   const oos=trades.filter(t=>t.signalTime>=split),is=trades.filter(t=>t.signalTime<split);
-  results.push({variant:v,overall:summarize(trades),inSample:summarize(is),outOfSample:summarize(oos),bySide:{LONG:summarize(trades.filter(t=>t.side==="LONG")),SHORT:summarize(trades.filter(t=>t.side==="SHORT"))},oosBySide:{LONG:summarize(oos.filter(t=>t.side==="LONG")),SHORT:summarize(oos.filter(t=>t.side==="SHORT"))},trades});
+  results.push({variant:v,diagnostics:run.counts,overall:summarize(trades),inSample:summarize(is),outOfSample:summarize(oos),bySide:{LONG:summarize(trades.filter(t=>t.side==="LONG")),SHORT:summarize(trades.filter(t=>t.side==="SHORT"))},oosBySide:{LONG:summarize(oos.filter(t=>t.side==="LONG")),SHORT:summarize(oos.filter(t=>t.side==="SHORT"))},trades});
  }
- const report={generatedAt:new Date().toISOString(),symbol:SYMBOL,exchange:"Binance USDⓈ-M Futures",period:{from:new Date(START).toISOString(),to:new Date(END).toISOString(),days:DAYS,split:"70% in-sample / 30% out-of-sample"},data:{candles15m:bars.length,candles1h:h1.length,feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,funding:"excluded",entry:"next 15m open, adverse slippage",stop:"beyond 8-bar local extreme by 0.15 ATR; reject risk outside 0.25-2.5 ATR",maxHoldBars:MAX_HOLD,stopTargetSameBar:"stop first",adx:"1h ADX(14) < 20",bollinger:"15m BB(20, 2.5 standard deviations)",rsi:"15m RSI(14), <25 long / >75 short",swing:"confirmed 2-left/2-right pivots; no future data used before confirmation",note:"Funding, liquidation and intrabar tick order are not modeled; stop-first assumption is conservative."}};
+ const report={generatedAt:new Date().toISOString(),symbol:SYMBOL,exchange:"Binance USDⓈ-M Futures",period:{from:new Date(START).toISOString(),to:new Date(END).toISOString(),days:DAYS,split:"70% in-sample / 30% out-of-sample"},data:{candles15m:bars.length,candles1h:h1.length,feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,funding:"excluded",entry:"next 15m open, adverse slippage",stop:"beyond 8-bar local extreme by 0.15 ATR; reject risk outside 0.25-2.5 ATR",maxHoldBars:MAX_HOLD,stopTargetSameBar:"stop first",adx:"1h ADX(14), thresholds 20/25/30 by variant",bollinger:"15m BB(20), 2.0 or 2.5 standard deviations by variant",rsi:"15m RSI(14), thresholds 25/75, 30/70 or 35/65 by variant",swing:"confirmed 2-left/2-right pivots; no future data used before confirmation",note:"Funding, liquidation and intrabar tick order are not modeled; stop-first assumption is conservative."}};
  report.variants=results.map(({trades,...x})=>x);
  await mkdir("artifacts",{recursive:true});
  await writeFile("artifacts/btcusdt-low-risk-mean-reversion.json",JSON.stringify(report,null,2));
