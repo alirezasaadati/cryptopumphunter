@@ -8,7 +8,7 @@ const END=process.env.BACKTEST_END?Date.parse(process.env.BACKTEST_END):Date.now
 const START=process.env.BACKTEST_START?Date.parse(process.env.BACKTEST_START):END-DAYS*24*H;
 const SYMBOL_LIMIT=Math.max(1,Math.min(8,Number(process.env.BACKTEST_SYMBOLS||6)));
 const FEE=Number(process.env.BACKTEST_FEE??0.0005), SLIP=Number(process.env.BACKTEST_SLIPPAGE??0.0003);
-const MAX_SETUP_AGE=90*60_000, HOLD_M1=72*60, HOLD_M15=72*4;
+const MAX_SETUP_AGE=90*60_000, HOLD_M1=72*60, HOLD_M15=72*4; // identical settings for in-sample and out-of-sample runs
 
 if(!Number.isFinite(START)||!Number.isFinite(END)||END<=START) throw Error("Invalid backtest period");
 
