@@ -1,0 +1,29 @@
+name: Engine V5 tests
+
+on:
+  pull_request:
+    paths:
+      - "engine-v5/**"
+      - ".github/workflows/engine-v5-tests.yml"
+  push:
+    branches:
+      - "engine-v5-design"
+    paths:
+      - "engine-v5/**"
+      - ".github/workflows/engine-v5-tests.yml"
+
+jobs:
+  engine-v5-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine-v5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: node --check src/index.js
+      - name: Run Engine V5 tests
+        run: node --test tests/*.test.mjs
