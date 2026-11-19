@@ -1,0 +1,32 @@
+name: BTC top-three nested trend tuning
+on:
+  push:
+    branches:
+      - experiment/btc-top3-tuned-validation
+    paths:
+      - "research/btc_top3_nested_tuning.py"
+      - "research/btc_trend_methods.py"
+      - ".github/workflows/btc-top3-nested-tuning.yml"
+  workflow_dispatch:
+jobs:
+  tune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install numerical dependency
+        run: python -m pip install --disable-pip-version-check numpy
+      - name: Run nested BTC-only tuning
+        run: |
+          cd research
+          python btc_top3_nested_tuning.py
+      - name: Upload tuning report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-top3-nested-tuning
+          path: artifacts/btc-top3-nested-tuning.json
+          if-no-files-found: error
