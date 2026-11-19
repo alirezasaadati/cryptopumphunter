@@ -20,6 +20,8 @@ jobs:
       - run: npm install
       - name: Repository tests
         run: npm test
+      - name: Validate benchmark JavaScript syntax
+        run: node --check scripts/btcusdt-smc-lorentzian-deep.mjs
       - name: Lorentzian reference port smoke test
         env:
           PYTHONPATH: scripts/vendor
