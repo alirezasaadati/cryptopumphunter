@@ -1847,8 +1847,9 @@ async function notifyTradeMilestone(env,trade,key,target){
   const status=remaining>0
     ? `${remaining}٪ از حجم معامله همچنان باز است.\nحد ضرر اولیه بدون تغییر باقی مانده است.`
     : "کل حجم معامله بسته شد و معامله تکمیل شد.";
+  const direction=trade.side==="LONG"?"🟢 لانگ / Long":"🔴 شورت / Short";
   await sendMessage(env,trade.chatId,
-    `${labels[key]||key} ${formatFuturesSymbol(trade.symbol)} لمس شد.\nقیمت هدف: ${formatPrice(target)}\nبازده قیمتی: ${p>=0?"+":""}${Number(p).toFixed(2)}%\nدرصد حجم بسته‌شده: ${closed}٪\n${status}`);
+    `${labels[key]||key} ${formatFuturesSymbol(trade.symbol)} لمس شد.\nجهت معامله: ${direction}\nقیمت هدف: ${formatPrice(target)}\nبازده قیمتی: ${p>=0?"+":""}${Number(p).toFixed(2)}%\nدرصد حجم بسته‌شده: ${closed}٪\n${status}`);
 }
 async function handleTradeAction(action,chatId,env){const[,op]=action.split(":");if(op==="be")return sendMessage(env,chatId,"ℹ️ در نسخه جدید حد ضرر سیگنال خودکار جابه‌جا نمی‌شود؛ برای ارزیابی منصفانه حد ضرر اولیه ثابت می‌ماند.");if(op==="skip"||op==="enter")return sendMessage(env,chatId,"ℹ️ این نسخه هر سیگنال صادرشده را خودکار در دفتر ارزیابی ثبت می‌کند؛ ثبت دستی لازم نیست.")}
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت دستی معامله در نسخه جدید غیرفعال است؛ سیگنال‌های صادرشده خودکار در دفتر ارزیابی ثبت می‌شوند.")}
