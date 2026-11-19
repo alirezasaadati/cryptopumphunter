@@ -78,7 +78,7 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
   const direction = side === "LONG" ? 1 : -1;
   const risk = direction === 1 ? entry - stop : stop - entry;
   if (!(risk > 0) || !Number.isFinite(risk)) throw new Error("Invalid trade risk");
-  const position = { side, entry, stop, risk, direction, remaining: 1, realizedR: 0, targetHits: 0, exitTime: null, exitReason: null };
+  const position = { side, entry, stop, risk, direction, remaining: 1, realizedR: 0, targetHits: 0, target1Hit: false, target2Hit: false, target3Hit: false, exitTime: null, exitReason: null };
   const config = { fee, slippage };
   const endIndex = Math.min(candles.length - 1, startIndex + maxHoldHours);
   for (let i = startIndex; i <= endIndex && position.remaining > 0; i++) {
@@ -101,6 +101,9 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
       position.realizedR += weight * (grossR - feeR);
       position.remaining -= weight;
       position.targetHits++;
+      if (t === 0) position.target1Hit = true;
+      if (t === 1) position.target2Hit = true;
+      if (t === 2) position.target3Hit = true;
       targets[t] = null;
     }
     if (position.remaining <= 1e-9) {
@@ -111,6 +114,7 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
   if (position.remaining > 0) closeTrade(position, candles[endIndex].close, "TIME_EXIT", candles[endIndex].time, config);
   return {
     side, entry, stop, risk, netR: position.realizedR, targetHits: position.targetHits,
+    target1Hit: position.target1Hit, target2Hit: position.target2Hit, target3Hit: position.target3Hit,
     exitReason: position.exitReason, entryTime: candles[startIndex].time, exitTime: position.exitTime
   };
 }
@@ -121,6 +125,10 @@ function sideMetrics(trades) {
   const grossLoss = Math.abs(losses.reduce((sum,t)=>sum+t.netR,0));
   return {
     trades: trades.length,
+    tp1Trades: trades.filter(t => t.target1Hit).length,
+    tp2Trades: trades.filter(t => t.target2Hit).length,
+    tp3Trades: trades.filter(t => t.target3Hit).length,
+    stopAfterTp1Trades: trades.filter(t => t.target1Hit && t.exitReason === "STOP").length,
     wins: wins.length,
     losses: losses.length,
     winRatePct: trades.length ? wins.length / trades.length * 100 : 0,
@@ -138,6 +146,10 @@ function summarize(trades) {
   return {
     trades: trades.length, wins: wins.length, losses: losses.length,
     breakeven: trades.length-wins.length-losses.length,
+    tp1Trades: trades.filter(t => t.target1Hit).length,
+    tp2Trades: trades.filter(t => t.target2Hit).length,
+    tp3Trades: trades.filter(t => t.target3Hit).length,
+    stopAfterTp1Trades: trades.filter(t => t.target1Hit && t.exitReason === "STOP").length,
     winRatePct: trades.length ? wins.length/trades.length*100 : 0,
     netR: trades.reduce((s,t)=>s+t.netR,0),
     expectancyR: trades.length ? trades.reduce((s,t)=>s+t.netR,0)/trades.length : 0,
@@ -259,6 +271,10 @@ async function main() {
     "| Valid signals | "+report.baseline.valid+" | "+report.current.valid+" |",
     "| Risky signals | "+report.baseline.risky+" | "+report.current.risky+" |",
     "| Executed non-overlapping trades | "+report.baseline.metrics.trades+" | "+report.current.metrics.trades+" |",
+    "| Trades that touched TP1 (includes TP2/TP3) | "+report.baseline.metrics.tp1Trades+" | "+report.current.metrics.tp1Trades+" |",
+    "| Trades that touched TP2 (includes TP3) | "+report.baseline.metrics.tp2Trades+" | "+report.current.metrics.tp2Trades+" |",
+    "| Trades that touched TP3 | "+report.baseline.metrics.tp3Trades+" | "+report.current.metrics.tp3Trades+" |",
+    "| TP1 then later stopped out | "+report.baseline.metrics.stopAfterTp1Trades+" | "+report.current.metrics.stopAfterTp1Trades+" |",
     "| Win rate | "+report.baseline.metrics.winRatePct.toFixed(2)+"% | "+report.current.metrics.winRatePct.toFixed(2)+"% |",
     "| Expectancy | "+report.baseline.metrics.expectancyR.toFixed(3)+"R | "+report.current.metrics.expectancyR.toFixed(3)+"R |",
     "| Profit factor | "+(report.baseline.metrics.profitFactor??"n/a")+" | "+(report.current.metrics.profitFactor??"n/a")+" |",
