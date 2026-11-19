@@ -417,7 +417,7 @@ async function isApproved(chatId, env) {
 }
 function archiveChannelId(env) {
   const id = String(env.SIGNAL_ARCHIVE_CHANNEL_ID || "").trim();
-  return /^-100\\d+$/.test(id) ? id : null;
+  return /^-100\d+$/.test(id) ? id : null;
 }
 async function sendArchiveAccessLink(env, userId) {
   const channelId = archiveChannelId(env);
@@ -432,7 +432,7 @@ async function sendArchiveAccessLink(env, userId) {
       if(!link)throw new Error("Telegram did not return invite link");
       if(env.APP_KV)await env.APP_KV.put(key,link);
     }
-    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\\n\\n"+link,BACK_MENU);
+    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link,BACK_MENU);
   } catch(error) {
     console.error("Archive invite link failed:",String(error?.message||error));
     await sendMessage(env,userId,"⚠️ ساخت لینک ورود به آرشیو فعلاً ممکن نشد.",BACK_MENU);
@@ -733,6 +733,7 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
         allowedAt: new Date().toISOString(), allowedBy: String(chatId) };
       await env.APP_KV.put(memberKey(targetId), JSON.stringify(member));
       await env.APP_KV.delete(pendingKey(targetId));
+      await restoreArchiveMemberEligibility(env,targetId);
       await sendMessage(env, targetId,
         "🎉 دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر فعال شد.\n\n" +
         "خوش آمدید! اکنون می‌توانید از امکانات ربات استفاده کنید.");
