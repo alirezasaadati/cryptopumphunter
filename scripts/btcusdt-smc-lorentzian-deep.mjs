@@ -1,5 +1,4 @@
 import { analyzeFuturesSymbol } from "../src/index.js";
-import { analyzeFuturesSymbol } from "../src/index.js";
 import { buildSmcStructure } from "../src/smc-structure-benchmark.js";
 import { mkdir, writeFile, readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
