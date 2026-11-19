@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "check": "node --check src/index.js",
-    "test": "npm run check && node --test tests/*.test.mjs"
+    "test": "npm run check && node --test tests/*.test.mjs",
+    "smoke": "node scripts/smoke-test.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
