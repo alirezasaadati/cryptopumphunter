@@ -1428,7 +1428,7 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
     momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
 }
 
-function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m) {
+function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   }
@@ -1499,9 +1499,9 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m) {
     reasons.push("داده فاندینگ در دسترس نبود");
   }
 
-  const entryFilters = evaluateFuturesEntryFilters({
-    ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr
-  });
+  const entryFilters = options.skipEntryFilters
+    ? { ok: true, skippedForBaseline: true }
+    : evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr });
   if (!entryFilters.ok) {
     return { symbol: ticker.symbol, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
   }
@@ -1513,7 +1513,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m) {
     reasons.push("تأیید ۱۵دقیقه‌ای کامل نبود؛ سیگنال به‌دلیل آن حذف نشد");
   }
 
-  const entry = Number(ticker.last);
+  const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
   const swing = candles1h.slice(-8, -1);
   const swingLow = Math.min(...swing.map(c => c.low));
   const swingHigh = Math.max(...swing.map(c => c.high));
