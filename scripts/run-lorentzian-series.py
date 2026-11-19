@@ -16,13 +16,11 @@ configs = {
  "h1_k5": {"neighbors_count": 5},
  "h1_features4": {"feature_count": 4},
  "h1_regime_off": {"use_regime_filter": False},
- "h1_volatility_off": {"use_volatility_filter": False},
  "h1_adx20": {"use_adx_filter": True, "adx_threshold": 20},
- "h1_ema200": {"use_ema_filter": True, "ema_period": 200},
  "m15_default": {},
  "m15_no_kernel": {"use_kernel_filter": False},
 }
-history_limit = 10000 if timeframe == "h1" else 40000
+history_limit = 10000 if timeframe == "h1" else 2000
 configs = {k: {"max_bars_back": history_limit, **v} for k,v in configs.items() if k.startswith(timeframe + "_")}
 out = {"bar_count": len(bars), "variants": {}}
 for name, overrides in configs.items():
