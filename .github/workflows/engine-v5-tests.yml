@@ -55,15 +55,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run 90-day historical paper backtest
+      - name: Run 180-day historical paper backtest with 90-day holdout
         run: npm run backtest
         env:
-          BACKTEST_DAYS: "90"
+          BACKTEST_DAYS: "180"
           BACKTEST_SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT"
         timeout-minutes: 15
       - name: Upload historical backtest report
         uses: actions/upload-artifact@v4
         with:
-          name: engine-v5-historical-backtest-90d
+          name: engine-v5-historical-backtest-180d
           path: engine-v5/historical-backtest-report.json
           if-no-files-found: error
