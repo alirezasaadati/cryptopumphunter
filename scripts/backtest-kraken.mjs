@@ -7,6 +7,26 @@ const FOUR_HOURS = 4 * HOUR;
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const ONE_MINUTE = 60 * 1000;
 const DAYS = Math.max(15, Math.min(90, Number(process.env.BACKTEST_DAYS || 30)));
+const DAY = 24 * HOUR;
+function ema(values, period) {
+  if (values.length < period) return [];
+  const alpha = 2 / (period + 1);
+  const out = [];
+  let value = values.slice(0, period).reduce((a,b)=>a+b,0)/period;
+  out.push(value);
+  for (const x of values.slice(period)) { value = alpha*x + (1-alpha)*value; out.push(value); }
+  return out;
+}
+function aggregateDailyFrom4h(candles) {
+  const groups = new Map();
+  for (const c of candles) {
+    const time = Math.floor(c.time / DAY) * DAY;
+    const g = groups.get(time);
+    if (!g) groups.set(time,{time,open:c.open,high:c.high,low:c.low,close:c.close,count:1});
+    else { g.high=Math.max(g.high,c.high); g.low=Math.min(g.low,c.low); g.close=c.close; g.count++; }
+  }
+  return [...groups.values()].filter(x=>x.count===6).sort((a,b)=>a.time-b.time);
+}
 const SYMBOL_LIMIT = Math.max(1, Math.min(24, Number(process.env.BACKTEST_SYMBOLS || 5)));
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
 const SLIPPAGE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_SLIPPAGE || 0.0003));
@@ -462,7 +482,23 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   };
 }
 async function main() {
-  const endMs=Date.now(), startMs=endMs-DAYS*24*HOUR, fromMs=startMs-15*24*HOUR;
+  const startMs = process.env.BACKTEST_START ? Date.parse(process.env.BACKTEST_START) : Date.now()-DAYS*DAY;
+  const endMs = process.env.BACKTEST_END ? Date.parse(process.env.BACKTEST_END) : Date.now();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) throw new Error("Invalid BACKTEST_START/BACKTEST_END");
+  const fromMs=startMs-30*DAY;
+  const benchmark4h=await fetchHistoricalCandles("PF_XBTUSD","4h",fromMs,endMs,FOUR_HOURS);
+  const benchmarkDaily=aggregateDailyFrom4h(benchmark4h).filter(c=>c.time>=startMs && c.time+DAY<=endMs);
+  const benchmarkEma=ema(aggregateDailyFrom4h(benchmark4h).map(c=>c.close),20);
+  const allDaily=aggregateDailyFrom4h(benchmark4h);
+  const emaOffset=allDaily.length-benchmarkEma.length;
+  const dailyWithEma=allDaily.map((c,i)=>({...c,ema20:benchmarkEma[i-emaOffset]??null}));
+  const benchmarkWindow=dailyWithEma.filter(c=>c.time>=startMs && c.time+DAY<=endMs);
+  const firstClose=benchmarkWindow[0]?.close??null, lastClose=benchmarkWindow.at(-1)?.close??null;
+  const periodReturnPct=firstClose&&lastClose?(lastClose/firstClose-1)*100:null;
+  const aboveEmaPct=benchmarkWindow.length?benchmarkWindow.filter(c=>c.ema20!==null&&c.close>c.ema20).length/benchmarkWindow.length*100:null;
+  const emaStart=benchmarkWindow.find(c=>c.ema20!==null)?.ema20??null, emaEnd=benchmarkWindow.filter(c=>c.ema20!==null).at(-1)?.ema20??null;
+  const emaSlopePct=emaStart&&emaEnd?(emaEnd/emaStart-1)*100:null;
+  const isBullishRegime=periodReturnPct>0&&aboveEmaPct>=60&&emaSlopePct>0;
   const tickerData=await getJson(BASE+"/derivatives/api/v3/tickers");
   if (!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
   const universe=tickerData.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&
@@ -505,7 +541,11 @@ async function main() {
   const sum=(mode,key)=>results.reduce((n,r)=>n+Number(r[mode]?.[key]||0),0);
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
-    period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS},
+    period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:(endMs-startMs)/DAY},
+    marketRegime:{benchmark:"Kraken PF_XBTUSD daily candles aggregated from 4h",dailyCandles:benchmarkWindow.length,
+      firstClose,lastClose,periodReturnPct,percentDaysAboveEma20:aboveEmaPct,ema20SlopePct:emaSlopePct,
+      bullishCriteria:"period return > 0%, at least 60% of daily closes above EMA20, and EMA20 rising over the test window",
+      verifiedBullish:isBullishRegime},
     settings:{symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,feePerSidePct:FEE_PER_SIDE*100,
       slippagePerSidePct:SLIPPAGE_PER_SIDE*100,maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
       sameCandleStopTargetRule:"stop first (conservative)",funding:"excluded",
