@@ -65,9 +65,9 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   assert.match(long, /^🟢 سیگنال معتبر/);
   assert.match(long, /نماد: <b>ETH<\/b>/);
   assert.match(long, /جهت معامله: 🟢 لانگ \/ Long/);
-  const risky = formatFuturesSignalAlert({...signal, tier:"EXPERIMENTAL"}, 3);
-  assert.match(risky, /^🟠 سیگنال پر ریسک/);
-  assert.match(risky, /⛔ حد ضرر:/);
+  const formerlyRisky = formatFuturesSignalAlert({...signal, tier:"EXPERIMENTAL"}, 3);
+  assert.match(formerlyRisky, /^🟢 سیگنال معتبر/);
+  assert.match(formerlyRisky, /⛔ حد ضرر:/);
   assert.doesNotMatch(short, /PF_|BTCUSD/);
   const krakenXbt = formatFuturesSignalAlert({...signal, symbol:"PF_XBTUSD"}, 4);
   const krakenNvdx = formatFuturesSignalAlert({...signal, symbol:"PF_NVDXUSD"}, 5);
