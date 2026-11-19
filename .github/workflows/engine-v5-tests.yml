@@ -55,15 +55,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run 180-day historical paper backtest with 90-day holdout
+      - name: Run 90-day OKX historical paper backtest with 45-day holdout
         run: npm run backtest
         env:
-          BACKTEST_DAYS: "180"
-          BACKTEST_SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT"
+          BACKTEST_DAYS: "90"
+          BACKTEST_INSTRUMENTS: "BTC-USDT-SWAP,ETH-USDT-SWAP,SOL-USDT-SWAP"
         timeout-minutes: 15
       - name: Upload historical backtest report
         uses: actions/upload-artifact@v4
         with:
-          name: engine-v5-historical-backtest-180d
+          name: engine-v5-historical-backtest-okx-90d
           path: engine-v5/historical-backtest-report.json
           if-no-files-found: error
