@@ -31,7 +31,10 @@ async function downloadKlines(interval,month){
   return csv.split(/\r?\n/).filter(Boolean).map(line=>{
     const p=line.split(",");
     if(!/^\d+$/.test(p[0]||""))return null;
-    const c={time:Number(p[0]),open:Number(p[1]),high:Number(p[2]),low:Number(p[3]),close:Number(p[4]),volume:Number(p[5])};
+    const rawTime=Number(p[0]);
+    // Binance Vision switched recent archive timestamps to microseconds.
+    const c={time:rawTime>1e14?Math.floor(rawTime/1000):rawTime,
+      open:Number(p[1]),high:Number(p[2]),low:Number(p[3]),close:Number(p[4]),volume:Number(p[5])};
     if(![c.time,c.open,c.high,c.low,c.close,c.volume].every(Number.isFinite))return null;
     return c;
   }).filter(Boolean);
