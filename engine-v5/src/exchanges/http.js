@@ -19,7 +19,7 @@ export async function getJson(url, fetchImpl = fetch, options = {}) {
     }
     return body;
   } catch (error) {
-    if (controller.signal.aborted && error?.name !== "AbortError") {
+    if (controller.signal.aborted) {
       const timeoutError = new Error(`Exchange request timed out after ${timeoutMs}ms`);
       timeoutError.code = "REQUEST_TIMEOUT";
       throw timeoutError;
