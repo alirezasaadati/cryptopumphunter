@@ -1,0 +1,31 @@
+name: Current production strategy 30-day check
+on:
+  push:
+    branches: [daily-4h-15m-backtest]
+    paths:
+      - '.github/workflows/current-engine-30d-check.yml'
+      - 'src/index.js'
+      - 'scripts/backtest-kraken.mjs'
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 30-day current strategy backtest
+        env:
+          BACKTEST_DAYS: '30'
+          BACKTEST_SYMBOLS: '24'
+          BACKTEST_FEE: '0.0005'
+          BACKTEST_SLIPPAGE: '0.0003'
+        run: node scripts/backtest-kraken.mjs
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-strategy-30d
+          path: artifacts/
+          if-no-files-found: warn
