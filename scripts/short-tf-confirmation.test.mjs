@@ -86,3 +86,18 @@ test("expires instead of chasing when live price drifts too far",()=>{
   assert.equal(chased.status,"EXPIRED");
   assert.equal(chased.reason,"ENTRY_TOO_FAR_NO_CHASE");
 });
+
+test("expires a setup after its maximum lifetime",()=>{
+  const f=fixture("LONG");
+  const result=evaluateShortTfConfirmation({side:"LONG",candles1m:f.m1,candles5m:f.m5,candles15m:f.m15,setupTime:f.setupTime,now:f.setupTime+91*M1,maxSetupAgeMs:90*M1});
+  assert.equal(result.status,"EXPIRED");
+  assert.equal(result.reason,"SIGNAL_SETUP_EXPIRED");
+});
+
+test("uses the live quote as the entry reference after the no-chase check",()=>{
+  const f=fixture("LONG");
+  const quote=100.123;
+  const result=evaluateShortTfConfirmation({side:"LONG",candles1m:f.m1,candles5m:f.m5,candles15m:f.m15,setupTime:f.setupTime,now:f.now,referencePrice:quote,maxDriftPct:100});
+  assert.equal(result.status,"CONFIRMED",JSON.stringify(result));
+  assert.equal(result.entryReference,quote);
+});
