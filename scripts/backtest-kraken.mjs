@@ -120,40 +120,55 @@ function aggregate15mFrom1m(candles) {
   }
   return [...groups.values()].filter(x=>x.count===15).sort((a,b)=>a.time-b.time);
 }
+function aggregate5mFrom1m(candles) {
+  const groups=new Map();
+  for(const x of candles){
+    const time=Math.floor(x.time/(5*ONE_MINUTE))*5*ONE_MINUTE;
+    const g=groups.get(time);
+    if(!g) groups.set(time,{time,open:x.open,high:x.high,low:x.low,close:x.close,count:1});
+    else {g.high=Math.max(g.high,x.high);g.low=Math.min(g.low,x.low);g.close=x.close;g.count++;}
+  }
+  return [...groups.values()].filter(x=>x.count===5).sort((a,b)=>a.time-b.time);
+}
+function findBreakout(bars, trade, fromTime, toTime, duration) {
+  const dir=trade.side==="LONG"?1:-1;
+  for(let i=1;i<bars.length;i++){
+    const b=bars[i],prev=bars[i-1];
+    if(b.time<fromTime || b.time+duration>toTime) continue;
+    if(dir===1?b.close>prev.high:b.close<prev.low)
+      return {level:dir===1?prev.high:prev.low,closeTime:b.time+duration};
+  }
+  return null;
+}
 function findAlternativeEntries(trade, minuteCandles) {
-  const bars15=aggregate15mFrom1m(minuteCandles);
-  const dir=trade.side==="LONG"?1:-1, end=trade.entryTime+60*ONE_MINUTE;
-  let breakout=null;
-  for(let i=1;i<bars15.length;i++){
-    const b=bars15[i],prev=bars15[i-1];
-    if(b.time< trade.entryTime || b.time+FIFTEEN_MINUTES>end) continue;
-    const confirmed=dir===1?b.close>prev.high:b.close<prev.low;
-    if(confirmed){breakout={level:dir===1?prev.high:prev.low,closeTime:b.time+FIFTEEN_MINUTES};break;}
-  }
-  if(!breakout) return {confirmation:null,pullback:null};
+  const bars15=aggregate15mFrom1m(minuteCandles),bars5=aggregate5mFrom1m(minuteCandles);
+  const dir=trade.side==="LONG"?1:-1,end=trade.entryTime+60*ONE_MINUTE;
+  const breakout15=findBreakout(bars15,trade,trade.entryTime,end,FIFTEEN_MINUTES);
+  const breakout5=findBreakout(bars5,trade,trade.entryTime,end,5*ONE_MINUTE);
   const nextAt=t=>minuteCandles.find(x=>x.time===t);
-  const confirmationBar=nextAt(breakout.closeTime);
-  let confirmation=null;
-  if(confirmationBar){
-    const p=confirmationBar.open*(1+dir*SLIPPAGE_PER_SIDE);
-    if((dir===1&&p<trade.target1&&p>trade.stop)||(dir===-1&&p>trade.target1&&p<trade.stop))
-      confirmation={time:confirmationBar.time,entry:p,breakoutLevel:breakout.level};
+  const makeEntry=(time,level)=> {
+    const bar=nextAt(time); if(!bar) return null;
+    const p=bar.open*(1+dir*SLIPPAGE_PER_SIDE);
+    if(!((dir===1&&p<trade.target1&&p>trade.stop)||(dir===-1&&p>trade.target1&&p<trade.stop))) return null;
+    return {time:bar.time,entry:p,breakoutLevel:level};
+  };
+  const confirmation5=breakout5?makeEntry(breakout5.closeTime,breakout5.level):null;
+  let confirmation15and5=null;
+  if(breakout15){
+    const confirm5After=findBreakout(bars5,trade,breakout15.closeTime,end,5*ONE_MINUTE);
+    if(confirm5After) confirmation15and5=makeEntry(confirm5After.closeTime,confirm5After.level);
   }
-  let pullback=null;
-  for(const b of minuteCandles){
-    if(b.time<breakout.closeTime || b.time>=end-ONE_MINUTE) continue;
-    const tolerance=trade.risk*0.10;
-    const retested=dir===1?b.low<=breakout.level+tolerance:b.high>=breakout.level-tolerance;
-    const reclaimed=dir===1?b.close>breakout.level:b.close<breakout.level;
-    if(!retested||!reclaimed) continue;
-    const next=nextAt(b.time+ONE_MINUTE);
-    if(!next) continue;
-    const p=next.open*(1+dir*SLIPPAGE_PER_SIDE);
-    if((dir===1&&p<trade.target1&&p>trade.stop)||(dir===-1&&p>trade.target1&&p<trade.stop)){
-      pullback={time:next.time,entry:p,breakoutLevel:breakout.level};break;
+  const smallPullback=breakout15?(()=>{
+    for(const b of minuteCandles){
+      if(b.time<breakout15.closeTime || b.time>=end-ONE_MINUTE) continue;
+      const tolerance=trade.risk*0.05;
+      const retested=dir===1?b.low<=breakout15.level+tolerance:b.high>=breakout15.level-tolerance;
+      const reclaimed=dir===1?b.close>breakout15.level:b.close<breakout15.level;
+      if(retested&&reclaimed){const entry=makeEntry(b.time+ONE_MINUTE,breakout15.level);if(entry)return entry;}
     }
-  }
-  return {confirmation,pullback};
+    return null;
+  })():null;
+  return {confirmation5,confirmation15and5,smallPullback};
 }
 function simulateFromMinuteEntry(trade, entryModel, minuteCandles, hourlyCandles) {
   const dir=trade.side==="LONG"?1:-1, entry=entryModel.entry;
@@ -210,31 +225,32 @@ async function compareEntryModels(trades) {
     return {key:k,minute:m,hourly:h};
   });
   for(const x of minuteRows) if(!x.error) cache.set(x.key,x);
-  const confirmation=[],pullback=[];
+  const models={confirmation5:[],confirmation15and5:[],smallPullback:[]};
   for(const t of trades){
     const data=cache.get(t.symbol+"|"+t.entryTime);if(!data) continue;
     const entries=findAlternativeEntries(t,data.minute);
-    if(entries.confirmation){
-      const sim=simulateFromMinuteEntry(t,entries.confirmation,data.minute,data.hourly);
-      if(sim) confirmation.push(sim);
-    }
-    if(entries.pullback){
-      const sim=simulateFromMinuteEntry(t,entries.pullback,data.minute,data.hourly);
-      if(sim) pullback.push(sim);
+    for(const name of Object.keys(models)){
+      if(!entries[name]) continue;
+      const sim=simulateFromMinuteEntry(t,entries[name],data.minute,data.hourly);
+      if(sim) models[name].push(sim);
     }
   }
-  const baseline=nonOverlapping(trades),confirmed=nonOverlapping(confirmation),retested=nonOverlapping(pullback);
+  const baseline=nonOverlapping(trades);
+  const output={};
+  for(const [name,rows] of Object.entries(models)){
+    const selected=nonOverlapping(rows);
+    output[name]={attempted:rows.length,samples:selected.length,metrics:summarize(selected)};
+  }
   return {
     rules:{
       baseline:"Current entry at next 1h candle open",
-      confirmation:"Wait for a completed 15m candle to close beyond the previous 15m candle high/low; enter at next 1m open, within 60m",
-      pullback:"After that 15m breakout, wait for a 1m retest within 0.10R of breakout level and close back beyond it; enter next 1m open, within 60m",
+      confirmation5:"First completed 5m candle closes beyond previous 5m high/low; enter next 1m open, within 60m",
+      confirmation15and5:"First 15m breakout, then completed 5m candle closes beyond previous 5m high/low; enter next 1m open, within 60m",
+      smallPullback:"After 15m breakout, 1m retest within 0.05R of breakout level and close back beyond it; enter next 1m open, within 60m",
       exits:"Original absolute stop/targets, 40/35/25 partial exits, 0.05% fee and 0.03% slippage per side; stop-first ambiguity"
     },
     data:{tradesRequested:trades.length,minuteAndHourlyLoaded:cache.size,failed:minuteRows.filter(x=>x.error).length},
-    baseline:summarize(baseline),confirmation:summarize(confirmed),pullback:summarize(retested),
-    attempted:{confirmation:confirmation.length,pullback:pullback.length},
-    samples:{confirmation:confirmed.length,pullback:retested.length}
+    baseline:summarize(baseline),models:output
   };
 }
 async function addMinuteExcursions(trades) {
