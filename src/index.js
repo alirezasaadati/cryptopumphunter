@@ -1843,7 +1843,7 @@ async function notifyTradeMilestone(env,trade,key,target){
   const p=priceChangePercent(trade.side,trade.actualEntry,target);
   const labels={TP1:"🎯 هدف اول",TP2:"🎯 هدف دوم",TP3:"🎯 هدف سوم"};
   const direction=trade.side==="LONG"?"🟢 لانگ / Long":"🔴 شورت / Short";
-  const profit=p===null?"—":`${Math.abs(Number(p)).toFixed(2)}٪`;
+  const profit=p===null?"—":`${Math.abs(Number(p)*10).toFixed(2)}٪`;
   await sendMessage(env,trade.chatId,
     `${labels[key]||key} ${formatFuturesSymbol(trade.symbol)} لمس شد.\nجهت معامله: ${direction}\nقیمت هدف: ${formatPrice(target)}\n🥳 درصد سود: ${profit}`);
 }
