@@ -1,6 +1,6 @@
 import { runSpotScan } from "./spot-engine.js";
 import { evaluateShortTfConfirmation } from "./short-tf-confirmation.js";
-import { ENTRY_SHADOW_CONFIG, shadowSetupId, buildShadowLevels, advanceShadowTrade } from "./entry-shadow.js";
+import { ENTRY_SHADOW_CONFIG, shadowSetupId, buildShadowLevels, advanceShadowTrade, summarizeShadowRecords } from "./entry-shadow.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
@@ -153,6 +153,17 @@ export default {
         kv: Boolean(env.APP_KV),
         membership: true
       });
+    }
+
+    if (request.method === "GET" && url.pathname === "/entry-shadow/status") {
+      if (!authorizedSetup(url, env)) return json({ ok: false, error: "Unauthorized" }, 401);
+      try {
+        const data = await entryShadowRequest(env, "/shadow/list");
+        const records = Array.isArray(data.records) ? data.records : [];
+        return json({ ok: true, meta: data.meta, summary: summarizeShadowRecords(records), recent: records.slice(-50) });
+      } catch (error) {
+        return json({ ok: false, error: String(error?.message || error) }, 503);
+      }
     }
 
     if (request.method === "GET" && url.pathname === "/testdata") {
