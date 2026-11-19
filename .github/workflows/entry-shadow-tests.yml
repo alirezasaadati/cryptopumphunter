@@ -1,0 +1,30 @@
+name: Entry shadow engine tests
+on:
+  push:
+    branches: [30-day-entry-shadow-mode]
+    paths:
+      - "src/entry-shadow.js"
+      - "src/short-tf-confirmation.js"
+      - "scripts/entry-shadow.test.mjs"
+      - "scripts/short-tf-confirmation.test.mjs"
+      - ".github/workflows/entry-shadow-tests.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/entry-shadow.js"
+      - "src/short-tf-confirmation.js"
+      - "scripts/entry-shadow.test.mjs"
+      - "scripts/short-tf-confirmation.test.mjs"
+      - ".github/workflows/entry-shadow-tests.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check src/index.js
+      - run: node --check src/entry-shadow.js
+      - run: node --check src/short-tf-confirmation.js
+      - run: node --test scripts/entry-shadow.test.mjs scripts/short-tf-confirmation.test.mjs
