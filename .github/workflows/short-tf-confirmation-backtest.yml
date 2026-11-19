@@ -20,7 +20,8 @@ jobs:
         run: node --check scripts/short-tf-confirmation-backtest.mjs
       - name: Run Kraken historical comparison
         env:
-          BACKTEST_DAYS: "30"
+          BACKTEST_START: "2026-09-20T00:00:00Z"
+          BACKTEST_END: "2026-10-20T00:00:00Z"
           BACKTEST_SYMBOLS: "6"
           BACKTEST_FEE: "0.0005"
           BACKTEST_SLIPPAGE: "0.0003"
