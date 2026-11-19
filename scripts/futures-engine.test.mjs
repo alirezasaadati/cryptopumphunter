@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   FUTURES_CONFIG,
+  SignalDeliveryCoordinator,
   isKrakenPerpetualTicker,
   calculateAtr,
   evaluateFuturesEntryFilters,
@@ -56,6 +57,44 @@ function makeSetup(side="LONG") {
     oneHour,fourHour,fifteenMinute
   };
 }
+
+
+test("admin signal listing returns recent unexpired signals from Durable Object without writes",async()=>{
+  const now=Date.now();
+  const stored=[
+    {id:"old",symbol:"PF_OLDUSD",side:"SHORT",score:80,createdAt:now-5000,expiresAt:now+60000},
+    {id:"new",symbol:"PF_NEWUSD",side:"LONG",score:91,createdAt:now-1000,expiresAt:now+60000},
+    {id:"expired",symbol:"PF_EXPIREDUSD",side:"SHORT",score:99,createdAt:now,expiresAt:now-1}
+  ];
+  const writes=[];
+  const ctx={storage:{
+    get:async key=>key==="active-futures-pending"?stored:undefined,
+    put:async(...args)=>writes.push(args),
+    delete:async()=>{}
+  }};
+  const env={SIGNAL_DELIVERY_SECRET:"test-secret"};
+  const coordinator=new SignalDeliveryCoordinator(ctx,env);
+  const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/list",{
+    method:"POST",
+    headers:{"content-type":"application/json","x-signal-delivery-secret":"test-secret"},
+    body:JSON.stringify({limit:10})
+  }));
+  const result=await response.json();
+  assert.equal(response.status,200);
+  assert.deepEqual(result.signals.map(x=>x.id),["new","old"]);
+  assert.equal(result.signals[0].score,91);
+  assert.equal(writes.length,0);
+});
+
+test("admin signal listing endpoint rejects requests without the Durable Object secret",async()=>{
+  const coordinator=new SignalDeliveryCoordinator({storage:{get:async()=>[]}}, {SIGNAL_DELIVERY_SECRET:"test-secret"});
+  const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/list",{
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body:"{}"
+  }));
+  assert.equal(response.status,401);
+});
 
 test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.MAX_SYMBOLS,24);
