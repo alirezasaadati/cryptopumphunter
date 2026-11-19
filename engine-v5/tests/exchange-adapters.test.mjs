@@ -1,54 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createBinanceAdapter } from "../src/exchanges/binance.js";
-import { createBybitAdapter } from "../src/exchanges/bybit.js";
 import { createOkxAdapter } from "../src/exchanges/okx.js";
 import { createKrakenAdapter } from "../src/exchanges/kraken.js";
-import { collectExchangeOverviews } from "../src/exchanges/index.js";
+import { collectExchangeOverviews, createExchangeAdapters } from "../src/exchanges/index.js";
 
 function mockFetch(routes) {
   return async input => {
     const url = new URL(String(input));
     const route = routes.find(([match]) => url.href.includes(match));
     if (!route) throw new Error(`Unexpected URL: ${url.href}`);
-    return new Response(JSON.stringify(route[1]), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    });
+    return new Response(JSON.stringify(route[1]), { status: 200, headers: { "content-type": "application/json" } });
   };
 }
 
-test("Binance adapter normalizes spot and perpetual tickers", async () => {
-  const fetchImpl = mockFetch([
-    ["/api/v3/exchangeInfo", { symbols: [{ symbol: "BTCUSDT", status: "TRADING", baseAsset: "BTC", quoteAsset: "USDT" }] }],
-    ["/api/v3/ticker/24hr", [{ symbol: "BTCUSDT", lastPrice: "100", bidPrice: "99", askPrice: "101", volume: "10", quoteVolume: "1000", priceChangePercent: "2", highPrice: "105", lowPrice: "95", closeTime: 10 }]],
-    ["/fapi/v1/exchangeInfo", { symbols: [{ symbol: "BTCUSDT", status: "TRADING", contractType: "PERPETUAL", baseAsset: "BTC", quoteAsset: "USDT" }] }],
-    ["/fapi/v1/ticker/24hr", [{ symbol: "BTCUSDT", lastPrice: "100", bidPrice: "99", askPrice: "101", volume: "20", quoteVolume: "2000", priceChangePercent: "3", highPrice: "106", lowPrice: "94", closeTime: 11 }]],
-    ["/fapi/v1/premiumIndex", [{ symbol: "BTCUSDT", lastFundingRate: "0.0001" }]]
-  ]);
-  const result = await createBinanceAdapter(fetchImpl).fetchOverview();
-  assert.equal(result.instruments.length, 2);
-  assert.equal(result.tickers.length, 2);
-  assert.equal(result.tickers.find(x => x.marketType === "perpetual").fundingRate, 0.0001);
-  assert.equal(result.tickers[0].spreadBps, 200);
-});
-
-test("Bybit adapter paginates linear instruments and normalizes tickers", async () => {
-  const fetchImpl = async input => {
-    const url = new URL(String(input));
-    const category = url.searchParams.get("category");
-    const path = url.pathname;
-    let body;
-    if (path.endsWith("instruments-info")) {
-      body = { retCode: 0, result: { list: [{ symbol: category === "spot" ? "ETHUSDT" : "BTCUSDT", status: "Trading", baseCoin: category === "spot" ? "ETH" : "BTC", quoteCoin: "USDT", contractType: category === "linear" ? "LinearPerpetual" : undefined }], nextPageCursor: "" } };
-    } else if (path.endsWith("tickers")) {
-      body = { retCode: 0, result: { list: [{ symbol: category === "spot" ? "ETHUSDT" : "BTCUSDT", lastPrice: "10", bid1Price: "9", ask1Price: "11", volume24h: "5", turnover24h: "50", price24hPcnt: "0.01", openInterest: "100", fundingRate: "0.0002" }] } };
-    } else throw new Error(`Unexpected Bybit URL: ${url.href}`);
-    return new Response(JSON.stringify(body), { status: 200 });
-  };
-  const result = await createBybitAdapter(fetchImpl).fetchOverview();
-  assert.equal(result.instruments.length, 2);
-  assert.equal(result.tickers.find(x => x.marketType === "perpetual").openInterest, 100);
+test("V5 registers only OKX and Kraken adapters", () => {
+  assert.deepEqual(createExchangeAdapters(async () => {}).map(x => x.id), ["okx", "kraken"]);
 });
 
 test("OKX adapter normalizes spot and swap instruments", async () => {
