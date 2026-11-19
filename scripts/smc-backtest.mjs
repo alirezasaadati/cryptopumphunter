@@ -81,7 +81,7 @@ function simulate(signal,bars,startIndex){
     break;
   }
   if(entryIndex<0)return{unfilled:true,side:signal.side,desiredEntry,
-    expiryTime:bars[fillEnd].time};
+    expiryIndex:fillEnd,expiryTime:bars[fillEnd].time};
   const entry=adverseFill(rawEntry,dir,true);
   const stop=signal.stop;
   const risk=dir*(entry-stop);
@@ -164,7 +164,7 @@ async function main(){
     if(nextIndex<=openUntil){overlapSkipped++;continue;}
     const trade=simulate(s,m5,nextIndex);
     if(!trade)continue;
-    if(trade.unfilled){unfilled++;continue;}
+    if(trade.unfilled){unfilled++;openUntil=Math.max(openUntil,trade.expiryIndex);continue;}
     trade.signalTime=now;trade.bosTime=d.bos?.time;trade.chochTime=d.choch?.time;
     trades.push(trade);
     const exitIndex=m5.findIndex(c=>c.time===trade.exitTime);
