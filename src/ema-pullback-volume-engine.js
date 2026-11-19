@@ -117,7 +117,8 @@ export function evaluateEmaPullback({higherTimeframe,entryTimeframe,symbol="BTCU
   const trigger=bullish?(isBullEngulf(prev,c)||isBullPin(c,cfg.PINBAR_WICK_BODY_RATIO)):
     (isBearEngulf(prev,c)||isBearPin(c,cfg.PINBAR_WICK_BODY_RATIO));
   const strongClose=bullish?(c.close>=c.low+range*0.75):(c.close<=c.high-range*0.75);
-  if(!trigger||body<cfg.MIN_TRIGGER_BODY_RATIO||!strongClose)
+  const engulfing=bullish?isBullEngulf(prev,c):isBearEngulf(prev,c);
+  if(!trigger||(engulfing&&body<cfg.MIN_TRIGGER_BODY_RATIO)||!strongClose)
     return reject("REVERSAL_TRIGGER_NOT_STRONG",{trend,body,strongClose,trigger});
   const volumeBase=mean(bars.slice(i-cfg.TRIGGER_VOLUME_BARS,i).map(x=>x.volume));
   if(!(volumeBase>0)||c.volume<volumeBase*cfg.TRIGGER_VOLUME_MIN_RATIO)
