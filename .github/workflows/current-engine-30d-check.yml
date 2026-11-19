@@ -1,4 +1,4 @@
-name: Current production strategy 30-day check
+name: Experimental entry models 60-day validation
 on:
   push:
     branches: [daily-4h-15m-backtest]
@@ -15,9 +15,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run 30-day current strategy backtest
+      - name: Run 60-day entry model validation
         env:
-          BACKTEST_DAYS: '30'
+          BACKTEST_DAYS: '60'
           BACKTEST_SYMBOLS: '24'
           BACKTEST_FEE: '0.0005'
           BACKTEST_SLIPPAGE: '0.0003'
