@@ -67,7 +67,7 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
   assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
   assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.35);
-  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,1.25);
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,3.0);
   assert.equal("ENTRY_INTERVAL" in FUTURES_CONFIG,false);
 });
 
@@ -169,8 +169,8 @@ test("late-entry filter rejects an overextended price versus hourly EMA20",()=>{
   const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
   const atr=calculateAtr(oneHour,14);
   const result=evaluateFuturesEntryFilters({
-    ticker:{...ticker,last:ema20+atr*2},candles1h:oneHour,candles15m:fifteenMinute,
-    side:"LONG",referencePrice:ema20+atr*2,ema20,atr
+    ticker:{...ticker,last:ema20+atr*4},candles1h:oneHour,candles15m:fifteenMinute,
+    side:"LONG",referencePrice:ema20+atr*4,ema20,atr
   });
   assert.equal(result.ok,false);
   assert.match(result.rejected,/ورود دیرهنگام/);
