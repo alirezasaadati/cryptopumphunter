@@ -29,31 +29,30 @@ export function futuresAlertStorageKey(chatId, fingerprint) {
 }
 
 export function formatFuturesSignalAlert(signal, index = 1) {
-  const side = signal?.side === "LONG" ? "🟢 لانگ" : "🔴 شورت";
-  return `🎯 سیگنال ${Number(index).toLocaleString("fa-IR")}\n` +
-    "━━━━━━━━━━━━━━━━━━\n" +
-    `🪙 نماد: ${formatFuturesSymbol(signal?.symbol)}\n` +
-    `🧭 جهت معامله: ${side}\n` +
-    `📍 ورود: ${formatSignalPrice(signal?.entry)}\n` +
-    `🛑 حد ضرر: ${formatSignalPrice(signal?.stop)}\n` +
-    `🎯 تارگت ۱: ${formatSignalPrice(signal?.target1)}\n` +
-    `🎯 تارگت ۲: ${formatSignalPrice(signal?.target2)}\n` +
-    `🎯 تارگت ۳: ${formatSignalPrice(signal?.target3)}\n\n` +
-    "⚠️ سیگنال تحلیلی است؛ سفارش واقعی ثبت نمی‌شود.";
+  const side = signal?.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
+  const label = signal?.tier === "EXPERIMENTAL" ? "🟠 سیگنال پر ریسک" : "🟢 سیگنال معتبر";
+  return `${label}\n\n` +
+    `نماد: <b>${escapeTelegramHtml(formatFuturesSymbol(signal?.symbol))}</b>\n\n` +
+    `جهت معامله: ${side}\n\n` +
+    `قیمت ورود: <b>${formatSignalPrice(signal?.entry)}</b>\n\n` +
+    `🎯 تارگت اول: <b>${formatSignalPrice(signal?.target1)}</b>\n` +
+    `🎯 تارگت دوم: <b>${formatSignalPrice(signal?.target2)}</b>\n` +
+    `🎯 تارگت سوم: <b>${formatSignalPrice(signal?.target3)}</b>\n\n` +
+    `⛔ حد ضرر: <b>${formatSignalPrice(signal?.stop)}</b>`;
 }
 
 function formatFuturesSymbol(symbol) {
-  return String(symbol || "—").toUpperCase().replace(/\.P$/, "").replace(/[-_/]?USDT$/, "");
+  return String(symbol || "—").toUpperCase().replace(/^PF_/, "").replace(/\.P$/, "").replace(/[-_/]?(?:USDT|USD)$/, "");
+}
+
+function escapeTelegramHtml(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function formatSignalPrice(value) {
   const price = Number(value);
   if (!Number.isFinite(price)) return "—";
-  if (price >= 1000) return price.toFixed(2);
-  if (price >= 1) return price.toFixed(4);
-  if (price >= 0.01) return price.toFixed(5);
-  if (price >= 0.0001) return price.toFixed(7);
-  return price.toExponential(3);
+  return price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 8 });
 }
 
 export { ALERT_TTL_SECONDS };
