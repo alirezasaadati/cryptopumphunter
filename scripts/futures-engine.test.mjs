@@ -29,7 +29,7 @@ function makeSetup(side="LONG") {
   const direction=side==="LONG"?1:-1;
   const oneHour=makeCandles({slope:0.015*direction,base:100});
   const fourHour=makeCandles({slope:0.04*direction,base:100});
-  const fifteenMinute=makeCandles({count:120,slope:0.004*direction,base:oneHour.at(-1).close-0.45*direction,volume:100});
+  const fifteenMinute=makeCandles({count:120,slope:0.004*direction,base:oneHour.at(-1).close-0.8*direction,volume:100});
   const closes=fifteenMinute.map(c=>c.close);
   const ema21=closes.slice(-21).reduce((a,b)=>a+b,0)/21;
   for(const c of fifteenMinute.slice(-9,-1)){
@@ -75,11 +75,11 @@ test("ATR rejects insufficient candles and calculates positive volatility",()=>{
   assert.ok(calculateAtr(makeCandles(),14)>0);
 });
 
-test("legacy 1h/4h strategy generates a LONG without 15m input",()=>{
+test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.side,"LONG");
-  assert.equal(result.eligible,true);
+  assert.equal(result.eligible,true,JSON.stringify(result));
   assert.ok(result.score>=72);
   assert.ok(result.stop<result.entry);
   assert.ok(result.target1>result.entry);
@@ -89,7 +89,7 @@ test("legacy 1h/4h strategy generates a LONG without 15m input",()=>{
   assert.equal(result.candleTime,oneHour.at(-1).time);
 });
 
-test("legacy 1h/4h strategy can generate a SHORT",()=>{
+test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("SHORT");
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.side,"SHORT");
@@ -109,7 +109,7 @@ test("relaxed 1h trend with neutral 4h context is tracked as experimental, never
   }));
   const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
   assert.equal(result.eligible,false);
-  assert.equal(result.experimentalEligible,true);
+  assert.equal(result.experimentalEligible,true,JSON.stringify(result));
   assert.ok(result.score>=55);
   assert.ok(result.stop<result.entry && result.target1>result.entry);
 });
