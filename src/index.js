@@ -1269,9 +1269,12 @@ const FUTURES_CONFIG = {
   MIN_SCORE: 72,
   INTERVAL: "1h",
   CONFIRM_INTERVAL: "4h",
-  // Notification/manual-fill settings only; they do not alter the v3.8.2 signal rules.
+  ENTRY_CONFIRM_INTERVAL: "15m",
   SIGNAL_TTL_MINUTES: 60,
-  MAX_ENTRY_DRIFT_PCT: 0.35
+  MAX_ENTRY_DRIFT_PCT: 0.35,
+  MAX_ENTRY_EMA_DISTANCE_ATR: 0.85,
+  MAX_PULLBACK_DISTANCE_ATR: 0.35,
+  MAX_RECLAIM_EXTENSION_ATR: 0.6
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
@@ -1378,14 +1381,66 @@ function calculateAtr(candles, period = 14) {
   return recent.length === period ? average(recent) : null;
 }
 
-function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
+function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr }) {
+  const marketPrice = Number(ticker?.last);
+  if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
+    return { ok: false, rejected: "قیمت لحظه‌ای بازار معتبر نیست" };
+  }
+  const driftPct = Math.abs(marketPrice - referencePrice) / referencePrice * 100;
+  if (driftPct > FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT) {
+    return { ok: false, rejected: "فاصله قیمت لحظه‌ای تا قیمت تحلیلی بیش از حد مجاز است", driftPct };
+  }
+
+  const emaDistanceAtr = Math.abs(marketPrice - ema20) / atr;
+  if (emaDistanceAtr > FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR) {
+    return { ok: false, rejected: "ورود دیرهنگام است؛ قیمت بیش از حد از EMA20 فاصله دارد", driftPct, emaDistanceAtr };
+  }
+
+  if (!Array.isArray(candles15m) || candles15m.length < FUTURES_CONFIG.MIN_CANDLES) {
+    return { ok: false, rejected: "داده کندل ۱۵دقیقه‌ای برای تأیید ورود کافی نیست", driftPct, emaDistanceAtr };
+  }
+  const closes15m = candles15m.map(c => c.close);
+  const ema9_15m = ema(closes15m, 9);
+  const ema21_15m = ema(closes15m, 21);
+  const atr15m = calculateAtr(candles15m, 14);
+  const last15m = candles15m[candles15m.length - 1];
+  const recentPullback = candles15m.slice(-9, -1);
+  if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) {
+    return { ok: false, rejected: "اندیکاتورهای تأیید ۱۵دقیقه‌ای معتبر نیستند", driftPct, emaDistanceAtr };
+  }
+
+  const aligned = side === "LONG"
+    ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open
+    : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open;
+  if (!aligned) {
+    return { ok: false, rejected: "جهت حرکت و مومنتوم ۱۵دقیقه‌ای ورود را تأیید نمی‌کند", driftPct, emaDistanceAtr };
+  }
+
+  const touchedPullbackZone = side === "LONG"
+    ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR)
+    : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
+  if (!touchedPullbackZone) {
+    return { ok: false, rejected: "پولبک معتبر به محدوده EMA21 در تایم‌فریم ۱۵دقیقه تشکیل نشده است", driftPct, emaDistanceAtr };
+  }
+
+  const reclaimExtensionAtr = side === "LONG"
+    ? (last15m.close - ema9_15m) / atr15m
+    : (ema9_15m - last15m.close) / atr15m;
+  if (reclaimExtensionAtr > FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR) {
+    return { ok: false, rejected: "قیمت پس از پولبک بیش از حد از نقطه تأیید فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
+  }
+
+  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m };
+}
+
+function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   }
   const closes1h = candles1h.map(c => c.close);
   const closes4h = candles4h.map(c => c.close);
   const last = candles1h[candles1h.length - 1];
-  const price = last.close;
+  const referencePrice = last.close;
   const e20 = ema(closes1h, 20);
   const e50 = ema(closes1h, 50);
   const e20_4h = ema(closes4h, 20);
@@ -1398,8 +1453,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
 
   const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume));
   const volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
-  const up1h = e20 > e50 && price > e20;
-  const down1h = e20 < e50 && price < e20;
+  const up1h = e20 > e50 && referencePrice > e20;
+  const down1h = e20 < e50 && referencePrice < e20;
   const up4h = e20_4h > e50_4h;
   const down4h = e20_4h < e50_4h;
   let side = null;
@@ -1449,14 +1504,23 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
     reasons.push("داده فاندینگ در دسترس نبود");
   }
 
+  const entryFilters = evaluateFuturesEntryFilters({
+    ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr
+  });
+  if (!entryFilters.ok) {
+    return { symbol: ticker.symbol, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
+  }
+  reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
+  reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
+  reasons.push("روند و پولبک ۱۵دقیقه‌ای تأیید شدند");
+
+  const entry = Number(ticker.last);
   const swing = candles1h.slice(-8, -1);
   const swingLow = Math.min(...swing.map(c => c.low));
   const swingHigh = Math.max(...swing.map(c => c.high));
-  const entry = price;
   let stop = side === "LONG"
     ? Math.min(swingLow, entry - atr * 1.5)
     : Math.max(swingHigh, entry + atr * 1.5);
-  // Enforce a positive, bounded risk distance; reject malformed levels.
   const risk = side === "LONG" ? entry - stop : stop - entry;
   const riskPct = risk / entry;
   if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
@@ -1475,7 +1539,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
     side,
     score,
     experimentalEligible,
-    price,
+    price: entry,
     entry,
     stop,
     target1,
@@ -1492,6 +1556,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h) {
     change24h: change,
     candleTime: last.time,
     reasons,
+    entryDiagnostics: entryFilters,
     eligible
   };
 }
@@ -1963,11 +2028,12 @@ async function runFuturesSignalScan(env, options = {}) {
   }
   const analyzed = await mapLimit(universe, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
-      const [oneHour, fourHour] = await Promise.all([
+      const [oneHour, fourHour, fifteenMinute] = await Promise.all([
         getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.INTERVAL),
-        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL)
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL),
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL)
       ]);
-      return analyzeFuturesSymbol(ticker, oneHour, fourHour);
+      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute);
     } catch (error) {
       return { symbol: ticker.symbol, rejected: error.message || "خطای تحلیل" };
     }
@@ -2212,4 +2278,4 @@ async function mapLimit(items, limit, callback) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
+export { FUTURES_CONFIG, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
