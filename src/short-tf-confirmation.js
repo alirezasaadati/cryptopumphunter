@@ -48,7 +48,7 @@ export function evaluateShortTfConfirmation({
   max15mAge=4, max5mWait=6, max1mWait=5, maxDriftPct=0.35, maxSetupAgeMs=90*60_000
 }={}) {
   if (side !== "LONG" && side !== "SHORT") return { status:"INVALID", reason:"INVALID_SIDE" };
-  if (!Number.isFinite(Number(setupTime)) || Number(setupTime)<0 || Number(setupTime)>now) {
+  if (setupTime===null || setupTime===undefined || !Number.isFinite(Number(setupTime)) || Number(setupTime)<0 || Number(setupTime)>now) {
     return { status:"INVALID", reason:"INVALID_SETUP_TIME" };
   }
   const signalTime=Number(setupTime);
