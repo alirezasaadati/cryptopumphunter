@@ -1,0 +1,36 @@
+name: EMA Pullback Volume BTC Backtest
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/ema-pullback-volume-engine
+    paths:
+      - "src/ema-pullback-volume-engine.js"
+      - "scripts/ema-pullback-volume-backtest.mjs"
+      - "scripts/ema-pullback-volume-engine.test.mjs"
+      - ".github/workflows/ema-pullback-volume-backtest.yml"
+
+jobs:
+  test-and-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax checks
+        run: |
+          node --check src/ema-pullback-volume-engine.js
+          node --check scripts/ema-pullback-volume-backtest.mjs
+      - name: Unit tests
+        run: node --test scripts/ema-pullback-volume-engine.test.mjs
+      - name: Run BTC one-year backtest
+        run: node scripts/ema-pullback-volume-backtest.mjs
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: ema-pullback-volume-btc-backtest
+          path: artifacts/ema-pullback-volume-backtest.*
+          if-no-files-found: error
