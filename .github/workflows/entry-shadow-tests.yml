@@ -24,4 +24,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm test
+      - run: node --check src/index.js
+      - run: node --check src/entry-shadow.js
+      - run: node --check src/short-tf-confirmation.js
+      - run: node --test scripts/entry-shadow.test.mjs scripts/short-tf-confirmation.test.mjs
