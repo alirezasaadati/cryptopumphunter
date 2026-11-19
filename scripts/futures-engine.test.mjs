@@ -4,6 +4,7 @@ import {
   FUTURES_CONFIG,
   isKrakenPerpetualTicker,
   calculateAtr,
+  evaluateFuturesEntryFilters,
   analyzeFuturesSymbol,
   getKrakenFuturesCandles
 } from "../src/index.js";
@@ -24,16 +25,35 @@ function makeCandles({count=120,slope=0.015,base=100,volume=100}={}) {
   });
 }
 
+function testEma(values,period) {
+  const multiplier=2/(period+1);
+  let value=values.slice(0,period).reduce((a,b)=>a+b,0)/period;
+  for(let i=period;i<values.length;i++)value=values[i]*multiplier+value*(1-multiplier);
+  return value;
+}
+
 function makeSetup(side="LONG") {
   const direction=side==="LONG"?1:-1;
   const oneHour=makeCandles({slope:0.015*direction,base:100});
   const fourHour=makeCandles({slope:0.04*direction,base:100});
+  const fifteenMinute=makeCandles({count:120,slope:0.004*direction,base:oneHour.at(-1).close-0.8*direction,volume:100});
+  const closes=fifteenMinute.map(c=>c.close);
+  const ema21=closes.slice(-21).reduce((a,b)=>a+b,0)/21;
+  for(const c of fifteenMinute.slice(-9,-1)){
+    if(direction>0)c.low=Math.min(c.low,ema21-0.1);
+    else c.high=Math.max(c.high,ema21+0.1);
+  }
+  const last15=fifteenMinute.at(-1);
+  last15.open=last15.close-0.05*direction;
+  last15.close=oneHour.at(-1).close;
+  last15.high=Math.max(last15.high,last15.close+0.05);
+  last15.low=Math.min(last15.low,last15.open-0.05);
   return {
     ticker:{
       symbol:"PF_TESTUSD",last:oneHour.at(-1).close,quoteVolume:12_000_000,
       priceChangePercent:2*direction,premium:{lastFundingRate:0.0001*direction}
     },
-    oneHour,fourHour
+    oneHour,fourHour,fifteenMinute
   };
 }
 
@@ -45,6 +65,9 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.MIN_SCORE,72);
   assert.equal(FUTURES_CONFIG.INTERVAL,"1h");
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
+  assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.35);
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,3.0);
   assert.equal("ENTRY_INTERVAL" in FUTURES_CONFIG,false);
 });
 
@@ -60,11 +83,11 @@ test("ATR rejects insufficient candles and calculates positive volatility",()=>{
   assert.ok(calculateAtr(makeCandles(),14)>0);
 });
 
-test("legacy 1h/4h strategy generates a LONG without 15m input",()=>{
-  const {ticker,oneHour,fourHour}=makeSetup("LONG");
-  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour);
+test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.side,"LONG");
-  assert.equal(result.eligible,true);
+  assert.equal(result.eligible,true,JSON.stringify(result));
   assert.ok(result.score>=72);
   assert.ok(result.stop<result.entry);
   assert.ok(result.target1>result.entry);
@@ -74,9 +97,9 @@ test("legacy 1h/4h strategy generates a LONG without 15m input",()=>{
   assert.equal(result.candleTime,oneHour.at(-1).time);
 });
 
-test("legacy 1h/4h strategy can generate a SHORT",()=>{
-  const {ticker,oneHour,fourHour}=makeSetup("SHORT");
-  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour);
+test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("SHORT");
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.side,"SHORT");
   assert.equal(result.eligible,true);
   assert.ok(result.stop>result.entry);
@@ -87,27 +110,27 @@ test("legacy 1h/4h strategy can generate a SHORT",()=>{
 
 
 test("relaxed 1h trend with neutral 4h context is tracked as experimental, never production",()=>{
-  const {ticker,oneHour}=makeSetup("LONG");
+  const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({
     time:Date.now()-(120-i)*4*60*60*1000,
     open:100,high:100.1,low:99.9,close:100,volume:100
   }));
-  const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour);
+  const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
   assert.equal(result.eligible,false);
-  assert.equal(result.experimentalEligible,true);
+  assert.equal(result.experimentalEligible,true,JSON.stringify(result));
   assert.ok(result.score>=55);
   assert.ok(result.stop<result.entry && result.target1>result.entry);
 });
 
 test("risk distance outside the original 0.2%-8% band is rejected",()=>{
-  const {ticker,oneHour,fourHour}=makeSetup("LONG");
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const altered=oneHour.map(x=>({...x}));
   // Widen the last 14 true ranges enough to exceed the original 8% risk ceiling.
   for(let i=altered.length-14;i<altered.length;i++) {
     altered[i].high=altered[i].close+10;
     altered[i].low=altered[i].close-10;
   }
-  const result=analyzeFuturesSymbol(ticker,altered,fourHour);
+  const result=analyzeFuturesSymbol(ticker,altered,fourHour,fifteenMinute);
   assert.ok(result.rejected || result.eligible===false);
 });
 
@@ -126,4 +149,59 @@ test("Kraken candle loader excludes the currently forming candle",async()=>{
     const candles=await getKrakenFuturesCandles("PF_TESTUSD","1h");
     assert.deepEqual(candles.map(x=>x.close),[101,102]);
   }finally{globalThis.fetch=originalFetch;}
+});
+
+
+test("entry drift filter rejects a stale candle-close entry",()=>{
+  const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
+  const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
+  const atr=calculateAtr(oneHour,14);
+  const result=evaluateFuturesEntryFilters({
+    ticker:{...ticker,last:ticker.last*1.01},candles1h:oneHour,candles15m:fifteenMinute,
+    side:"LONG",referencePrice:oneHour.at(-1).close,ema20,atr
+  });
+  assert.equal(result.ok,false);
+  assert.match(result.rejected,/فاصله قیمت لحظه‌ای/);
+});
+
+test("late-entry filter rejects an overextended price versus hourly EMA20",()=>{
+  const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
+  const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
+  const atr=calculateAtr(oneHour,14);
+  const result=evaluateFuturesEntryFilters({
+    ticker:{...ticker,last:ema20+atr*4},candles1h:oneHour,candles15m:fifteenMinute,
+    side:"LONG",referencePrice:ema20+atr*4,ema20,atr
+  });
+  assert.equal(result.ok,false);
+  assert.match(result.rejected,/ورود دیرهنگام/);
+});
+
+test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=>{
+  const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
+  const altered=fifteenMinute.map(c=>({...c}));
+  altered[altered.length-1].open=altered.at(-1).close+0.5;
+  const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
+  const atr=calculateAtr(oneHour,14);
+  const result=evaluateFuturesEntryFilters({
+    ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
+    referencePrice:oneHour.at(-1).close,ema20,atr
+  });
+  assert.equal(result.ok,true);
+  assert.equal(result.momentumConfirmed,false);
+});
+
+test("missing 15m pullback is diagnostic and does not suppress a candidate",()=>{
+  const {ticker,oneHour}=makeSetup("LONG");
+  const altered=makeCandles({count:120,slope:0.1,base:100}).map(c=>({...c,low:c.close-0.001}));
+  const priorEma9=testEma(altered.slice(0,-1).map(c=>c.close),9);
+  altered.at(-1).close=priorEma9+0.05;
+  altered.at(-1).open=priorEma9+0.02;
+  const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
+  const atr=calculateAtr(oneHour,14);
+  const result=evaluateFuturesEntryFilters({
+    ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
+    referencePrice:oneHour.at(-1).close,ema20,atr
+  });
+  assert.equal(result.ok,true);
+  assert.equal(result.pullbackConfirmed,false);
 });

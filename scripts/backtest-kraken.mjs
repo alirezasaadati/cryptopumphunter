@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 const BASE = "https://futures.kraken.com";
 const HOUR = 60 * 60 * 1000;
 const FOUR_HOURS = 4 * HOUR;
+const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const DAYS = Math.max(15, Math.min(90, Number(process.env.BACKTEST_DAYS || 30)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(24, Number(process.env.BACKTEST_SYMBOLS || 5)));
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
@@ -39,13 +40,20 @@ function normalizeCandles(rows, intervalMs) {
 }
 
 async function fetchHistoricalCandles(symbol, resolution, fromMs, toMs, intervalMs) {
-  const url = new URL(BASE + "/api/charts/v1/trade/" + encodeURIComponent(symbol) + "/" + resolution);
-  url.searchParams.set("from", String(Math.floor(fromMs / 1000)));
-  url.searchParams.set("to", String(Math.floor(toMs / 1000)));
-  url.searchParams.set("count", "2000");
-  const data = await getJson(url);
-  if (data.more_candles === true) throw new Error(symbol + " " + resolution + ": Kraken reports more candles than requested; shorten backtest window.");
-  return normalizeCandles(data.candles, intervalMs);
+  const chunkMs = intervalMs * 1800;
+  const combined = [];
+  for (let start = fromMs; start < toMs; start += chunkMs) {
+    const end = Math.min(toMs, start + chunkMs);
+    const url = new URL(BASE + "/api/charts/v1/trade/" + encodeURIComponent(symbol) + "/" + resolution);
+    url.searchParams.set("from", String(Math.floor(start / 1000)));
+    url.searchParams.set("to", String(Math.floor(end / 1000)));
+    url.searchParams.set("count", "1900");
+    const data = await getJson(url);
+    if (data.more_candles === true) throw new Error(symbol + " " + resolution + ": Kraken returned more candles than requested in a chunk.");
+    combined.push(...normalizeCandles(data.candles, intervalMs));
+  }
+  const byTime = new Map(combined.map(c => [c.time,c]));
+  return [...byTime.values()].sort((a,b)=>a.time-b.time);
 }
 
 function historicalChange(candles, index) {
@@ -143,44 +151,71 @@ function summarize(trades) {
 }
 
 async function backtestSymbol(ticker, fromMs, toMs) {
-  const [oneHour,fourHour] = await Promise.all([
+  const [oneHour,fourHour,fifteenMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs,HOUR),
-    fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS)
+    fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS),
+    fetchHistoricalCandles(ticker.symbol,"15m",fromMs,toMs,FIFTEEN_MINUTES)
   ]);
-  if (oneHour.length < 100 || fourHour.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error(ticker.symbol + ": insufficient historical candles (1h=" + oneHour.length + ", 4h=" + fourHour.length + ")");
-  const trades = [];
-  let nextAvailableIndex = 60;
+  if (oneHour.length < 100 || fourHour.length < FUTURES_CONFIG.MIN_CANDLES || fifteenMinute.length < 120) {
+    throw new Error(ticker.symbol + ": insufficient historical candles (1h=" + oneHour.length + ", 4h=" + fourHour.length + ", 15m=" + fifteenMinute.length + ")");
+  }
+  const strategies = {
+    baseline: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {} },
+    current: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {} }
+  };
+  const nextAvailable = { baseline: 60, current: 60 };
+  let fifteenIndex = 0;
   for (let i=60;i<oneHour.length-1;i++) {
-    if (i<nextAvailableIndex) continue;
     const signalBar=oneHour[i], signalCloseTime=signalBar.time+HOUR;
     const closed4h=fourHour.filter(c=>c.time+FOUR_HOURS<=signalCloseTime);
     if (closed4h.length<FUTURES_CONFIG.MIN_CANDLES) continue;
+    while (fifteenIndex < fifteenMinute.length && fifteenMinute[fifteenIndex].time + FIFTEEN_MINUTES <= signalCloseTime) fifteenIndex++;
+    const closed15m=fifteenMinute.slice(Math.max(0,fifteenIndex-120),fifteenIndex);
     const nextBar=oneHour[i+1];
     const tickerAtSignal={
       symbol:ticker.symbol,last:nextBar.open,quoteVolume:Number(ticker.volumeQuote)||0,
       priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}
     };
-    const first=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
-    if (!first?.eligible) continue;
-    const direction=first.side==="LONG"?1:-1;
-    tickerAtSignal.last=nextBar.open*(1+direction*SLIPPAGE_PER_SIDE);
-    const confirmed=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h);
-    if (!confirmed?.eligible) continue;
-    const entryIndex=i+1;
-    const tradeCandles=oneHour.slice(entryIndex,Math.min(oneHour.length,entryIndex+MAX_HOLD_HOURS+1));
-    const trade=simulateTrade({
-      side:confirmed.side,entry:confirmed.entry,stop:confirmed.stop,
-      targets:[confirmed.target1,confirmed.target2,confirmed.target3],
-      candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
-    });
-    trade.symbol=ticker.symbol; trade.score=confirmed.score; trade.signalTime=signalBar.time;
-    trades.push(trade);
-    const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
-    nextAvailableIndex=Math.max(entryIndex+1,exitIndex+1);
+    for (const mode of ["baseline","current"]) {
+      const state=strategies[mode];
+      const candidate = mode === "baseline"
+        ? analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m,{skipEntryFilters:true})
+        : analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m);
+      if (!candidate || (!candidate.eligible && !candidate.experimentalEligible)) {
+        if (mode === "current" && candidate?.rejected &&
+            /قیمت لحظه‌ای|ورود دیرهنگام|حرکت تأییدی/.test(candidate.rejected)) {
+          state.rejected++;
+          state.rejectReasons[candidate.rejected]=(state.rejectReasons[candidate.rejected]||0)+1;
+        }
+        continue;
+      }
+      // Count every hourly signal opportunity before applying trade-overlap rules.
+      // This makes baseline/current signal frequency directly comparable at identical timestamps.
+      state.signals++;
+      if (candidate.eligible) state.valid++; else state.risky++;
+      if (i < nextAvailable[mode]) continue;
+      const direction=candidate.side==="LONG"?1:-1;
+      const entry = candidate.entry * (1 + direction * SLIPPAGE_PER_SIDE);
+      const tradeCandles=oneHour.slice(i+1,Math.min(oneHour.length,i+1+MAX_HOLD_HOURS+1));
+      const trade=simulateTrade({
+        side:candidate.side,entry,stop:candidate.stop,
+        targets:[candidate.target1,candidate.target2,candidate.target3],
+        candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
+      });
+      trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
+      trade.entryModel=mode === "baseline" ? "last_1h_close" : "next_1h_open";
+      state.trades.push(trade);
+      const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
+      nextAvailable[mode]=Math.max(i+1,exitIndex+1);
+    }
   }
-  return {symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,trades,metrics:summarize(trades)};
+  return {
+    symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,candles15m:fifteenMinute.length,
+    baseline:{signals:strategies.baseline.signals,valid:strategies.baseline.valid,risky:strategies.baseline.risky,metrics:summarize(strategies.baseline.trades)},
+    current:{signals:strategies.current.signals,valid:strategies.current.valid,risky:strategies.current.risky,rejected:strategies.current.rejected,rejectReasons:strategies.current.rejectReasons,metrics:summarize(strategies.current.trades)},
+    trades:{baseline:strategies.baseline.trades,current:strategies.current.trades}
+  };
 }
-
 async function main() {
   const endMs=Date.now(), startMs=endMs-DAYS*24*HOUR, fromMs=startMs-15*24*HOUR;
   const tickerData=await getJson(BASE+"/derivatives/api/v3/tickers");
@@ -193,49 +228,53 @@ async function main() {
   const results=[];
   for (const ticker of universe) {
     try { results.push(await backtestSymbol(ticker,fromMs,endMs)); }
-    catch(error) { results.push({symbol:ticker.symbol,error:error.message,trades:[],metrics:summarize([])}); }
+    catch(error) { results.push({symbol:ticker.symbol,error:error.message,baseline:{signals:0,metrics:summarize([])},current:{signals:0,metrics:summarize([])}}); }
   }
-  const allTrades=results.flatMap(r=>r.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const allBaseline=results.flatMap(r=>r.trades?.baseline||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const allCurrent=results.flatMap(r=>r.trades?.current||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const sum=(mode,key)=>results.reduce((n,r)=>n+Number(r[mode]?.[key]||0),0);
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS},
-    settings:{
-      symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,
-      feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
-      maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
-      sameCandleStopTargetRule:"stop first (conservative)",
-      entryRule:"next 1h candle open, adverse slippage applied",
-      funding:"excluded (historical funding series not included)",
-      signalUses:"historical 1h/4h closed candles; 24h change derived from historical bars; no current funding or future candle data"
-    },
-    overall:summarize(allTrades),
-    symbols:results.map(({trades,...rest})=>rest),trades:allTrades
+    settings:{symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,feePerSidePct:FEE_PER_SIDE*100,
+      slippagePerSidePct:SLIPPAGE_PER_SIDE*100,maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
+      sameCandleStopTargetRule:"stop first (conservative)",funding:"excluded",
+      baselineEntry:"signal candle close",currentEntry:"next 1h candle open, adverse slippage applied",
+      currentFilters:"0.35% live/reference drift; 1.25 ATR max distance to 1h EMA20; 1.25 ATR max 15m reclaim extension; 15m momentum/pullback advisory only",
+      universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
+    baseline:{signals:sum("baseline","signals"),valid:sum("baseline","valid"),risky:sum("baseline","risky"),metrics:summarize(allBaseline)},
+    current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent)},
+    signalCountChangePct:sum("baseline","signals")?((sum("current","signals")/sum("baseline","signals"))-1)*100:0,
+    symbols:results.map(({trades,...r})=>r),trades:{baseline:allBaseline,current:allCurrent}
   };
   await mkdir("artifacts",{recursive:true});
-  await writeFile("artifacts/kraken-futures-backtest.json",JSON.stringify(report,null,2));
+  await writeFile("artifacts/kraken-futures-backtest-comparison.json",JSON.stringify(report,null,2));
   const lines=[
-    "# Kraken Futures v3.9.0 — Historical Backtest","",
+    "# Kraken Futures — baseline vs current entry filters","",
     "Period: "+report.period.from+" to "+report.period.to+" ("+DAYS+" days)",
-    "Symbols successfully tested: "+report.settings.symbolsTested+"/"+SYMBOL_LIMIT,
-    "Trades: "+report.overall.trades,
-    "Win rate: "+report.overall.winRatePct.toFixed(2)+"%",
-    "Net result: "+report.overall.netR.toFixed(2)+"R",
-    "Expectancy: "+report.overall.expectancyR.toFixed(3)+"R/trade",
-    "Profit factor: "+(report.overall.profitFactor===null?"n/a":report.overall.profitFactor.toFixed(2)),
-    "Max drawdown: "+report.overall.maxDrawdownR.toFixed(2)+"R",
-    "LONG: "+report.overall.bySide.LONG.trades+" trades | win "+report.overall.bySide.LONG.winRatePct.toFixed(2)+"% | PF "+(report.overall.bySide.LONG.profitFactor===null?"n/a":report.overall.bySide.LONG.profitFactor.toFixed(2))+" | net "+report.overall.bySide.LONG.netR.toFixed(2)+"R | expectancy "+report.overall.bySide.LONG.expectancyR.toFixed(3)+"R",
-    "SHORT: "+report.overall.bySide.SHORT.trades+" trades | win "+report.overall.bySide.SHORT.winRatePct.toFixed(2)+"% | PF "+(report.overall.bySide.SHORT.profitFactor===null?"n/a":report.overall.bySide.SHORT.profitFactor.toFixed(2))+" | net "+report.overall.bySide.SHORT.netR.toFixed(2)+"R | expectancy "+report.overall.bySide.SHORT.expectancyR.toFixed(3)+"R","",
-    "Costs assumed: "+(FEE_PER_SIDE*100).toFixed(3)+"% fee + "+(SLIPPAGE_PER_SIDE*100).toFixed(3)+"% slippage per side.",
-    "Partial exits: 40% at 1.5R, 35% at 2.2R, 25% at 3R. Same-candle stop/target ambiguity is resolved as stop first.",
-    "Historical funding is excluded. Simplified price-based simulation; not a live-fill or profitability guarantee.","",
-    "| Symbol | 1h candles | 4h candles | Trades | Win rate | Net R | Expectancy | Max DD | Error |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---|",
-    ...results.map(r=>"| "+r.symbol+" | "+(r.candles1h||0)+" | "+(r.candles4h||0)+" | "+r.metrics.trades+" | "+r.metrics.winRatePct.toFixed(1)+"% | "+r.metrics.netR.toFixed(2)+" | "+r.metrics.expectancyR.toFixed(3)+" | "+r.metrics.maxDrawdownR.toFixed(2)+" | "+(r.error||"").replaceAll("|","/")+" |")
+    "Symbols successfully tested: "+report.settings.symbolsTested+"/"+SYMBOL_LIMIT,"",
+    "| Metric | Baseline | Current |",
+    "|---|---:|---:|",
+    "| Signals | "+report.baseline.signals+" | "+report.current.signals+" |",
+    "| Valid signals | "+report.baseline.valid+" | "+report.current.valid+" |",
+    "| Risky signals | "+report.baseline.risky+" | "+report.current.risky+" |",
+    "| Executed non-overlapping trades | "+report.baseline.metrics.trades+" | "+report.current.metrics.trades+" |",
+    "| Win rate | "+report.baseline.metrics.winRatePct.toFixed(2)+"% | "+report.current.metrics.winRatePct.toFixed(2)+"% |",
+    "| Expectancy | "+report.baseline.metrics.expectancyR.toFixed(3)+"R | "+report.current.metrics.expectancyR.toFixed(3)+"R |",
+    "| Profit factor | "+(report.baseline.metrics.profitFactor??"n/a")+" | "+(report.current.metrics.profitFactor??"n/a")+" |",
+    "| Net R | "+report.baseline.metrics.netR.toFixed(2)+"R | "+report.current.metrics.netR.toFixed(2)+"R |",
+    "| Max drawdown | "+report.baseline.metrics.maxDrawdownR.toFixed(2)+"R | "+report.current.metrics.maxDrawdownR.toFixed(2)+"R |",
+    "| Current filter rejections | — | "+report.current.rejected+" |",
+    "| Signal count change | — | "+report.signalCountChangePct.toFixed(2)+"% |","",
+    "Assumptions: 0.05% fee and 0.03% slippage per side; 72h maximum hold; 40/35/25 partial exits; stop-first same-candle ambiguity.",
+    "Funding excluded. Current universe is selected using present-day volume and therefore has survivorship/universe bias. This is a comparative simulation, not a guarantee of live fills.","",
+    "| Symbol | Baseline signals | Current signals | Change | Current valid | Current risky | Current rejected |",
+    "|---|---:|---:|---:|---:|---:|---:|",
+    ...results.map(r=>"| "+r.symbol+" | "+(r.baseline?.signals||0)+" | "+(r.current?.signals||0)+" | "+(((r.current?.signals||0)-(r.baseline?.signals||0)))+" | "+(r.current?.valid||0)+" | "+(r.current?.risky||0)+" | "+(r.current?.rejected||0)+" |")
   ];
-  await writeFile("artifacts/kraken-futures-backtest.md",lines.join("\n"));
-  console.log(JSON.stringify({ok:true,overall:report.overall,symbols:report.symbols,artifacts:["artifacts/kraken-futures-backtest.json","artifacts/kraken-futures-backtest.md"]},null,2));
+  await writeFile("artifacts/kraken-futures-backtest-comparison.md",lines.join("\n"));
+  console.log(JSON.stringify({ok:true,baseline:report.baseline,current:report.current,signalCountChangePct:report.signalCountChangePct,symbols:report.symbols},null,2));
 }
-
 if (process.argv[1] && import.meta.url === new URL("file://" + process.argv[1]).href) {
   main().catch(error=>{console.error(error);process.exitCode=1;});
 }

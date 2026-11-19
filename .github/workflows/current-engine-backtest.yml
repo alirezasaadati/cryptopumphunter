@@ -2,7 +2,7 @@ name: Current futures engine backtest
 on:
   workflow_dispatch:
   push:
-    branches: [fix/telegram-kv-quota-fallback]
+    branches: [add-entry-quality-filters]
     paths:
       - "scripts/backtest-kraken.mjs"
       - ".github/workflows/current-engine-backtest.yml"
