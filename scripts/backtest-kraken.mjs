@@ -2,6 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const SYMBOL = "BTCUSDT";
 const INTERVAL = 15 * 60 * 1000;
@@ -11,72 +14,56 @@ const FEE = 0.0005;
 const SLIPPAGE = 0.0003;
 const H4_ORDER = 5;
 constasync function fetchKlines() {
-  const end = Date.now();
-  const start = end - DAYS * 86400000;
-  const fromDate = new Date(start);
-  const now = new Date(end);
-  const months = [];
-  let y = fromDate.getUTCFullYear(), m = fromDate.getUTCMonth() + 1;
-  while (y < now.getUTCFullYear() || (y === now.getUTCFullYear() && m <= now.getUTCMonth())) {
-    months.push({y,m});
-    m++;
-    if (m===13) {m=1;y++;}
+  const end=Date.now(), start=end-DAYS*86400000;
+  const now=new Date(end), from=new Date(start), rows=[];
+  const months=[];
+  let y=from.getUTCFullYear(),m=from.getUTCMonth()+1;
+  while(y<now.getUTCFullYear()||(y===now.getUTCFullYear()&&m<=now.getUTCMonth()+1)){
+    months.push({y,m}); if(++m===13){m=1;y++;}
   }
-  const rows = [];
-  async function downloadCsv(url) {
-    const response = await fetch(url, {headers:{accept:"application/zip"},signal:AbortSignal.timeout(45000)});
-    if (response.status===404) return null;
-    if (!response.ok) throw new Error("Archive HTTP "+response.status+" for "+url);
-    const buffer=Buffer.from(await response.arrayBuffer());
-    const path=join(tmpdir(),"btc-klines-"+Date.now()+"-"+Math.random().toString(16).slice(2)+".zip");
-    const {writeFile:writeTmp,unlink}=await import("node:fs/promises");
-    await writeTmp(path,buffer);
-    try { return execFileSync("unzip",["-p",path],{maxBuffer:80*1024*1024,encoding:"utf8"}); }
-    finally { await unlink(path).catch(()=>{}); }
+  async function csvFromZip(url){
+    const res=await fetch(url,{signal:AbortSignal.timeout(45000)});
+    if(res.status===404)return null;
+    if(!res.ok)throw new Error("Archive HTTP "+res.status+" "+url);
+    const path=join(tmpdir(),"btc-"+Date.now()+"-"+Math.random().toString(16).slice(2)+".zip");
+    const {writeFile:wt,unlink}=await import("node:fs/promises");
+    await wt(path,Buffer.from(await res.arrayBuffer()));
+    try{return execFileSync("unzip",["-p",path],{encoding:"utf8",maxBuffer:80*1024*1024});}
+    finally{await unlink(path).catch(()=>{});}
   }
-  function parseCsv(csv) {
-    if (!csv) return;
-    for (const line of csv.trim().split(/\r?\n/)) {
-      if (!line) continue;
-      const x=line.split(",");
-      if (x.length<7) continue;
-      let t=Number(x[0]);
-      if (t>1e14) t=Math.floor(t/1000);
-      const rawCloseTime=Number(x[6]);
-      const c={time:t,open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+x[5],closeTime:rawCloseTime>1e14?Math.floor(rawCloseTime/1000):rawCloseTime};
-      if (c.time>=start && c.closeTime<end && Number.isFinite(c.close) && c.close>0) rows.push(c);
+  function parse(csv){
+    if(!csv)return;
+    for(const line of csv.trim().split(/\r?\n/)){
+      const x=line.split(","); if(x.length<7)continue;
+      let t=Number(x[0]),ct=Number(x[6]);
+      if(t>1e14)t=Math.floor(t/1000); if(ct>1e14)ct=Math.floor(ct/1000);
+      const c={time:t,open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+x[5],closeTime:ct};
+      if(t>=start&&ct<end&&Number.isFinite(c.close)&&c.close>0)rows.push(c);
     }
   }
-  for (const {y,m} of months) {
+  for(const {y,m} of months){
     const mm=String(m).padStart(2,"0");
     const name=SYMBOL+"-15m-"+y+"-"+mm+".zip";
     const url="https://data.binance.vision/data/spot/monthly/klines/"+SYMBOL+"/15m/"+name;
-    const csv=await downloadCsv(url);
-    if (csv===null) {
-      const daysInMonth=new Date(Date.UTC(y,m,0)).getUTCDate();
-      for(let d=1;d<=daysInMonth;d++) {
+    const csv=await csvFromZip(url);
+    if(csv!==null)parse(csv);
+    else{
+      const days=new Date(Date.UTC(y,m,0)).getUTCDate();
+      for(let d=1;d<=days;d++){
         const date=y+"-"+mm+"-"+String(d).padStart(2,"0");
-        const daily="https://data.binance.vision/data/spot/daily/klines/"+SYMBOL+"/15m/"+SYMBOL+"-15m-"+date+".zip";
-        parseCsv(await downloadCsv(daily));
+        parse(await csvFromZip("https://data.binance.vision/data/spot/daily/klines/"+SYMBOL+"/15m/"+SYMBOL+"-15m-"+date+".zip"));
       }
-    } else parseCsv(csv);
-    await new Promise(r=>setTimeout(r,100));
-  }
-  const cy=now.getUTCFullYear(), cm=now.getUTCMonth()+1;
-  const lastDay=new Date(Date.UTC(cy,cm-1,now.getUTCDate()-1)).getUTCDate();
-  const cmm=String(cm).padStart(2,"0");
-  for(let d=1;d<=lastDay;d++) {
-    const date=cy+"-"+cmm+"-"+String(d).padStart(2,"0");
-    const url="https://data.binance.vision/data/spot/daily/klines/"+SYMBOL+"/15m/"+SYMBOL+"-15m-"+date+".zip";
-    parseCsv(await downloadCsv(url));
+    }
     await new Promise(r=>setTimeout(r,80));
   }
-  const map=new Map(rows.map(x=>[x.time,x]));
-  return [...map.values()].sort((a,b)=>a.time-b.time);
-} 120));
+  // Current month: daily archives only, through yesterday UTC.
+  const cy=now.getUTCFullYear(),cm=now.getUTCMonth()+1,lastDay=now.getUTCDate()-1;
+  for(let d=1;d<=lastDay;d++){
+    const date=cy+"-"+String(cm).padStart(2,"0")+"-"+String(d).padStart(2,"0");
+    parse(await csvFromZip("https://data.binance.vision/data/spot/daily/klines/"+SYMBOL+"/15m/"+SYMBOL+"-15m-"+date+".zip"));
+    await new Promise(r=>setTimeout(r,80));
   }
-  const map = new Map(rows.map(x => [x.time, x]));
-  return [...map.values()].sort((a,b)=>a.time-b.time);
+  return [...new Map(rows.map(c=>[c.time,c])).values()].sort((a,b)=>a.time-b.time);
 }
 
 function aggregate4h(m15) {
