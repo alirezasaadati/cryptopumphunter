@@ -26,11 +26,11 @@ async function load5m(){
 function aggregate(xs,ms,count){const groups=new Map();for(const c of xs){const t=Math.floor(c.time/ms)*ms;if(!groups.has(t))groups.set(t,[]);groups.get(t).push(c);}
  return [...groups.entries()].sort((a,b)=>a[0]-b[0]).filter(([,v])=>v.length===count).map(([time,v])=>({time,open:v[0].open,high:Math.max(...v.map(x=>x.high)),low:Math.min(...v.map(x=>x.low)),close:v.at(-1).close,volume:v.reduce((s,x)=>s+x.volume,0)}));}
 function fill(price,dir,isEntry){return price*(1+(isEntry?dir:-dir)*SLIPPAGE);}
-function runPair(htf,ltf,label,htfMs,ltfMs){
+function runPair(htf,ltf,label,htfMs,ltfMs,engineConfig={}){
  let hp=0,trades=[],rejected={},signals=0,busyUntil=-1,lastKey="";
  for(let i=60;i<ltf.length-1;i++){
   const closeTime=ltf[i].time+ltfMs;while(hp<htf.length&&htf[hp].time+htfMs<=closeTime)hp++;if(hp<60)continue;
-  const result=evaluateEmaPullback({symbol:SYMBOL,higherTimeframe:htf.slice(Math.max(0,hp-100),hp),entryTimeframe:ltf.slice(Math.max(0,i-119),i+1)});
+  const result=evaluateEmaPullback({symbol:SYMBOL,higherTimeframe:htf.slice(Math.max(0,hp-100),hp),entryTimeframe:ltf.slice(Math.max(0,i-119),i+1),config:engineConfig});
   if(!result.eligible){rejected[result.rejected]=(rejected[result.rejected]||0)+1;continue;}
   const s=result.signal,key=s.side+"|"+s.time;if(key===lastKey)continue;lastKey=key;signals++;if(i+1<=busyUntil)continue;
   const dir=s.side==="LONG"?1:-1,first=ltf[i+1],entry=fill(first.open,dir,true),stop=s.stop,risk=dir*(entry-stop);if(!(risk>0))continue;
@@ -57,9 +57,14 @@ function runPair(htf,ltf,label,htfMs,ltfMs){
 async function main(){
  const m5=await load5m();if(m5.length<100000)throw new Error("Incomplete M5 dataset: "+m5.length);
  const m15=aggregate(m5,15*60000,3),h1=aggregate(m5,60*60000,12),h4=aggregate(m5,4*60*60000,48);
- const results=[runPair(h1,m15,"H1 trend + M15 entry",60*60000,15*60000),runPair(h4,m5,"H4 trend + M5 entry",4*60*60000,FIVE)];
+ const results=[
+  runPair(h1,m15,"H1 trend + M15 entry | trigger-volume ON",60*60000,15*60000,{REQUIRE_TRIGGER_VOLUME_EXPANSION:true}),
+  runPair(h1,m15,"H1 trend + M15 entry | trigger-volume OFF",60*60000,15*60000,{REQUIRE_TRIGGER_VOLUME_EXPANSION:false}),
+  runPair(h4,m5,"H4 trend + M5 entry | trigger-volume ON",4*60*60000,FIVE,{REQUIRE_TRIGGER_VOLUME_EXPANSION:true}),
+  runPair(h4,m5,"H4 trend + M5 entry | trigger-volume OFF",4*60*60000,FIVE,{REQUIRE_TRIGGER_VOLUME_EXPANSION:false})
+ ];
  const report={symbol:SYMBOL,period:{start:new Date(START).toISOString(),end:new Date(END).toISOString()},candles:{m5:m5.length,m15:m15.length,h1:h1.length,h4:h4.length},
-  assumptions:{trend:"HTF close vs EMA50 and EMA20 vs EMA50",entry:"pullback volume contraction + confirmed pivot or EMA20-50 band + engulfing/pinbar + trigger volume expansion",
+  assumptions:{trend:"HTF close vs EMA50 and EMA20 vs EMA50",entry:"pullback volume contraction + confirmed pivot or EMA20-50 band + engulfing/pinbar; compare trigger-volume expansion ON vs OFF",
    execution:"next entry timeframe open; 0.03% slippage each side; 0.05% fee each side; 50% exit at 2R and 50% at 3R; stop-first on ambiguous candles; max hold 7 days; one position at a time",
    limitation:"No funding, spread, market impact or historical news filter."},results};
  await mkdir("artifacts",{recursive:true});await writeFile("artifacts/ema-pullback-volume-backtest.json",JSON.stringify(report,null,2));
