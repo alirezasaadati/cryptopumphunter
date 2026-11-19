@@ -31,7 +31,9 @@ export function futuresAlertStorageKey(chatId, fingerprint) {
 export function formatFuturesSignalAlert(signal, index = 1) {
   const side = signal?.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
   const label = signal?.tier === "EXPERIMENTAL" ? "🟠 سیگنال پر ریسک" : "🟢 سیگنال معتبر";
-  return `${label}\n\n` +
+  const score = Number(signal?.score);
+  const scoreLine = Number.isFinite(score) ? `⭐ امتیاز سیگنال: <b>${Math.round(score)}/100</b>\n\n` : "";
+  return `${label}\n\n${scoreLine}` +
     `نماد: <b>${escapeTelegramHtml(formatFuturesSymbol(signal?.symbol))}</b>\n\n` +
     `جهت معامله: ${side}\n\n` +
     `قیمت ورود: <b>${formatSignalPrice(signal?.entry)}</b>\n\n` +
