@@ -9,6 +9,8 @@ const START=Date.UTC(2025,10,1);
 const END=Date.UTC(2026,10,1);
 const FIVE=5*60_000, FIFTEEN=15*60_000, FOUR_H=4*60*60_000;
 const FEE=0.0005, SLIPPAGE=0.0003, MAX_HOLD_BARS=72*12;
+const LTF_HISTORY_BARS=240;
+const ENTRY_WAIT_BARS=12;
 const WEIGHTS=[0.40,0.35,0.25];
 
 function monthKeys(){
@@ -65,15 +67,31 @@ function aggregate(candles,interval,requiredCount){
 function adverseFill(price,dir,entry=false){return price*(1+(entry?dir:-dir)*SLIPPAGE);}
 function simulate(signal,bars,startIndex){
   const dir=signal.side==="LONG"?1:-1;
-  const entry=adverseFill(bars[startIndex].open,dir,true);
+  const desiredEntry=signal.entry;
+  const fillEnd=Math.min(bars.length-1,startIndex+ENTRY_WAIT_BARS-1);
+  let entryIndex=-1,rawEntry=null;
+  // Model an OB/FVG midpoint limit order, not an unconditional next-open entry.
+  for(let i=startIndex;i<=fillEnd;i++){
+    const b=bars[i];
+    const touched=dir===1?b.low<=desiredEntry:b.high>=desiredEntry;
+    if(!touched)continue;
+    // A gap through the limit receives the better opening price.
+    rawEntry=dir===1?Math.min(desiredEntry,b.open):Math.max(desiredEntry,b.open);
+    entryIndex=i;
+    break;
+  }
+  if(entryIndex<0)return{unfilled:true,side:signal.side,desiredEntry,
+    expiryTime:bars[fillEnd].time};
+  const entry=adverseFill(rawEntry,dir,true);
   const stop=signal.stop;
   const risk=dir*(entry-stop);
   if(!(risk>0))return null;
   const targets=[signal.target1,signal.target2,signal.target3];
   let remaining=1,netR=0,targetHits=0,exitReason="TIME_EXIT",exitTime=null;
-  const end=Math.min(bars.length-1,startIndex+MAX_HOLD_BARS);
-  for(let i=startIndex;i<=end&&remaining>1e-9;i++){
+  const end=Math.min(bars.length-1,entryIndex+MAX_HOLD_BARS);
+  for(let i=entryIndex;i<=end&&remaining>1e-9;i++){
     const b=bars[i];
+    // Conservative same-candle treatment: a touched stop wins after entry fill.
     const gap=dir===1?b.open<=stop:b.open>=stop;
     const touched=dir===1?b.low<=stop:b.high>=stop;
     if(gap||touched){
@@ -96,8 +114,8 @@ function simulate(signal,bars,startIndex){
       remaining=0;exitReason="TIME_EXIT";exitTime=b.time;
     }
   }
-  return{side:signal.side,entry,stop,targets,netR,targetHits,exitReason,
-    entryTime:bars[startIndex].time,exitTime,score:signal.score};
+  return{unfilled:false,side:signal.side,entry,desiredEntry,stop,targets,netR,targetHits,exitReason,
+    entryTime:bars[entryIndex].time,exitTime,score:signal.score,entryDelayBars:entryIndex-startIndex};
 }
 function metrics(trades){
   const wins=trades.filter(t=>t.netR>0),losses=trades.filter(t=>t.netR<0);
@@ -115,10 +133,10 @@ async function main(){
   const h4=aggregate(m15,FOUR_H,16);
   if(m5.length<100000||m15.length<30000||h4.length<2000)
     throw new Error("Unexpectedly incomplete data: 5m="+m5.length+", 15m="+m15.length+", H4="+h4.length);
-  let p15=0,p4=0,signals=0,rejected=0,overlapSkipped=0;
+  let p15=0,p4=0,signals=0,rejected=0,overlapSkipped=0,unfilled=0;
   let openUntil=-1,lastSignalKey="",lastEvaluated15=-1;
   const trades=[],rejectReasons={};
-  for(let i=60;i<m5.length-1;i++){
+  for(let i=LTF_HISTORY_BARS;i<m5.length-1;i++){
     const now=m5[i].time+FIVE;
     while(p15<m15.length&&m15[p15].time+FIFTEEN<=now)p15++;
     while(p4<h4.length&&h4[p4].time+FOUR_H<=now)p4++;
@@ -129,7 +147,7 @@ async function main(){
       symbol:SYMBOL,
       higherTimeframe:h4.slice(Math.max(0,p4-100),p4),
       structureTimeframe:m15.slice(Math.max(0,p15-120),p15),
-      entryTimeframe:m5.slice(Math.max(0,i-64),i+1),
+      entryTimeframe:m5.slice(Math.max(0,i-LTF_HISTORY_BARS+1),i+1),
       // News is deliberately neutralized for this technical-only test; news performance is NOT tested. // CHOCH v2: reversal-only trigger.
       news:{status:"CLEAR",highImpact:false,score:100,reason:"News layer bypassed: no historical news archive in this test."},
       riskConfig:{maxRiskPct:0.04}
@@ -146,6 +164,7 @@ async function main(){
     if(nextIndex<=openUntil){overlapSkipped++;continue;}
     const trade=simulate(s,m5,nextIndex);
     if(!trade)continue;
+    if(trade.unfilled){unfilled++;continue;}
     trade.signalTime=now;trade.bosTime=d.bos?.time;trade.chochTime=d.choch?.time;
     trades.push(trade);
     const exitIndex=m5.findIndex(c=>c.time===trade.exitTime);
@@ -161,11 +180,11 @@ async function main(){
     period:{from:new Date(START).toISOString(),to:new Date(END).toISOString(),days:365},
     data:{m5:m5.length,m15:m15.length,h4:h4.length,missingM5:0,missingM15:0},
     assumptions:{higherTimeframe:"4h",structureTimeframe:"15m",entryTimeframe:"5m",
-      entry:"next 5m candle open with adverse slippage",feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,
+      entry:"OB/FVG midpoint limit; wait up to 12 M5 bars; favorable gap fills at open; adverse slippage applied",entryWaitBars:ENTRY_WAIT_BARS,ltfHistoryBars:LTF_HISTORY_BARS,feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,
       maxHoldHours:72,partialTargetsPct:[40,35,25],sameCandleStopAndTarget:"stop first",
       funding:"not applicable (spot)",newsFilter:"bypassed with CLEAR; historical news not tested",
       riskMaxPct:4,onePositionAtATime:true,lookahead:"confirmed pivots only; closed candles only"},
-    counts:{signals,rejected,overlapSkipped,executedTrades:trades.length,rejectionReasons:rejectReasons},
+    counts:{signals,rejected,overlapSkipped,unfilled,executedTrades:trades.length,rejectionReasons:rejectReasons},
     overall:metrics(trades),bySide,byMonth:Object.fromEntries(Object.entries(byMonth).map(([k,v])=>[k,metrics(v)])),
     trades
   };
@@ -182,7 +201,7 @@ async function main(){
     "- News layer bypassed as CLEAR; this is technical-only and does not validate news filter","",
     "## Results","",
     "| Metric | Result |","|---|---:|",
-    "| Signals | "+signals+" |","| Rejected evaluations | "+rejected+" |","| Skipped (position open) | "+overlapSkipped+" |",
+    "| Signals | "+signals+" |","| Rejected evaluations | "+rejected+" |","| Skipped (position open) | "+overlapSkipped+" |","| Unfilled limit entries | "+unfilled+" |",
     "| Executed trades | "+trades.length+" |","| Win rate | "+pct(report.overall.winRatePct)+" |",
     "| Net result | "+report.overall.netR.toFixed(2)+"R |","| Expectancy | "+report.overall.expectancyR.toFixed(3)+"R |",
     "| Profit factor | "+(report.overall.profitFactor===null?"n/a":report.overall.profitFactor.toFixed(3))+" |","| Max drawdown | "+report.overall.maxDrawdownR.toFixed(2)+"R |","",
