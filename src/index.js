@@ -273,9 +273,9 @@ async function fetchJson(url, label) {
 async function telegram(method, env, body) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN تنظیم نشده است.");
 
-  // Protect all bot-authored messages (including direct futures signals) from
-  // Telegram's native forwarding and saving actions where the client supports it.
-  const protectedBody = method === "sendMessage"
+  // Protect messages for regular users, while allowing the owner to copy
+  // their own bot messages. Archive-channel posts remain protected.
+  const protectedBody = method === "sendMessage" && !isOwner(body.chat_id, env)
     ? { ...body, protect_content: true }
     : body;
 
@@ -418,12 +418,21 @@ async function sendArchiveAccessLink(env, userId) {
   if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ دسترسی شما به آرشیو فعال نیست.",BACK_MENU);
   try {
     const key="signal-archive:join-request-link";
-    let link=env.APP_KV?await env.APP_KV.get(key):null;
+    let link=null;
+    // KV is only a cache here: a temporary KV read/write failure must not
+    // prevent Telegram from creating and delivering a valid invite link.
+    if(env.APP_KV){
+      try { link=await env.APP_KV.get(key); }
+      catch(error){ console.error("Archive invite cache read failed:",String(error?.message||error)); }
+    }
     if(!link){
       const result=await telegram("createChatInviteLink",env,{chat_id:channelId,name:"Crypto Pump Hunter members",creates_join_request:true});
       link=result?.result?.invite_link;
       if(!link)throw new Error("Telegram did not return invite link");
-      if(env.APP_KV)await env.APP_KV.put(key,link);
+      if(env.APP_KV){
+        try { await env.APP_KV.put(key,link); }
+        catch(error){ console.error("Archive invite cache write failed:",String(error?.message||error)); }
+      }
     }
     await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link,BACK_MENU);
   } catch(error) {
