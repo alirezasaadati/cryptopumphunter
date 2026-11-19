@@ -183,7 +183,7 @@ test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
 });
 
 
-test("relaxed 1h trend with neutral 4h context is tracked as experimental, never production",()=>{
+test("relaxed 1h trend with neutral 4h context is rejected with no experimental signal path",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({
     time:Date.now()-(120-i)*4*60*60*1000,
@@ -191,9 +191,7 @@ test("relaxed 1h trend with neutral 4h context is tracked as experimental, never
   }));
   const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
   assert.equal(result.eligible,false);
-  assert.equal(result.experimentalEligible,true,JSON.stringify(result));
-  assert.ok(result.score>=55);
-  assert.ok(result.stop<result.entry && result.target1>result.entry);
+  assert.equal(result.experimentalEligible,undefined);
 });
 
 test("risk distance outside the original 0.2%-8% band is rejected",()=>{
