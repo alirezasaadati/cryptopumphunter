@@ -293,7 +293,7 @@ async function telegram(method, env, body) {
   return data;
 }
 
-async function sendMessage(env, chatId, text, replyMarkup = null) {
+async function sendMessage(env, chatId, text, replyMarkup = null, parseMode = null) {
   const body = {
     chat_id: chatId,
     text,
@@ -301,6 +301,7 @@ async function sendMessage(env, chatId, text, replyMarkup = null) {
   };
 
   if (replyMarkup) body.reply_markup = replyMarkup;
+  if (parseMode) body.parse_mode = parseMode;
 
   return telegram("sendMessage", env, body);
 }
@@ -1502,21 +1503,32 @@ function formatPrice(value) {
 }
 
 function formatFuturesSignal(item, index = 1) {
-  const sideLabel = item.side === "LONG" ? "🟢 لانگ" : "🔴 شورت";
-  return `🎯 سیگنال ${Number(index).toLocaleString("fa-IR")}\n` +
-    "━━━━━━━━━━━━━━━━━━\n" +
-    `🪙 نماد: ${formatFuturesSymbol(item.symbol)}\n` +
-    `🧭 جهت معامله: ${sideLabel}\n` +
-    `📍 ورود: ${formatPrice(item.entry)}\n` +
-    `🛑 حد ضرر: ${formatPrice(item.stop)}\n` +
-    `🎯 تارگت ۱: ${formatPrice(item.target1)}\n` +
-    `🎯 تارگت ۲: ${formatPrice(item.target2)}\n` +
-    `🎯 تارگت ۳: ${formatPrice(item.target3)}\n\n` +
-    "⚠️ سیگنال تحلیلی است؛ سفارش واقعی ثبت نمی‌شود.";
+  const sideLabel = item.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
+  const label = item.tier === "EXPERIMENTAL" ? "🟠 سیگنال پر ریسک" : "🟢 سیگنال معتبر";
+  const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol));
+  return `${label}\n\n` +
+    `نماد: <b>${symbol}</b>\n\n` +
+    `جهت معامله: ${sideLabel}\n\n` +
+    `قیمت ورود: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
+    `🎯 تارگت اول: <b>${formatSignalPrice(item.target1)}</b>\n` +
+    `🎯 تارگت دوم: <b>${formatSignalPrice(item.target2)}</b>\n` +
+    `🎯 تارگت سوم: <b>${formatSignalPrice(item.target3)}</b>\n\n` +
+    `⛔ حد ضرر: <b>${formatSignalPrice(item.stop)}</b>`;
+}
+
+function formatSignalPrice(value) {
+  const price = Number(value);
+  return Number.isFinite(price)
+    ? price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 8 })
+    : "—";
+}
+
+function escapeTelegramHtml(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function formatFuturesSymbol(symbol) {
-  return String(symbol || "—").toUpperCase().replace(/\.P$/, "").replace(/[-_/]?USDT$/, "");
+  return String(symbol || "—").toUpperCase().replace(/^PF_/, "").replace(/\.P$/, "").replace(/[-_/]?(?:USDT|USD)$/, "");
 }
 
 
@@ -1565,7 +1577,7 @@ async function registerTrackedSignal(env,chatId,signal){
   await writeTradeList(env,FUTURES_OPEN_KEY,open.slice(0,300));
   return true
 }
-async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText,replyMarkup=null){
+async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
   if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
   if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
   if(!env.APP_KV)throw new Error("APP_KV is required for durable signal delivery.");
@@ -1577,14 +1589,14 @@ async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText
     throw new Error(`Signal delivery requires reconciliation (${record.status}): ${signal.symbol} ${signal.id}`);
   }
   if(!record){
-    record={version:1,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,signal,messageText,replyMarkup,status:"QUEUED",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+    record={version:1,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,signal,messageText,replyMarkup,parseMode,status:"QUEUED",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     await env.APP_KV.put(key,JSON.stringify(record));
   }
   if(signalOutboxAction(record)==="send"){
     record={...record,status:"SENDING",attemptedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     await env.APP_KV.put(key,JSON.stringify(record));
     try{
-      const response=await sendMessage(env,chatId,messageText,replyMarkup);
+      const response=await sendMessage(env,chatId,messageText,replyMarkup,parseMode);
       record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
       await env.APP_KV.put(key,JSON.stringify(record));
     }catch(error){
@@ -1600,7 +1612,7 @@ async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText
   return{delivered:true,duplicate:false};
 }
 
-async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMarkup=null){
+async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
   if(!signal?.id)throw new Error("Signal id is required for coordinated delivery.");
   if(!env.SIGNAL_DELIVERY)throw new Error("SIGNAL_DELIVERY Durable Object binding is required; refusing an uncoordinated send.");
   const key=signalOutboxKey(chatId,signal.id);
@@ -1610,7 +1622,7 @@ async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMa
   const response=await stub.fetch("https://signal-delivery.internal/deliver",{
     method:"POST",
     headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},
-    body:JSON.stringify({chatId:String(chatId),signal,messageText,replyMarkup})
+    body:JSON.stringify({chatId:String(chatId),signal,messageText,replyMarkup,parseMode})
   });
   let payload;
   try{payload=await response.json()}catch{throw new Error("Signal delivery coordinator returned an unreadable response.");}
@@ -1662,7 +1674,7 @@ export class SignalDeliveryCoordinator {
           return Response.json({ok:true,released:true});
         }
         if(url.pathname==="/deliver"){
-          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null);
+          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null,payload.parseMode??"HTML");
           return Response.json({ok:true,result});
         }
         if(!this.env.APP_KV)throw new Error("APP_KV is required for reconciliation.");
@@ -1683,7 +1695,7 @@ export class SignalDeliveryCoordinator {
           if(!["SENDING","UNCERTAIN"].includes(record.status))throw new Error("Only SENDING or UNCERTAIN records can be retried.");
           if(!record.signal||typeof record.messageText!=="string")throw new Error("This older outbox record has no retry payload.");
           await this.env.APP_KV.put(key,JSON.stringify({...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
-          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,chatId,record.signal,record.messageText,record.replyMarkup??null);
+          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,chatId,record.signal,record.messageText,record.replyMarkup??null,record.parseMode??"HTML");
           return Response.json({ok:true,result});
         }
         throw new Error("Unknown reconciliation action.");
@@ -2014,16 +2026,8 @@ async function runFuturesSignalScan(env, options = {}) {
 }
 
 function formatExperimentalFuturesSignal(item) {
-  const sideLabel = item.side === "LONG" ? "🟢 لانگ" : "🔴 شورت";
-  return "🧪 سیگنال آزمایشی فیوچرز — فقط Paper Trading\n" +
-    "━━━━━━━━━━━━━━━━━━\n" +
-    `🪙 نماد: ${formatFuturesSymbol(item.symbol)}\n` +
-    `🧭 جهت: ${sideLabel}\n` +
-    `⭐ امتیاز: ${item.score}/100\n` +
-    `📍 ورود فرضی: ${formatPrice(item.entry)}\n` +
-    `🛑 حد ضرر: ${formatPrice(item.stop)}\n` +
-    `🎯 اهداف: ${formatPrice(item.target1)} / ${formatPrice(item.target2)} / ${formatPrice(item.target3)}\n\n` +
-    "این مورد از فیلتر آزمایشی عبور کرده، نه فیلتر اصلی؛ برای معامله واقعی استفاده نکن.";
+  return formatFuturesSignal({ ...item, tier: "EXPERIMENTAL" }) +
+    "\n\n⚠️ این سیگنال فقط برای ارزیابی آزمایشی است؛ برای معامله واقعی استفاده نکن.";
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
