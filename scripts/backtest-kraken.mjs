@@ -5,6 +5,7 @@ const BASE = "https://futures.kraken.com";
 const HOUR = 60 * 60 * 1000;
 const FOUR_HOURS = 4 * HOUR;
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
+const ONE_MINUTE = 60 * 1000;
 const DAYS = Math.max(15, Math.min(90, Number(process.env.BACKTEST_DAYS || 30)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(24, Number(process.env.BACKTEST_SYMBOLS || 5)));
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
@@ -54,6 +55,91 @@ async function fetchHistoricalCandles(symbol, resolution, fromMs, toMs, interval
   }
   const byTime = new Map(combined.map(c => [c.time,c]));
   return [...byTime.values()].sort((a,b)=>a.time-b.time);
+}
+
+async function mapLimit(items, limit, mapper) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({length: Math.min(limit, items.length)}, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      try { results[index] = await mapper(items[index], index); }
+      catch (error) { results[index] = { error: error.message }; }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function excursionForWindow(trade, candles, minutes) {
+  const cutoff = trade.entryTime + minutes * 60 * 1000;
+  const bars = candles.filter(c => c.time >= trade.entryTime && c.time < cutoff);
+  if (!bars.length) return null;
+  const high = Math.max(...bars.map(c => c.high));
+  const low = Math.min(...bars.map(c => c.low));
+  const favorable = trade.side === "LONG" ? high - trade.entry : trade.entry - low;
+  const adverse = trade.side === "LONG" ? trade.entry - low : high - trade.entry;
+  return {
+    bars: bars.length,
+    mfeR: Math.max(0, favorable / trade.risk),
+    maeR: Math.max(0, adverse / trade.risk),
+    mfePct: Math.max(0, favorable / trade.entry * 100),
+    maePct: Math.max(0, adverse / trade.entry * 100)
+  };
+}
+
+function summarizeExcursions(trades) {
+  const windows = [1,5,15,30,60];
+  const summarizeValues = values => {
+    const sorted = values.filter(Number.isFinite).sort((a,b)=>a-b);
+    if (!sorted.length) return {count:0,mean:null,median:null,p75:null,max:null};
+    const at = p => sorted[Math.min(sorted.length-1,Math.ceil(sorted.length*p)-1)];
+    return {count:sorted.length,mean:sorted.reduce((a,b)=>a+b,0)/sorted.length,median:at(0.5),p75:at(0.75),max:sorted[sorted.length-1]};
+  };
+  return Object.fromEntries(windows.map(minutes => {
+    const rows = trades.map(t => t.excursions?.[minutes]).filter(Boolean);
+    return [minutes + "m", {
+      sample: rows.length,
+      maeR: summarizeValues(rows.map(x=>x.maeR)),
+      mfeR: summarizeValues(rows.map(x=>x.mfeR)),
+      adverseAtLeast025R: rows.filter(x=>x.maeR>=0.25).length,
+      adverseAtLeast05R: rows.filter(x=>x.maeR>=0.5).length,
+      favorableAtLeast025R: rows.filter(x=>x.mfeR>=0.25).length
+    }];
+  }));
+}
+
+async function addMinuteExcursions(trades) {
+  const requests = trades.map((trade,index)=>({trade,index}));
+  const rows = await mapLimit(requests, 5, async ({trade,index}) => {
+    const candles = await fetchHistoricalCandles(trade.symbol, "1m", trade.entryTime, trade.entryTime + 61 * ONE_MINUTE, ONE_MINUTE);
+    if (!candles.length) throw new Error("No 1m candles returned");
+    const excursions = Object.fromEntries([1,5,15,30,60].map(m => [m, excursionForWindow(trade,candles,m)]));
+    let firstPositive = null, firstNegative = null, ambiguousThresholdMinute = false;
+    for (const bar of candles) {
+      const positive = trade.side === "LONG"
+        ? bar.high >= trade.entry + 0.25 * trade.risk
+        : bar.low <= trade.entry - 0.25 * trade.risk;
+      const negative = trade.side === "LONG"
+        ? bar.low <= trade.entry - 0.25 * trade.risk
+        : bar.high >= trade.entry + 0.25 * trade.risk;
+      if (positive && negative) ambiguousThresholdMinute = true;
+      if (positive && firstPositive === null) firstPositive = Math.max(0,(bar.time-trade.entryTime)/60000);
+      if (negative && firstNegative === null) firstNegative = Math.max(0,(bar.time-trade.entryTime)/60000);
+    }
+    return {index,excursions,firstPositive025RMinute:firstPositive,firstNegative025RMinute:firstNegative,ambiguousThresholdMinute,candleCount:candles.length};
+  });
+  let successful = 0;
+  for (const row of rows) {
+    if (row.error) continue;
+    const trade = trades[row.index];
+    Object.assign(trade,{excursions:row.excursions,firstPositive025RMinute:row.firstPositive025RMinute,
+      firstNegative025RMinute:row.firstNegative025RMinute,ambiguousThresholdMinute:row.ambiguousThresholdMinute,
+      minuteCandlesLoaded:row.candleCount});
+    successful++;
+  }
+  const failed = rows.map((r,i)=>r.error?{symbol:trades[i].symbol,entryTime:new Date(trades[i].entryTime).toISOString(),error:r.error}:null).filter(Boolean);
+  return {requested:trades.length,loaded:successful,failed};
 }
 
 function historicalChange(candles, index) {
@@ -244,6 +330,30 @@ async function main() {
   }
   const allBaseline=results.flatMap(r=>r.trades?.baseline||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const allCurrent=results.flatMap(r=>r.trades?.current||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const minuteDataStatus = await addMinuteExcursions(allCurrent);
+  const excursionAnalysis = {
+    dataStatus: minuteDataStatus,
+    all: summarizeExcursions(allCurrent),
+    bySide: {
+      LONG: summarizeExcursions(allCurrent.filter(t=>t.side==="LONG")),
+      SHORT: summarizeExcursions(allCurrent.filter(t=>t.side==="SHORT"))
+    },
+    byTp1Outcome: {
+      touchedTP1: summarizeExcursions(allCurrent.filter(t=>t.target1Hit)),
+      neverTouchedTP1: summarizeExcursions(allCurrent.filter(t=>!t.target1Hit))
+    },
+    thresholdTiming: {
+      firstPositive025R: {
+        reached: allCurrent.filter(t=>t.firstPositive025RMinute!==null && t.firstPositive025RMinute!==undefined).length,
+        medianMinute: (()=>{const v=allCurrent.map(t=>t.firstPositive025RMinute).filter(Number.isFinite).sort((a,b)=>a-b);return v.length?v[Math.floor(v.length/2)]:null;})()
+      },
+      firstNegative025R: {
+        reached: allCurrent.filter(t=>t.firstNegative025RMinute!==null && t.firstNegative025RMinute!==undefined).length,
+        medianMinute: (()=>{const v=allCurrent.map(t=>t.firstNegative025RMinute).filter(Number.isFinite).sort((a,b)=>a-b);return v.length?v[Math.floor(v.length/2)]:null;})()
+      },
+      ambiguousMinuteBars: allCurrent.filter(t=>t.ambiguousThresholdMinute).length
+    }
+  };
   const sum=(mode,key)=>results.reduce((n,r)=>n+Number(r[mode]?.[key]||0),0);
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
@@ -256,6 +366,7 @@ async function main() {
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
     baseline:{signals:sum("baseline","signals"),valid:sum("baseline","valid"),risky:sum("baseline","risky"),metrics:summarize(allBaseline)},
     current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent)},
+    minuteExcursions: excursionAnalysis,
     signalCountChangePct:sum("baseline","signals")?((sum("current","signals")/sum("baseline","signals"))-1)*100:0,
     symbols:results.map(({trades,...r})=>r),trades:{baseline:allBaseline,current:allCurrent}
   };
