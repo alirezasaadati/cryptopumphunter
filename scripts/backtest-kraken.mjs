@@ -6,7 +6,7 @@ const HOUR = 60 * 60 * 1000;
 const FOUR_HOURS = 4 * HOUR;
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const ONE_MINUTE = 60 * 1000;
-const DAYS = Math.max(15, Math.min(90, Number(process.env.BACKTEST_DAYS || 30)));
+const DAYS = Math.max(15, Math.min(400, Number(process.env.BACKTEST_DAYS || 30)));
 const DAY = 24 * HOUR;
 function ema(values, period) {
   if (values.length < period) return [];
@@ -236,7 +236,7 @@ function nonOverlapping(trades) {
   }
   return out;
 }
-async function compareEntryModels(trades) {
+async function compareEntryModels(trades, regimeAt = () => "unclassified") {
   const cache=new Map();
   const minuteRows=await mapLimit(trades,5,async t=>{
     const k=t.symbol+"|"+t.entryTime;
@@ -259,7 +259,9 @@ async function compareEntryModels(trades) {
   const output={};
   for(const [name,rows] of Object.entries(models)){
     const selected=nonOverlapping(rows);
-    output[name]={attempted:rows.length,samples:selected.length,metrics:summarize(selected)};
+    const regimeGroups = Object.groupBy(selected, t => regimeAt(t.entryTime));
+    output[name]={attempted:rows.length,samples:selected.length,metrics:summarize(selected),
+      regimeBreakdown:Object.fromEntries(["bullish","bearish","neutral","unclassified"].map(regime=>[regime,summarize(regimeGroups[regime]||[])]))};
   }
   return {
     rules:{
@@ -514,7 +516,18 @@ async function main() {
   const allBaseline=results.flatMap(r=>r.trades?.baseline||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const allCurrent=results.flatMap(r=>r.trades?.current||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const minuteDataStatus = await addMinuteExcursions(allCurrent);
-  const entryModelComparison = await compareEntryModels(allCurrent);
+  const regimeAt = timestamp => {
+    const index = dailyWithEma.findLastIndex(c => c.time <= timestamp);
+    if (index < 1) return "unclassified";
+    const today = dailyWithEma[index], previous = dailyWithEma[index-1];
+    if (today.ema20 == null || previous.ema20 == null) return "unclassified";
+    if (today.close > today.ema20 && today.ema20 > previous.ema20) return "bullish";
+    if (today.close < today.ema20 && today.ema20 < previous.ema20) return "bearish";
+    return "neutral";
+  };
+  const dailyRegimeCounts = {bullish:0,bearish:0,neutral:0,unclassified:0};
+  for (const day of benchmarkWindow) dailyRegimeCounts[regimeAt(day.time+DAY-1)]++;
+  const entryModelComparison = await compareEntryModels(allCurrent,regimeAt);
   const excursionAnalysis = {
     dataStatus: minuteDataStatus,
     all: summarizeExcursions(allCurrent),
@@ -545,7 +558,9 @@ async function main() {
     marketRegime:{benchmark:"Kraken PF_XBTUSD daily candles aggregated from 4h",dailyCandles:benchmarkWindow.length,
       firstClose,lastClose,periodReturnPct,percentDaysAboveEma20:aboveEmaPct,ema20SlopePct:emaSlopePct,
       bullishCriteria:"period return > 0%, at least 60% of daily closes above EMA20, and EMA20 rising over the test window",
-      verifiedBullish:isBullishRegime},
+      verifiedBullish:isBullishRegime,
+      dailyRegimeDefinition:"Bullish = BTC daily close above EMA20 and EMA20 rising vs prior day; bearish = close below EMA20 and EMA20 falling; otherwise neutral",
+      dailyRegimeCounts},
     settings:{symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,feePerSidePct:FEE_PER_SIDE*100,
       slippagePerSidePct:SLIPPAGE_PER_SIDE*100,maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
       sameCandleStopTargetRule:"stop first (conservative)",funding:"excluded",
