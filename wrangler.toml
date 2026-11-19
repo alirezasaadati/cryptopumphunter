@@ -4,6 +4,7 @@ compatibility_date = "2026-11-16"
 
 [vars]
 APP_MODE = "manual"
+ENTRY_SHADOW_ENABLED = "false"
 MIN_SIGNAL_SCORE = "72"
 SIGNAL_TTL_MINUTES = "60"
 MAX_ENTRY_DRIFT_PCT = "0.35"
@@ -15,7 +16,7 @@ binding = "APP_KV"
 id = "dab441cdffc0460faeb497cee6edd314"
 
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/5 * * * *", "*/10 * * * *"]
 
 [secrets]
 required = ["OWNER_TELEGRAM_ID", "SIGNAL_DELIVERY_SECRET"]
