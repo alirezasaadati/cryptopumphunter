@@ -866,6 +866,7 @@ function menuForChat(env, chatId) {
   const keyboard = MAIN_MENU.inline_keyboard.map(row => row.slice());
   if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0,
     [{ text: "👥 مدیریت اعضا", callback_data: "members:0" }],
+    [{ text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }],
     [{ text: "⚠️ بررسی ارسال‌های نامشخص", callback_data: "outbox:review" }]
   );
   return { inline_keyboard: keyboard };
@@ -1004,7 +1005,7 @@ async function handleCallback(query, env) {
 
   if (action.startsWith("approve:") || action.startsWith("reject:") ||
       action.startsWith("members:") || action.startsWith("mprof:") ||
-      action.startsWith("mrev:") || action.startsWith("mall:") || action.startsWith("outbox:")) {
+      action.startsWith("mrev:") || action.startsWith("mall:") || action.startsWith("outbox:") || action.startsWith("admin:")) {
     if (!isOwner(chatId,env) || String(query.from?.id)!==String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
       await answerCallback(env,query.id,"⛔ دسترسی غیرمجاز"); return;
     }
@@ -1016,6 +1017,7 @@ async function handleCallback(query, env) {
     else if(action.startsWith("mprof:")) await showMemberProfile(env,chatId,action.slice(6));
     else if(action.startsWith("mrev:")) await changeMemberAccess(env,chatId,action.slice(5),false);
       else if(action.startsWith("mall:")) await changeMemberAccess(env,chatId,action.slice(5),true);
+      else if(action==="admin:signals") await showRecentFuturesSignalReport(env,chatId);
       else if(action==="outbox:review") await showUncertainSignalOutbox(env,chatId);
       else if(action.startsWith("outbox:detail:")) await showOutboxSignalDetail(env,chatId,action.slice(14));
       else if(action.startsWith("outbox:confirm:")) await reconcileSignalOutbox(env,chatId,action.slice(15),"confirm_delivered");
@@ -1792,7 +1794,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=this.env.SIGNAL_DELIVERY_SECRET;
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -1811,6 +1813,14 @@ export class SignalDeliveryCoordinator {
           const today=quotaDayKey();
           await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
           return Response.json({ok:true,allowed:false,day:today});
+        }
+        if(url.pathname==="/signals/list"){
+          const now=Date.now();
+          const current=await this.ctx.storage.get("active-futures-pending")||[];
+          const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side))
+            .sort((a,b)=>Number(b?.createdAt||0)-Number(a?.createdAt||0));
+          const limit=Math.max(1,Math.min(20,Number(payload.limit)||15));
+          return Response.json({ok:true,signals:active.slice(0,limit)});
         }
         if(url.pathname==="/signals/register"){
           const now=Date.now();
@@ -1888,6 +1898,79 @@ export class SignalDeliveryCoordinator {
   }
 }
 
+
+async function showRecentFuturesSignalReport(env,ownerId){
+  if(!isOwner(ownerId,env))return;
+  if(!env.SIGNAL_DELIVERY||!env.SIGNAL_DELIVERY_SECRET){
+    await sendMessage(env,ownerId,"❌ اتصال امن حافظه سیگنال‌ها در دسترس نیست.");
+    return;
+  }
+  try{
+    const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
+    const response=await stub.fetch("https://signal-delivery.internal/signals/list",{
+      method:"POST",
+      headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},
+      body:JSON.stringify({limit:15})
+    });
+    let payload={};
+    try{payload=await response.json()}catch{}
+    if(!response.ok||!payload?.ok)throw new Error(payload?.error||"دریافت فهرست سیگنال‌ها ناموفق بود.");
+    const signals=Array.isArray(payload.signals)?payload.signals:[];
+    if(!signals.length){
+      await sendMessage(env,ownerId,"📊 در حال حاضر سیگنال فعالی در حافظه موتور وجود ندارد.\nاین گزارش فقط سیگنال‌های هنوز معتبر و منقضی‌نشده را نشان می‌دهد.");
+      return;
+    }
+    const fmt=value=>{
+      const n=Number(value);
+      return Number.isFinite(n)?n.toLocaleString("en-US",{maximumFractionDigits:8}):"—";
+    };
+    const lines=[
+      "📊 گزارش مدیریتی سیگنال‌های اخیر",
+      "━━━━━━━━━━━━━━━━━━",
+      "منبع: حافظه Durable Object موتور فیوچرز",
+      "تعداد نمایش: "+signals.length,
+      "این گزارش فقط خواندنی است و هیچ داده‌ای در KV ذخیره نمی‌کند.",
+      ""
+    ];
+    for(let i=0;i<signals.length;i++){
+      const s=signals[i];
+      const side=s.side==="LONG"?"🟢 لانگ":"🔴 شورت";
+      const created=Number(s.createdAt);
+      const createdText=Number.isFinite(created)&&created>0?new Date(created).toISOString():"نامشخص";
+      lines.push(
+        (i+1)+") "+formatFuturesSymbol(s.symbol)+" | "+side,
+        "امتیاز: "+fmt(s.score)+" از 100",
+        "ورود: "+fmt(s.entry)+" | حد ضرر: "+fmt(s.stop),
+        "TP1: "+fmt(s.target1)+" | TP2: "+fmt(s.target2)+" | TP3: "+fmt(s.target3),
+        "RSI: "+fmt(s.rsi)+" | نسبت حجم: "+fmt(s.volumeRatio)+" | تغییر ۲۴ساعته: "+fmt(s.change24h)+"٪",
+        "حجم مظنه: "+fmt(s.quoteVolume)+" USD | فاندینگ: "+fmt(s.funding),
+        "زمان ایجاد: "+createdText
+      );
+      if(Array.isArray(s.reasons)&&s.reasons.length){
+        lines.push("دلایل امتیازدهی:");
+        for(const reason of s.reasons.slice(0,8))lines.push("• "+String(reason).slice(0,180));
+      }
+      const d=s.entryDiagnostics;
+      if(d&&typeof d==="object"){
+        const checks=[
+          ["فاصله قیمت تا قیمت تحلیلی",d.driftPct,"٪"],
+          ["فاصله از EMA20 بر حسب ATR",d.emaDistanceAtr," ATR"],
+          ["تأیید مومنتوم ۱۵دقیقه‌ای",d.momentumConfirmed===true?"بله":d.momentumConfirmed===false?"خیر":"نامشخص",""],
+          ["تأیید پولبک ۱۵دقیقه‌ای",d.pullbackConfirmed===true?"بله":d.pullbackConfirmed===false?"خیر":"نامشخص",""]
+        ];
+        lines.push("کنترل ورود:");
+        for(const [label,value,suffix] of checks){
+          if(value!==undefined)lines.push("• "+label+": "+(typeof value==="number"?fmt(value)+suffix:value));
+        }
+      }
+      lines.push("━━━━━━━━━━━━━━━━━━","");
+    }
+    await sendLongMessage(env,ownerId,lines.join("\n"));
+  }catch(error){
+    console.error("Admin recent signal report failed:",String(error?.stack||error));
+    await sendMessage(env,ownerId,"❌ ساخت گزارش مدیریتی ناموفق بود:\n"+String(error?.message||error).slice(0,500));
+  }
+}
 
 function outboxSelectionKey(ownerId,token){return "admin:outbox-selection:"+ownerId+":"+token;}
 
