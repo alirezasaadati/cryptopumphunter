@@ -59,7 +59,7 @@ jobs:
         run: npm run backtest
         env:
           BACKTEST_DAYS: "180"
-          BACKTEST_SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT"
+          BACKTEST_SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT"
         timeout-minutes: 15
       - name: Upload historical backtest report
         uses: actions/upload-artifact@v4
