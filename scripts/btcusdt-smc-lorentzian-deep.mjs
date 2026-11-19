@@ -96,7 +96,7 @@ function simulate({side,entry,stop,targets,candles}){
  return{side,entry,stop,risk,netR:net,targetHits:hits,exitReason:reason,entryTime:candles[0].time,exitTime};
 }
 function bySide(ts){return{LONG:summarize(ts.filter(t=>t.side==="LONG")),SHORT:summarize(ts.filter(t=>t.side==="SHORT"))};}
-async function main(){const now=Date.now(),start=now-DAYS*24*HOUR,from=start-WARMUP_DAYS*24*HOUR;const [h1,h4,m15]=await Promise.all([fetchKlines("1h",from,now),fetchKlines("4h",from,now),fetchKlines("15m",from,now)]);if(h1.length<DAYS*20||h4.length<DAYS*4||m15.length<DAYS*80)throw new Error("Insufficient BTCUSDT candles: 1h="+h1.length+", 4h="+h4.length+", 15m="+m15.length);const tmp=await mkdtemp(join(tmpdir(),"smc-lorentzian-")),h1csv=join(tmp,"h1.csv"),m15csv=join(tmp,"m15.csv"),lorJson=join(tmp,"lorentzian.json");
+async function main(){const wall=new Date(),now=Date.UTC(wall.getUTCFullYear(),wall.getUTCMonth(),1),start=now-DAYS*24*HOUR,from=start-WARMUP_DAYS*24*HOUR;const [h1,h4,m15]=await Promise.all([fetchKlines("1h",from,now),fetchKlines("4h",from,now),fetchKlines("15m",from,now)]);if(h1.length<DAYS*20||h4.length<DAYS*4||m15.length<DAYS*80)throw new Error("Insufficient BTCUSDT candles: 1h="+h1.length+", 4h="+h4.length+", 15m="+m15.length);const tmp=await mkdtemp(join(tmpdir(),"smc-lorentzian-")),h1csv=join(tmp,"h1.csv"),m15csv=join(tmp,"m15.csv"),lorJson=join(tmp,"lorentzian.json");
 const csvFor=bars=>"time,open,high,low,close\n"+bars.map(c=>[new Date(c.time).toISOString(),c.open,c.high,c.low,c.close].join(",")).join("\n")+"\n";
 const m15LorStart=Math.max(0,m15.length-2000);await writeFile(h1csv,csvFor(h1));await writeFile(m15csv,csvFor(m15.slice(m15LorStart)));
 try{
