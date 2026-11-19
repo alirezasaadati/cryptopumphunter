@@ -6,7 +6,7 @@ const M1=60_000, M5=300_000, M15=900_000;
 
 function trend(interval,count,{base=100,step=0.04,side="LONG",range=0.02}={}) {
   return Array.from({length:count},(_,i)=>{
-    const raw=base+i*step*(side==="LONG"?1:-1);
+    const raw=base+i*step;
     return {time:i*interval,open:raw-step*0.15,high:raw+range,low:raw-range,close:raw,volume:100+i};
   });
 }
@@ -22,13 +22,13 @@ function fixture(side) {
   m15[44]={...last,open:pbClose-sign*0.01,high:pbClose+sign*0.02,low:e+sign*0.005,close:pbClose};
   if(side==="SHORT") m15[44]={...last,open:pbClose+0.01,high:e-0.005,low:pbClose-0.02,close:pbClose};
 
-  const m5=trend(M5,84,{base:100,step:sign*0.04,side,range:0.025});
-  const confirmIndex=81;
+  const m5=trend(M5,140,{base:100,step:sign*0.04,side,range:0.025});
+  const confirmIndex=135;
   const conf=m5[confirmIndex], confClose=conf.close+sign*0.02;
   m5[confirmIndex]={...conf,open:conf.close-sign*0.005,high:confClose+0.01,low:conf.close-0.01,close:confClose};
 
-  const m1=trend(M1,250,{base:100,step:sign*0.001,side,range:0.02});
-  const triggerIndex=206;
+  const m1=trend(M1,700,{base:100,step:sign*0.001,side,range:0.02});
+  const triggerIndex=680;
   const prev=m1[triggerIndex-1], t=m1[triggerIndex];
   const triggerClose=prev.close+sign*0.006;
   m1[triggerIndex]={...t,open:prev.close-sign*0.001,high:Math.max(triggerClose,prev.close)+0.005,low:Math.min(triggerClose,prev.close)-0.015,close:triggerClose};
