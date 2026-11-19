@@ -105,11 +105,6 @@ const MAIN_MENU = {
       { text: "📈 سیگنال فیوچرز", callback_data: "futures" }
     ],
     [
-      { text: "🔎 اسکن بازار", callback_data: "market_scan" },
-      { text: "📊 تحلیل بازار", callback_data: "market_analysis" }
-    ],
-    [
-      { text: "📌 معاملات باز", callback_data: "open_trades" },
       { text: "📚 تاریخچه معاملات", callback_data: "trade_history" },
       { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" }
     ],
@@ -1045,15 +1040,6 @@ async function handleCallback(query, env) {
       await runFuturesSignalsForChat(env, chatId);
       return;
     }
-    if (action === "market_scan") {
-      await runSpotMarketScanForChat(env, chatId);
-      return;
-    }
-    if (action === "market_analysis") {
-      await showLatestMarketAnalysis(env, chatId);
-      return;
-    }
-    if (action === "open_trades") return showOpenFuturesTrades(env, chatId);
     if (action === "trade_history" || action === "issued_signals" || action === "ledger:archive" || action === "ledger:history") return sendArchiveAccessLink(env,chatId);
     if (action.startsWith("ledger:a:")) return showIssuedSignalDetails(env, chatId, action.slice(9), "archive");
     if (action.startsWith("ledger:h:")) return showIssuedSignalDetails(env, chatId, action.slice(9), "history");
