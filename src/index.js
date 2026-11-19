@@ -1636,12 +1636,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
-  const experimentalEligible = !eligible && !strictSetup && score >= 55 && volumeRatio >= 0.5;
   return {
     symbol: ticker.symbol,
     side,
     score,
-    experimentalEligible,
     price: entry,
     entry,
     stop,
@@ -1672,7 +1670,7 @@ function formatPrice(value) {
 
 function formatFuturesSignal(item, index = 1) {
   const sideLabel = item.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
-  const label = item.tier === "EXPERIMENTAL" ? "🟠 سیگنال پر ریسک" : "🟢 سیگنال معتبر";
+  const label = "🟢 سیگنال معتبر";
   const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol));
   return `${label}\n\n` +
     `نماد: <b>${symbol}</b>\n\n` +
@@ -1729,7 +1727,7 @@ function tradeOutcomePercent(t,exitPrice){const e=Number(t.actualEntry??t.entry)
 function getNewClosedFuturesCandles(candles,lastCheckedCandleTime=0){return(Array.isArray(candles)?candles:[]).filter(c=>Number(c.time)>Number(lastCheckedCandleTime||0)).sort((a,b)=>a.time-b.time)}
 function ensureTradeTrackingCheckpoint(trade,now=Date.now()){if(!Number.isFinite(Number(trade?.lastCheckedCandleTime))||Number(trade.lastCheckedCandleTime)<=0){trade.lastCheckedCandleTime=Math.floor(now/60000)*60000;trade.trackingMode=trade.trackingMode||"LEGACY_CONTINUED";return true}return false}
 function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),targets=[Number(signal?.target1),Number(signal?.target2),Number(signal?.target3)];if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,...targets].every(Number.isFinite)||![entry,stop,...targets].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<targets[0]&&targets[0]<targets[1]&&targets[1]<targets[2]:stop>entry&&entry>targets[0]&&targets[0]>targets[1]&&targets[1]>targets[2]}
-function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:signal.tier==="EXPERIMENTAL"?"EXPERIMENTAL":"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
+function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
 async function sendAndArchiveFuturesSignalUnlocked(env,ctx,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
   if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
   if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
@@ -2039,7 +2037,7 @@ async function runAutomaticFuturesAlertScan(env) {
   if (!acquire.acquired) return { skipped: true, reason: "scan already running" };
   try {
     const result = await runFuturesSignalScan(env);
-    return { scanned: true, signals: (result.signals || []).length, experimentalSignals: result.experimentalSent || 0 };
+    return { scanned: true, signals: (result.signals || []).length, experimentalSignals: 0 };
   } finally {
     const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
     if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
@@ -2067,14 +2065,10 @@ async function runFuturesSignalScan(env, options = {}) {
   }, () => Date.now() < analysisDeadline);
   const createdAt = Date.now();
   const eligibleCandidates = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score);
-  const experimentalCandidates = analyzed.filter(x => x?.experimentalEligible)
-    .sort((a, b) => b.score - a.score).slice(0, 3);
   const generatedSignals = eligibleCandidates.slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
   const signals = await registerPendingFuturesSignals(env, generatedSignals);
 
-  // Experimental alerts and trade-outcome tracking are intentionally disabled.
-  const experimentalSent = 0;
   try {
     await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
   } catch (error) {
@@ -2105,12 +2099,7 @@ async function runFuturesSignalScan(env, options = {}) {
     "📡 منبع داده: API عمومی Kraken Derivatives Futures\n" +
     "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست. قیمت ممکن است پس از بسته‌شدن کندل تغییر کند.";
 
-  return { report, signals, experimentalSent };
-}
-
-function formatExperimentalFuturesSignal(item) {
-  return formatFuturesSignal({ ...item, tier: "EXPERIMENTAL" }) +
-    "\n\n⚠️ این سیگنال فقط برای ارزیابی آزمایشی است؛ برای معامله واقعی استفاده نکن.";
+  return { report, signals, experimentalSent: 0 };
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
