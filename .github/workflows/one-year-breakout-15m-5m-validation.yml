@@ -1,0 +1,34 @@
+name: One-year mixed-regime 15m breakout + 5m confirmation backtest
+on:
+  workflow_dispatch:
+  push:
+    branches: [one-year-breakout-15m-5m-validation]
+    paths:
+      - "scripts/backtest-kraken.mjs"
+      - ".github/workflows/one-year-breakout-15m-5m-validation.yml"
+      - "src/index.js"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run one-year mixed-regime validation
+        env:
+          BACKTEST_START: "2024-11-19T00:00:00Z"
+          BACKTEST_END: "2025-11-19T00:00:00Z"
+          BACKTEST_DAYS: "365"
+          BACKTEST_SYMBOLS: "8"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+        run: node scripts/backtest-kraken.mjs
+      - name: Upload one-year report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: one-year-mixed-regime-15m-breakout-5m-confirmation
+          path: artifacts/
+          if-no-files-found: warn
