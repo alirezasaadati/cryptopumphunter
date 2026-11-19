@@ -22,7 +22,7 @@ configs = {
  "m15_default": {},
  "m15_no_kernel": {"use_kernel_filter": False},
 }
-configs = {k:v for k,v in configs.items() if k.startswith(timeframe + "_")}
+history_limit = 10000 if timeframe == "h1" else 40000\nconfigs = {k: {"max_bars_back": history_limit, **v} for k,v in configs.items() if k.startswith(timeframe + "_")}
 out = {"bar_count": len(bars), "variants": {}}
 for name, overrides in configs.items():
     settings = Settings.from_mapping(overrides)
