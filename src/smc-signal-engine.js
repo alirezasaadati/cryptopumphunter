@@ -125,11 +125,24 @@ function findOrderBlock(candles,side,breakIndex){
   return null;
 }
 function overlaps(a,b){return a.low<=b.high&&b.low<=a.high;}
-function nearestLiquidityTarget(candles,side,pivots,entry){
+function structuralTargets(side,entry,risk,atr,pivots){
   const levels=side==="LONG"?pivots.highs:pivots.lows;
-  const candidates=levels.filter(p=>side==="LONG"?p.price>entry:p.price<entry);
-  return side==="LONG"?candidates.sort((a,b)=>a.price-b.price)[0]||null:
-    candidates.sort((a,b)=>b.price-a.price)[0]||null;
+  const ordered=levels.map(x=>x.price).filter(p=>side==="LONG"?p>entry:p<entry)
+    .sort((a,b)=>side==="LONG"?a-b:b-a);
+  const dir=side==="LONG"?1:-1;
+  const pad=atr*SMC_CONFIG.ENTRY_BUFFER_ATR;
+  const poolTargets=ordered.map(p=>p-dir*pad).filter(p=>dir*(p-entry)>0);
+  const targets=[];
+  for(let i=0;i<3;i++){
+    const minR=SMC_CONFIG.TARGET_R[i];
+    const fallback=entry+dir*risk*minR;
+    const structural=poolTargets[i];
+    const previous=targets[i-1];
+    const minimum=previous===undefined?entry+dir*risk*minR:previous+dir*risk*0.25;
+    targets.push(structural!==undefined&&dir*(structural-minimum)>=0?structural:
+      (previous===undefined?fallback:dir>0?Math.max(fallback,minimum):Math.min(fallback,minimum)));
+  }
+  return targets;
 }
 function fvgAfterChoch(candles,side,fromIndex){
   for(let i=Math.max(2,fromIndex);i<candles.length;i++){
@@ -226,18 +239,11 @@ export function analyzeSMCSignal({symbol,higherTimeframe,structureTimeframe,entr
   const riskPerUnit=side==="LONG"?entry-stop:stop-entry;
   const riskPct=riskPerUnit/entry;
   const validRisk=Number.isFinite(riskPct)&&riskPerUnit>0&&riskPct<=Number(riskConfig.maxRiskPct??SMC_CONFIG.MAX_RISK_PCT);
-  const targetLiquidity=nearestLiquidityTarget(structureTimeframe,side,pivots,entry);
-  const direction=side==="LONG"?1:-1;
-  const targets=SMC_CONFIG.TARGET_R.map(r=>entry+direction*riskPerUnit*r);
+  const targets=structuralTargets(side,entry,riskPerUnit,eAtr,pivots);
   const risk={valid:validRisk,reason:validRisk?"risk distance within configured limit":"stop distance invalid or exceeds maximum risk",riskPct};
   const matrix=evaluateDecisionMatrix({trend:true,liquidity:sweep,structure:bos,entry,news,risk});
   const diagnostics={higherTrend:ht.direction,structure:st.direction,liquiditySweep:sweep,bos,orderBlock:ob,choch:{level:choch.level,time:choch.time},fvg,entryZone:usableZone,news:normalizeNews(news),matrix};
   if(!matrix.approved)return empty(matrix.rejected,diagnostics);
-  if(targetLiquidity){
-    const structuralReward=side==="LONG"?targetLiquidity.price-entry:entry-targetLiquidity.price;
-    if(structuralReward/riskPerUnit<SMC_CONFIG.MIN_RR_T1)
-      return empty("نقدینگی ساختاری مقابل، نسبت سود به زیان حداقل را تأمین نمی‌کند.",diagnostics);
-  }
   return{eligible:true,rejected:null,diagnostics,signal:{
     id:null,symbol,side,entry,entryZone:usableZone,stop,
     target1:targets[0],target2:targets[1],target3:targets[2],
