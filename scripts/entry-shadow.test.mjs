@@ -15,7 +15,7 @@ test("builds one-entry risk levels and rejects invalid risk",()=>{
 test("tracks closed-candle stop-first outcome and MAE",()=>{
  const trade={status:"OPEN",side:"LONG",entry:100,stop:98,risk:2,target1:103,target2:105,target3:107,
   entryTime:0,remaining:1,realizedR:0,targetHits:[],maxMaeR:0,lastProcessedCandleTime:0};
- const next=advanceShadowTrade(trade,[{time:0,open:100,high:102,low:97,close:101}],120000);
+ const next=advanceShadowTrade(trade,[{time:60000,open:100,high:102,low:97,close:101}],120000);
  assert.equal(next.status,"CLOSED");
  assert.equal(next.exitReason,"STOP");
  assert.equal(next.maxMaeR,1.5);
