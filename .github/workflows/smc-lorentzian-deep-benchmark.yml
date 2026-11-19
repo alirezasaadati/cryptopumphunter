@@ -1,0 +1,37 @@
+name: SMC and Lorentzian deep benchmark
+on:
+  push:
+    branches: [experiment/smc-lorentzian-deep-benchmark]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: npm install
+      - name: Repository tests
+        run: npm test
+      - name: Lorentzian reference port smoke test
+        env:
+          PYTHONPATH: scripts/vendor
+        run: python3 -c "from lorentzian_classification import Settings; print(Settings())"
+      - name: One-year BTCUSDT SMC and Lorentzian benchmark
+        env:
+          PYTHONPATH: scripts/vendor
+        run: node scripts/btcusdt-smc-lorentzian-deep.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: btcusdt-smc-lorentzian-deep
+          path: artifacts/btcusdt-smc-lorentzian-deep.*
+          if-no-files-found: warn
+          retention-days: 30
