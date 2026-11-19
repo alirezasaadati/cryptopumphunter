@@ -2101,7 +2101,7 @@ async function refreshOpenFuturesTrades(env,chatId,tickers) {
       t.status="CLOSED_STOP";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,true);t.outcomePercent=tradeOutcomePercent(t,price);t.closeReason="STOP_LOSS";
       closed.unshift(t);
       await updateIssuedSignal(env.APP_KV,t.chatId,t);
-      await sendMessage(env,chatId,`🛑 ${formatFuturesSymbol(t.symbol)} استاپ شد 😞.\nنتیجه: ${formatOutcomePercent(t.outcomePercent)}\n\nبزودی سیگنال جبرانی صادر خواهد شد.`);
+      await sendMessage(env,chatId,`🛑 ${formatFuturesSymbol(t.symbol)}\n\nمتأسفانه استاپ شد 😞\n\nنتیجه معامله: ${Math.abs(Number(t.outcomePercent)||0).toFixed(2)}٪ ضرر\n\nبزودی سیگنال جبرانی صادر خواهد شد.`);
       continue;
     }
     const favorableR=tradeDir(t.side)*(price-t.actualEntry)/t.initialRisk;
