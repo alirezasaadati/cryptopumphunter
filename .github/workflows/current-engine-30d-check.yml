@@ -1,4 +1,4 @@
-name: Experimental entry models — historical bull-market validation
+name: One-year mixed-regime 15m breakout + 5m confirmation validation
 on:
   push:
     branches: [daily-4h-15m-backtest]
@@ -9,25 +9,25 @@ on:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run fixed historical bull-market entry model validation
+      - name: Run one-year mixed-regime entry model validation
         env:
-          BACKTEST_START: '2025-04-10T00:00:00Z'
-          BACKTEST_END: '2025-06-09T00:00:00Z'
-          BACKTEST_DAYS: '60'
-          BACKTEST_SYMBOLS: '24'
+          BACKTEST_START: '2024-11-19T00:00:00Z'
+          BACKTEST_END: '2025-11-19T00:00:00Z'
+          BACKTEST_DAYS: '365'
+          BACKTEST_SYMBOLS: '8'
           BACKTEST_FEE: '0.0005'
           BACKTEST_SLIPPAGE: '0.0003'
         run: node scripts/backtest-kraken.mjs
-      - name: Upload report
+      - name: Upload one-year report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bull-market-entry-model-comparison-2025
+          name: one-year-mixed-regime-15m-breakout-5m-confirmation
           path: artifacts/
           if-no-files-found: warn
