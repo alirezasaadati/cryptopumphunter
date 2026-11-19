@@ -56,7 +56,7 @@ test("does not use candles that are still forming",()=>{
 
 test("requires enough fully closed history before confirming",()=>{
   const now=100*M1;
-  const result=evaluateShortTfConfirmation({side:"LONG",candles1m:trend(M1,20),candles5m:trend(M5,20),candles15m:trend(M15,20),setupTime:0,now});
+  const result=evaluateShortTfConfirmation({side:"LONG",candles1m:trend(M1,20),candles5m:trend(M5,20),candles15m:trend(M15,20),setupTime:0,now,maxSetupAgeMs:1e9});
   assert.equal(result.reason,"INSUFFICIENT_CLOSED_CANDLES");
 });
 
