@@ -52,6 +52,7 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 function pivots(bars, lastClosedTime) {
+  bars = bars.slice(-120);
   const highs=[],lows=[];
   for(let i=PIVOT_L;i<bars.length-PIVOT_R;i++){
     const p=bars[i], confirm=bars[i+PIVOT_R].time+HOUR;
