@@ -1380,7 +1380,7 @@ const FUTURES_CONFIG = {
   MAX_PULLBACK_DISTANCE_ATR: 0.35,
   MAX_RECLAIM_EXTENSION_ATR: 1.0,
   TARGET_LEVERAGE: 10,
-  TARGET_ROI_LEVELS: [0.20, 0.40, 0.60, 0.80, 1.20]
+  TARGET_ROI_LEVELS: [0.20, 0.40, 0.60]
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
@@ -1687,8 +1687,7 @@ function formatFuturesSignal(item, index = 1) {
     `🎯 تارگت ۱ (۲۰٪): <b>${formatSignalPrice(item.target1)}</b>\n` +
     `🎯 تارگت ۲ (۴۰٪): <b>${formatSignalPrice(item.target2)}</b>\n` +
     `🎯 تارگت ۳ (۶۰٪): <b>${formatSignalPrice(item.target3)}</b>\n` +
-    `🎯 تارگت ۴ (۸۰٪): <b>${formatSignalPrice(item.target4)}</b>\n` +
-    `🎯 تارگت ۵ (۱۲۰٪): <b>${formatSignalPrice(item.target5)}</b>\n\n` +
+    `\n` +
     `⛔ حد ضرر: <b>${formatSignalPrice(item.stop)}</b>`;
 }
 
