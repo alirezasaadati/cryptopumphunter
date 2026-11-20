@@ -1,4 +1,5 @@
 name: BTC trend model benchmark
+# Isolated research workflow; never deploys or modifies production.
 on:
   push:
     branches: [experiment/btc-trend-model-benchmark]
