@@ -26,6 +26,7 @@ jobs:
           BACKTEST_FEE: "0.0005"
           BACKTEST_SLIPPAGE: "0.0003"
           BACKTEST_RANDOM_SEEDS: "100"
+          BACKTEST_FIXED_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_XRPUSD"
         run: node scripts/backtest-diagnostics.mjs
       - name: Upload diagnostic report
         if: always()
