@@ -1,0 +1,31 @@
+name: Breakout 0.3 percent paired A-B backtest
+on:
+  push:
+    branches: [experiment/breakout-03pct-ab-20261120]
+    paths:
+      - "scripts/backtest-breakout-ab.mjs"
+      - ".github/workflows/breakout-ab-backtest.yml"
+      - "src/index.js"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run paired historical backtest
+        env:
+          BACKTEST_DAYS: "60"
+          BACKTEST_SYMBOLS: "24"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+        run: node scripts/backtest-breakout-ab.mjs
+      - name: Upload paired backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: breakout-03pct-ab-report
+          path: artifacts/
+          if-no-files-found: warn
