@@ -9,7 +9,6 @@ const DAYS = Math.max(15, Math.min(90, Number(process.env.BACKTEST_DAYS || 30)))
 const SYMBOL_LIMIT = Math.max(1, Math.min(24, Number(process.env.BACKTEST_SYMBOLS || 5)));
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
 const SLIPPAGE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_SLIPPAGE || 0.0003));
-const MAX_HOLD_HOURS = 72;
 const INITIAL_MARGIN_USD = 10;
 const LEVERAGE = 10;
 const POSITION_NOTIONAL_USD = INITIAL_MARGIN_USD * LEVERAGE;
@@ -76,13 +75,13 @@ function closeTrade(position, rawPrice, reason, time, config) {
   return position;
 }
 
-export function simulateTrade({ side, entry, stop, targets, candles, startIndex, fee = 0.0005, slippage = 0.0003, maxHoldHours = 72 }) {
+export function simulateTrade({ side, entry, stop, targets, candles, startIndex, fee = 0.0005, slippage = 0.0003 }) {
   const direction = side === "LONG" ? 1 : -1;
   const risk = direction === 1 ? entry - stop : stop - entry;
   if (!(risk > 0) || !Number.isFinite(risk)) throw new Error("Invalid trade risk");
   const position = { side, entry, stop, risk, direction, remaining: 1, realizedR: 0, targetHits: 0, exitTime: null, exitReason: null };
   const config = { fee, slippage };
-  const endIndex = Math.min(candles.length - 1, startIndex + maxHoldHours);
+  const endIndex = candles.length - 1;
   for (let i = startIndex; i <= endIndex && position.remaining > 0; i++) {
     const bar = candles[i];
     const stopGap = direction === 1 ? bar.open <= stop : bar.open >= stop;
@@ -108,12 +107,12 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
     if (position.remaining <= 1e-9) {
       position.remaining = 0; position.exitTime = bar.time; position.exitReason = "TARGETS"; break;
     }
-    if (i === endIndex) closeTrade(position, bar.close, "TIME_EXIT", bar.time, config);
   }
-  if (position.remaining > 0) closeTrade(position, candles[endIndex].close, "TIME_EXIT", candles[endIndex].time, config);
+  if (position.remaining > 0) { position.exitTime = candles[endIndex].time; position.exitReason = "OPEN_AT_DATA_END"; }
   return {
     side, entry, stop, risk, netR: position.realizedR, targetHits: position.targetHits,
-    exitReason: position.exitReason, entryTime: candles[startIndex].time, exitTime: position.exitTime
+    remaining: position.remaining, exitReason: position.exitReason, entryTime: candles[startIndex].time, exitTime: position.exitTime,
+    markPrice: position.remaining > 0 ? candles[endIndex].close : null
   };
 }
 
@@ -133,6 +132,8 @@ function sideMetrics(trades) {
 }
 
 function summarize(trades) {
+  const openTrades = trades.filter(t=>t.exitReason==="OPEN_AT_DATA_END");
+  trades = trades.filter(t=>t.exitReason!=="OPEN_AT_DATA_END");
   const wins = trades.filter(t => t.netR > 0), losses = trades.filter(t => t.netR < 0);
   const grossWin = wins.reduce((s,t)=>s+t.netR,0), grossLoss = Math.abs(losses.reduce((s,t)=>s+t.netR,0));
   let equity = 0, peak = 0, maxDrawdown = 0;
@@ -143,7 +144,7 @@ function summarize(trades) {
     maxDrawdownUsd = Math.max(maxDrawdownUsd,peakUsd-equityUsd);
   }
   return {
-    trades: trades.length, wins: wins.length, losses: losses.length,
+    trades: trades.length, completedTrades: trades.length, openAtDataEnd: openTrades.length, wins: wins.length, losses: losses.length,
     breakeven: trades.length-wins.length-losses.length,
     winRatePct: trades.length ? wins.length/trades.length*100 : 0,
     netR: trades.reduce((s,t)=>s+t.netR,0),
@@ -208,11 +209,11 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       if (i < nextAvailable[mode]) continue;
       const direction=candidate.side==="LONG"?1:-1;
       const entry = candidate.entry * (1 + direction * SLIPPAGE_PER_SIDE);
-      const tradeCandles=oneHour.slice(i+1,Math.min(oneHour.length,i+1+MAX_HOLD_HOURS+1));
+      const tradeCandles=oneHour.slice(i+1);
       const trade=simulateTrade({
         side:candidate.side,entry,stop:candidate.stop,
         targets:[candidate.target1],
-        candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
+        candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE
       });
       trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
       trade.netUsd = trade.netR * (trade.risk / trade.entry) * POSITION_NOTIONAL_USD;
@@ -251,7 +252,7 @@ async function main() {
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS},
     settings:{symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,feePerSidePct:FEE_PER_SIDE*100,
-      slippagePerSidePct:SLIPPAGE_PER_SIDE*100,maxHoldHours:MAX_HOLD_HOURS,
+      slippagePerSidePct:SLIPPAGE_PER_SIDE*100,maxHoldHours:null,
       initialMarginUsd:INITIAL_MARGIN_USD,leverage:LEVERAGE,positionNotionalUsd:POSITION_NOTIONAL_USD,compounding:false,targetModel:"single TP1 closes 100% at 0.6R",
       sameCandleStopTargetRule:"stop first (conservative)",funding:"excluded",
       baselineEntry:"signal candle close",currentEntry:"next 1h candle open, adverse slippage applied",
@@ -281,7 +282,7 @@ async function main() {
     "| Max drawdown | "+report.baseline.metrics.maxDrawdownR.toFixed(2)+"R | "+report.current.metrics.maxDrawdownR.toFixed(2)+"R |",
     "| Current filter rejections | — | "+report.current.rejected+" |",
     "| Signal count change | — | "+report.signalCountChangePct.toFixed(2)+"% |","",
-    "Assumptions: $10 margin, 10x leverage, fixed $100 notional per trade (no compounding); 0.05% fee and 0.03% slippage per side; 72h maximum hold; one TP1 at 0.6R closes 100%; stop-first same-candle ambiguity.",
+    "Assumptions: $10 margin, 10x leverage, fixed $100 notional per trade (no compounding); 0.05% fee and 0.03% slippage per side; no maximum holding time; one TP1 at 0.6R closes 100%; stop-first same-candle ambiguity. Trades still open at the end of available data are reported separately and excluded from realized PnL metrics.",
     "Funding excluded. Current universe is selected using present-day volume and therefore has survivorship/universe bias. This is a comparative simulation, not a guarantee of live fills.","",
     "| Symbol | Baseline signals | Current signals | Change | Current valid | Current risky | Current rejected |",
     "|---|---:|---:|---:|---:|---:|---:|",
