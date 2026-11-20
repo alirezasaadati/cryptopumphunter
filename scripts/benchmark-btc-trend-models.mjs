@@ -306,8 +306,8 @@ async function run() {
     labelDefinition:{
       horizonHours:FORWARD_HOURS,
       atrMultiplier:ATR_LABEL_MULTIPLIER,
-      bullish:"24h forward close-to-close gain exceeds "+ATR_LABEL_MULTIPLIER+" × ATR(4h,14) × sqrt("+ (FORWARD_HOURS/4) + ")",
-      bearish:"24h forward close-to-close loss exceeds the same volatility threshold",
+      bullish:FORWARD_HOURS+"h forward close-to-close gain exceeds "+ATR_LABEL_MULTIPLIER+" × ATR(4h,14) × sqrt("+ (FORWARD_HOURS/4) + ")",
+      bearish:FORWARD_HOURS+"h forward close-to-close loss exceeds the same volatility threshold",
       neutral:"forward move remains inside the volatility threshold",
       note:"Labels use future prices only for evaluation; model inputs at each timestamp use closed candles available at that timestamp."
     },
@@ -343,10 +343,11 @@ async function run() {
     "- Period: "+result.period.testStart+" to "+result.period.testEnd,
     "- Scored hourly observations: "+observations,
     "- OOS split: final 30% of chronological observations",
-    "- Label: "+result.labelDefinition.bullish+" / "+result.labelDefinition.bearish,\n    "- Always-neutral accuracy baseline: "+result.labelDistribution.alwaysNeutralAccuracyPct.toFixed(2)+"%, label counts: "+JSON.stringify(result.labelDistribution.counts),
+    "- Label: "+result.labelDefinition.bullish+" / "+result.labelDefinition.bearish,
+    "- Always-neutral accuracy baseline: "+result.labelDistribution.alwaysNeutralAccuracyPct.toFixed(2)+"%, label counts: "+JSON.stringify(result.labelDistribution.counts),
     "",
     "| Model | OOS accuracy | OOS macro-F1 | OOS directional precision | OOS conditional direction accuracy | OOS coverage | Opposite-direction | Signal flip rate |",
-    "|---|---:|---:|---:|---:|---:|---:|",
+    "|---|---:|---:|---:|---:|---:|---:|---:|",
     ...models.map(name=>{
       const x=result.models[name];
       return "| "+name+" | "+x.outOfSample.accuracyPct.toFixed(2)+"% | "+x.outOfSample.macroF1Pct.toFixed(2)+"% | "+
