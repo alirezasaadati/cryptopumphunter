@@ -1,0 +1,29 @@
+name: Experimental long signal context audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [experiment/long-signal-context-audit]
+    paths:
+      - "scripts/backtest-futures-lifecycle.mjs"
+      - ".github/workflows/long-signal-context-audit.yml"
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run historical context audit
+        env:
+          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+        run: node scripts/backtest-futures-lifecycle.mjs
+      - name: Upload diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-signal-context-audit
+          path: artifacts/
+          if-no-files-found: error
