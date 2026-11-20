@@ -81,7 +81,7 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
   const position = { side, entry, stop, risk, direction, remaining: 1, realizedR: 0, targetHits: 0, exitTime: null, exitReason: null };
   const config = { fee, slippage };
   const endIndex = Math.min(candles.length - 1, startIndex + maxHoldHours);
-  const marginProfitPrice = entry * (1 + direction * 0.02); // 20% on 10x margin = 2% favorable underlying move
+  const marginProfitPrice = entry * (1 + direction * 0.01); // 10% on 10x margin = 1% favorable underlying move
   let hit20PctMarginBeforeStop = false;
   let hit20PctMarginTime = null;
   let maxFavorablePctBeforeStop = 0;
