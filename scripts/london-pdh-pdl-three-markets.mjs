@@ -239,7 +239,7 @@ function findSetup(bars,ind,start,side,level,session) {
   const sweep=bars[start],atr0=ind.atr[start];
   if(!finite(atr0)||atr0<=0)return {diagnostics:{sweeps:1,invalidAtr:1}};
   const sweepExtreme=side==="LONG"?sweep.low:sweep.high;
-  const mssLevel=side==="LONG"?ind.piv.highs[start]:ind.piv.lows[start];
+  const mssLevel=side==="LONG"?ind.piv.highs[start-1]:ind.piv.lows[start-1];
   if(!finite(mssLevel))return {diagnostics:{sweeps:1,noPriorPivot:1}};
   const stopBuffer=Math.max(atr0*0.1,sweep.close*0.00005);
   const stop=side==="LONG"?sweepExtreme-stopBuffer:sweepExtreme+stopBuffer;
@@ -296,7 +296,7 @@ function runBacktest(symbol,bars,source) {
     for(const key of Object.keys(found.diagnostics||{}))diag[key]=(diag[key]||0)+found.diagnostics[key];
     if(found.rejectedRisk)diag.rejectedRisk++;
     if(found.trade){
-      trades.push(found.trade);diag.fills++;
+      trades.push(found.trade);
       tradedSessions.add(session);
       nextFree=bars.findIndex((x,idx)=>idx>found.entryIndex&&x.time>found.trade.exitTime);
       if(nextFree<0)nextFree=bars.length;
