@@ -157,12 +157,11 @@ function runEngine(engine, symbol, candles15, candles1h, candles4h, signalStart,
     } else {
       const h1CandleTime=h1.at(-1).time;
       const ticker={symbol,last:nextBar.open,priceChangePercent:change24h(h1),quoteVolume:tickerMeta.quoteVolume};
-      const backtestTargetMultiples = engine === 'v4.7-tp1-1.2'
-        ? [1.2, 2.5, 3.5]
-        : engine.startsWith('v4.7-tp1.2-2-3-breakout-') || engine === 'v4.7-tp1.2-2-3'
-          ? [1.2, 2.0, 3.0]
-          : undefined;
-      const breakoutMatch = engine.match(/^v4\.7-tp1\.2-2-3-breakout-(0\.2|0\.3|0\.4|0\.5)$/);
+      const targetVariantMatch = engine.match(/^v4\.7-tp1-(1\.2|1\.0|0\.8|0\.6)-2-3-breakout-0\.3$/);
+      const backtestTargetMultiples = targetVariantMatch
+        ? [Number(targetVariantMatch[1]), 2.0, 3.0]
+        : undefined;
+      const breakoutMatch = engine.match(/^v4\.7-tp1-(?:1\.2|1\.0|0\.8|0\.6)-2-3-breakout-(0\.3)$/);
       const backtestOptions = {
         ...(backtestTargetMultiples ? {backtestTargetMultiples} : {}),
         ...(breakoutMatch ? {maxBreakoutDistancePct:Number(breakoutMatch[1])} : {})
