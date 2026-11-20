@@ -182,8 +182,9 @@ test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
   assert.ok(result.score>=72);
   assert.ok(result.stop<result.entry);
   assert.ok(result.target1>result.entry);
-  assert.ok(result.target2>result.target1);
-  assert.ok(result.target3>result.target2);
+  assert.equal(result.target2,undefined);
+  assert.equal(result.target3,undefined);
+  assert.ok(Math.abs((result.target1-result.entry)/(result.entry-result.stop)-0.6)<1e-9);
   assert.equal(result.rewardRisk,0.6);
   assert.equal(result.candleTime,oneHour.at(-1).time);
 });
@@ -195,8 +196,9 @@ test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
   assert.equal(result.eligible,true);
   assert.ok(result.stop>result.entry);
   assert.ok(result.target1<result.entry);
-  assert.ok(result.target2<result.target1);
-  assert.ok(result.target3<result.target2);
+  assert.equal(result.target2,undefined);
+  assert.equal(result.target3,undefined);
+  assert.ok(Math.abs((result.entry-result.target1)/(result.stop-result.entry)-0.6)<1e-9);
 });
 
 

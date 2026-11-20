@@ -1678,8 +1678,6 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
 
   const direction = side === "LONG" ? 1 : -1;
   const target1 = entry + direction * risk * 0.6;
-  const target2 = entry + direction * risk * 2.0;
-  const target3 = entry + direction * risk * 3.0;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
   return {
@@ -1690,8 +1688,6 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     entry,
     stop,
     target1,
-    target2,
-    target3,
     rewardRisk: 0.6,
     rsi: rsiValue,
     ema20: e20,
@@ -1722,9 +1718,7 @@ function formatFuturesSignal(item, index = 1) {
     `نماد: <b>${symbol}</b>\n\n` +
     `جهت معامله: ${sideLabel}\n\n` +
     `قیمت ورود: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
-    `🎯 تارگت اول: <b>${formatSignalPrice(item.target1)}</b>\n` +
-    `🎯 تارگت دوم: <b>${formatSignalPrice(item.target2)}</b>\n` +
-    `🎯 تارگت سوم: <b>${formatSignalPrice(item.target3)}</b>\n\n` +
+    `🎯 تارگت: <b>${formatSignalPrice(item.target1)}</b>\n\n` +
     `⛔ حد ضرر: <b>${formatSignalPrice(item.stop)}</b>`;
 }
 
@@ -1768,12 +1762,12 @@ const FUTURES_DISPLAY_LEVERAGE=10;
 function priceChangePercent(side,entry,exit){const e=Number(entry),x=Number(exit);return Number.isFinite(e)&&e>0&&Number.isFinite(x)?tradeDir(side)*(x-e)/e*100:null}
 function leveragedPriceChangePercent(side,entry,exit){const p=priceChangePercent(side,entry,exit);return p===null?null:p*FUTURES_DISPLAY_LEVERAGE}
 function formatOutcomePercent(value){if(value===null||value===undefined||value==="")return "—";const n=Number(value);if(!Number.isFinite(n))return "—";const label=n>0?"سود":n<0?"زیان":"سر‌به‌سر";return `${Math.abs(n).toFixed(2)}٪ ${label}`}
-function tradeResultR(t,includeRemainder){const risk=Number(t.initialRisk),entry=Number(t.actualEntry);if(!Number.isFinite(risk)||risk<=0||!Number.isFinite(entry)||entry<=0)return null;const levels=[["TP1",.4,Number(t.target1)],["TP2",.35,Number(t.target2)],["TP3",.25,Number(t.target3)]];let r=0,weight=0;for(const[k,w,target]of levels)if((t.tpHits||[]).includes(k)&&Number.isFinite(target)){r+=w*tradeDir(t.side)*(target-entry)/risk;weight+=w}if(includeRemainder)r+=(1-weight)*tradeDir(t.side)*(Number(t.currentStop)-entry)/risk;return r}
-function tradeOutcomePercent(t,exitPrice){const e=Number(t.actualEntry??t.entry);if(!Number.isFinite(e)||e<=0)return null;const levels=[["TP1",.4,t.target1],["TP2",.35,t.target2],["TP3",.25,t.target3]];let out=0,w=0;for(const[k,wt,target]of levels)if((t.tpHits||[]).includes(k)&&Number.isFinite(Number(target))){const p=priceChangePercent(t.side,e,target);if(p!==null){out+=wt*p;w+=wt}}if(w<1){const p=priceChangePercent(t.side,e,exitPrice);if(p!==null)out+=(1-w)*p}return out*FUTURES_DISPLAY_LEVERAGE}
+function tradeResultR(t,includeRemainder){const risk=Number(t.initialRisk),entry=Number(t.actualEntry),target=Number(t.target1);if(!Number.isFinite(risk)||risk<=0||!Number.isFinite(entry)||entry<=0)return null;if((t.tpHits||[]).includes("TP1")&&Number.isFinite(target))return tradeDir(t.side)*(target-entry)/risk;return includeRemainder?tradeDir(t.side)*(Number(t.currentStop)-entry)/risk:0}
+function tradeOutcomePercent(t,exitPrice){const e=Number(t.actualEntry??t.entry);if(!Number.isFinite(e)||e<=0)return null;const exit=(t.tpHits||[]).includes("TP1")?Number(t.target1):Number(exitPrice);const p=priceChangePercent(t.side,e,exit);return p===null?null:p*FUTURES_DISPLAY_LEVERAGE}
 function getNewClosedFuturesCandles(candles,lastCheckedCandleTime=0){return(Array.isArray(candles)?candles:[]).filter(c=>Number(c.time)>Number(lastCheckedCandleTime||0)).sort((a,b)=>a.time-b.time)}
 function ensureTradeTrackingCheckpoint(trade,now=Date.now()){if(!Number.isFinite(Number(trade?.lastCheckedCandleTime))||Number(trade.lastCheckedCandleTime)<=0){trade.lastCheckedCandleTime=Math.floor(now/60000)*60000;trade.trackingMode=trade.trackingMode||"LEGACY_CONTINUED";return true}return false}
-function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),targets=[Number(signal?.target1),Number(signal?.target2),Number(signal?.target3)];if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,...targets].every(Number.isFinite)||![entry,stop,...targets].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<targets[0]&&targets[0]<targets[1]&&targets[1]<targets[2]:stop>entry&&entry>targets[0]&&targets[0]>targets[1]&&targets[1]>targets[2]}
-function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
+function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),target=Number(signal?.target1);if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,target].every(Number.isFinite)||![entry,stop,target].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<target:stop>entry&&entry>target}
+function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
 async function sendAndArchiveFuturesSignalUnlocked(env,ctx,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
   if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
   if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
@@ -1990,7 +1984,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
         (i+1)+") "+formatFuturesSymbol(s.symbol)+" | "+side,
         "امتیاز: "+fmt(s.score)+" از 100",
         "ورود: "+fmt(s.entry)+" | حد ضرر: "+fmt(s.stop),
-        "TP1: "+fmt(s.target1)+" | TP2: "+fmt(s.target2)+" | TP3: "+fmt(s.target3),
+        "تارگت: "+fmt(s.target1),
         "RSI: "+fmt(s.rsi)+" | نسبت حجم: "+fmt(s.volumeRatio)+" | تغییر ۲۴ساعته: "+fmt(s.change24h)+"٪",
         "حجم مظنه: "+fmt(s.quoteVolume)+" USD | فاندینگ: "+fmt(s.funding),
         "زمان ایجاد: "+createdText

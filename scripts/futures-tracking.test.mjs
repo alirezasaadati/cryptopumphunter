@@ -24,44 +24,21 @@ test("TP/SL predicates respect trade direction", () => {
   assert.equal(stopReached("SHORT", 105, 100), true);
 });
 
-test("partial TP outcome includes the remaining position at the stop", () => {
-  const trade = {
-    side: "SHORT",
-    actualEntry: 100,
-    target1: 95,
-    target2: 90,
-    target3: 85,
-    tpHits: ["TP1"]
-  };
-  const result = tradeOutcomePercent(trade, 105);
-  // 40% at +5%, remaining 60% at -5% = -1% price return, shown at 10x = -10%.
-  assert.equal(Number(result.toFixed(8)), -10);
+test("single TP1 closes the full position; no second or third target is used", () => {
+  const trade = {side:"SHORT",actualEntry:100,target1:97,tpHits:["TP1"]};
+  assert.equal(Number(tradeOutcomePercent(trade,105).toFixed(8)),30);
+  assert.equal(Number(tradeResultR({side:"SHORT",actualEntry:100,initialRisk:5,currentStop:105,target1:97,tpHits:["TP1"]},true).toFixed(8)),0.6);
 });
 
-test("full TP3 outcome is the weighted result of all targets", () => {
-  const trade = {
-    side: "LONG",
-    actualEntry: 100,
-    target1: 105,
-    target2: 110,
-    target3: 120,
-    tpHits: ["TP1", "TP2", "TP3"]
-  };
-  const result = tradeOutcomePercent(trade, 120);
-  // Weighted price return is 10.5%; fixed 10x display return is 105%.
-  assert.equal(Number(result.toFixed(8)), 105);
-});
-
-test("signal tracking accepts correctly ordered LONG and SHORT levels", () => {
-  assert.equal(isValidFuturesSignalLevels({id:"l1",symbol:"PI_ETHUSD",side:"LONG",entry:100,stop:95,target1:105,target2:110,target3:120}), true);
-  assert.equal(isValidFuturesSignalLevels({id:"s1",symbol:"PI_ETHUSD",side:"SHORT",entry:100,stop:105,target1:95,target2:90,target3:80}), true);
+test("signal tracking accepts a single correctly ordered LONG or SHORT target", () => {
+  assert.equal(isValidFuturesSignalLevels({id:"l1",symbol:"PI_ETHUSD",side:"LONG",entry:100,stop:95,target1:105}), true);
+  assert.equal(isValidFuturesSignalLevels({id:"s1",symbol:"PI_ETHUSD",side:"SHORT",entry:100,stop:105,target1:95}), true);
 });
 
 test("signal tracking rejects missing, non-positive, and misordered levels", () => {
-  const base = {id:"x1",symbol:"PI_ETHUSD",side:"LONG",entry:100,stop:95,target1:105,target2:110,target3:120};
-  assert.equal(isValidFuturesSignalLevels({...base,target2:104}), false);
+  const base = {id:"x1",symbol:"PI_ETHUSD",side:"LONG",entry:100,stop:95,target1:105};
   assert.equal(isValidFuturesSignalLevels({...base,stop:101}), false);
-  assert.equal(isValidFuturesSignalLevels({...base,target3:0}), false);
+  assert.equal(isValidFuturesSignalLevels({...base,target1:0}), false);
   assert.equal(isValidFuturesSignalLevels({...base,side:"SHORT"}), false);
   assert.equal(isValidFuturesSignalLevels({...base,id:""}), false);
 });
@@ -89,25 +66,12 @@ test("tracking does not fall back to an old candle when no new candle exists", (
 });
 
 
-test("R accounting uses actual signal target distances and staged exits", () => {
-  const base = {
-    side: "LONG", actualEntry: 100, initialRisk: 5, currentStop: 95,
-    target1: 107.5, target2: 112.5, target3: 117.5
-  };
-  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: [] }, true) - (-1)) < 1e-9);
-  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1"] }, true)) < 1e-9);
-  // 40% at 1.5R + 35% at 2.5R + 25% remainder at -1R = 1.225R.
-  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1", "TP2"] }, true) - 1.225) < 1e-9);
-  // 40%*1.5R + 35%*2.5R + 25%*3.5R = 2.35R.
-  assert.ok(Math.abs(tradeResultR({ ...base, tpHits: ["TP1", "TP2", "TP3"] }, false) - 2.35) < 1e-9);
-});
-
-test("R accounting is directionally correct for SHORT stop-outs", () => {
-  const trade = {
-    side: "SHORT", actualEntry: 100, initialRisk: 5, currentStop: 105,
-    target1: 92.5, target2: 87.5, target3: 82.5, tpHits: ["TP1"]
-  };
-  assert.ok(Math.abs(tradeResultR(trade, true)) < 1e-9);
+test("single-target R accounting uses the full position at 0.6R", () => {
+  const base = {side:"LONG",actualEntry:100,initialRisk:5,currentStop:95,target1:103,tpHits:[]};
+  assert.equal(tradeResultR(base,true),-1);
+  assert.ok(Math.abs(tradeResultR({...base,tpHits:["TP1"]},true)-0.6)<1e-9);
+  const short = {side:"SHORT",actualEntry:100,initialRisk:5,currentStop:105,target1:97,tpHits:["TP1"]};
+  assert.ok(Math.abs(tradeResultR(short,true)-0.6)<1e-9);
 });
 
 test("a candle spanning both stop and target is identifiable as ambiguous", () => {
