@@ -159,11 +159,14 @@ function runEngine(engine, symbol, candles15, candles1h, candles4h, signalStart,
       const ticker={symbol,last:nextBar.open,priceChangePercent:change24h(h1),quoteVolume:tickerMeta.quoteVolume};
       const backtestTargetMultiples = engine === 'v4.7-tp1-1.2'
         ? [1.2, 2.5, 3.5]
-        : engine === 'v4.7-tp1.2-2-3'
+        : ['v4.7-tp1.2-2-3','v4.7-tp1.2-2-3-breakout-0.4'].includes(engine)
           ? [1.2, 2.0, 3.0]
           : undefined;
-      const result=analyzeFuturesSymbol(ticker,h1,h4,m15,
-        backtestTargetMultiples ? {backtestTargetMultiples} : {});
+      const backtestOptions = {
+        ...(backtestTargetMultiples ? {backtestTargetMultiples} : {}),
+        ...(engine === 'v4.7-tp1.2-2-3-breakout-0.4' ? {maxBreakoutDistancePct:0.4} : {})
+      };
+      const result=analyzeFuturesSymbol(ticker,h1,h4,m15,backtestOptions);
       if (result?.eligible && Number(result.candleTime)===h1CandleTime && h1CandleTime!==lastV47CandleTime) {
         signal=result; trade=createV47Trade(symbol,signal,bar,nextBar,i); lastV47CandleTime=h1CandleTime;
       }
@@ -252,7 +255,7 @@ async function main() {
   for (const days of DAYS_LIST) {
     const signalStart=SIGNAL_END-days*24*60*60*1000;
     results[`${days}d`]={};
-    for (const engine of ['v2.3','v4.7','v4.7-tp1-1.2','v4.7-tp1.2-2-3']) {
+    for (const engine of ['v2.3','v4.7','v4.7-tp1-1.2','v4.7-tp1.2-2-3','v4.7-tp1.2-2-3-breakout-0.4']) {
       let trades=[];
       for (const meta of universe) {
         const s=seriesBySymbol[meta.symbol];
@@ -263,7 +266,7 @@ async function main() {
       console.log(`${days}d ${engine}:`,results[`${days}d`][engine].summary);
     }
   }
-  const report={metadata:{source:'Kraken Futures public trade candles',backtestVariants:['v4.7 baseline [1.5,2.5,3.5]','TP1-only [1.2,2.5,3.5]','TP1/TP2/TP3 [1.2,2.0,3.0]'],symbols:universe.map(x=>x.symbol),symbolSelection:'Fixed user-requested 10-symbol universe (BTC, XRP, DOT, ETH, UNI, ADA, BCH, SOL, FIL, ATOM); same exact symbols and dates used for both engines and both periods.',signalWindowsDays:DAYS_LIST,signalEnd:new Date(SIGNAL_END).toISOString(),warmupDays:WARMUP_DAYS,
+  const report={metadata:{source:'Kraken Futures public trade candles',backtestVariants:['v4.7 baseline [1.5,2.5,3.5]','TP1-only [1.2,2.5,3.5]','TP1/TP2/TP3 [1.2,2.0,3.0]','TP1/TP2/TP3 [1.2,2.0,3.0] + confirmed 15m pivot breakout distance <=0.4% (3-left/3-right)'],symbols:universe.map(x=>x.symbol),symbolSelection:'Fixed user-requested 10-symbol universe (BTC, XRP, DOT, ETH, UNI, ADA, BCH, SOL, FIL, ATOM); same exact symbols and dates used for all engines and both periods.',signalWindowsDays:DAYS_LIST,signalEnd:new Date(SIGNAL_END).toISOString(),warmupDays:WARMUP_DAYS,
     execution:'Signals evaluated only on completed 15m candles; only completed 1h/4h candles are visible; entry at next 15m open; v2.3 stop/targets shifted by entry fill delta to preserve original level distances; same 15m exit candles for both engines.',
     exitRule:'No maximum holding time. A trade remains open until stop or TP3. TP1/TP2 are milestones only. If stop and any target are touched in the same 15m candle, stop is assumed first; a gap through stop is filled at the 15m open. Positions still unresolved at latest available candle are marked OPEN_AT_END.',
     constraints:'One concurrent trade per symbol per engine. Historical funding is not available in the candle feed; v4.7 funding adjustment is omitted, matching its no-funding-data branch. Fees, slippage and partial exits are excluded. Historical symbol-universe membership is not reconstructed. A fixed user-requested 10-symbol list is used for both engines; the run fails rather than silently substituting any unavailable or insufficient-history symbol.',skippedSymbols},
@@ -271,9 +274,9 @@ async function main() {
   await fs.writeFile(path.join(OUT,'comparison-report.json'),JSON.stringify(report,null,2));
   const lines=['# v2.3 vs v4.7 — Historical signal engine comparison on identical fixed 10-symbol universe','',`Data end: ${report.metadata.signalEnd}`,`Symbols: ${report.metadata.symbols.join(', ')}`,'',
     '| Period | Engine | Trades | Trades / 30 symbol-days | TP1 hit % | Stop % | Stop before TP1 % | Mean per-symbol TP1 % | TP3 win rate |' ,'|---|---|---:|---:|---:|---:|---:|---:|---:|'];
-  for (const days of DAYS_LIST) for (const engine of ['v2.3','v4.7','v4.7-tp1-1.2','v4.7-tp1.2-2-3']) { const s=results[`${days}d`][engine].summary; lines.push(`| ${days}d | ${engine} | ${s.totalTrades} | ${s.signalsPer30SymbolDays} | ${s.tp1HitPct}% | ${s.stopPct}% | ${s.stoppedBeforeTP1Pct}% | ${s.meanPerSymbolTP1HitPct}% | ${s.tp3WinRatePct}% |`); }
+  for (const days of DAYS_LIST) for (const engine of ['v2.3','v4.7','v4.7-tp1-1.2','v4.7-tp1.2-2-3','v4.7-tp1.2-2-3-breakout-0.4']) { const s=results[`${days}d`][engine].summary; lines.push(`| ${days}d | ${engine} | ${s.totalTrades} | ${s.signalsPer30SymbolDays} | ${s.tp1HitPct}% | ${s.stopPct}% | ${s.stoppedBeforeTP1Pct}% | ${s.meanPerSymbolTP1HitPct}% | ${s.tp3WinRatePct}% |`); }
   lines.push('','## Per-symbol normalized results','', '| Period | Engine | Symbol | Trades | TP1 hit % | Stop before TP1 % | Signals / 30 symbol-days |','|---|---|---|---:|---:|---:|---:|');
-  for (const days of DAYS_LIST) for (const engine of ['v2.3','v4.7','v4.7-tp1-1.2','v4.7-tp1.2-2-3']) for (const [symbol,m] of Object.entries(results[`${days}d`][engine].summary.bySymbol)) lines.push(`| ${days}d | ${engine} | ${symbol} | ${m.trades} | ${m.tp1HitPct}% | ${m.stoppedBeforeTP1Pct}% | ${m.signalsPer30SymbolDays} |`);
+  for (const days of DAYS_LIST) for (const engine of ['v2.3','v4.7','v4.7-tp1-1.2','v4.7-tp1.2-2-3','v4.7-tp1.2-2-3-breakout-0.4']) for (const [symbol,m] of Object.entries(results[`${days}d`][engine].summary.bySymbol)) lines.push(`| ${days}d | ${engine} | ${symbol} | ${m.trades} | ${m.tp1HitPct}% | ${m.stoppedBeforeTP1Pct}% | ${m.signalsPer30SymbolDays} |`);
   lines.push('','## Methodology','',report.metadata.execution,report.metadata.exitRule,'',report.metadata.constraints,'','Full trade ledger and raw candle files are in the workflow artifact.');
   await fs.writeFile(path.join(OUT,'comparison-report.md'),lines.join('\n'));
   console.log('\n'+lines.join('\n'));
