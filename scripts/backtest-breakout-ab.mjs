@@ -81,13 +81,28 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
   const position = { side, entry, stop, risk, direction, remaining: 1, realizedR: 0, targetHits: 0, exitTime: null, exitReason: null };
   const config = { fee, slippage };
   const endIndex = Math.min(candles.length - 1, startIndex + maxHoldHours);
+  const marginProfitPrice = entry * (1 + direction * 0.02); // 20% on 10x margin = 2% favorable underlying move
+  let hit20PctMarginBeforeStop = false;
+  let hit20PctMarginTime = null;
+  let maxFavorablePctBeforeStop = 0;
   for (let i = startIndex; i <= endIndex && position.remaining > 0; i++) {
     const bar = candles[i];
     const stopGap = direction === 1 ? bar.open <= stop : bar.open >= stop;
     const stopTouched = direction === 1 ? bar.low <= stop : bar.high >= stop;
+    // Conservative intrabar ordering: if stop and +2% threshold occur in the same candle,
+    // count the stop first and do not count the 20%-margin profit threshold.
     if (stopGap || stopTouched) {
       closeTrade(position, stopGap ? bar.open : stop, "STOP", bar.time, config);
       break;
+    }
+    const favorablePct = direction === 1
+      ? (bar.high / entry - 1) * 100
+      : (entry / bar.low - 1) * 100;
+    maxFavorablePctBeforeStop = Math.max(maxFavorablePctBeforeStop, favorablePct);
+    const profitThresholdTouched = direction === 1 ? bar.high >= marginProfitPrice : bar.low <= marginProfitPrice;
+    if (!hit20PctMarginBeforeStop && profitThresholdTouched) {
+      hit20PctMarginBeforeStop = true;
+      hit20PctMarginTime = bar.time;
     }
     for (let t = 0; t < targets.length && position.remaining > 0; t++) {
       const target = targets[t];
@@ -111,6 +126,7 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
   if (position.remaining > 0) closeTrade(position, candles[endIndex].close, "TIME_EXIT", candles[endIndex].time, config);
   return {
     side, entry, stop, risk, netR: position.realizedR, targetHits: position.targetHits,
+    hit20PctMarginBeforeStop, hit20PctMarginTime, maxFavorablePctBeforeStop,
     exitReason: position.exitReason, entryTime: candles[startIndex].time, exitTime: position.exitTime
   };
 }
@@ -138,6 +154,8 @@ function summarize(trades) {
   return {
     trades: trades.length, wins: wins.length, losses: losses.length,
     anyTpHit: trades.filter(t=>t.targetHits>0).length,
+    hit20PctMarginBeforeStop: trades.filter(t=>t.hit20PctMarginBeforeStop).length,
+    hit20PctMarginBeforeStopPct: trades.length ? trades.filter(t=>t.hit20PctMarginBeforeStop).length / trades.length * 100 : 0,
     totalStops: trades.filter(t=>t.exitReason==="STOP").length,
     tp1Hit: trades.filter(t=>t.targetHits>=1).length,
     tp2Hit: trades.filter(t=>t.targetHits>=2).length,
@@ -264,6 +282,7 @@ async function main() {
     "| Risky signals | "+report.withBreakout.risky+" | "+report.withoutBreakout.risky+" |",
     "| Executed non-overlapping trades | "+report.withBreakout.metrics.trades+" | "+report.withoutBreakout.metrics.trades+" |",
     "| Trades that hit any TP (TP1/TP2/TP3) | "+report.withBreakout.metrics.anyTpHit+" | "+report.withoutBreakout.metrics.anyTpHit+" |",
+    "| Reached +20% on 10x margin (2% favorable move) before stop | "+report.withBreakout.metrics.hit20PctMarginBeforeStop+" ("+report.withBreakout.metrics.hit20PctMarginBeforeStopPct.toFixed(2)+"%) | "+report.withoutBreakout.metrics.hit20PctMarginBeforeStop+" ("+report.withoutBreakout.metrics.hit20PctMarginBeforeStopPct.toFixed(2)+"%) |",
     "| TP1 hit | "+report.withBreakout.metrics.tp1Hit+" | "+report.withoutBreakout.metrics.tp1Hit+" |",
     "| TP2 hit | "+report.withBreakout.metrics.tp2Hit+" | "+report.withoutBreakout.metrics.tp2Hit+" |",
     "| TP3 hit | "+report.withBreakout.metrics.tp3Hit+" | "+report.withoutBreakout.metrics.tp3Hit+" |",
