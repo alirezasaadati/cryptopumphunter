@@ -44,7 +44,7 @@ async function getUniverse() {
       Number(item.volumeQuote) >= FUTURES_CONFIG.MIN_QUOTE_VOLUME && Number(item.last) > 0;
   }).sort((a, b) => Number(b.volumeQuote) - Number(a.volumeQuote));
   if (eligible.length < SYMBOL_LIMIT) throw new Error(`Only ${eligible.length} eligible perpetuals returned; ${SYMBOL_LIMIT} requested.`);
-  return eligible.slice(0, SYMBOL_LIMIT).map(x => ({
+  return eligible.slice(0, Math.max(SYMBOL_LIMIT * 5, 40)).map(x => ({
     symbol: x.symbol, quoteVolume: Number(x.volumeQuote), last: Number(x.last),
     currentFundingRate: Number(x.fundingRate)
   }));
@@ -186,20 +186,42 @@ function summarize(trades) {
 async function main() {
   await fs.mkdir(OUT,{recursive:true});
   console.log('Fetching Kraken Futures perpetual universe...');
-  const universe=await getUniverse();
-  console.log('Selected symbols:',universe.map(x=>x.symbol).join(', '));
+  const candidates=await getUniverse();
   const maxDays=Math.max(...DAYS_LIST);
   const dataStart=SIGNAL_END-(maxDays+WARMUP_DAYS)*24*60*60*1000;
+  const expectedBars={ '15m':Math.floor((SIGNAL_END-dataStart)/MS['15m']), '1h':Math.floor((SIGNAL_END-dataStart)/MS['1h']), '4h':Math.floor((SIGNAL_END-dataStart)/MS['4h']) };
   const seriesBySymbol={};
-  for (const meta of universe) {
-    console.log(`Downloading ${meta.symbol} candles...`);
+  const universe=[];
+  const skippedSymbols=[];
+  for (const meta of candidates) {
+    if (universe.length>=SYMBOL_LIMIT) break;
+    console.log(`Checking historical coverage for ${meta.symbol}...`);
     const series={};
-    for (const interval of RESOLUTIONS) series[interval]=await downloadCandles(meta.symbol,interval,dataStart,SIGNAL_END);
-    const minimums={ '15m':40,'1h':60,'4h':60 };
-    for (const interval of RESOLUTIONS) if (series[interval].length<minimums[interval]) throw new Error(`${meta.symbol} ${interval}: insufficient history (${series[interval].length}).`);
+    series['4h']=await downloadCandles(meta.symbol,'4h',dataStart,SIGNAL_END);
+    const covers180d=series['4h'].length>=expectedBars['4h']*0.90 &&
+      series['4h'][0]?.time<=dataStart+2*MS['4h'] &&
+      series['4h'].at(-1)?.time>=SIGNAL_END-2*24*60*60*1000;
+    if (!covers180d) {
+      skippedSymbols.push({symbol:meta.symbol,reason:'less than 90% of the required 210-day 4h history'});
+      console.log(`Skipping ${meta.symbol}: insufficient 4h historical coverage (${series['4h'].length}/${expectedBars['4h']}).`);
+      continue;
+    }
+    series['1h']=await downloadCandles(meta.symbol,'1h',dataStart,SIGNAL_END);
+    series['15m']=await downloadCandles(meta.symbol,'15m',dataStart,SIGNAL_END);
+    const sufficient=['1h','15m'].every(interval=>series[interval].length>=expectedBars[interval]*0.90 &&
+      series[interval][0]?.time<=dataStart+2*MS[interval] &&
+      series[interval].at(-1)?.time>=SIGNAL_END-2*24*60*60*1000);
+    if (!sufficient) {
+      skippedSymbols.push({symbol:meta.symbol,reason:'insufficient 1h/15m historical coverage'});
+      console.log(`Skipping ${meta.symbol}: incomplete 1h/15m history.`);
+      continue;
+    }
+    universe.push(meta);
     seriesBySymbol[meta.symbol]=series;
     for (const interval of RESOLUTIONS) await fs.writeFile(path.join(OUT,`${meta.symbol}-${interval}.json`),JSON.stringify(series[interval]));
   }
+  if (universe.length<SYMBOL_LIMIT) throw new Error(`Only ${universe.length}/${SYMBOL_LIMIT} perpetuals have complete 180-day coverage. Skipped: ${JSON.stringify(skippedSymbols)}`);
+  console.log('Selected full-history symbols:',universe.map(x=>x.symbol).join(', '));
   const results={};
   for (const days of DAYS_LIST) {
     const signalStart=SIGNAL_END-days*24*60*60*1000;
@@ -218,7 +240,7 @@ async function main() {
   const report={metadata:{source:'Kraken Futures public trade candles',symbols:universe.map(x=>x.symbol),symbolSelection:'Top 8 currently eligible perpetuals by current quote volume; same fixed universe used for both engines and both periods.',signalWindowsDays:DAYS_LIST,signalEnd:new Date(SIGNAL_END).toISOString(),warmupDays:WARMUP_DAYS,
     execution:'Signals evaluated only on completed 15m candles; only completed 1h/4h candles are visible; entry at next 15m open; v2.3 stop/targets shifted by entry fill delta to preserve original level distances; same 15m exit candles for both engines.',
     exitRule:'No maximum holding time. A trade remains open until stop or TP3. TP1/TP2 are milestones only. If stop and any target are touched in the same 15m candle, stop is assumed first. Positions still unresolved at latest available candle are marked OPEN_AT_END.',
-    constraints:'One concurrent trade per symbol per engine. Historical funding is not available in the candle feed; v4.7 funding adjustment is omitted, matching its no-funding-data branch. Fees, slippage and partial exits are excluded. Historical symbol-universe membership is not reconstructed; top current eligible contracts are used.'},
+    constraints:'One concurrent trade per symbol per engine. Historical funding is not available in the candle feed; v4.7 funding adjustment is omitted, matching its no-funding-data branch. Fees, slippage and partial exits are excluded. Historical symbol-universe membership is not reconstructed; top current eligible contracts with at least 90% of required 210-day candle coverage are used.',skippedSymbols},
     candleCoverage:Object.fromEntries(universe.map(meta=>[meta.symbol,Object.fromEntries(RESOLUTIONS.map(r=>[r,{count:seriesBySymbol[meta.symbol][r].length,first:new Date(seriesBySymbol[meta.symbol][r][0].time).toISOString(),last:new Date(seriesBySymbol[meta.symbol][r].at(-1).time).toISOString()}]))])),results};
   await fs.writeFile(path.join(OUT,'comparison-report.json'),JSON.stringify(report,null,2));
   const lines=['# v2.3 vs v4.7 — Historical signal engine comparison','',`Data end: ${report.metadata.signalEnd}`,`Symbols: ${report.metadata.symbols.join(', ')}`,'',
