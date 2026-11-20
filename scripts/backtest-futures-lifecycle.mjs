@@ -65,6 +65,71 @@ function historicalChange(candles, index) {
   const old = candles[index - 24], now = candles[index];
   return !old || old.close <= 0 ? 0 : ((now.close / old.close) - 1) * 100;
 }
+
+function emaValue(values, period) {
+  if (values.length < period) return null;
+  const multiplier = 2 / (period + 1);
+  let value = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < values.length; i++) value = values[i] * multiplier + value * (1 - multiplier);
+  return value;
+}
+function rsiValue(values, period = 14) {
+  if (values.length <= period) return null;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = values[i] - values[i - 1];
+    if (change > 0) gains += change; else losses -= change;
+  }
+  let avgGain = gains / period, avgLoss = losses / period;
+  for (let i = period + 1; i < values.length; i++) {
+    const change = values[i] - values[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(0, change)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(0, -change)) / period;
+  }
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}
+function confirmedSwings(candles, field, left = 3, right = 3) {
+  const out = [];
+  for (let i = left; i < candles.length - right; i++) {
+    const value = candles[i][field];
+    let pivot = true;
+    for (let j = i - left; j <= i + right; j++) {
+      if (j === i) continue;
+      if (field === "high" ? candles[j][field] >= value : candles[j][field] <= value) { pivot = false; break; }
+    }
+    if (pivot) out.push({ time: candles[i].time, price: value, index: i });
+  }
+  return out;
+}
+function structureDirection(candles) {
+  const highs = confirmedSwings(candles, "high", 2, 2).slice(-3);
+  const lows = confirmedSwings(candles, "low", 2, 2).slice(-3);
+  if (highs.length < 2 || lows.length < 2) return { direction: "UNKNOWN", highs, lows };
+  const hh = highs.at(-1).price > highs.at(-2).price;
+  const hl = lows.at(-1).price > lows.at(-2).price;
+  const lh = highs.at(-1).price < highs.at(-2).price;
+  const ll = lows.at(-1).price < lows.at(-2).price;
+  return { direction: hh && hl ? "BULLISH" : lh && ll ? "BEARISH" : "RANGE", hh, hl, lh, ll, highs, lows };
+}
+function longSignalContext(oneHour, fourHour, fifteenMinute, entry) {
+  const c1 = oneHour.at(-1), e20_1h = emaValue(oneHour.map(c => c.close), 20), e50_1h = emaValue(oneHour.map(c => c.close), 50);
+  const e20_4h = emaValue(fourHour.map(c => c.close), 20), e50_4h = emaValue(fourHour.map(c => c.close), 50);
+  const rsi = rsiValue(oneHour.map(c => c.close), 14);
+  const swings1h = structureDirection(oneHour), swings4h = structureDirection(fourHour);
+  const pivots15 = confirmedSwings(fifteenMinute, "high", 3, 3);
+  const pivot = pivots15.at(-1) || null;
+  const breakoutDistancePct = pivot ? (entry - pivot.price) / pivot.price * 100 : null;
+  const postSignal1h = oneHour.slice(-6);
+  return {
+    oneHour: { close: c1.close, ema20: e20_1h, ema50: e50_1h, emaTrend: e20_1h > e50_1h && c1.close > e20_1h ? "BULLISH" : e20_1h < e50_1h && c1.close < e20_1h ? "BEARISH" : "MIXED", structure: swings1h },
+    fourHour: { close: fourHour.at(-1)?.close, ema20: e20_4h, ema50: e50_4h, emaTrend: e20_4h > e50_4h ? "BULLISH" : e20_4h < e50_4h ? "BEARISH" : "FLAT", structure: swings4h },
+    rsi14_1h: rsi,
+    breakout15m: { pivotHigh: pivot, entryDistancePct: breakoutDistancePct, withinEngineMaxDistance: breakoutDistancePct !== null && breakoutDistancePct >= 0 && breakoutDistancePct <= 0.3 },
+    recent1h: postSignal1h.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close }))
+  };
+}
 function lowerBound(candles, time) {
   let lo = 0, hi = candles.length;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (candles[mid].time < time) lo = mid + 1; else hi = mid; }
@@ -158,7 +223,10 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
       entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
       signalTime: signalBar.time, entryTime: signalCloseTime,
-      score: candidate.score, ambiguousCandles: 0
+      score: candidate.score, ambiguousCandles: 0,
+      signalContext: candidate.side === "LONG"
+        ? longSignalContext(oneHour.slice(0, i + 1), closed4h, closed15m, entry)
+        : undefined
     };
     let candleIndex = lowerBound(fiveMinute,signalCloseTime);
     let closed = false;
