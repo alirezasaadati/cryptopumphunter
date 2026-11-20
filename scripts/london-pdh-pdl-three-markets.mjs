@@ -124,8 +124,8 @@ async function loadXauUsd(dir) {
     ], { stdio: "inherit", timeout: 25 * 60 * 1000 });
   }
   const files = await readdir(outDir);
-  const bidFile = files.find(x => x.startsWith("xauusd-bid-") && x.endsWith(".csv"));
-  const askFile = files.find(x => x.startsWith("xauusd-ask-") && x.endsWith(".csv"));
+  const bidFile = files.find(x => x.startsWith("xauusd-bid") && x.endsWith(".csv"));
+  const askFile = files.find(x => x.startsWith("xauusd-ask") && x.endsWith(".csv"));
   if (!bidFile || !askFile) throw new Error("Dukascopy XAUUSD bid/ask CSV files were not created");
   const bid = parseCsv(await readFile(join(outDir,bidFile),"utf8"));
   const ask = parseCsv(await readFile(join(outDir,askFile),"utf8"));
