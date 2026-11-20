@@ -4,6 +4,7 @@ on:
     branches: [short-pullback-experiments]
     paths:
       - ".github/workflows/short-pullback-validation-1y.yml"
+      - "scripts/backtest-diagnostics.mjs"
   workflow_dispatch:
 jobs:
   diagnostics:
