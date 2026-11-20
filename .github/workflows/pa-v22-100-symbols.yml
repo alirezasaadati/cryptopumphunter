@@ -23,7 +23,7 @@ jobs:
           node --check scripts/backtest-btc-1y.mjs
           node --check scripts/backtest-pa-v22-100-symbols.mjs
       - name: Run 10-symbol historical backtest
-        run: node scripts/backtest-pa-v22-30-symbols.mjs
+        run: node scripts/backtest-pa-v22-100-symbols.mjs
       - name: Upload complete reports
         if: always()
         uses: actions/upload-artifact@v4
