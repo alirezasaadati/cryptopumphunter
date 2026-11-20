@@ -73,8 +73,13 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
   const profitExit = trade.side === "LONG"
     ? (open >= target ? open : target)
     : (open <= target ? open : target);
-  const reason = stopHit ? "CLOSED_STOP" : "CLOSED_PROFIT";
-  const exitPrice = stopHit ? stopExit : profitExit;
+  const stopAtOpen = trade.side === "LONG" ? open <= stop : open >= stop;
+  const profitAtOpen = trade.side === "LONG" ? open >= target : open <= target;
+  // A gap through one level at the candle open establishes that level first.
+  // If both are touched later within the candle, stop remains the conservative choice.
+  const closeAtStop = stopAtOpen || (!profitAtOpen && stopHit);
+  const reason = closeAtStop ? "CLOSED_STOP" : "CLOSED_PROFIT";
+  const exitPrice = closeAtStop ? stopExit : profitExit;
   const closedAt = candle.time ?? new Date().toISOString();
   const updatedTrade = {
     ...trade,
