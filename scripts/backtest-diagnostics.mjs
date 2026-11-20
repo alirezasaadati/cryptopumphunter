@@ -31,9 +31,9 @@ function filterPasses(name,x,a,b,c){
   }
   if(!name.startsWith("hybridFilter"))return true;
   const side=x.side,d=side==="LONG"?1:-1;
-  if(name==="hybridFilter4h"||name==="hybridFilterCombined"){const closes=b.map(v=>v.close),e20=ema(closes.slice(-220),20),e50=ema(closes.slice(-220),50),strength=adx(b);if(!Number.isFinite(e20)||!Number.isFinite(e50)||!Number.isFinite(strength)||strength<18||!(d===1?e20>e50:e20<e50))return false;}
-  if(name==="hybridFilter1hStructure"||name==="hybridFilterCombined"){if(a.length<14)return false;const recent=a.slice(-7,-1),prior=a.slice(-13,-7),rh=Math.max(...recent.map(v=>v.high)),rl=Math.min(...recent.map(v=>v.low)),ph=Math.max(...prior.map(v=>v.high)),pl=Math.min(...prior.map(v=>v.low));if(!(d===1?rh>ph&&rl>pl:rh<ph&&rl<pl))return false;}
-  if(name==="hybridFilter15mConfirm"||name==="hybridFilterCombined"){const q=x.entryDiagnostics;if(!q?.momentumConfirmed||!q?.pullbackConfirmed)return false;}
+  if(name==="hybridFilter4h"||name==="hybridFilterCombined"||name==="hybridFilterCombinedPullback"){const closes=b.map(v=>v.close),e20=ema(closes.slice(-220),20),e50=ema(closes.slice(-220),50),strength=adx(b);if(!Number.isFinite(e20)||!Number.isFinite(e50)||!Number.isFinite(strength)||strength<18||!(d===1?e20>e50:e20<e50))return false;}
+  if(name==="hybridFilter1hStructure"||name==="hybridFilterCombined"||name==="hybridFilterCombinedPullback"){if(a.length<14)return false;const recent=a.slice(-7,-1),prior=a.slice(-13,-7),rh=Math.max(...recent.map(v=>v.high)),rl=Math.min(...recent.map(v=>v.low)),ph=Math.max(...prior.map(v=>v.high)),pl=Math.min(...prior.map(v=>v.low));if(!(d===1?rh>ph&&rl>pl:rh<ph&&rl<pl))return false;}
+  if(name==="hybridFilter15mConfirm"||name==="hybridFilterCombined"||name==="hybridFilterCombinedPullback"){const q=x.entryDiagnostics;if(!q?.momentumConfirmed||!q?.pullbackConfirmed)return false;}
   return true;
 }
 function hashText(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return h>>>0;}
