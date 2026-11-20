@@ -75,47 +75,19 @@ function parseBinance(csv) {
   }
   return out;
 }
-let exchangeInfoPromise = null;
-async function getBinanceOnboardDate(symbol) {
-  if (!exchangeInfoPromise) exchangeInfoPromise = (async () => {
-    const r = await fetch("https://fapi.binance.com/fapi/v1/exchangeInfo", { signal: AbortSignal.timeout(30000) });
-    if (!r.ok) throw new Error("Binance exchangeInfo HTTP " + r.status);
-    return r.json();
-  })();
-  const info = await exchangeInfoPromise;
-  const item = (info.symbols || []).find(x => x.symbol === symbol && x.contractType === "PERPETUAL");
-  return item ? Number(item.onboardDate || WARM_START) : null;
-}
 async function loadBinanceSymbol(symbol, dir) {
-  const onboard = await getBinanceOnboardDate(symbol);
-  if (!onboard) {
-    console.log("Binance USD-M perpetual " + symbol + " is not present in exchangeInfo; no matching data.");
-    return [];
-  }
-  const symbolStart = Math.max(WARM_START, onboard);
   const all = [];
-  let month = new Date(Date.UTC(new Date(symbolStart).getUTCFullYear(), new Date(symbolStart).getUTCMonth(), 1));
+  let month = new Date(Date.UTC(new Date(WARM_START).getUTCFullYear(), new Date(WARM_START).getUTCMonth(), 1));
   const lastMonth = Date.UTC(new Date(END).getUTCFullYear(), new Date(END).getUTCMonth(), 1);
   while (month.getTime() < lastMonth) {
     const y = month.getUTCFullYear(), m = String(month.getUTCMonth()+1).padStart(2,"0");
     const file = symbol + "-" + INTERVAL + "-" + y + "-" + m + ".zip";
     const url = "https://data.binance.vision/data/futures/um/monthly/klines/" + symbol + "/" + INTERVAL + "/" + file;
-    let csv = await fetchZipCsv(url, dir);
+    const csv = await fetchZipCsv(url, dir);
     if (csv) all.push(...parseBinance(csv));
-    else {
-      const first = new Date(Math.max(month.getTime(), symbolStart));
-      const next = new Date(Date.UTC(y, month.getUTCMonth()+1, 1));
-      for (let d = new Date(first); d < next && d.getTime() < END; d.setUTCDate(d.getUTCDate()+1)) {
-        const yy=d.getUTCFullYear(), mm=String(d.getUTCMonth()+1).padStart(2,"0"), dd=String(d.getUTCDate()).padStart(2,"0");
-        const daily = symbol + "-" + INTERVAL + "-" + yy + "-" + mm + "-" + dd + ".zip";
-        const dailyUrl = "https://data.binance.vision/data/futures/um/daily/klines/" + symbol + "/" + INTERVAL + "/" + daily;
-        const dcsv = await fetchZipCsv(dailyUrl, dir);
-        if (dcsv) all.push(...parseBinance(dcsv));
-      }
-    }
     month = new Date(Date.UTC(y, month.getUTCMonth()+1, 1));
   }
-  const current = new Date(Math.max(Date.UTC(new Date(END).getUTCFullYear(), new Date(END).getUTCMonth(), 1), symbolStart));
+  const current = new Date(Date.UTC(new Date(END).getUTCFullYear(), new Date(END).getUTCMonth(), 1));
   for (let d = current; d.getTime() < END; d.setUTCDate(d.getUTCDate()+1)) {
     const yy=d.getUTCFullYear(), mm=String(d.getUTCMonth()+1).padStart(2,"0"), dd=String(d.getUTCDate()).padStart(2,"0");
     const daily = symbol + "-" + INTERVAL + "-" + yy + "-" + mm + "-" + dd + ".zip";
