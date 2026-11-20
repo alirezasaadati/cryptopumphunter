@@ -1,3 +1,4 @@
+// Experimental branch only: EMA 3% and LONG pivot 0.35% filter variants.
 import { analyzeFuturesSymbol as cand } from "./candidate-engine.mjs";
 import { FUTURES_CONFIG, findLatestConfirmed15mPivot, calculateAtr } from "../src/index.js";
 import { mkdir, writeFile } from "node:fs/promises";
