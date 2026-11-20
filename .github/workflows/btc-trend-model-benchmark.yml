@@ -1,0 +1,28 @@
+name: BTC trend model benchmark
+on:
+  push:
+    branches: [experiment/btc-trend-model-benchmark]
+    paths:
+      - "scripts/benchmark-btc-trend-models.mjs"
+      - ".github/workflows/btc-trend-model-benchmark.yml"
+  workflow_dispatch:
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate benchmark script
+        run: node --check scripts/benchmark-btc-trend-models.mjs
+      - name: Run one-year BTC trend benchmark
+        run: node scripts/benchmark-btc-trend-models.mjs
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-trend-model-benchmark
+          path: artifacts/
+          if-no-files-found: warn
