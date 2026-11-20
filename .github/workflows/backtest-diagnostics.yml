@@ -1,7 +1,7 @@
 name: Futures backtest diagnostics
 on:
   push:
-    branches: [backtest-three-engines]
+    branches: [backtest-three-engines, ema-pivot-experiments]
     paths:
       - "scripts/backtest-diagnostics.mjs"
       - "scripts/candidate-engine.mjs"
