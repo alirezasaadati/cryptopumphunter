@@ -4,7 +4,8 @@ on:
     branches: [backtest-three-engines]
     paths:
       - "scripts/candidate-engine.mjs"
-      - "scripts/backtest-three-engines.mjs"\n      - "scripts/backtest-architectures.mjs"
+      - "scripts/backtest-three-engines.mjs"
+      - "scripts/backtest-architectures.mjs"
       - ".github/workflows/backtest-three-engines.yml"
   workflow_dispatch:
 jobs:
