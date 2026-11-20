@@ -10,7 +10,8 @@ const BASE = 'https://futures.kraken.com';
 const NOW = Date.now();
 const SIGNAL_END = NOW;
 const DAYS_LIST = [90, 180];
-const SYMBOL_LIMIT = Math.max(1, Math.min(10, Number(process.env.BACKTEST_SYMBOLS || 8)));
+const FIXED_SYMBOLS = ['PF_XBTUSD','PF_XRPUSD','PF_DOTUSD','PF_ETHUSD','PF_UNIUSD','PF_ADAUSD','PF_BCHUSD','PF_SOLUSD','PF_FILUSD','PF_ATOMUSD'];
+const SYMBOL_LIMIT = FIXED_SYMBOLS.length;
 const WARMUP_DAYS = 30;
 const MS = { '15m': 900_000, '1h': 3_600_000, '4h': 14_400_000 };
 const SEC = { '15m': 900, '1h': 3600, '4h': 14400 };
@@ -38,16 +39,14 @@ async function getJson(url, attempts = 5) {
 async function getUniverse() {
   const data = await getJson(`${BASE}/derivatives/api/v3/tickers`);
   if (!Array.isArray(data?.tickers)) throw new Error('Kraken tickers response did not contain tickers[].');
-  const eligible = data.tickers.filter(item => {
-    const symbol = String(item.symbol || '').toUpperCase();
-    return item.tag === 'perpetual' && item.suspended !== true && /^(PI|PF)_[A-Z0-9]+USD$/.test(symbol) &&
-      Number(item.volumeQuote) >= FUTURES_CONFIG.MIN_QUOTE_VOLUME && Number(item.last) > 0;
-  }).sort((a, b) => Number(b.volumeQuote) - Number(a.volumeQuote));
-  if (eligible.length < SYMBOL_LIMIT) throw new Error(`Only ${eligible.length} eligible perpetuals returned; ${SYMBOL_LIMIT} requested.`);
-  return eligible.slice(0, Math.max(SYMBOL_LIMIT * 5, 40)).map(x => ({
-    symbol: x.symbol, quoteVolume: Number(x.volumeQuote), last: Number(x.last),
-    currentFundingRate: Number(x.fundingRate)
-  }));
+  const bySymbol = new Map(data.tickers.map(item => [String(item.symbol || '').toUpperCase(), item]));
+  const missing = FIXED_SYMBOLS.filter(symbol => !bySymbol.has(symbol));
+  if (missing.length) throw new Error(`The fixed 10-symbol comparison universe is unavailable on Kraken: ${missing.join(', ')}. Do not silently replace symbols.`);
+  return FIXED_SYMBOLS.map(symbol => {
+    const item = bySymbol.get(symbol);
+    if (item.tag !== 'perpetual' || item.suspended === true) throw new Error(`${symbol} is not an active perpetual contract.`);
+    return { symbol, quoteVolume: Number(item.volumeQuote || 0), last: Number(item.last), currentFundingRate: Number(item.fundingRate) };
+  });
 }
 
 function normalizeRows(rows, interval) {
@@ -169,18 +168,38 @@ function runEngine(engine, symbol, candles15, candles1h, candles4h, signalStart,
   return trades;
 }
 
-function summarize(trades) {
+function summarize(trades, universeSymbols, periodDays) {
   const closed=trades.filter(t=>t.exitReason!=='OPEN_AT_END');
   const wins=closed.filter(t=>t.exitReason==='TP3');
   const stops=closed.filter(t=>t.exitReason==='STOP');
   const longs=trades.filter(t=>t.side==='LONG').length;
   const shorts=trades.length-longs;
+  const bySymbol = Object.fromEntries(universeSymbols.map(symbol => {
+    const ts=trades.filter(t=>t.symbol===symbol);
+    const n=ts.length, ss=ts.filter(t=>t.exitReason==='STOP');
+    const tp1=ts.filter(t=>t.hitTP1).length, tp3=ts.filter(t=>t.exitReason==='TP3').length;
+    const open=ts.filter(t=>t.exitReason==='OPEN_AT_END').length;
+    return [symbol,{trades:n,tp1,tp1HitPct:n?+(tp1/n*100).toFixed(2):0,
+      tp3,stop:ss.length,stopPct:n?+(ss.length/n*100).toFixed(2):0,
+      stoppedBeforeTP1:ss.filter(t=>!t.hitTP1).length,
+      stoppedBeforeTP1Pct:n?+(ss.filter(t=>!t.hitTP1).length/n*100).toFixed(2):0,
+      open,signalsPer30SymbolDays:+(n*30/periodDays).toFixed(2)}];
+  }));
+  const activeSymbols=universeSymbols.length;
+  const sum=key=>universeSymbols.reduce((v,s)=>v+bySymbol[s][key],0);
   return { totalTrades:trades.length, longs, shorts, closedTrades:closed.length,
     tp3: wins.length, stops:stops.length, hitTP1:trades.filter(t=>t.hitTP1).length,
     hitTP2:trades.filter(t=>t.hitTP2).length, stoppedBeforeTP1:stops.filter(t=>!t.hitTP1).length,
     hitTP1ThenStopped:stops.filter(t=>t.hitTP1).length,
     openAtEnd:trades.filter(t=>t.exitReason==='OPEN_AT_END').length,
     tp3WinRatePct:closed.length?+(wins.length/closed.length*100).toFixed(2):0,
+    tp1HitPct:trades.length?+(trades.filter(t=>t.hitTP1).length/trades.length*100).toFixed(2):0,
+    stopPct:trades.length?+(stops.length/trades.length*100).toFixed(2):0,
+    stoppedBeforeTP1Pct:trades.length?+(stops.filter(t=>!t.hitTP1).length/trades.length*100).toFixed(2):0,
+    signalsPer30SymbolDays:+(trades.length*30/(periodDays*activeSymbols)).toFixed(2),
+    meanPerSymbolTP1HitPct:+(sum('tp1HitPct')/activeSymbols).toFixed(2),
+    meanPerSymbolStoppedBeforeTP1Pct:+(sum('stoppedBeforeTP1Pct')/activeSymbols).toFixed(2),
+    bySymbol,
     avgSignalScore:trades.length?+(trades.reduce((s,t)=>s+(Number(t.score)||0),0)/trades.length).toFixed(2):0 };
 }
 
@@ -234,19 +253,21 @@ async function main() {
         trades.push(...runEngine(engine,meta.symbol,s['15m'],s['1h'],s['4h'],signalStart,SIGNAL_END,meta));
       }
       trades.sort((a,b)=>a.entryTime-b.entryTime);
-      results[`${days}d`][engine]={summary:summarize(trades),trades};
+      results[`${days}d`][engine]={summary:summarize(trades,universe.map(x=>x.symbol),days),trades};
       console.log(`${days}d ${engine}:`,results[`${days}d`][engine].summary);
     }
   }
-  const report={metadata:{source:'Kraken Futures public trade candles',symbols:universe.map(x=>x.symbol),symbolSelection:'Top 8 currently eligible perpetuals by current quote volume; same fixed universe used for both engines and both periods.',signalWindowsDays:DAYS_LIST,signalEnd:new Date(SIGNAL_END).toISOString(),warmupDays:WARMUP_DAYS,
+  const report={metadata:{source:'Kraken Futures public trade candles',symbols:universe.map(x=>x.symbol),symbolSelection:'Fixed user-requested 10-symbol universe (BTC, XRP, DOT, ETH, UNI, ADA, BCH, SOL, FIL, ATOM); same exact symbols and dates used for both engines and both periods.',signalWindowsDays:DAYS_LIST,signalEnd:new Date(SIGNAL_END).toISOString(),warmupDays:WARMUP_DAYS,
     execution:'Signals evaluated only on completed 15m candles; only completed 1h/4h candles are visible; entry at next 15m open; v2.3 stop/targets shifted by entry fill delta to preserve original level distances; same 15m exit candles for both engines.',
     exitRule:'No maximum holding time. A trade remains open until stop or TP3. TP1/TP2 are milestones only. If stop and any target are touched in the same 15m candle, stop is assumed first; a gap through stop is filled at the 15m open. Positions still unresolved at latest available candle are marked OPEN_AT_END.',
-    constraints:'One concurrent trade per symbol per engine. Historical funding is not available in the candle feed; v4.7 funding adjustment is omitted, matching its no-funding-data branch. Fees, slippage and partial exits are excluded. Historical symbol-universe membership is not reconstructed; top current eligible contracts with at least 90% of required 210-day candle coverage are used.',skippedSymbols},
+    constraints:'One concurrent trade per symbol per engine. Historical funding is not available in the candle feed; v4.7 funding adjustment is omitted, matching its no-funding-data branch. Fees, slippage and partial exits are excluded. Historical symbol-universe membership is not reconstructed. A fixed user-requested 10-symbol list is used for both engines; the run fails rather than silently substituting any unavailable or insufficient-history symbol.',skippedSymbols},
     candleCoverage:Object.fromEntries(universe.map(meta=>[meta.symbol,Object.fromEntries(RESOLUTIONS.map(r=>[r,{count:seriesBySymbol[meta.symbol][r].length,first:new Date(seriesBySymbol[meta.symbol][r][0].time).toISOString(),last:new Date(seriesBySymbol[meta.symbol][r].at(-1).time).toISOString()}]))])),results};
   await fs.writeFile(path.join(OUT,'comparison-report.json'),JSON.stringify(report,null,2));
-  const lines=['# v2.3 vs v4.7 — Historical signal engine comparison','',`Data end: ${report.metadata.signalEnd}`,`Symbols: ${report.metadata.symbols.join(', ')}`,'',
-    '| Period | Engine | Trades | Long | Short | TP1 | TP2 | TP3 | Stops | Stop before TP1 | TP1 then stop | Open | TP3 win rate |','|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|'];
-  for (const days of DAYS_LIST) for (const engine of ['v2.3','v4.7']) { const s=results[`${days}d`][engine].summary; lines.push(`| ${days}d | ${engine} | ${s.totalTrades} | ${s.longs} | ${s.shorts} | ${s.hitTP1} | ${s.hitTP2} | ${s.tp3} | ${s.stops} | ${s.stoppedBeforeTP1} | ${s.hitTP1ThenStopped} | ${s.openAtEnd} | ${s.tp3WinRatePct}% |`); }
+  const lines=['# v2.3 vs v4.7 — Historical signal engine comparison on identical fixed 10-symbol universe','',`Data end: ${report.metadata.signalEnd}`,`Symbols: ${report.metadata.symbols.join(', ')}`,'',
+    '| Period | Engine | Trades | Trades / 30 symbol-days | TP1 hit % | Stop % | Stop before TP1 % | Mean per-symbol TP1 % | TP3 win rate |' ,'|---|---|---:|---:|---:|---:|---:|---:|---:|'];
+  for (const days of DAYS_LIST) for (const engine of ['v2.3','v4.7']) { const s=results[`${days}d`][engine].summary; lines.push(`| ${days}d | ${engine} | ${s.totalTrades} | ${s.signalsPer30SymbolDays} | ${s.tp1HitPct}% | ${s.stopPct}% | ${s.stoppedBeforeTP1Pct}% | ${s.meanPerSymbolTP1HitPct}% | ${s.tp3WinRatePct}% |`); }
+  lines.push('','## Per-symbol normalized results','', '| Period | Engine | Symbol | Trades | TP1 hit % | Stop before TP1 % | Signals / 30 symbol-days |','|---|---|---|---:|---:|---:|---:|');
+  for (const days of DAYS_LIST) for (const engine of ['v2.3','v4.7']) for (const [symbol,m] of Object.entries(results[`${days}d`][engine].summary.bySymbol)) lines.push(`| ${days}d | ${engine} | ${symbol} | ${m.trades} | ${m.tp1HitPct}% | ${m.stoppedBeforeTP1Pct}% | ${m.signalsPer30SymbolDays} |`);
   lines.push('','## Methodology','',report.metadata.execution,report.metadata.exitRule,'',report.metadata.constraints,'','Full trade ledger and raw candle files are in the workflow artifact.');
   await fs.writeFile(path.join(OUT,'comparison-report.md'),lines.join('\n'));
   console.log('\n'+lines.join('\n'));
