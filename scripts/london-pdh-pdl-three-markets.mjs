@@ -13,10 +13,6 @@ const LONDON = "Europe/London";
 const BINANCE_FEE = 0.0005;
 const BINANCE_SLIPPAGE = 0.0001;
 const GOLD_SLIPPAGE = 0.0001;
-const MAX_SWEEP_WAIT = 18;
-const MAX_MSS_TO_FVG = 6;
-const MAX_FVG_RETEST = 12;
-const MAX_HOLD = 36;
 const TARGET_R = 2;
 
 const fmtNY = new Intl.DateTimeFormat("en-US", {
@@ -170,21 +166,23 @@ function dailyLevels(bars) {
   return {days,prev,keys};
 }
 function summarize(trades) {
-  const closed=trades.filter(t=>Number.isFinite(t.netR));\n  const wins=closed.filter(t=>t.netR>0),losses=closed.filter(t=>t.netR<0);
-  const grossWin=wins.reduce((s,t)=>s+t.netR,0),grossLoss=Math.abs(losses.reduce((s,t)=>s+t.netR,0));
+  const closed=trades.filter(t=>Number.isFinite(t.netR));
+  const wins=closed.filter(t=>t.netR>0),losses=closed.filter(t=>t.netR<0);
+  const grossWin=wins.reduce((sum,t)=>sum+t.netR,0),grossLoss=Math.abs(losses.reduce((sum,t)=>sum+t.netR,0));
   let eq=0,peak=0,dd=0;
   for(const t of closed){eq+=t.netR;peak=Math.max(peak,eq);dd=Math.max(dd,peak-eq);}
   return {
-    trades:trades.length,wins:wins.length,losses:losses.length,
-    winRatePct:trades.length?100*wins.length/trades.length:0,
-    netR:trades.reduce((s,t)=>s+t.netR,0),
-    expectancyR:trades.length?trades.reduce((s,t)=>s+t.netR,0)/trades.length:0,
+    trades:closed.length,openTrades:trades.length-closed.length,wins:wins.length,losses:losses.length,
+    winRatePct:closed.length?100*wins.length/closed.length:0,
+    netR:closed.reduce((sum,t)=>sum+t.netR,0),
+    expectancyR:closed.length?closed.reduce((sum,t)=>sum+t.netR,0)/closed.length:0,
     profitFactor:grossLoss?grossWin/grossLoss:(grossWin?null:0),
     maxDrawdownR:dd,
     avgWinR:wins.length?grossWin/wins.length:0,
     avgLossR:losses.length?-grossLoss/losses.length:0
   };
 }
+
 function costAndFill(symbol,bar,side,mid,exit=false) {
   const dir=side==="LONG"?1:-1;
   if(symbol==="XAUUSD"){
@@ -343,9 +341,7 @@ async function main(){
         timeframe:"M5",
         liquidity:"previous trading-session high and low",
         sweep:"wick beyond PDH/PDL followed by candle close back inside",
-        mss:"close beyond the latest confirmed 2-left/2-right pivot in reversal direction",
-        fvg:"first directional 3-candle fair value gap within 6 bars after MSS",
-        entry:"50% FVG midpoint retest within 12 bars",
+        entry:"at the close of the sweep-and-reclaim candle",
         stop:"beyond sweep extreme by 0.1 ATR(14)",
         target:"2R",
         maxHoldBars:null,
