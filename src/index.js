@@ -1,6 +1,5 @@
 import { runSpotScan } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
-import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals, issuedSignalSymbols } from "./signal-ledger.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
 
@@ -105,12 +104,6 @@ const MAIN_MENU = {
       { text: "📈 سیگنال فیوچرز", callback_data: "futures" }
     ],
     [
-      { text: "🔎 اسکن بازار", callback_data: "market_scan" },
-      { text: "📊 تحلیل بازار", callback_data: "market_analysis" }
-    ],
-    [
-      { text: "📌 معاملات باز", callback_data: "open_trades" },
-      { text: "📚 تاریخچه معاملات", callback_data: "trade_history" },
       { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" }
     ],
     [{ text: "🛡️ راهنمای مدیریت سرمایه", callback_data: "capital_guide" }],
@@ -209,6 +202,11 @@ export default {
         }
       }
 
+      if(update.chat_join_request){
+        ctx.waitUntil(handleArchiveJoinRequest(update.chat_join_request,env));
+        return new Response("OK");
+      }
+
       if (update.callback_query) {
         ctx.waitUntil(handleCallback(update.callback_query, env));
         return new Response("OK");
@@ -275,12 +273,18 @@ async function fetchJson(url, label) {
 async function telegram(method, env, body) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN تنظیم نشده است.");
 
+  // Protect messages for regular users, while allowing the owner to copy
+  // their own bot messages. Archive-channel posts remain protected.
+  const protectedBody = method === "sendMessage" && !isOwner(body.chat_id, env)
+    ? { ...body, protect_content: true }
+    : body;
+
   const response = await fetch(
     `${TELEGRAM_API}/bot${(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)}/${method}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(protectedBody)
     }
   );
 
@@ -397,15 +401,90 @@ async function migrateLegacyMembership(env) {
 
 async function isApproved(chatId, env) {
   if (isOwner(chatId, env)) return true;
-
   if (!(env.OWNER_TELEGRAM_ID || env.OWNER_ID) || !env.APP_KV) return false;
-
   try {
-    await migrateLegacyMembership(env);
     const member = await env.APP_KV.get(memberKey(chatId), "json");
-    return Boolean(member && member.approved !== false && member.revoked !== true);
-  } catch {
+    if (member) return Boolean(member.approved !== false && member.revoked !== true);
+    const legacy = await env.APP_KV.get("v1:members", "json") || {};
+    return legacy[String(chatId)]?.status === "active";
+  } catch (error) {
+    console.error("Read-only membership check failed:", String(error?.message || error));
     return false;
+  }
+}
+function archiveChannelId(env) {
+  const id = String(env.SIGNAL_ARCHIVE_CHANNEL_ID || "").trim();
+  return /^-100\d+$/.test(id) ? id : null;
+}
+async function sendArchiveAccessLink(env, userId) {
+  const channelId = archiveChannelId(env);
+  if (!channelId) return sendMessage(env,userId,"⚠️ اتصال آرشیو هنوز کامل تنظیم نشده است.",BACK_MENU);
+  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ دسترسی شما به آرشیو فعال نیست.",BACK_MENU);
+  try {
+    const key="signal-archive:join-request-link";
+    let link=null;
+    // KV is only a cache here: a temporary KV read/write failure must not
+    // prevent Telegram from creating and delivering a valid invite link.
+    if(env.APP_KV){
+      try { link=await env.APP_KV.get(key); }
+      catch(error){ console.error("Archive invite cache read failed:",String(error?.message||error)); }
+    }
+    if(!link){
+      const result=await telegram("createChatInviteLink",env,{chat_id:channelId,name:"Crypto Pump Hunter members",creates_join_request:true});
+      link=result?.result?.invite_link;
+      if(!link)throw new Error("Telegram did not return invite link");
+      if(env.APP_KV){
+        try { await env.APP_KV.put(key,link); }
+        catch(error){ console.error("Archive invite cache write failed:",String(error?.message||error)); }
+      }
+    }
+    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link,BACK_MENU);
+  } catch(error) {
+    console.error("Archive invite link failed:",String(error?.message||error));
+    await sendMessage(env,userId,"⚠️ ساخت لینک ورود به آرشیو فعلاً ممکن نشد.",BACK_MENU);
+  }
+}
+async function handleArchiveJoinRequest(request,env) {
+  const channelId=archiveChannelId(env);
+  if(!channelId||String(request?.chat?.id)!==channelId)return false;
+  const userId=request?.from?.id;if(!userId)return true;
+  try {
+    if(await isApproved(userId,env)){
+      await telegram("approveChatJoinRequest",env,{chat_id:channelId,user_id:userId});
+      await sendMessage(env,userId,"✅ درخواست ورود به کانال آرشیو تأیید شد.");
+    } else {
+      await telegram("declineChatJoinRequest",env,{chat_id:channelId,user_id:userId});
+      await sendMessage(env,userId,"⛔ فقط اعضای تأییدشده ربات می‌توانند وارد آرشیو شوند.");
+    }
+  } catch(error){console.error("Archive join request failed:",String(error?.message||error));}
+  return true;
+}
+async function removeArchiveMember(env,userId) {
+  const channelId=archiveChannelId(env);
+  if(!channelId||!userId||isOwner(userId,env)) {
+    return {ok:false,error:"شناسه کانال آرشیو یا شناسه عضو معتبر نیست."};
+  }
+  try {
+    await telegram("banChatMember",env,{chat_id:channelId,user_id:Number(userId),revoke_messages:false});
+    return {ok:true};
+  } catch(error) {
+    const message=String(error?.message||error);
+    console.error("Archive removal failed:",message);
+    return {ok:false,error:message};
+  }
+}
+async function restoreArchiveMemberEligibility(env,userId) {
+  const channelId=archiveChannelId(env);
+  if(!channelId||!userId||isOwner(userId,env)) {
+    return {ok:false,error:"شناسه کانال آرشیو یا شناسه عضو معتبر نیست."};
+  }
+  try {
+    await telegram("unbanChatMember",env,{chat_id:channelId,user_id:Number(userId),only_if_banned:true});
+    return {ok:true};
+  } catch(error) {
+    const message=String(error?.message||error);
+    console.error("Archive unban failed:",message);
+    return {ok:false,error:message};
   }
 }
 
@@ -592,6 +671,7 @@ async function handleAdminMembershipCallback(query, env) {
       );
 
       await env.APP_KV.delete(pendingKey(applicantId));
+      await restoreArchiveMemberEligibility(env, applicantId);
 
       await sendMessage(
         env,
@@ -678,6 +758,7 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
         allowedAt: new Date().toISOString(), allowedBy: String(chatId) };
       await env.APP_KV.put(memberKey(targetId), JSON.stringify(member));
       await env.APP_KV.delete(pendingKey(targetId));
+      await restoreArchiveMemberEligibility(env,targetId);
       await sendMessage(env, targetId,
         "🎉 دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر فعال شد.\n\n" +
         "خوش آمدید! اکنون می‌توانید از امکانات ربات استفاده کنید.");
@@ -688,6 +769,7 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
         revokedAt: new Date().toISOString(), revokedBy: String(chatId) };
       await env.APP_KV.put(memberKey(targetId), JSON.stringify(member));
       await env.APP_KV.delete(pendingKey(targetId));
+      await removeArchiveMember(env,targetId);
       await sendMessage(env, targetId, "⛔ دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر لغو شد.");
       await sendMessage(env, chatId, `🚫 دسترسی کاربر ${targetId} لغو شد.`);
     }
@@ -740,11 +822,42 @@ async function showMemberProfile(env, ownerId, id) {
 async function changeMemberAccess(env,ownerId,id,allow) {
   if(!isOwner(ownerId,env)||!env.APP_KV||!/^-?\d+$/.test(id))return;
   if(String(id)===String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))){await sendMessage(env,ownerId,"دسترسی مدیر اصلی قابل تغییر نیست.");return;}
-  const m=await env.APP_KV.get(memberKey(id),"json");
+  let m;
+  try {
+    m=await env.APP_KV.get(memberKey(id),"json");
+  } catch(error) {
+    const message=String(error?.message||error);
+    console.error("Member access lookup failed:",message);
+    await sendMessage(env,ownerId,"❌ اطلاعات عضو از KV خوانده نشد؛ هیچ تغییری اعمال نشد.\nعلت: "+message.slice(0,500));
+    return;
+  }
   if(!m){await sendMessage(env,ownerId,"عضو پیدا نشد.");return;}
   const next=allow?{...m,approved:true,revoked:false,allowedAt:new Date().toISOString(),allowedBy:String(ownerId)}:{...m,approved:false,revoked:true,revokedAt:new Date().toISOString(),revokedBy:String(ownerId)};
-  await env.APP_KV.put(memberKey(id),JSON.stringify(next));
-  try{await sendMessage(env,id,allow?"🎉 دسترسی شما دوباره فعال شد.":"⛔ دسترسی شما توسط مدیر لغو شد.");}catch{}
+  try {
+    await env.APP_KV.put(memberKey(id),JSON.stringify(next));
+  } catch(error) {
+    const message=String(error?.message||error);
+    console.error("Member access KV write failed:",message);
+    await sendMessage(env,ownerId,"❌ تغییر دسترسی ذخیره نشد؛ هیچ تغییری در وضعیت عضو تأیید نمی‌شود.\nعلت: "+message.slice(0,500));
+    return;
+  }
+  const archiveResult=allow
+    ? await restoreArchiveMemberEligibility(env,id)
+    : await removeArchiveMember(env,id);
+  try {
+    await sendMessage(env,id,allow?"🎉 دسترسی شما دوباره فعال شد.":"⛔ دسترسی شما توسط مدیر لغو شد.");
+  } catch(error) {
+    console.warn("Member access notification failed:",String(error?.message||error));
+  }
+  if(!archiveResult?.ok) {
+    await sendMessage(env,ownerId,
+      "⚠️ وضعیت دسترسی در ربات ذخیره شد، اما تغییر دسترسی کانال آرشیو ناموفق بود.\n"+
+      "علت: "+String(archiveResult?.error||"خطای نامشخص").slice(0,500));
+  } else {
+    await sendMessage(env,ownerId,allow
+      ?"✅ دسترسی عضو در ربات فعال شد و محدودیت کانال آرشیو برداشته شد."
+      :"✅ دسترسی عضو در ربات لغو شد و عضویت او در کانال آرشیو مسدود شد.");
+  }
   await showMemberProfile(env,ownerId,id);
 }
 
@@ -753,6 +866,7 @@ function menuForChat(env, chatId) {
   const keyboard = MAIN_MENU.inline_keyboard.map(row => row.slice());
   if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0,
     [{ text: "👥 مدیریت اعضا", callback_data: "members:0" }],
+    [{ text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }],
     [{ text: "⚠️ بررسی ارسال‌های نامشخص", callback_data: "outbox:review" }]
   );
   return { inline_keyboard: keyboard };
@@ -891,7 +1005,7 @@ async function handleCallback(query, env) {
 
   if (action.startsWith("approve:") || action.startsWith("reject:") ||
       action.startsWith("members:") || action.startsWith("mprof:") ||
-      action.startsWith("mrev:") || action.startsWith("mall:") || action.startsWith("outbox:")) {
+      action.startsWith("mrev:") || action.startsWith("mall:") || action.startsWith("outbox:") || action.startsWith("admin:")) {
     if (!isOwner(chatId,env) || String(query.from?.id)!==String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
       await answerCallback(env,query.id,"⛔ دسترسی غیرمجاز"); return;
     }
@@ -903,6 +1017,7 @@ async function handleCallback(query, env) {
     else if(action.startsWith("mprof:")) await showMemberProfile(env,chatId,action.slice(6));
     else if(action.startsWith("mrev:")) await changeMemberAccess(env,chatId,action.slice(5),false);
       else if(action.startsWith("mall:")) await changeMemberAccess(env,chatId,action.slice(5),true);
+      else if(action==="admin:signals") await showRecentFuturesSignalReport(env,chatId);
       else if(action==="outbox:review") await showUncertainSignalOutbox(env,chatId);
       else if(action.startsWith("outbox:detail:")) await showOutboxSignalDetail(env,chatId,action.slice(14));
       else if(action.startsWith("outbox:confirm:")) await reconcileSignalOutbox(env,chatId,action.slice(15),"confirm_delivered");
@@ -938,22 +1053,7 @@ async function handleCallback(query, env) {
       await runFuturesSignalsForChat(env, chatId);
       return;
     }
-    if (action === "market_scan") {
-      await runSpotMarketScanForChat(env, chatId);
-      return;
-    }
-    if (action === "market_analysis") {
-      await showLatestMarketAnalysis(env, chatId);
-      return;
-    }
-    if (action === "open_trades") return showOpenFuturesTrades(env, chatId);
-    if (action === "trade_history") return showIssuedSignalSymbols(env, chatId, "history");
-    if (action === "issued_signals") return showIssuedSignalSymbols(env, chatId, "archive");
-    if (action === "ledger:archive") return showIssuedSignalSymbols(env, chatId, "archive");
-    if (action === "ledger:history") return showIssuedSignalSymbols(env, chatId, "history");
-    if (action.startsWith("ledger:a:")) return showIssuedSignalDetails(env, chatId, action.slice(9), "archive");
-    if (action.startsWith("ledger:h:")) return showIssuedSignalDetails(env, chatId, action.slice(9), "history");
-    if (action.startsWith("trade:")) return handleTradeAction(action, chatId, env);
+    if (action === "issued_signals" || action === "ledger:archive" || action === "ledger:history") return sendArchiveAccessLink(env,chatId);
     if (action === "capital_guide") {
       await telegram("sendMessage", env, {
         chat_id: chatId,
@@ -1171,7 +1271,7 @@ async function registerWebhook(request, env) {
   try {
     const body = {
       url: webhookUrl,
-      allowed_updates: ["message", "callback_query"],
+      allowed_updates: ["message", "callback_query", "chat_join_request"],
       max_connections: 5
     };
 
@@ -1183,7 +1283,7 @@ async function registerWebhook(request, env) {
       ok: true,
       result: result.result,
       description: result.description || "Webhook registered",
-      allowed_updates: ["message", "callback_query"]
+      allowed_updates: ["message", "callback_query", "chat_join_request"]
     });
   } catch (error) {
     return json({ ok: false, error: error.message }, 500);
@@ -1261,8 +1361,12 @@ function average(values) {
 const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
-  MAX_SYMBOLS: 24,
+  // Scan all liquid perpetuals, stopping only when the safe execution budget is reached.
   CONCURRENCY: 3,
+  MAX_SCAN_DURATION_MS: 180000,
+  SCAN_FINALIZATION_RESERVE_MS: 45000,
+  REQUEST_TIMEOUT_MS: 12000,
+  MAX_SIGNALS_PER_SCAN: 20,
   MIN_QUOTE_VOLUME: 5_000_000,
   KLINE_LIMIT: 120,
   MIN_CANDLES: 60,
@@ -1274,14 +1378,16 @@ const FUTURES_CONFIG = {
   MAX_ENTRY_DRIFT_PCT: 0.35,
   MAX_ENTRY_EMA_DISTANCE_ATR: 3.0,
   MAX_PULLBACK_DISTANCE_ATR: 0.35,
-  MAX_RECLAIM_EXTENSION_ATR: 3.0
+  MAX_RECLAIM_EXTENSION_ATR: 3.0,
+  MAX_BREAKOUT_DISTANCE_PCT: 0.3
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
 
 async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL) {
   const response = await fetch(`${baseUrl}${path}`, {
-    headers: { Accept: "application/json" }
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(FUTURES_CONFIG.REQUEST_TIMEOUT_MS)
   });
   const body = await response.text();
   let data;
@@ -1318,7 +1424,6 @@ async function getKrakenFuturesUniverse() {
   return data.tickers
     .filter(isKrakenPerpetualTicker)
     .sort((a, b) => Number(b.volumeQuote) - Number(a.volumeQuote))
-    .slice(0, FUTURES_CONFIG.MAX_SYMBOLS)
     .map(t => ({
       ...t,
       priceChangePercent: Number(t.change24h) || 0,
@@ -1428,6 +1533,26 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
     momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
 }
 
+function findLatestConfirmed15mPivot(candles, side, left = 3, right = 3) {
+  if (!Array.isArray(candles) || candles.length < left + right + 1) return null;
+  const field = side === "LONG" ? "high" : "low";
+  for (let i = candles.length - right - 1; i >= left; i--) {
+    const value = Number(candles[i]?.[field]);
+    if (!Number.isFinite(value)) continue;
+    let pivot = true;
+    for (let j = i - left; j <= i + right; j++) {
+      if (j === i) continue;
+      const neighbor = Number(candles[j]?.[field]);
+      if (!Number.isFinite(neighbor) || (side === "LONG" ? neighbor >= value : neighbor <= value)) {
+        pivot = false;
+        break;
+      }
+    }
+    if (pivot) return { index: i, time: candles[i].time, price: value, type: side === "LONG" ? "swing_high" : "swing_low" };
+  }
+  return null;
+}
+
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
@@ -1505,6 +1630,31 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   if (!entryFilters.ok) {
     return { symbol: ticker.symbol, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
   }
+
+  if (!options.skipBreakoutFilter) {
+    const breakoutPivot = findLatestConfirmed15mPivot(candles15m, side, 3, 3);
+    if (!breakoutPivot) {
+      return { symbol: ticker.symbol, side, rejected: "پیوت شکست معتبر ۱۵دقیقه‌ای در دسترس نیست" };
+    }
+    const breakoutEntryPrice = Number(ticker.last);
+    const breakoutDistancePct = side === "LONG"
+      ? (breakoutEntryPrice - breakoutPivot.price) / breakoutPivot.price * 100
+      : (breakoutPivot.price - breakoutEntryPrice) / breakoutPivot.price * 100;
+    if (!Number.isFinite(breakoutDistancePct) || breakoutDistancePct < 0 ||
+        breakoutDistancePct > FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT) {
+      return {
+        symbol: ticker.symbol,
+        side,
+        rejected: "فاصله ورود تا سطح شکست خارج از محدوده مجاز است",
+        breakoutDiagnostics: {
+          pivot: breakoutPivot,
+          signedDistancePct: breakoutDistancePct,
+          maxDistancePct: FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT
+        }
+      };
+    }
+    reasons.push("فاصله قیمت از پیوت شکست ۱۵دقیقه‌ای حداکثر ۰٫۳٪ است");
+  }
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
   if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
@@ -1528,22 +1678,16 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
 
   const direction = side === "LONG" ? 1 : -1;
   const target1 = entry + direction * risk * 1.5;
-  const target2 = entry + direction * risk * 2.5;
-  const target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
-  const experimentalEligible = !eligible && !strictSetup && score >= 55 && volumeRatio >= 0.5;
   return {
     symbol: ticker.symbol,
     side,
     score,
-    experimentalEligible,
     price: entry,
     entry,
     stop,
     target1,
-    target2,
-    target3,
     rewardRisk: 1.5,
     rsi: rsiValue,
     ema20: e20,
@@ -1568,15 +1712,13 @@ function formatPrice(value) {
 
 function formatFuturesSignal(item, index = 1) {
   const sideLabel = item.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
-  const label = item.tier === "EXPERIMENTAL" ? "🟠 سیگنال پر ریسک" : "🟢 سیگنال معتبر";
+  const label = "🟢 سیگنال معتبر";
   const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol));
   return `${label}\n\n` +
     `نماد: <b>${symbol}</b>\n\n` +
     `جهت معامله: ${sideLabel}\n\n` +
     `قیمت ورود: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
-    `🎯 تارگت اول: <b>${formatSignalPrice(item.target1)}</b>\n` +
-    `🎯 تارگت دوم: <b>${formatSignalPrice(item.target2)}</b>\n` +
-    `🎯 تارگت سوم: <b>${formatSignalPrice(item.target3)}</b>\n\n` +
+    `🎯 تارگت: <b>${formatSignalPrice(item.target1)}</b>\n\n` +
     `⛔ حد ضرر: <b>${formatSignalPrice(item.stop)}</b>`;
 }
 
@@ -1602,21 +1744,16 @@ function formatFuturesSymbol(symbol) {
 }
 
 
-// V4.6: automatic signal-outcome tracking.
-const FUTURES_PENDING_KEY="futures_pending_signals";
-const FUTURES_OPEN_KEY="futures_open_trades";
-const FUTURES_CLOSED_KEY="futures_closed_trades";
-async function readTradeList(env,key){if(!env.APP_KV)throw new Error("APP_KV binding is missing");const raw=await env.APP_KV.get(key);if(!raw)return[];try{const v=JSON.parse(raw);return Array.isArray(v)?v:[]}catch{return[]}}
-async function writeTradeList(env,key,value){if(!env.APP_KV)throw new Error("APP_KV binding is missing");await env.APP_KV.put(key,JSON.stringify(value))}
-async function savePendingFuturesSignals(env,fresh){
-  const now=Date.now(),old=await readTradeList(env,FUTURES_PENDING_KEY),m=new Map();
-  for(const x of old.filter(v=>v.expiresAt>now)){const f=futuresSignalFingerprint(x);if(f&&!m.has(f))m.set(f,x)}
-  for(const x of fresh){const f=futuresSignalFingerprint(x);if(f&&!m.has(f))m.set(f,x)}
-  const merged=[...m.values()].slice(0,150);
-  // A scheduled scan runs every five minutes. Do not spend a KV Put when the
-  // pending-signal snapshot is byte-for-byte unchanged.
-  if(JSON.stringify(merged)!==JSON.stringify(old))await writeTradeList(env,FUTURES_PENDING_KEY,merged);
-  return fresh.map(x=>m.get(futuresSignalFingerprint(x))).filter(Boolean)
+async function registerPendingFuturesSignals(env, candidates) {
+  if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) throw new Error("Durable signal storage is required.");
+  const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
+  const response = await stub.fetch("https://signal-delivery.internal/signals/register", {
+    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET },
+    body: JSON.stringify({ signals: Array.isArray(candidates) ? candidates : [] })
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload?.ok || !Array.isArray(payload.signals)) throw new Error(payload?.error || "Durable pending-signal registration failed.");
+  return payload.signals;
 }
 const tradeDir=side=>side==="LONG"?1:-1;
 const targetReached=(side,p,t)=>side==="LONG"?p>=t:p<=t;
@@ -1625,66 +1762,54 @@ const FUTURES_DISPLAY_LEVERAGE=10;
 function priceChangePercent(side,entry,exit){const e=Number(entry),x=Number(exit);return Number.isFinite(e)&&e>0&&Number.isFinite(x)?tradeDir(side)*(x-e)/e*100:null}
 function leveragedPriceChangePercent(side,entry,exit){const p=priceChangePercent(side,entry,exit);return p===null?null:p*FUTURES_DISPLAY_LEVERAGE}
 function formatOutcomePercent(value){if(value===null||value===undefined||value==="")return "—";const n=Number(value);if(!Number.isFinite(n))return "—";const label=n>0?"سود":n<0?"زیان":"سر‌به‌سر";return `${Math.abs(n).toFixed(2)}٪ ${label}`}
-function tradeResultR(t,includeRemainder){const risk=Number(t.initialRisk),entry=Number(t.actualEntry);if(!Number.isFinite(risk)||risk<=0||!Number.isFinite(entry)||entry<=0)return null;const levels=[["TP1",.4,Number(t.target1)],["TP2",.35,Number(t.target2)],["TP3",.25,Number(t.target3)]];let r=0,weight=0;for(const[k,w,target]of levels)if((t.tpHits||[]).includes(k)&&Number.isFinite(target)){r+=w*tradeDir(t.side)*(target-entry)/risk;weight+=w}if(includeRemainder)r+=(1-weight)*tradeDir(t.side)*(Number(t.currentStop)-entry)/risk;return r}
-function tradeOutcomePercent(t,exitPrice){const e=Number(t.actualEntry??t.entry);if(!Number.isFinite(e)||e<=0)return null;const levels=[["TP1",.4,t.target1],["TP2",.35,t.target2],["TP3",.25,t.target3]];let out=0,w=0;for(const[k,wt,target]of levels)if((t.tpHits||[]).includes(k)&&Number.isFinite(Number(target))){const p=priceChangePercent(t.side,e,target);if(p!==null){out+=wt*p;w+=wt}}if(w<1){const p=priceChangePercent(t.side,e,exitPrice);if(p!==null)out+=(1-w)*p}return out*FUTURES_DISPLAY_LEVERAGE}
+function tradeResultR(t,includeRemainder){const risk=Number(t.initialRisk),entry=Number(t.actualEntry),target=Number(t.target1);if(!Number.isFinite(risk)||risk<=0||!Number.isFinite(entry)||entry<=0)return null;if((t.tpHits||[]).includes("TP1")&&Number.isFinite(target))return tradeDir(t.side)*(target-entry)/risk;return includeRemainder?tradeDir(t.side)*(Number(t.currentStop)-entry)/risk:0}
+function tradeOutcomePercent(t,exitPrice){const e=Number(t.actualEntry??t.entry);if(!Number.isFinite(e)||e<=0)return null;const exit=(t.tpHits||[]).includes("TP1")?Number(t.target1):Number(exitPrice);const p=priceChangePercent(t.side,e,exit);return p===null?null:p*FUTURES_DISPLAY_LEVERAGE}
 function getNewClosedFuturesCandles(candles,lastCheckedCandleTime=0){return(Array.isArray(candles)?candles:[]).filter(c=>Number(c.time)>Number(lastCheckedCandleTime||0)).sort((a,b)=>a.time-b.time)}
 function ensureTradeTrackingCheckpoint(trade,now=Date.now()){if(!Number.isFinite(Number(trade?.lastCheckedCandleTime))||Number(trade.lastCheckedCandleTime)<=0){trade.lastCheckedCandleTime=Math.floor(now/60000)*60000;trade.trackingMode=trade.trackingMode||"LEGACY_CONTINUED";return true}return false}
-function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),targets=[Number(signal?.target1),Number(signal?.target2),Number(signal?.target3)];if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,...targets].every(Number.isFinite)||![entry,stop,...targets].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<targets[0]&&targets[0]<targets[1]&&targets[1]<targets[2]:stop>entry&&entry>targets[0]&&targets[0]>targets[1]&&targets[1]>targets[2]}
-function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:signal.tier==="EXPERIMENTAL"?"EXPERIMENTAL":"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
-async function registerTrackedSignal(env,chatId,signal){
-  if(!env.APP_KV||!signal?.id)return false;
-  const open=await readTradeList(env,FUTURES_OPEN_KEY),closed=await readTradeList(env,FUTURES_CLOSED_KEY);
-  const existing=[...open,...closed].find(t=>String(t.signalId)===String(signal.id)&&String(t.chatId)===String(chatId));
-  if(existing){
-    // Backfill the permanent ledger for a trade created before the archive write completed.
-    await saveIssuedSignal(env.APP_KV,chatId,signal,existing);
-    await updateIssuedSignal(env.APP_KV,chatId,existing);
-    return false;
-  }
-  const trade=createTrackedFuturesTrade(signal,chatId);
-  if(!trade)return false;
-  // Persist the canonical archive first. If the open-list write then fails,
-  // a retry can safely rebuild the open-list entry without duplicating the archive.
-  await saveIssuedSignal(env.APP_KV,chatId,signal,trade);
-  open.unshift(trade);
-  await writeTradeList(env,FUTURES_OPEN_KEY,open.slice(0,300));
-  return true
-}
-async function sendAndArchiveFuturesSignalUnlocked(env,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
+function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),target=Number(signal?.target1);if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,target].every(Number.isFinite)||![entry,stop,target].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<target:stop>entry&&entry>target}
+function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
+async function sendAndArchiveFuturesSignalUnlocked(env,ctx,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
   if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
   if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
-  if(!env.APP_KV)throw new Error("APP_KV is required for durable signal delivery.");
-  const key=signalOutboxKey(chatId,signal.id);
-  let record=await env.APP_KV.get(key,"json");
-  const action=signalOutboxAction(record);
-  if(action==="done")return{delivered:true,duplicate:true};
-  if(action==="reconcile"){
-    throw new Error(`Signal delivery requires reconciliation (${record.status}): ${signal.symbol} ${signal.id}`);
+  const key="signal-outbox:"+signalOutboxKey(chatId,signal.id);
+  let record=await ctx.storage.get(key);
+  if(record?.status==="SENT"||record?.status==="ARCHIVED")return{delivered:true,duplicate:true};
+  if(record?.status==="SENDING"||record?.status==="UNCERTAIN")throw new Error("Signal delivery is uncertain and requires manual reconciliation; automatic resend is blocked.");
+  record={version:2,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,signal,messageText,replyMarkup,parseMode,status:"SENDING",createdAt:record?.createdAt||new Date().toISOString(),attemptedAt:new Date().toISOString()};
+  await ctx.storage.put(key,record);
+  let response;
+  try {
+    response=await sendMessage(env,chatId,messageText,replyMarkup,parseMode);
+  } catch(error) {
+    await ctx.storage.put(key,{...record,status:"UNCERTAIN",error:String(error?.message||error).slice(0,500),updatedAt:new Date().toISOString()});
+    throw error;
   }
-  if(!record){
-    record={version:1,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,signal,messageText,replyMarkup,parseMode,status:"QUEUED",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-    await env.APP_KV.put(key,JSON.stringify(record));
+  record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString()};
+  await ctx.storage.put(key,record);
+  try {
+    const archiveResult=await publishSignalToArchive(env,signal,messageText,parseMode);
+    record={...record,archivePublished:archiveResult?.published!==false,archiveMessageId:archiveResult?.messageId??null};
+  } catch(error) {
+    record={...record,archivePublished:false,archivePublishError:String(error?.message||error).slice(0,500)};
+    console.error("Archive failed; private signal delivery remains successful:",signal.symbol,String(error?.message||error));
   }
-  if(signalOutboxAction(record)==="send"){
-    record={...record,status:"SENDING",attemptedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-    await env.APP_KV.put(key,JSON.stringify(record));
-    try{
-      const response=await sendMessage(env,chatId,messageText,replyMarkup,parseMode);
-      record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-      await env.APP_KV.put(key,JSON.stringify(record));
-    }catch(error){
-      // Network failures can be ambiguous: do not blindly resend and risk duplicate alerts.
-      record={...record,status:"UNCERTAIN",error:String(error?.message||error).slice(0,500),updatedAt:new Date().toISOString()};
-      try{await env.APP_KV.put(key,JSON.stringify(record));}catch(storeError){console.error("Could not persist uncertain signal outbox state:",String(storeError?.message||storeError));}
-      throw error;
-    }
-  }
-  await registerTrackedSignal(env,chatId,signal);
-  record={...record,status:"ARCHIVED",archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-  await env.APP_KV.put(key,JSON.stringify(record));
+  record={...record,status:"ARCHIVED",archivedAt:new Date().toISOString()};
+  await ctx.storage.put(key,record);
   return{delivered:true,duplicate:false};
 }
 
+async function publishSignalToArchive(env,signal,messageText,parseMode="HTML") {
+  const channelId=archiveChannelId(env);if(!channelId)return {skipped:true};
+  if(!env.SIGNAL_DELIVERY||!env.SIGNAL_DELIVERY_SECRET)throw new Error("Archive publishing requires SIGNAL_DELIVERY coordination.");
+  const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:signal-archive-publisher"));
+  const response=await stub.fetch("https://signal-delivery.internal/archive-publish",{
+    method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},
+    body:JSON.stringify({channelId,signalId:String(signal.id),messageText,parseMode})
+  });
+  const payload=await response.json();
+  if(!response.ok||!payload?.ok)throw new Error(payload?.error||"Archive publishing failed.");
+  return payload.result;
+}
 async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
   if(!signal?.id)throw new Error("Signal id is required for coordinated delivery.");
   if(!env.SIGNAL_DELIVERY)throw new Error("SIGNAL_DELIVERY Durable Object binding is required; refusing an uncoordinated send.");
@@ -1711,7 +1836,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=this.env.SIGNAL_DELIVERY_SECRET;
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -1731,9 +1856,30 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.put("kv-daily-write-pause",{day:today,pausedAt:new Date().toISOString(),reason:payload.message||"Daily KV write quota exceeded"});
           return Response.json({ok:true,allowed:false,day:today});
         }
-        if((url.pathname==="/deliver"||url.pathname==="/reconcile") && this.env.SIGNAL_DELIVERY){
-          const gate=await kvWriteGate(this.env,"allow");
-          if(gate?.allowed===false)throw new Error("KV daily write quota is paused until the next UTC day.");
+        if(url.pathname==="/signals/list"){
+          const now=Date.now();
+          const current=await this.ctx.storage.get("active-futures-pending")||[];
+          const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side))
+            .sort((a,b)=>Number(b?.createdAt||0)-Number(a?.createdAt||0));
+          const limit=Math.max(1,Math.min(20,Number(payload.limit)||15));
+          return Response.json({ok:true,signals:active.slice(0,limit)});
+        }
+        if(url.pathname==="/signals/register"){
+          const now=Date.now();
+          const current=await this.ctx.storage.get("active-futures-pending")||[];
+          const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side));
+          const activeKeys=new Set(active.map(x=>String(x.symbol).trim().toUpperCase()+"|"+x.side));
+          const seen=new Set();
+          const fresh=[];
+          for(const signal of Array.isArray(payload.signals)?payload.signals:[]){
+            if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
+            const key=String(signal.symbol).trim().toUpperCase()+"|"+signal.side;
+            if(activeKeys.has(key)||seen.has(key))continue;
+            seen.add(key);fresh.push(signal);
+          }
+          const merged=[...active,...fresh].slice(-150);
+          await this.ctx.storage.put("active-futures-pending",merged);
+          return Response.json({ok:true,signals:fresh});
         }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
@@ -1746,8 +1892,19 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.delete("automatic-futures-scan-lock");
           return Response.json({ok:true,released:true});
         }
+        if(url.pathname==="/archive-publish"){
+          const key="published-signal:"+String(payload.signalId||"");
+          const old=await this.ctx.storage.get(key);
+          if(old)return Response.json({ok:true,result:{published:false,duplicate:true,messageId:old.messageId}});
+          if(!archiveChannelId(this.env)||String(payload.channelId)!==archiveChannelId(this.env))throw new Error("Archive channel ID mismatch.");
+          if(!payload.signalId||typeof payload.messageText!=="string")throw new Error("Invalid archive payload.");
+          const sent=await telegram("sendMessage",this.env,{chat_id:payload.channelId,text:payload.messageText,parse_mode:payload.parseMode||"HTML",disable_web_page_preview:true,protect_content:true});
+          const messageId=sent?.result?.message_id??null;
+          await this.ctx.storage.put(key,{messageId,publishedAt:new Date().toISOString()});
+          return Response.json({ok:true,result:{published:true,messageId}});
+        }
         if(url.pathname==="/deliver"){
-          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null,payload.parseMode??"HTML");
+          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,this.ctx,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null,payload.parseMode??"HTML");
           return Response.json({ok:true,result});
         }
         if(!this.env.APP_KV)throw new Error("APP_KV is required for reconciliation.");
@@ -1759,7 +1916,6 @@ export class SignalDeliveryCoordinator {
           if(record.status==="ARCHIVED")return Response.json({ok:true,result:{alreadyArchived:true}});
           if(!["SENDING","UNCERTAIN","SENT"].includes(record.status))throw new Error("This signal is not awaiting delivery reconciliation.");
           if(!record.signal)throw new Error("This older outbox record has no signal snapshot; it cannot be safely archived automatically.");
-          await registerTrackedSignal(this.env,chatId,record.signal);
           const confirmed={...record,status:"ARCHIVED",archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),manualConfirmedAt:new Date().toISOString()};
           await this.env.APP_KV.put(key,JSON.stringify(confirmed));
           return Response.json({ok:true,result:{confirmed:true}});
@@ -1768,7 +1924,8 @@ export class SignalDeliveryCoordinator {
           if(!["SENDING","UNCERTAIN"].includes(record.status))throw new Error("Only SENDING or UNCERTAIN records can be retried.");
           if(!record.signal||typeof record.messageText!=="string")throw new Error("This older outbox record has no retry payload.");
           await this.env.APP_KV.put(key,JSON.stringify({...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
-          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,chatId,record.signal,record.messageText,record.replyMarkup??null,record.parseMode??"HTML");
+          await this.ctx.storage.put("signal-outbox:"+key,{...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString()});
+          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,this.ctx,chatId,record.signal,record.messageText,record.replyMarkup??null,record.parseMode??"HTML");
           return Response.json({ok:true,result});
         }
         throw new Error("Unknown reconciliation action.");
@@ -1780,6 +1937,81 @@ export class SignalDeliveryCoordinator {
         return Response.json({ok:false,error:String(error?.message||error).slice(0,500)},{status:409});
       }
     });
+  }
+}
+
+
+async function showRecentFuturesSignalReport(env,ownerId){
+  if(!isOwner(ownerId,env))return;
+  if(!env.SIGNAL_DELIVERY||!env.SIGNAL_DELIVERY_SECRET){
+    await sendMessage(env,ownerId,"❌ اتصال امن حافظه سیگنال‌ها در دسترس نیست.");
+    return;
+  }
+  try{
+    const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
+    const response=await stub.fetch("https://signal-delivery.internal/signals/list",{
+      method:"POST",
+      headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},
+      body:JSON.stringify({limit:15})
+    });
+    let payload={};
+    try{payload=await response.json()}catch{}
+    if(!response.ok||!payload?.ok)throw new Error(payload?.error||"دریافت فهرست سیگنال‌ها ناموفق بود.");
+    const signals=Array.isArray(payload.signals)?payload.signals:[];
+    if(!signals.length){
+      await sendMessage(env,ownerId,"📊 در حال حاضر سیگنال فعالی در حافظه موتور وجود ندارد.\nاین گزارش فقط سیگنال‌های هنوز معتبر و منقضی‌نشده را نشان می‌دهد.");
+      return;
+    }
+    const fmt=value=>{
+      if(value===null||value===undefined||value==="")return "—";
+      const n=Number(value);
+      return Number.isFinite(n)?n.toLocaleString("en-US",{maximumFractionDigits:8}):"—";
+    };
+    const lines=[
+      "📊 گزارش مدیریتی سیگنال‌های اخیر",
+      "━━━━━━━━━━━━━━━━━━",
+      "منبع: حافظه Durable Object موتور فیوچرز",
+      "تعداد نمایش: "+signals.length,
+      "این گزارش فقط خواندنی است و هیچ داده‌ای در KV ذخیره نمی‌کند.",
+      ""
+    ];
+    for(let i=0;i<signals.length;i++){
+      const s=signals[i];
+      const side=s.side==="LONG"?"🟢 لانگ":"🔴 شورت";
+      const created=Number(s.createdAt);
+      const createdText=Number.isFinite(created)&&created>0?new Date(created).toISOString():"نامشخص";
+      lines.push(
+        (i+1)+") "+formatFuturesSymbol(s.symbol)+" | "+side,
+        "امتیاز: "+fmt(s.score)+" از 100",
+        "ورود: "+fmt(s.entry)+" | حد ضرر: "+fmt(s.stop),
+        "تارگت: "+fmt(s.target1),
+        "RSI: "+fmt(s.rsi)+" | نسبت حجم: "+fmt(s.volumeRatio)+" | تغییر ۲۴ساعته: "+fmt(s.change24h)+"٪",
+        "حجم مظنه: "+fmt(s.quoteVolume)+" USD | فاندینگ: "+fmt(s.funding),
+        "زمان ایجاد: "+createdText
+      );
+      if(Array.isArray(s.reasons)&&s.reasons.length){
+        lines.push("دلایل امتیازدهی:");
+        for(const reason of s.reasons.slice(0,8))lines.push("• "+String(reason).slice(0,180));
+      }
+      const d=s.entryDiagnostics;
+      if(d&&typeof d==="object"){
+        const checks=[
+          ["فاصله قیمت تا قیمت تحلیلی",d.driftPct,"٪"],
+          ["فاصله از EMA20 بر حسب ATR",d.emaDistanceAtr," ATR"],
+          ["تأیید مومنتوم ۱۵دقیقه‌ای",d.momentumConfirmed===true?"بله":d.momentumConfirmed===false?"خیر":"نامشخص",""],
+          ["تأیید پولبک ۱۵دقیقه‌ای",d.pullbackConfirmed===true?"بله":d.pullbackConfirmed===false?"خیر":"نامشخص",""]
+        ];
+        lines.push("کنترل ورود:");
+        for(const [label,value,suffix] of checks){
+          if(value!==undefined)lines.push("• "+label+": "+(typeof value==="number"?fmt(value)+suffix:value));
+        }
+      }
+      lines.push("━━━━━━━━━━━━━━━━━━","");
+    }
+    await sendLongMessage(env,ownerId,lines.join("\n"));
+  }catch(error){
+    console.error("Admin recent signal report failed:",String(error?.stack||error));
+    await sendMessage(env,ownerId,"❌ ساخت گزارش مدیریتی ناموفق بود:\n"+String(error?.message||error).slice(0,500));
   }
 }
 
@@ -1832,139 +2064,7 @@ async function reconcileSignalOutbox(env,ownerId,token,action){
   await sendMessage(env,ownerId,action==="confirm_delivered"?"✅ سیگنال به‌عنوان ارسال‌شده در آرشیو ثبت شد.":"🔁 تلاش مجدد انجام شد و نتیجه در آرشیو ثبت شد.");
   await showUncertainSignalOutbox(env,ownerId);
 }
-async function refreshTrackedFuturesTrades(env,chatId=null){
-  const open=await readTradeList(env,FUTURES_OPEN_KEY);
-  if(!open.length)return{checked:0,closed:0};
-  const targets=open.filter(t=>chatId==null||String(t.chatId)===String(chatId));
-  if(!targets.length)return{checked:0,closed:0};
-  const closed=await readTradeList(env,FUTURES_CLOSED_KEY),remaining=open.slice();
-  let checked=0,closedCount=0,openListDirty=false,closedListDirty=false;
-  const checkpointNow=Date.now();
-  const persistSnapshots=chatId!==null;
-  const results=await mapLimit(targets,3,async trade=>{
-    try{
-      const checkpointChanged=ensureTradeTrackingCheckpoint(trade,checkpointNow);
-      const candles=await getKrakenFuturesCandles(trade.symbol,"1m");
-      const recent=getNewClosedFuturesCandles(candles,trade.lastCheckedCandleTime);
-      let event=null,eventPrice=null,eventCandleTime=null,milestoneChanged=false;
-      for(const candle of recent.sort((a,b)=>a.time-b.time)){
-        const hi=Number(candle.high),lo=Number(candle.low);
-        const stopHit=stopReached(trade.side,hi,trade.currentStop)||stopReached(trade.side,lo,trade.currentStop);
-        const hits=[["TP1",Number(trade.target1)],["TP2",Number(trade.target2)],["TP3",Number(trade.target3)]]
-          .filter(([,target])=>Number.isFinite(target)&&(targetReached(trade.side,hi,target)||targetReached(trade.side,lo,target)));
-        if(stopHit){event="STOP";eventPrice=trade.currentStop;eventCandleTime=candle.time;break}
-        for(const[k,target]of hits)if(!trade.tpHits.includes(k)){
-          trade.tpHits.push(k);milestoneChanged=true;
-          await notifyTradeMilestone(env,trade,k,target);
-        }
-        if(trade.tpHits.includes("TP3")){event="TP3";eventPrice=trade.target3;eventCandleTime=candle.time;break}
-      }
-      const latest=recent[recent.length-1];
-      if(latest){
-        trade.lastPrice=Number(latest.close);
-        trade.lastCheckedAt=new Date().toISOString();
-        trade.lastCheckedCandleTime=Number(latest.time);
-      }
-      checked++;
-      if(event){
-        trade.closedAt=new Date().toISOString();trade.exitPrice=Number(eventPrice);
-        trade.outcomeR=tradeResultR(trade,event==="STOP");
-        trade.outcomePercent=tradeOutcomePercent(trade,eventPrice);
-        trade.closeReason=event==="STOP"?"STOP_LOSS":"TP3";
-        trade.status=event==="STOP"?"CLOSED_STOP":"CLOSED_TARGETS";
-        trade.resolutionCandleTime=eventCandleTime;
-      }
-      // Cron checks run every five minutes. Persist only meaningful state
-      // transitions (milestones/closures), not every routine price/checkpoint
-      // refresh. The user-facing open-trades view may persist a fresh snapshot.
-      const dirty=Boolean(event||milestoneChanged||(persistSnapshots&&(latest||checkpointChanged)));
-      return{trade,closed:Boolean(event),dirty};
-    }catch(error){
-      console.error("Tracked futures trade refresh failed:",trade.symbol,String(error?.message||error));
-      return{trade,closed:false,dirty:false};
-    }
-  });
-  const closedIds=new Set();
-  for(const x of results){
-    const i=remaining.findIndex(t=>t.id===x.trade.id);
-    if(i>=0){
-      remaining[i]=x.trade;
-      if(x.dirty){
-        openListDirty=true;
-        await updateIssuedSignal(env.APP_KV,x.trade.chatId,x.trade);
-      }
-      if(x.closed){
-        closedIds.add(x.trade.id);closed.unshift(x.trade);closedCount++;closedListDirty=true;
-      }
-    }
-  }
-  if(openListDirty)await writeTradeList(env,FUTURES_OPEN_KEY,remaining.filter(t=>!closedIds.has(t.id)).slice(0,300));
-  if(closedListDirty)await writeTradeList(env,FUTURES_CLOSED_KEY,closed.slice(0,500));
-  for(const x of results.filter(v=>v.closed)){
-    const t=x.trade,o=Number(t.outcomePercent),label=o>0?"سود":o<0?"ضرر":"سر‌به‌سر";
-    await sendMessage(env,t.chatId,`📚 نتیجه سیگنال ${formatFuturesSymbol(t.symbol)}\n━━━━━━━━━━━━━━━━━━\nجهت: ${t.side==="LONG"?"LONG 🟢":"SHORT 🔴"}\nورود سیگنال: ${formatPrice(t.actualEntry)}\nخروج ثبت‌شده: ${formatPrice(t.exitPrice)}\nنتیجه: ${Number.isFinite(o)?formatOutcomePercent(o):"—"}\nR: ${Number.isFinite(t.outcomeR)?(t.outcomeR>=0?"+":"")+t.outcomeR.toFixed(2):"—"}\nTPهای لمس‌شده: ${t.tpHits.join(", ")||"هیچ‌کدام"}\nدلیل بسته‌شدن: ${t.closeReason==="STOP_LOSS"?"حد ضرر":"TP3"}`);
-  }
-  return{checked,closed:closedCount};
-}
-async function notifyTradeMilestone(env,trade,key,target){
-  const p=leveragedPriceChangePercent(trade.side,trade.actualEntry,target);
-  const labels={TP1:"🎯 تارگت اول",TP2:"🎯 تارگت دوم",TP3:"🎯 تارگت سوم"};
-  const direction=trade.side==="LONG"?"🟢 لانگ / Long":"🔴 شورت / Short";
-  const profit=p===null?"—":`${Math.abs(Number(p)).toFixed(2)}٪`;
-  await sendMessage(env,trade.chatId,
-    `${labels[key]||key} ${formatFuturesSymbol(trade.symbol)} لمس شد.\nجهت معامله: ${direction}\nقیمت تارگت: ${formatPrice(target)}\n🥳 درصد سود: ${profit}`);
-}
-async function handleTradeAction(action,chatId,env){const[,op]=action.split(":");if(op==="be")return sendMessage(env,chatId,"ℹ️ در نسخه جدید حد ضرر سیگنال خودکار جابه‌جا نمی‌شود؛ برای ارزیابی منصفانه حد ضرر اولیه ثابت می‌ماند.");if(op==="skip"||op==="enter")return sendMessage(env,chatId,"ℹ️ این نسخه هر سیگنال صادرشده را خودکار در دفتر ارزیابی ثبت می‌کند؛ ثبت دستی لازم نیست.")}
-async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت دستی معامله در نسخه جدید غیرفعال است؛ سیگنال‌های صادرشده خودکار در دفتر ارزیابی ثبت می‌شوند.")}
-async function showIssuedSignalSymbols(env,chatId,view="archive"){
-  if(!env.APP_KV)return sendMessage(env,chatId,"❌ حافظه دائمی در دسترس نیست.",BACK_MENU);
-  const records=await listIssuedSignals(env.APP_KV,chatId,{status:view==="history"?undefined:undefined});
-  const filtered=view==="history"?records.filter(x=>String(x.status||"").startsWith("CLOSED")):records;
-  const symbols=issuedSignalSymbols(filtered);
-  if(!symbols.length)return sendMessage(env,chatId,view==="history"?"📚 هنوز سیگنال تکمیل‌شده‌ای در تاریخچه ثبت نشده است.":"🗂 هنوز سیگنالی در آرشیو ثبت نشده است.",BACK_MENU);
-  const keyboard=[];
-  for(let i=0;i<symbols.length;i+=2)keyboard.push(symbols.slice(i,i+2).map(symbol=>({text:"🪙 "+formatFuturesSymbol(symbol),callback_data:`ledger:${view==="history"?"h":"a"}:${symbol}`})));
-  keyboard.push([{text:"🏠 منوی اصلی",callback_data:"menu"}]);
-  return sendMessage(env,chatId,view==="history"?"📚 تاریخچه معاملات — انتخاب نماد":"🗂 آرشیو سیگنال‌های صادرشده — انتخاب نماد", {inline_keyboard:keyboard});
-}
-async function showIssuedSignalDetails(env,chatId,selection,view){
-  const [symbol,pageRaw]=String(selection||"").split(":");
-  const page=Math.max(0,Number(pageRaw)||0);
-  const records=await listIssuedSignals(env.APP_KV,chatId,{symbol});
-  const filtered=view==="history"?records.filter(x=>String(x.status||"").startsWith("CLOSED")):records;
-  const pageSize=8,totalPages=Math.max(1,Math.ceil(filtered.length/pageSize));
-  const items=filtered.slice(page*pageSize,(page+1)*pageSize);
-  if(!items.length)return sendMessage(env,chatId,"برای این نماد در این بخش موردی ثبت نشده است.",{inline_keyboard:[[{text:"⬅️ بازگشت به نمادها",callback_data:view==="history"?"ledger:history":"ledger:archive"}],[{text:"🏠 منوی اصلی",callback_data:"menu"}]]});
-  const body=items.map(x=>{
-    const d=new Date(x.publishedAt||x.createdAt);
-    const date=d.toLocaleString("fa-IR",{timeZone:"Asia/Tehran"});
-    const status=String(x.status||"OPEN").startsWith("CLOSED")?(x.closeReason==="STOP_LOSS"?"🛑 STOP / استاپ":x.closeReason==="TP3"?"🏁 FULL TARGET / فول تارگت":"بسته‌شده"):"🟢 باز";
-    const milestones=(x.tpHits||[]).map(k=>({TP1:"TP1 / تارگت یک",TP2:"TP2 / تارگت دو",TP3:"TP3 / تارگت سه"}[k]||k));
-    return `🪙 ${formatFuturesSymbol(x.symbol)} | ${x.side}\n🕒 ${date}\nوضعیت: ${status}\nورود: ${formatPrice(x.entry)} | استاپ: ${formatPrice(x.stop)}\nTP1: ${formatPrice(x.target1)} | TP2: ${formatPrice(x.target2)} | TP3: ${formatPrice(x.target3)}\nتارگت‌های لمس‌شده: ${milestones.join("، ")||"هیچ‌کدام"}${x.exitPrice!==null&&x.exitPrice!==undefined?"\nنتیجه: "+formatOutcomePercent(tradeOutcomePercent({...x,actualEntry:x.entry},x.exitPrice)):""}`;
-  }).join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
-  const keyboard=[];
-  const nav=[];
-  if(page>0)nav.push({text:"⬅️ قبلی",callback_data:`ledger:${view==="history"?"h":"a"}:${symbol}:${page-1}`});
-  if(page+1<totalPages)nav.push({text:"بعدی ➡️",callback_data:`ledger:${view==="history"?"h":"a"}:${symbol}:${page+1}`});
-  if(nav.length)keyboard.push(nav);
-  keyboard.push([{text:"⬅️ بازگشت به نمادها",callback_data:view==="history"?"ledger:history":"ledger:archive"}]);
-  keyboard.push([{text:"🏠 منوی اصلی",callback_data:"menu"}]);
-  const heading=view==="history"?"📚 تاریخچه تکمیل‌شده ":"🗂 آرشیو سیگنال‌های صادرشده ";
-  return sendMessage(env,chatId,heading+formatFuturesSymbol(symbol)+` | صفحه ${page+1} از ${totalPages}\n━━━━━━━━━━━━━━━━━━\n`+body,{inline_keyboard:keyboard});
-}
-async function showOpenFuturesTrades(env,chatId){
-  try{await refreshTrackedFuturesTrades(env,chatId)}catch(error){console.error("Open trade refresh failed:",String(error?.stack||error))}
-  const list=(await readTradeList(env,FUTURES_OPEN_KEY)).filter(t=>String(t.chatId)===String(chatId));
-  if(!list.length)return sendMessage(env,chatId,"📭 معامله بازی در دفتر پیگیری ثبت نشده است.",BACK_MENU);
-  const body=list.slice(0,15).map(t=>{
-    const p=leveragedPriceChangePercent(t.side,t.actualEntry,t.lastPrice);
-    const label=t.tier==="EXPERIMENTAL"?"🟠 سیگنال پر ریسک":"🟢 سیگنال معتبر";
-    const direction=t.side==="LONG"?"🟢 لانگ / Long":"🔴 شورت / Short";
-    return `${label}\nنماد: ${formatFuturesSymbol(t.symbol)}\nجهت معامله: ${direction}\nورود: ${formatPrice(t.actualEntry)}\nقیمت فعلی: ${formatPrice(t.lastPrice)}\nدرصد سود/زیان فعلی: ${formatOutcomePercent(p)}\n\n🎯 تارگت اول: ${formatPrice(t.target1)}\n🎯 تارگت دوم: ${formatPrice(t.target2)}\n🎯 تارگت سوم: ${formatPrice(t.target3)}\n\n⛔ حد ضرر: ${formatPrice(t.currentStop)}\nتارگت‌های لمس‌شده: ${t.tpHits.join(", ")||"—"}`;
-  }).join("\n\n━━━━━━━━━━━━━━━━━━\n\n");
-  return sendLongMessage(env,chatId,"📌 معاملات باز / سیگنال‌های در حال ارزیابی\n━━━━━━━━━━━━━━━━━━\n\n"+body+"\n\n⚠️ این دفتر ارزیابی است؛ سفارش واقعی ثبت نمی‌شود.");
-}
-async function showFuturesTradeHistory(env,chatId){const list=(await readTradeList(env,FUTURES_CLOSED_KEY)).filter(t=>String(t.chatId)===String(chatId)).slice(0,50);if(!list.length)return sendMessage(env,chatId,"📚 هنوز معامله بسته‌شده‌ای ثبت نشده است.",BACK_MENU);const results=list.map(t=>{const computed=tradeOutcomePercent(t,t.exitPrice);return computed===null?Number(t.outcomePercent)||0:computed}),wins=results.filter(v=>v>0).length,losses=results.filter(v=>v<0).length,breakeven=list.length-wins-losses,winRate=list.length?wins/list.length*100:0,tp1=list.filter(t=>t.tpHits?.includes("TP1")).length,tp2=list.filter(t=>t.tpHits?.includes("TP2")).length,tp3=list.filter(t=>t.tpHits?.includes("TP3")).length,avg=results.reduce((s,v)=>s+v,0)/list.length,total=results.reduce((s,v)=>s+v,0);const summary=`📊 آمار عملکرد سیگنال‌ها\n━━━━━━━━━━━━━━━━━━\nکل سیگنال‌های بسته‌شده: ${list.length}\nبرد: ${wins} | باخت: ${losses} | سر‌به‌سر: ${breakeven}\n🏆 Win Rate: ${winRate.toFixed(1)}٪\n📈 میانگین نتیجه هر سیگنال: ${formatOutcomePercent(avg)}\n💰 مجموع نتیجه معاملات: ${formatOutcomePercent(total)}\n🎯 رسیدن به TP1: ${tp1} | TP2: ${tp2} | TP3: ${tp3}\n\n`;const body=list.slice(0,15).map((t,i)=>`${t.tier==="EXPERIMENTAL"?"🟠 سیگنال پر ریسک | ":"🟢 سیگنال معتبر | "}${formatFuturesSymbol(t.symbol)} | ${t.side}\nورود: ${formatPrice(t.actualEntry)} | خروج: ${formatPrice(t.exitPrice)}\nنتیجه: ${formatOutcomePercent(results[i])} | ${Number(t.outcomeR).toFixed(2)}R\nTPها: ${t.tpHits.join(", ")||"—"} | ${t.closeReason==="STOP_LOSS"?"استاپ":"TP3"}`).join("\n\n");return sendLongMessage(env,chatId,summary+"📚 تاریخچه معاملات\n━━━━━━━━━━━━━━━━━━\n"+body)}
+async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت و پیگیری نتایج معاملات در این نسخه غیرفعال است.")}
 async function runAutomaticFuturesAlertScan(env) {
   if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) {
     throw new Error("SIGNAL_DELIVERY and SIGNAL_DELIVERY_SECRET are required for scan coordination.");
@@ -1976,47 +2076,12 @@ async function runAutomaticFuturesAlertScan(env) {
   if (!acquireResponse.ok || !acquire.ok) throw new Error(acquire.error || "Could not acquire automatic scan lock.");
   if (!acquire.acquired) return { skipped: true, reason: "scan already running" };
   try {
-    const tracking = await refreshTrackedFuturesTrades(env);
     const result = await runFuturesSignalScan(env);
-    return { scanned: true, signals: (result.signals || []).length, experimentalSignals: result.experimentalSent || 0, checkedTrades: tracking.checked, closedTrades: tracking.closed };
+    return { scanned: true, signals: (result.signals || []).length, experimentalSignals: 0 };
   } finally {
     const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
     if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
   }
-}
-
-async function filterActiveDuplicateFuturesSignals(env, candidates) {
-  const now = Date.now();
-  const [pending, open] = await Promise.all([
-    readTradeList(env, FUTURES_PENDING_KEY),
-    readTradeList(env, FUTURES_OPEN_KEY)
-  ]);
-  const activeKeys = new Set();
-
-  // A pending signal blocks another signal for the same contract and direction
-  // until its entry window expires, regardless of the candle fingerprint.
-  for (const signal of pending) {
-    if (signal?.expiresAt > now && signal?.symbol && ['LONG', 'SHORT'].includes(signal?.side)) {
-      activeKeys.add(String(signal.symbol).trim().toUpperCase() + '|' + signal.side);
-    }
-  }
-
-  // An accepted/open paper trade continues to block repeats even after
-  // the original signal's entry window has expired.
-  for (const trade of open) {
-    if (trade?.tier !== "EXPERIMENTAL" && trade?.status === 'OPEN' && trade?.symbol && ['LONG', 'SHORT'].includes(trade?.side)) {
-      activeKeys.add(String(trade.symbol).trim().toUpperCase() + '|' + trade.side);
-    }
-  }
-
-  const seenThisScan = new Set();
-  return (Array.isArray(candidates) ? candidates : []).filter(signal => {
-    if (!signal?.symbol || !['LONG', 'SHORT'].includes(signal?.side)) return false;
-    const key = String(signal.symbol).trim().toUpperCase() + '|' + signal.side;
-    if (activeKeys.has(key) || seenThisScan.has(key)) return false;
-    seenThisScan.add(key);
-    return true;
-  });
 }
 
 async function runFuturesSignalScan(env, options = {}) {
@@ -2025,6 +2090,7 @@ async function runFuturesSignalScan(env, options = {}) {
   if (!universe.length) {
     return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [] };
   }
+  const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   const analyzed = await mapLimit(universe, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
       const [oneHour, fourHour, fifteenMinute] = await Promise.all([
@@ -2036,44 +2102,17 @@ async function runFuturesSignalScan(env, options = {}) {
     } catch (error) {
       return { symbol: ticker.symbol, rejected: error.message || "خطای تحلیل" };
     }
-  });
+  }, () => Date.now() < analysisDeadline);
   const createdAt = Date.now();
   const eligibleCandidates = analyzed.filter(x => x?.eligible).sort((a, b) => b.score - a.score);
-  const experimentalCandidates = analyzed.filter(x => x?.experimentalEligible)
-    .sort((a, b) => b.score - a.score).slice(0, 3);
-  const nonDuplicateCandidates = await filterActiveDuplicateFuturesSignals(env, eligibleCandidates);
-  const generatedSignals = nonDuplicateCandidates.slice(0, 8)
+  const generatedSignals = eligibleCandidates.slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
     .map(x => ({ ...x, id: crypto.randomUUID(), createdAt, expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000, status: "PENDING" }));
-  const signals = await savePendingFuturesSignals(env, generatedSignals);
+  const signals = await registerPendingFuturesSignals(env, generatedSignals);
 
-  // Experimental candidates are delivered only to the owner, clearly labelled,
-  // and rate-limited per symbol/direction. They never enter the production signal queue.
-  const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
-  let experimentalSent = 0;
-  if (env.APP_KV && ownerId) {
-    for (const candidate of experimentalCandidates) {
-      const key = `futures:experimental:sent:${candidate.symbol}:${candidate.side}`;
-      if (await env.APP_KV.get(key)) continue;
-      const signal = {
-        ...candidate, id: crypto.randomUUID(), tier: "EXPERIMENTAL",
-        createdAt: Date.now(), expiresAt: Date.now() + 60 * 60 * 1000
-      };
-      try {
-        await sendAndArchiveFuturesSignal(env, ownerId, signal, formatExperimentalFuturesSignal(signal));
-        await env.APP_KV.put(key, "sent", { expirationTtl: 3600 });
-        experimentalSent++;
-      } catch (error) {
-        console.error("Experimental futures alert failed:", signal.symbol, String(error?.message || error));
-      }
-    }
-  }
-
-  if (env.APP_KV) {
-    try {
-      await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
-    } catch (error) {
-      console.error("Immediate futures alert dispatch failed:", String(error?.stack || error?.message || error));
-    }
+  try {
+    await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
+  } catch (error) {
+    console.error("Immediate futures alert dispatch failed:", String(error?.stack || error?.message || error));
   }
   const validData = analyzed.filter(x => x && x.score !== undefined).length;
   const rejected = analyzed.filter(x => x?.rejected).slice(0, 8);
@@ -2081,7 +2120,8 @@ async function runFuturesSignalScan(env, options = {}) {
     "━━━━━━━━━━━━━━━━━━\n" +
     "🏦 بازار: Kraken Derivatives Perpetual\n" +
     "⏱ تایم‌فریم: 1h با تأیید روند 4h\n" +
-    `📥 نمادهای پرحجم بررسی‌شده: ${universe.length}\n` +
+    `📥 نمادهای بررسی‌شده: ${analyzed.filter(Boolean).length} از ${universe.length}\n` +
+    (analyzed.filter(Boolean).length < universe.length ? "⏱ ادامه بررسی به‌دلیل بودجه امن زمان به چرخه بعد موکول شد.\n" : "") +
     `📊 تحلیل‌های معتبر: ${validData}\n` +
     `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n\n`;
   if (signals.length) {
@@ -2099,27 +2139,7 @@ async function runFuturesSignalScan(env, options = {}) {
     "📡 منبع داده: API عمومی Kraken Derivatives Futures\n" +
     "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست. قیمت ممکن است پس از بسته‌شدن کندل تغییر کند.";
 
-  if (env.APP_KV) {
-    try {
-      await env.APP_KV.put("last_futures_scan", JSON.stringify({
-        version: "3.8.2-engine",
-        timestamp: Date.now(),
-        report,
-        signals: signals.map(x => ({
-          symbol: x.symbol, side: x.side, score: x.score, entry: x.entry,
-          stop: x.stop, target1: x.target1, target2: x.target2, target3: x.target3
-        }))
-      }));
-    } catch (error) {
-      report += `\n⚠️ ذخیره گزارش فیوچرز ناموفق بود: ${String(error.message || "KV error")}`;
-    }
-  }
-  return { report, signals, experimentalSent };
-}
-
-function formatExperimentalFuturesSignal(item) {
-  return formatFuturesSignal({ ...item, tier: "EXPERIMENTAL" }) +
-    "\n\n⚠️ این سیگنال فقط برای ارزیابی آزمایشی است؛ برای معامله واقعی استفاده نکن.";
+  return { report, signals, experimentalSent: 0 };
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
@@ -2154,103 +2174,60 @@ async function runFuturesSignalsForChat(env, chatId) {
 }
 
 
-async function refreshOpenFuturesTrades(env,chatId,tickers) {
-  const open=await readTradeList(env,FUTURES_OPEN_KEY);if(!open.length)return;
-  const prices=new Map((tickers||[]).map(t=>[`${t.exchange || "Kraken"}:${t.symbol}`,Number(t.last)]));
-  const closed=await readTradeList(env,FUTURES_CLOSED_KEY),remaining=[];
-  for(const t of open) {
-    if(String(t.chatId)!==String(chatId)){remaining.push(t);continue;}
-    const price=prices.get(`${t.exchange || "Kraken"}:${t.symbol}`);if(!Number.isFinite(price)||price<=0){remaining.push(t);continue;}
-    t.lastPrice=price;t.lastCheckedAt=new Date().toISOString();
-    if(stopReached(t.side,price,t.currentStop)) {
-      t.status="CLOSED_STOP";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,true);t.outcomePercent=tradeOutcomePercent(t,price);t.closeReason="STOP_LOSS";
-      closed.unshift(t);
-      await updateIssuedSignal(env.APP_KV,t.chatId,t);
-      await sendMessage(env,chatId,`🛑 ${formatFuturesSymbol(t.symbol)}\n\nمتأسفانه استاپ شد 😞\n\nنتیجه معامله: ${Math.abs(Number(t.outcomePercent)||0).toFixed(2)}٪ ضرر\n\nبزودی سیگنال جبرانی صادر خواهد شد.`);
-      continue;
-    }
-    const favorableR=tradeDir(t.side)*(price-t.actualEntry)/t.initialRisk;
-    if(favorableR>=0.75&&!t.protectionAlerted&&!t.breakEvenConfirmed) {
-      t.protectionAlerted=true;
-      await sendMessage(env,chatId,`🛡️ قیمت ${formatFuturesSymbol(t.symbol)} به +0.75R رسیده؛ یعنی نصف مسیر تارگت اول. برای جلوگیری از تبدیل سود شناور به زیان، انتقال حد ضرر باقی‌مانده به نقطه ورود را بررسی کن. اگر واقعاً در صرافی انجامش دادی، تأیید کن.`,
-        {inline_keyboard:[[{text:"✅ حد ضرر را به ورود منتقل کردم",callback_data:`trade:be:${t.id}`}]]});
-    }
-    const levels=[["TP1",t.target1],["TP2",t.target2],["TP3",t.target3]],hits=[];
-    for(const [key,target] of levels)if(!t.tpHits.includes(key)&&targetReached(t.side,price,target)){t.tpHits.push(key);hits.push(key);}
-    for(const hit of hits) {
-      const target=hit==="TP1"?t.target1:hit==="TP2"?t.target2:t.target3;
-      await notifyTradeMilestone(env,t,hit,target);
-    }
-    if(t.tpHits.includes("TP3")) {
-      t.status="CLOSED_TARGETS";t.closedAt=new Date().toISOString();t.exitPrice=price;t.outcomeR=tradeResultR(t,false);t.outcomePercent=tradeOutcomePercent(t,price);t.closeReason="TP3";
-      closed.unshift(t);await updateIssuedSignal(env.APP_KV,t.chatId,t);await sendMessage(env,chatId,`🏁 هر سه تارگت ${formatFuturesSymbol(t.symbol)} لمس شد. نتیجه: ${formatOutcomePercent(t.outcomePercent)} | نتیجه بر اساس ریسک: ${t.outcomeR.toFixed(2)}R.`);continue;
-    }
-    await updateIssuedSignal(env.APP_KV,t.chatId,t);
-    remaining.push(t);
-  }
-  await writeTradeList(env,FUTURES_OPEN_KEY,remaining);
-  await writeTradeList(env,FUTURES_CLOSED_KEY,closed.slice(0,300));
-}
-
 async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
-  if (!env.APP_KV) throw new Error("APP_KV binding is required for automatic alerts.");
-  const queueKey = "futures:auto-alerts:pending-broadcasts";
-  let queue = await env.APP_KV.get(queueKey, "json") || [];
-  if (!Array.isArray(queue)) queue = [];
-  const queuedFingerprints = new Set(queue.map(item => item.fingerprint));
-  const fresh = selectUnnotifiedFuturesSignals(signals || [], queuedFingerprints);
-  queue = [...queue, ...fresh.map(item => ({ ...item, queuedAt: Date.now() }))].slice(-100);
-  if (queue.length && JSON.stringify(queue)!==JSON.stringify(await env.APP_KV.get(queueKey,"json")||[])) {
-    await env.APP_KV.put(queueKey, JSON.stringify(queue), { expirationTtl: 86400 });
-  }
-  if (!queue.length) return { newSignals: 0, recipients: 0, delivered: 0, failed: 0 };
-
-  await migrateLegacyMembership(env);
+  if (!Array.isArray(signals) || !signals.length) return { newSignals: 0, recipients: 0, delivered: 0, failed: 0 };
   const recipients = new Set();
-  if (env.OWNER_TELEGRAM_ID || env.OWNER_ID) recipients.add(String(env.OWNER_TELEGRAM_ID || env.OWNER_ID));
-  let cursor;
-  do {
-    const page = await env.APP_KV.list({ prefix: "member:", limit: 1000, ...(cursor ? { cursor } : {}) });
-    for (const item of page.keys || []) {
-      const chatId = item.name.slice("member:".length);
-      const member = await env.APP_KV.get(item.name, "json");
-      if (member && member.approved !== false && member.revoked !== true) recipients.add(String(chatId));
-    }
-    cursor = page.list_complete === false ? page.cursor : null;
-  } while (cursor);
-
-  let delivered = 0, failed = 0;
-  await mapLimit([...recipients].filter(id => excludeChatId == null || String(id) !== String(excludeChatId)), 4, async chatId => {
-    const pending = [];
-    for (const item of queue) {
-      const key = futuresAlertStorageKey(chatId, item.fingerprint);
-      if (!(await env.APP_KV.get(key))) pending.push({ ...item, key });
-    }
-    if (!pending.length) return;
+  const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
+  if (ownerId) recipients.add(String(ownerId));
+  // KV is used only to read the allow-list. Any read/quota outage must not
+  // prevent delivery to the owner, and must never broaden access to users.
+  if (env.APP_KV) {
     try {
-      for (let i = 0; i < pending.length; i++) {
-        const item = pending[i];
-        await sendAndArchiveFuturesSignal(env, chatId, item.signal, formatFuturesSignalAlert(item.signal, i + 1));
-        await env.APP_KV.put(item.key, "sent", { expirationTtl: ALERT_TTL_SECONDS });
+      let cursor;
+      do {
+        const page = await env.APP_KV.list({ prefix: "member:", limit: 1000, ...(cursor ? { cursor } : {}) });
+        for (const item of page.keys || []) {
+          const chatId = item.name.slice("member:".length);
+          const member = await env.APP_KV.get(item.name, "json");
+          if (member && member.approved !== false && member.revoked !== true) recipients.add(String(chatId));
+        }
+        cursor = page.list_complete === false ? page.cursor : null;
+      } while (cursor);
+      const legacyMembers = await env.APP_KV.get("v1:members", "json") || {};
+      for (const [chatId, legacy] of Object.entries(legacyMembers)) {
+        if (legacy?.status !== "active") continue;
+        const modern = await env.APP_KV.get(memberKey(chatId), "json");
+        if (!modern) recipients.add(String(chatId));
       }
-      delivered++;
     } catch (error) {
-      failed++;
-      console.error("Immediate futures alert delivery failed", chatId, String(error?.message || error));
+      console.error("Approved-member read failed; continuing with owner delivery only:", String(error?.message || error));
+    }
+  }
+  const targets = [...recipients].filter(id => excludeChatId == null || String(id) !== String(excludeChatId));
+  let delivered = 0, failed = 0;
+  await mapLimit(targets, 4, async chatId => {
+    for (let i = 0; i < signals.length; i++) {
+      try {
+        await sendAndArchiveFuturesSignal(env, chatId, signals[i], formatFuturesSignalAlert(signals[i], i + 1));
+        delivered++;
+      } catch (error) {
+        failed++;
+        console.error("Immediate futures alert delivery failed", chatId, signals[i].symbol, String(error?.message || error));
+      }
     }
   });
-  if (failed === 0 && recipients.size > 0) await env.APP_KV.delete(queueKey);
-  return { newSignals: fresh.length, queuedSignals: queue.length, recipients: recipients.size, delivered, failed };
+  return { newSignals: signals.length, recipients: targets.length, delivered, failed };
 }
 
 // ---------------- CONCURRENCY ----------------
 
-async function mapLimit(items, limit, callback) {
+async function mapLimit(items, limit, callback, shouldContinue = () => true) {
   const results = new Array(items.length);
   let index = 0;
 
   async function worker() {
     while (true) {
+      if (!shouldContinue()) return;
       const currentIndex = index++;
       if (currentIndex >= items.length) return;
 
@@ -2277,4 +2254,4 @@ async function mapLimit(items, limit, callback) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
+export { FUTURES_CONFIG, findLatestConfirmed15mPivot, mapLimit, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
