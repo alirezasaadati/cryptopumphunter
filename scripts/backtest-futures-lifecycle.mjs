@@ -188,7 +188,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   return {
     symbol:ticker.symbol,
     candles:{ "1h":oneHour.length, "4h":fourHour.length, "15m":fifteenMinute.length, "5m":fiveMinute.length },
-    signalsAccepted, skippedBySameSideLock:skippedByLock, rejectedSignals,
+    signalsAccepted:acceptedSignals, skippedBySameSideLock:skippedByLock, rejectedSignals,
     metrics:summarize(trades), trades
   };
 }
