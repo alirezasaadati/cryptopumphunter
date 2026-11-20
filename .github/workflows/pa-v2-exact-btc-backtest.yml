@@ -1,8 +1,8 @@
-name: Exact uploaded PA v2 BTC one-year backtest
+name: PA v2.1 BTC one-year backtest with unlimited holding
 on:
   push:
     branches:
-      - experiment/pa-v2-exact-btc-backtest
+      - experiment/pa-v21-btc-unlimited-hold
     paths:
       - "src/price-action-engine.js"
       - "scripts/backtest-btc-1y.mjs"
@@ -28,7 +28,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pa-v2-btc-1y-backtest
+          name: pa-v21-btc-1y-unlimited-hold
           path: artifacts/
           if-no-files-found: warn
           retention-days: 14
