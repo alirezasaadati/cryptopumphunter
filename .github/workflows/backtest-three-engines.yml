@@ -1,10 +1,10 @@
-name: Hybrid-only 12-month regime backtest
+name: Trend vs Mean-Reversion 12-month comparison
 on:
   push:
     branches: [backtest-three-engines]
     paths:
       - "scripts/candidate-engine.mjs"
-      - "scripts/backtest-three-engines.mjs"
+      - "scripts/backtest-three-engines.mjs"\n      - "scripts/backtest-architectures.mjs"
       - ".github/workflows/backtest-three-engines.yml"
   workflow_dispatch:
 jobs:
@@ -20,17 +20,17 @@ jobs:
         run: |
           node --check scripts/candidate-engine.mjs
           node --check scripts/backtest-three-engines.mjs
-      - name: Run hybrid-only 12-month backtest
+      - name: Run three-architecture comparison
         env:
           BACKTEST_DAYS: "365"
           BACKTEST_SYMBOLS: "8"
           BACKTEST_FEE: "0.0005"
           BACKTEST_SLIPPAGE: "0.0003"
-        run: node scripts/backtest-three-engines.mjs
-      - name: Upload hybrid report
+        run: node scripts/backtest-architectures.mjs
+      - name: Upload architecture comparison
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hybrid-12m-backtest
+          name: architecture-comparison
           path: artifacts/
           if-no-files-found: warn
