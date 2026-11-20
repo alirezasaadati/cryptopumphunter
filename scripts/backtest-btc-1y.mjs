@@ -4,7 +4,7 @@
 // Usage:
 //   node scripts/backtest-btc-1y.mjs
 //   BACKTEST_DAYS=365 BACKTEST_SYMBOL=PF_XBTUSD node scripts/backtest-btc-1y.mjs
-//   BACKTEST_DAYS=365 BACKTEST_SYMBOL=PF_XBTUSD BACKTEST_MAX_HOLD_HOURS=168 node scripts/backtest-btc-1y.mjs
+//   BACKTEST_DAYS=365 BACKTEST_SYMBOL=PF_XBTUSD node scripts/backtest-btc-1y.mjs
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { analyzePriceAction } from "../src/price-action-engine.js";
@@ -21,7 +21,6 @@ const DAY = 24 * HOUR;
 
 const SYMBOL = String(process.env.BACKTEST_SYMBOL || "PF_XBTUSD").trim();
 const DAYS = Math.max(30, Math.min(730, Number(process.env.BACKTEST_DAYS || 365)));
-const MAX_HOLD_HOURS = Math.max(24, Number(process.env.BACKTEST_MAX_HOLD_HOURS || 168));
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
 const SLIPPAGE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_SLIPPAGE || 0.0003));
 const WARMUP_DAYS = Math.max(10, Number(process.env.BACKTEST_WARMUP_DAYS || 20));
@@ -128,7 +127,7 @@ function applyTarget(position, target, weight, fee, slippage, time) {
 
 export function simulateTrade({
   side, entry, stop, targets, candles, startIndex,
-  fee = 0.0005, slippage = 0.0003, maxHoldHours = 168,
+  fee = 0.0005, slippage = 0.0003,
   sameCandleRule = "stop_first"
 }) {
   const direction = side === "LONG" ? 1 : -1;
@@ -141,7 +140,8 @@ export function simulateTrade({
     exitTime: null, exitReason: null
   };
   const config = { fee, slippage };
-  const endIndex = Math.min(candles.length - 1, startIndex + maxHoldHours);
+  // No time-based exit: keep scanning all available candles until TP/SL.
+  const endIndex = candles.length - 1;
 
   for (let i = startIndex; i <= endIndex && position.remaining > 0; i++) {
     const bar = candles[i];
@@ -198,19 +198,20 @@ export function simulateTrade({
       if (position.remaining <= 1e-9) break;
     }
 
-    if (i === endIndex && position.remaining > 0) {
-      closeTrade(position, bar.close, "TIME_EXIT", bar.time, config);
-    }
   }
 
+  // Keep unresolved positions open at the end of available history.
   if (position.remaining > 0 && position.exitReason == null) {
-    closeTrade(position, candles[endIndex].close, "TIME_EXIT", candles[endIndex].time, config);
+    position.exitReason = "OPEN_AT_DATA_END";
+    position.exitTime = candles[endIndex].time;
   }
 
   return {
     side, entry, stop, risk,
     netR: position.realizedR,
     targetHits: position.targetHits,
+    remaining: position.remaining,
+    isOpen: position.remaining > 0,
     exitReason: position.exitReason,
     entryTime: candles[startIndex].time,
     exitTime: position.exitTime,
@@ -223,29 +224,36 @@ export function simulateTrade({
 /* -------------------------------------------------------------------------- */
 
 function sideMetrics(trades) {
-  const wins = trades.filter(t => t.netR > 0);
-  const losses = trades.filter(t => t.netR < 0);
+  const closed = trades.filter(t => !t.isOpen);
+  const wins = closed.filter(t => t.netR > 0);
+  const losses = closed.filter(t => t.netR < 0);
   const grossWin = wins.reduce((s, t) => s + t.netR, 0);
   const grossLoss = Math.abs(losses.reduce((s, t) => s + t.netR, 0));
   return {
     trades: trades.length,
+    closedTrades: closed.length,
+    openTrades: trades.length - closed.length,
     wins: wins.length,
     losses: losses.length,
-    winRatePct: trades.length ? (wins.length / trades.length) * 100 : 0,
+    winRatePct: closed.length ? (wins.length / closed.length) * 100 : 0,
     netR: trades.reduce((s, t) => s + t.netR, 0),
-    expectancyR: trades.length ? trades.reduce((s, t) => s + t.netR, 0) / trades.length : 0,
+    expectancyR: closed.length ? closed.reduce((s, t) => s + t.netR, 0) / closed.length : 0,
     profitFactor: grossLoss ? grossWin / grossLoss : grossWin ? null : 0,
+    tp1Trades: trades.filter(t => t.targetHits >= 1).length,
+    stoppedTrades: trades.filter(t => t.exitReason === "STOP").length,
     avgTargetHits: trades.length ? trades.reduce((s, t) => s + t.targetHits, 0) / trades.length : 0
   };
 }
 
 function summarize(trades) {
-  const wins = trades.filter(t => t.netR > 0);
-  const losses = trades.filter(t => t.netR < 0);
+  const closed = trades.filter(t => !t.isOpen);
+  const open = trades.filter(t => t.isOpen);
+  const wins = closed.filter(t => t.netR > 0);
+  const losses = closed.filter(t => t.netR < 0);
   const grossWin = wins.reduce((s, t) => s + t.netR, 0);
   const grossLoss = Math.abs(losses.reduce((s, t) => s + t.netR, 0));
   let equity = 0, peak = 0, maxDrawdown = 0;
-  for (const trade of trades) {
+  for (const trade of closed) {
     equity += trade.netR;
     peak = Math.max(peak, equity);
     maxDrawdown = Math.max(maxDrawdown, peak - equity);
@@ -254,12 +262,16 @@ function summarize(trades) {
   for (const t of trades) exitReasons[t.exitReason || "UNKNOWN"] = (exitReasons[t.exitReason || "UNKNOWN"] || 0) + 1;
   return {
     trades: trades.length,
+    closedTrades: closed.length,
+    openTrades: open.length,
     wins: wins.length,
     losses: losses.length,
-    breakeven: trades.length - wins.length - losses.length,
-    winRatePct: trades.length ? (wins.length / trades.length) * 100 : 0,
+    breakeven: closed.length - wins.length - losses.length,
+    winRatePct: closed.length ? (wins.length / closed.length) * 100 : 0,
+    tp1Trades: trades.filter(t => t.targetHits >= 1).length,
+    stoppedTrades: trades.filter(t => t.exitReason === "STOP").length,
     netR: trades.reduce((s, t) => s + t.netR, 0),
-    expectancyR: trades.length ? trades.reduce((s, t) => s + t.netR, 0) / trades.length : 0,
+    expectancyR: closed.length ? closed.reduce((s, t) => s + t.netR, 0) / closed.length : 0,
     profitFactor: grossLoss ? grossWin / grossLoss : grossWin ? null : 0,
     maxDrawdownR: maxDrawdown,
     totalTargetHits: trades.reduce((s, t) => s + t.targetHits, 0),
@@ -294,7 +306,7 @@ async function runBacktest() {
   console.log(`\n📊 Backtest ${SYMBOL}`);
   console.log(`   Period: ${new Date(startMs).toISOString()} → ${new Date(endMs).toISOString()} (${DAYS} days)`);
   console.log(`   Warmup: ${WARMUP_DAYS} days before period`);
-  console.log(`   Max hold: ${MAX_HOLD_HOURS}h | Fee: ${FEE_PER_SIDE * 100}%/side | Slippage: ${SLIPPAGE_PER_SIDE * 100}%/side`);
+  console.log(`   Hold limit: NONE (TP/SL only) | Fee: ${FEE_PER_SIDE * 100}%/side | Slippage: ${SLIPPAGE_PER_SIDE * 100}%/side`);
   console.log(`   Same-candle rule: ${SAME_CANDLE_RULE}\n`);
 
   console.log("⏳ Fetching historical candles...");
@@ -375,7 +387,8 @@ async function runBacktest() {
     const direction = signal.side === "LONG" ? 1 : -1;
     const entry = signal.entry * (1 + direction * SLIPPAGE_PER_SIDE);
 
-    const tradeCandles = oneHour.slice(i + 1, Math.min(oneHour.length, i + 1 + MAX_HOLD_HOURS + 2));
+    // Include all remaining candles; no maximum holding time.
+    const tradeCandles = oneHour.slice(i + 1);
     if (tradeCandles.length < 2) continue;
 
     let trade;
@@ -389,7 +402,6 @@ async function runBacktest() {
         startIndex: 0,
         fee: FEE_PER_SIDE,
         slippage: SLIPPAGE_PER_SIDE,
-        maxHoldHours: MAX_HOLD_HOURS,
         sameCandleRule: SAME_CANDLE_RULE
       });
     } catch (error) {
@@ -443,7 +455,6 @@ async function runBacktest() {
       btcRangePct: btcStart ? ((btcMax - btcMin) / btcStart) * 100 : null
     },
     settings: {
-      maxHoldHours: MAX_HOLD_HOURS,
       feePerSidePct: FEE_PER_SIDE * 100,
       slippagePerSidePct: SLIPPAGE_PER_SIDE * 100,
       targetWeightsPct: TARGET_WEIGHTS.map(w => w * 100),
@@ -465,17 +476,22 @@ async function runBacktest() {
   md.push("");
   md.push(`**Period:** ${new Date(startMs).toISOString().slice(0, 10)} → ${new Date(endMs).toISOString().slice(0, 10)}`);
   md.push(`**BTC change:** ${report.period.btcChangePct?.toFixed(2)}% | **Range:** ${report.period.btcRangePct?.toFixed(2)}%`);
-  md.push(`**Max hold:** ${MAX_HOLD_HOURS}h | **Fee:** ${FEE_PER_SIDE * 100}%/side | **Slippage:** ${SLIPPAGE_PER_SIDE * 100}%/side | **Same-candle:** ${SAME_CANDLE_RULE}`);
+  md.push(`**Holding:** No time limit; TP/SL only | **Fee:** ${FEE_PER_SIDE * 100}%/side | **Slippage:** ${SLIPPAGE_PER_SIDE * 100}%/side | **Same-candle:** ${SAME_CANDLE_RULE}`);
   md.push("");
   md.push(`## Overall`);
   md.push("");
   md.push(`| Metric | Value |`);
   md.push(`|---|---:|`);
-  md.push(`| Trades | ${summary.trades} |`);
-  md.push(`| Wins | ${summary.wins} |`);
-  md.push(`| Losses | ${summary.losses} |`);
-  md.push(`| Breakeven | ${summary.breakeven} |`);
-  md.push(`| Win rate | ${summary.winRatePct.toFixed(2)}% |`);
+  md.push(`| Total trades | ${summary.trades} |`);
+  md.push(`| Closed trades | ${summary.closedTrades} |`);
+  md.push(`| Still open at data end | ${summary.openTrades} |`);
+  md.push(`| Trades that reached TP1 (including later-stopped trades) | ${summary.tp1Trades} |`);
+  md.push(`| Stop-loss trades | ${summary.stoppedTrades} |`);
+  md.push(`| LONG trades | ${summary.bySide.LONG.trades} |`);
+  md.push(`| SHORT trades | ${summary.bySide.SHORT.trades} |`);
+  md.push(`| Wins (closed trades only) | ${summary.wins} |`);
+  md.push(`| Losses (closed trades only) | ${summary.losses} |`);
+  md.push(`| Win rate (closed trades only) | ${summary.winRatePct.toFixed(2)}% |`);
   md.push(`| Net R | ${summary.netR.toFixed(2)}R |`);
   md.push(`| Expectancy | ${summary.expectancyR.toFixed(3)}R |`);
   md.push(`| Profit factor | ${summary.profitFactor ?? "n/a"} |`);
@@ -542,7 +558,10 @@ async function runBacktest() {
   console.log(`BTC change: ${report.period.btcChangePct?.toFixed(2)}% | Range: ${report.period.btcRangePct?.toFixed(2)}%`);
   console.log("═".repeat(60));
   console.log(`Trades:        ${summary.trades}`);
-  console.log(`Win rate:      ${summary.winRatePct.toFixed(2)}%`);
+  console.log(`Closed/Open:   ${summary.closedTrades}/${summary.openTrades}`);
+  console.log(`TP1 trades:    ${summary.tp1Trades}`);
+  console.log(`Stopped:       ${summary.stoppedTrades}`);
+  console.log(`Win rate:      ${summary.winRatePct.toFixed(2)}% (closed trades only)`);
   console.log(`Net R:         ${summary.netR.toFixed(2)}R`);
   console.log(`Expectancy:    ${summary.expectancyR.toFixed(3)}R`);
   console.log(`Profit factor: ${summary.profitFactor ?? "n/a"}`);
@@ -551,7 +570,8 @@ async function runBacktest() {
   console.log(`LONG:  ${summary.bySide.LONG.trades} trades | ${summary.bySide.LONG.winRatePct.toFixed(1)}% win | ${summary.bySide.LONG.netR.toFixed(2)}R`);
   console.log(`SHORT: ${summary.bySide.SHORT.trades} trades | ${summary.bySide.SHORT.winRatePct.toFixed(1)}% win | ${summary.bySide.SHORT.netR.toFixed(2)}R`);
   console.log("─".repeat(60));
-  console.log(`Signals: ${signalCounts.total_signals} (LONG ${signalCounts.long} / SHORT ${signalCounts.short})`);
+  console.log(`Trades: LONG ${summary.bySide.LONG.trades} / SHORT ${summary.bySide.SHORT.trades}`);
+  console.log(`Signals (pre-overlap filter): ${signalCounts.total_signals} (LONG ${signalCounts.long} / SHORT ${signalCounts.short})`);
   console.log(`Exit reasons: ${Object.entries(summary.exitReasons).map(([r, c]) => `${r}=${c}`).join(", ")}`);
   console.log("═".repeat(60));
   console.log(`📄 Reports: artifacts/backtest-btc-1y.md and .json\n`);
