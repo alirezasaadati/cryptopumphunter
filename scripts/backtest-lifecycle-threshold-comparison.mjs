@@ -166,7 +166,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
         const distance = Math.abs(referencePrice - maxHigh) / maxHigh;
         thresholdPass = Number.isFinite(distance) && maxHigh > 0 && distance >= 0.005;
       } else {
-        // SHORT side is deliberately unchanged: no additional distance threshold.
+        // SHORT side is deliberately unchanged: no additional distance threshold. LONG-only experiment.
         thresholdPass = true;
       }
     }
