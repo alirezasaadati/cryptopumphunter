@@ -1654,7 +1654,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
       };
     }
     reasons.push("فاصله قیمت از پیوت شکست ۱۵دقیقه‌ای حداکثر ۰٫۳٪ است");
-    }
+  }
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
   if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
