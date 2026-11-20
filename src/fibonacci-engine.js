@@ -169,7 +169,7 @@ function detectHiddenDivergence(candles, direction) {
   };
 }
 
-function findPullbackEntry(candles15m, direction, level) {
+export function findPullbackEntry(candles15m, direction, level) {
   const cfg = FIB_CONFIG;
   const start = Math.max(1, candles15m.length - cfg.SETUP_EXPIRY_15M - 2);
   let phase = "WAIT_TOUCH";
