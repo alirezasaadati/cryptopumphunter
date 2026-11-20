@@ -1795,7 +1795,7 @@ async function monitorOpenFuturesTrades(env) {
       const freshCandles = getNewClosedFuturesCandles(candles, trade.lastCheckedCandleTime);
       if (!freshCandles.length) continue;
       for (const candle of freshCandles) {
-        const result = evaluateTradeCandle(trade, candle);
+        const result = evaluateTradeCandle(trade, { ...candle, time: Number(candle.time) + 300000 });
         trade = {
           ...trade,
           lastPrice: candle.close,
