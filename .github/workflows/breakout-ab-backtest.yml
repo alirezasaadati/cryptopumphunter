@@ -1,7 +1,7 @@
 name: Breakout 0.3 percent paired A-B backtest
 on:
   push:
-    branches: [experiment/breakout-03pct-ab-20261120]
+    branches: [experiment/breakout-03pct-ab-20261120, experiment/fixed-margin-profit-targets-20261120]
     paths:
       - "scripts/backtest-breakout-ab.mjs"
       - ".github/workflows/breakout-ab-backtest.yml"
