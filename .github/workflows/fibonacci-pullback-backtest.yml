@@ -1,0 +1,31 @@
+name: Fibonacci pullback historical backtest
+on:
+  push:
+    branches: [feature/fibonacci-pullback-engine]
+    paths:
+      - '.github/workflows/fibonacci-pullback-backtest.yml'
+      - 'scripts/backtest-fibonacci-pullback.mjs'
+      - 'src/fibonacci-engine.js'
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 60-day historical backtest
+        env:
+          BACKTEST_DAYS: '60'
+          BACKTEST_SYMBOLS: '8'
+          BACKTEST_FEE: '0.0005'
+          BACKTEST_SLIPPAGE: '0.0003'
+        run: node scripts/backtest-fibonacci-pullback.mjs
+      - name: Upload Fibonacci backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fibonacci-pullback-backtest
+          path: artifacts/
+          if-no-files-found: warn
