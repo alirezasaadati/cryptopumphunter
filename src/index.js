@@ -1532,6 +1532,26 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
     momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
 }
 
+function findLatestConfirmed15mPivot(candles, side, left = 3, right = 3) {
+  if (!Array.isArray(candles) || candles.length < left + right + 1) return null;
+  const field = side === "LONG" ? "high" : "low";
+  for (let i = candles.length - right - 1; i >= left; i--) {
+    const value = Number(candles[i]?.[field]);
+    if (!Number.isFinite(value)) continue;
+    let pivot = true;
+    for (let j = i - left; j <= i + right; j++) {
+      if (j === i) continue;
+      const neighbor = Number(candles[j]?.[field]);
+      if (!Number.isFinite(neighbor) || (side === "LONG" ? neighbor >= value : neighbor <= value)) {
+        pivot = false;
+        break;
+      }
+    }
+    if (pivot) return { index: i, time: candles[i].time, price: value, type: side === "LONG" ? "swing_high" : "swing_low" };
+  }
+  return null;
+}
+
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
@@ -1609,6 +1629,21 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   if (!entryFilters.ok) {
     return { symbol: ticker.symbol, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
   }
+  if (Number.isFinite(options.maxBreakoutDistancePct)) {
+    const pivot = findLatestConfirmed15mPivot(candles15m, side, 3, 3);
+    if (!pivot) {
+      return { symbol: ticker.symbol, side, rejected: "پیوت شکست معتبر ۱۵دقیقه‌ای در دسترس نیست" };
+    }
+    const entryPrice = Number(ticker.last);
+    const signedDistancePct = side === "LONG"
+      ? (entryPrice - pivot.price) / pivot.price * 100
+      : (pivot.price - entryPrice) / pivot.price * 100;
+    if (!Number.isFinite(signedDistancePct) || signedDistancePct < 0 || signedDistancePct > options.maxBreakoutDistancePct) {
+      return { symbol: ticker.symbol, side, rejected: "فاصله ورود تا سطح شکست خارج از محدوده مجاز است",
+        breakoutDiagnostics: { pivot, signedDistancePct, maxDistancePct: options.maxBreakoutDistancePct } };
+    }
+  }
+
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
   if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
