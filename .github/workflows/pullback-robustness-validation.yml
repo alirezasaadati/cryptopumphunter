@@ -1,6 +1,10 @@
 name: Futures pullback robustness validation
 on:
   workflow_dispatch:
+  push:
+    branches: [ema-pivot-experiments]
+    paths:
+      - ".github/workflows/pullback-robustness-validation.yml"
 jobs:
   diagnostics:
     runs-on: ubuntu-latest
