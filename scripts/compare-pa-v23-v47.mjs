@@ -162,7 +162,7 @@ function runEngine(engine, symbol, candles15, candles1h, candles4h, signalStart,
         : engine.startsWith('v4.7-tp1.2-2-3-breakout-') || engine === 'v4.7-tp1.2-2-3'
           ? [1.2, 2.0, 3.0]
           : undefined;
-      const breakoutMatch = engine.match(/^v4\\.7-tp1\\.2-2-3-breakout-(0\\.2|0\\.3|0\\.4|0\\.5)$/);
+      const breakoutMatch = engine.match(/^v4\.7-tp1\.2-2-3-breakout-(0\.2|0\.3|0\.4|0\.5)$/);
       const backtestOptions = {
         ...(backtestTargetMultiples ? {backtestTargetMultiples} : {}),
         ...(breakoutMatch ? {maxBreakoutDistancePct:Number(breakoutMatch[1])} : {})
