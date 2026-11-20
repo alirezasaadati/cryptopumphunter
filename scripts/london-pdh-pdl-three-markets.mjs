@@ -170,10 +170,10 @@ function dailyLevels(bars) {
   return {days,prev,keys};
 }
 function summarize(trades) {
-  const wins=trades.filter(t=>t.netR>0),losses=trades.filter(t=>t.netR<0);
+  const closed=trades.filter(t=>Number.isFinite(t.netR));\n  const wins=closed.filter(t=>t.netR>0),losses=closed.filter(t=>t.netR<0);
   const grossWin=wins.reduce((s,t)=>s+t.netR,0),grossLoss=Math.abs(losses.reduce((s,t)=>s+t.netR,0));
   let eq=0,peak=0,dd=0;
-  for(const t of trades){eq+=t.netR;peak=Math.max(peak,eq);dd=Math.max(dd,peak-eq);}
+  for(const t of closed){eq+=t.netR;peak=Math.max(peak,eq);dd=Math.max(dd,peak-eq);}
   return {
     trades:trades.length,wins:wins.length,losses:losses.length,
     winRatePct:trades.length?100*wins.length/trades.length:0,
@@ -201,8 +201,8 @@ function calcTrade(symbol,bars,entryIndex,side,entryMid,stopMid,atrAtSweep,entry
   const risk=dir===1?entryMid-stopMid:stopMid-entryMid;
   if(!(risk>0))return null;
   const target=entryMid+dir*risk*TARGET_R;
-  let exitMid=null,exitIndex=Math.min(bars.length-1,entryIndex+MAX_HOLD),reason="TIME_EXIT";
-  for(let j=entryIndex;j<=exitIndex;j++){
+  let exitMid=null,exitIndex=null,reason="OPEN_AT_DATA_END";
+  for(let j=entryIndex+1;j<bars.length;j++){
     const b=bars[j];
     const triggerBar=symbol==="XAUUSD"?(dir===1?b.bid:b.ask):b;
     const stopHit=dir===1?triggerBar.low<=stopMid:triggerBar.high>=stopMid;
@@ -210,66 +210,41 @@ function calcTrade(symbol,bars,entryIndex,side,entryMid,stopMid,atrAtSweep,entry
     if(stopHit){exitMid=stopMid;reason="STOP";exitIndex=j;break;}
     if(targetHit){exitMid=target;reason="TP_2R";exitIndex=j;break;}
   }
-  if(exitMid===null){exitMid=bars[exitIndex].close;reason="TIME_EXIT";}
-  const entryBar=bars[entryIndex],exitBar=bars[exitIndex];
+  const entryBar=bars[entryIndex];
   const entryFill=costAndFill(symbol,entryBar,side,entryMid,false);
+  if(exitMid===null){
+    const mark=bars[bars.length-1];
+    const markPrice=mark.close;
+    const markFill=costAndFill(symbol,mark,side,markPrice,true);
+    const grossR=dir*(markFill-entryFill)/risk;
+    const fees=symbol==="XAUUSD"?0:BINANCE_FEE*(Math.abs(entryFill)+Math.abs(markFill))/risk;
+    return {symbol,side,signalTime:entryBar.time,entryTime:entryBar.time,entry:entryFill,entryMid,stop:stopMid,target,exit:null,exitMid:null,exitTime:null,exitReason:reason,riskPrice:risk,grossR:null,feesR:null,netR:null,unrealizedGrossR:grossR,unrealizedNetR:grossR-fees,markTime:mark.time,markPrice:markFill,entrySpread:entrySpread||0};
+  }
+  const exitBar=bars[exitIndex];
   const exitFill=costAndFill(symbol,exitBar,side,exitMid,true);
   const grossR=dir*(exitFill-entryFill)/risk;
   const fees=symbol==="XAUUSD"?0:BINANCE_FEE*(Math.abs(entryFill)+Math.abs(exitFill))/risk;
   const netR=grossR-fees;
-  return {
-    symbol,side,signalTime:bars[entryIndex].time,entryTime:bars[entryIndex].time,
-    entry:entryFill,entryMid,stop:stopMid,target,exit:exitFill,exitMid,
-    exitTime:bars[exitIndex].time,exitReason:reason,riskPrice:risk,
-    grossR,feesR:fees,netR,entrySpread:entrySpread||0
-  };
+  return {symbol,side,signalTime:entryBar.time,entryTime:entryBar.time,entry:entryFill,entryMid,stop:stopMid,target,exit:exitFill,exitMid,exitTime:exitBar.time,exitReason:reason,riskPrice:risk,grossR,feesR:fees,netR,entrySpread:entrySpread||0};
 }
 function findSetup(bars,ind,start,side,level,session) {
-  const dir=side==="LONG"?1:-1;
   const sweep=bars[start],atr0=ind.atr[start];
   if(!finite(atr0)||atr0<=0)return {diagnostics:{sweeps:1,invalidAtr:1}};
   const sweepExtreme=side==="LONG"?sweep.low:sweep.high;
-  const mssLevel=side==="LONG"?ind.piv.highs[start-1]:ind.piv.lows[start-1];
-  if(!finite(mssLevel))return {diagnostics:{sweeps:1,noPriorPivot:1}};
   const stopBuffer=Math.max(atr0*0.1,sweep.close*0.00005);
   const stop=side==="LONG"?sweepExtreme-stopBuffer:sweepExtreme+stopBuffer;
-  const diag={sweeps:1,mss:0,fvg:0,fills:0};
-  const last=Math.min(bars.length-20,start+MAX_SWEEP_WAIT);
-  for(let j=start+1;j<=last;j++){
-    const mss=side==="LONG"?bars[j].close>mssLevel:bars[j].close<mssLevel;
-    if(!mss)continue;
-    diag.mss++;
-    const fvgLast=Math.min(bars.length-2,j+MAX_MSS_TO_FVG);
-    for(let k=j;k<=fvgLast;k++){
-      const bull=side==="LONG"&&bars[k].low>bars[k-2].high;
-      const bear=side==="SHORT"&&bars[k].high<bars[k-2].low;
-      if(!bull&&!bear)continue;
-      diag.fvg++;
-      const zLow=side==="LONG"?bars[k-2].high:bars[k].high;
-      const zHigh=side==="LONG"?bars[k].low:bars[k-2].low;
-      const mid=(zLow+zHigh)/2;
-      const retestLast=Math.min(bars.length-1,k+MAX_FVG_RETEST);
-      for(let e=k+1;e<=retestLast;e++){
-        if(sessionKey(bars[e].time)!==session)break;
-        if(bars[e].low<=mid&&bars[e].high>=mid){
-          const risk=side==="LONG"?mid-stop:stop-mid;
-          if(!(risk>=atr0*0.2&&risk<=atr0*3))return {diagnostics:diag,rejectedRisk:true};
-          diag.fills++;
-          const trade=calcTrade(ind.symbol,bars,e,side,mid,stop,atr0,0);
-          return {diagnostics:diag,trade,entryIndex:e};
-        }
-      }
-      return {diagnostics:diag};
-    }
-  }
-  return {diagnostics:diag};
+  const entry=sweep.close;
+  const risk=side==="LONG"?entry-stop:stop-entry;
+  if(!(risk>0))return {diagnostics:{sweeps:1,invalidRisk:1}};
+  const trade=calcTrade(ind.symbol,bars,start,side,entry,stop,atr0,0);
+  return {diagnostics:{sweeps:1,reclaims:1,entries:trade?1:0},trade,entryIndex:start};
 }
 function runBacktest(symbol,bars,source) {
   const startIndex=bars.findIndex(b=>b.time>=REQUESTED_START);
   const actual=bars.filter(b=>b.time>=REQUESTED_START&&b.time<END);
   const atr=averageTrueRange(bars),piv=confirmedPivots(bars),levels=dailyLevels(bars);
   const ind={atr,piv,symbol};
-  const diag={sessions:levels.keys.length,sweeps:0,mss:0,fvg:0,fills:0,noPriorPivot:0,invalidAtr:0,rejectedRisk:0};
+  const diag={sessions:levels.keys.length,sweeps:0,reclaims:0,entries:0,invalidAtr:0,invalidRisk:0};
   const trades=[];
   let i=Math.max(50,startIndex);
   let nextFree=0;
@@ -315,7 +290,7 @@ function mdReport(report) {
     "Requested window: "+report.requestedPeriod.from+" to "+report.requestedPeriod.to+" UTC",
     "Time definition: ICT London Killzone = 02:00–05:00 America/New_York (DST-aware); trading day rolls at 17:00 New York time.",
     "Timeframes: M5 for levels, sweep, MSS, FVG, entry and management.",
-    "Setup: previous-session high/low sweep with close back inside; confirmed 2-left/2-right pivot MSS; first directional 3-candle FVG; midpoint retest entry; stop beyond sweep extreme by 0.1 ATR; 2R target; 36-bar time exit.",
+    "Setup: previous-session high/low sweep and immediate candle close back inside; entry at reclaim candle close; stop beyond sweep extreme by 0.1 ATR; 2R target; no maximum holding time (positions remain open until stop/target or data ends).",
     "Costs: Binance symbols use 0.05% taker fee and 0.01% adverse slippage per side. XAUUSD uses Dukascopy bid/ask candle spreads plus 0.01% slippage per side; broker commission/swap excluded.",
     "Conservative intrabar rule: stop is checked before target if both are touched in the same M5 candle. Funding is excluded.",
     "",
@@ -373,7 +348,7 @@ async function main(){
         entry:"50% FVG midpoint retest within 12 bars",
         stop:"beyond sweep extreme by 0.1 ATR(14)",
         target:"2R",
-        maxHoldBars:MAX_HOLD,
+        maxHoldBars:null,
         sameCandle:"stop checked before target",
         split:"70% chronological in-sample / 30% out-of-sample within each symbol's actual data window"
       },
