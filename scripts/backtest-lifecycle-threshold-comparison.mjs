@@ -127,6 +127,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   const baseline = makeState();
   const thresholded = makeState();
   const testStart = toMs - DAYS * 86400000;
+  let fourIndex = 0, fifteenIndex = 0;
 
   for (let i = 60; i < oneHour.length - 1; i++) {
     const signalBar = oneHour[i];
