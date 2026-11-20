@@ -177,6 +177,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       trade.status = "OPEN_AT_BACKTEST_END";
       trade.lastMark = fiveMinute.at(-1)?.close ?? null;
       trade.marginReturnAtMarkPct = trade.lastMark ? (candidate.side==="LONG" ? 1 : -1) * ((trade.lastMark-entry)/entry) * 100 * LEVERAGE : null;
+      // Preserve the same-side lock through the sample end for still-open trades.
+      lockUntil.set(lockKey,toMs);
     } else {
       lockUntil.set(lockKey,trade.closedAtMs);
     }
