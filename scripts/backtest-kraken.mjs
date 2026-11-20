@@ -79,7 +79,7 @@ function simulateTrade({ side, entry, stop, target, candles, fee = FEE_PER_SIDE,
     if (targetTouched) {
       const fill = target * (1 - direction * slippage);
       const netR = direction * (fill - entry) / risk - fee * (entry + fill) / risk;
-      return { outcome:"TP1", exitTime:bar.time, exitPrice:fill, netR };
+      return { outcome:"30% margin target", exitTime:bar.time, exitPrice:fill, netR };
     }
   }
   return { outcome:"OPEN_AT_DATA_END", exitTime:null, exitPrice:null, netR:null };
@@ -135,17 +135,16 @@ async function main() {
 
     const direction = candidate.side === "LONG" ? 1 : -1;
     const entry = candidate.entry * (1 + direction * SLIPPAGE_PER_SIDE);
-    // The production engine supplies target1 at 1.5R. Verify this per signal to prevent a stale setup.
-    const initialRisk = direction === 1 ? candidate.entry - candidate.stop : candidate.stop - candidate.entry;
-    const targetR = direction * (candidate.target1 - candidate.entry) / initialRisk;
-    if (Math.abs(targetR - 1.5) > 1e-8) {
-      throw new Error("Unexpected TP1 multiple " + targetR + " on " + new Date(signalBar.time).toISOString());
-    }
+    // One full-position target at +30% ROI on 10x margin = +3.0% underlying price move.
+    // Target is measured from the executable entry after adverse entry slippage.
+    const target30 = entry * (1 + direction * 0.03);
+    const initialRisk = direction === 1 ? entry - candidate.stop : candidate.stop - entry;
+    const targetR = direction * (target30 - entry) / initialRisk;
     const trade = simulateTrade({
       side:candidate.side,
       entry,
       stop:candidate.stop,
-      target:candidate.target1,
+      target:target30,
       candles:oneHour.slice(i+1),
     });
     results.push({
@@ -155,7 +154,7 @@ async function main() {
       entryTime:nextBar.time,
       entry,
       stop:candidate.stop,
-      target1:candidate.target1,
+      target30,
       targetR,
       outcome:trade.outcome,
       exitTime:trade.exitTime,
@@ -170,7 +169,7 @@ async function main() {
     }
   }
 
-  const tp1 = results.filter(t=>t.outcome==="TP1");
+  const target30 = results.filter(t=>t.outcome==="30% margin target");
   const stops = results.filter(t=>t.outcome==="STOP");
   const open = results.filter(t=>t.outcome==="OPEN_AT_DATA_END");
   const closed = results.filter(t=>t.outcome!=="OPEN_AT_DATA_END");
@@ -179,19 +178,19 @@ async function main() {
     venue:"Kraken Derivatives public historical OHLC candles",
     symbol:SYMBOL,
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS},
-    strategy:{target:"single TP1 = 1.5R, 100% position closed",breakoutDistanceMaxPct:0.3,entry:"next 1h candle open with adverse slippage",stop:"current engine stop",maxHoldingPeriod:"none; position followed until TP1/SL or end of dataset"},
+    strategy:{target:"single target = +30% ROI on 10x margin (3.0% underlying move), 100% position closed",leverage:10,targetMarginRoiPct:30,targetUnderlyingMovePct:3,breakoutDistanceMaxPct:0.3,entry:"next 1h candle open with adverse slippage",stop:"current engine stop",maxHoldingPeriod:"none; position followed until target/SL or end of dataset"},
     simulation:{timeframeForOutcome:"1h OHLC",feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,sameCandleRule:"stop first (conservative)",funding:"excluded",overlap:"one active position at a time"},
     candles:{oneHour:oneHour.length,fourHour:fourHour.length,fifteenMinute:fifteenMinute.length},
     counts:{
       eligibleSignalCandidates:signalCandidates,
       executedTrades:results.length,
-      tp1Hits:tp1.length,
+      target30Hits:target30.length,
       directStops:stops.length,
       stillOpenAtDataEnd:open.length,
       closedTrades:closed.length,
       long:results.filter(t=>t.side==="LONG").length,
       short:results.filter(t=>t.side==="SHORT").length,
-      tp1HitPct:closed.length?tp1.length/closed.length*100:0,
+      target30HitPct:closed.length?target30.length/closed.length*100:0,
       stopPct:closed.length?stops.length/closed.length*100:0,
       rejectedCandidates,
       rejectReasons
@@ -199,15 +198,22 @@ async function main() {
     performance:{
       netR:closed.reduce((s,t)=>s+(t.netR||0),0),
       averageRPerClosedTrade:closed.length?closed.reduce((s,t)=>s+(t.netR||0),0)/closed.length:0,
-      averageTp1NetR:tp1.length?tp1.reduce((s,t)=>s+t.netR,0)/tp1.length:0,
-      averageStopNetR:stops.length?stops.reduce((s,t)=>s+t.netR,0)/stops.length:0
+      averageTargetNetR:target30.length?target30.reduce((s,t)=>s+t.netR,0)/target30.length:0,
+      averageStopNetR:stops.length?stops.reduce((s,t)=>s+t.netR,0)/stops.length:0,
+      wins:closed.filter(t=>t.netR>0).length,
+      losses:closed.filter(t=>t.netR<0).length,
+      grossProfitUsd:closed.filter(t=>t.netR>0).reduce((s,t)=>s+t.netR*(Math.abs(t.entry-t.stop)/t.entry)*100,0),
+      grossLossUsd:Math.abs(closed.filter(t=>t.netR<0).reduce((s,t)=>s+t.netR*(Math.abs(t.entry-t.stop)/t.entry)*100,0)),
+      netPnlUsd:closed.reduce((s,t)=>s+t.netR*(Math.abs(t.entry-t.stop)/t.entry)*100,0),
+      usdNotionalPerTrade:100,
+      marginPerTradeUsd:10
     },
     trades:results
   };
   await mkdir("artifacts",{recursive:true});
-  await writeFile("artifacts/btc-single-tp-1-5r-backtest.json",JSON.stringify(report,null,2));
+  await writeFile("artifacts/btc-single-target-30-margin-backtest.json",JSON.stringify(report,null,2));
   const md = [
-    "# BTC historical backtest — single TP1 1.5R",
+    "# BTC historical backtest — single 30% margin target 1.5R",
     "",
     "Period: "+report.period.from+" to "+report.period.to+" ("+DAYS+" days)",
     "Symbol: "+SYMBOL,
@@ -215,17 +221,17 @@ async function main() {
     "",
     "| Outcome | Count |",
     "|---|---:|",
-    "| TP1 1.5R hit | "+tp1.length+" |",
+    "| 30% margin target 1.5R hit | "+target30.length+" |",
     "| Direct stop loss | "+stops.length+" |",
     "| Still open at data end | "+open.length+" |",
     "| Closed trades | "+closed.length+" |",
     "",
-    "TP1 hit rate among closed trades: "+report.counts.tp1HitPct.toFixed(2)+"%",
+    "30% margin target hit rate among closed trades: "+report.counts.target30HitPct.toFixed(2)+"%",
     "Stop rate among closed trades: "+report.counts.stopPct.toFixed(2)+"%",
     "",
-    "Assumptions: Kraken BTC perpetual, 1h OHLC for outcome detection; one active position at a time; 0.05% fee and 0.03% slippage per side; no funding; no max holding time; if TP and SL are both touched in the same 1h candle, SL is counted first. Open trades at the end are not classified as TP1 or SL."
+    "Assumptions: Kraken BTC perpetual, 1h OHLC for outcome detection; one active position at a time; 0.05% fee and 0.03% slippage per side; no funding; no max holding time; if TP and SL are both touched in the same 1h candle, SL is counted first. Open trades at the end are not classified as 30% margin target or SL."
   ].join("\n");
-  await writeFile("artifacts/btc-single-tp-1-5r-backtest.md",md);
+  await writeFile("artifacts/btc-single-target-30-margin-backtest.md",md);
   console.log(JSON.stringify({ok:true,period:report.period,counts:report.counts,performance:report.performance,candles:report.candles},null,2));
 }
 
