@@ -5,6 +5,7 @@ on:
     branches: [ema-pivot-experiments]
     paths:
       - ".github/workflows/pullback-robustness-validation.yml"
+      - "scripts/backtest-diagnostics.mjs"
 jobs:
   diagnostics:
     runs-on: ubuntu-latest
