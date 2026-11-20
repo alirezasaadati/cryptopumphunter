@@ -2,6 +2,7 @@ import { runSpotScan } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
+import { evaluateTradeCandle } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
   VERSION: "4.7.0",
@@ -1750,6 +1751,71 @@ function formatFuturesSymbol(symbol) {
 }
 
 
+async function getOpenFuturesTrades(env) {
+  if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) throw new Error("Durable signal storage is required.");
+  const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
+  const response = await stub.fetch("https://signal-delivery.internal/trades/list", {
+    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET },
+    body: "{}"
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload?.ok || !Array.isArray(payload.trades)) throw new Error(payload?.error || "Durable open-trade retrieval failed.");
+  return payload.trades;
+}
+
+async function persistFuturesTradeUpdates(env, updates) {
+  if (!updates.length) return { updated: 0 };
+  const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
+  const response = await stub.fetch("https://signal-delivery.internal/trades/update", {
+    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET },
+    body: JSON.stringify({ trades: updates })
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Durable trade update failed.");
+  return payload;
+}
+
+async function monitorOpenFuturesTrades(env) {
+  const trades = await getOpenFuturesTrades(env);
+  if (!trades.length) return { checked: 0, closed: 0, errors: 0 };
+  const symbols = [...new Set(trades.map(t => t.symbol).filter(Boolean))];
+  const updates = [];
+  let checked = 0, closed = 0, errors = 0;
+  await mapLimit(symbols, 3, async symbol => {
+    let candles;
+    try {
+      candles = await getKrakenFuturesCandles(symbol, "1h");
+    } catch (error) {
+      errors++;
+      console.error("Futures trade monitor candle fetch failed:", symbol, String(error?.message || error));
+      return;
+    }
+    for (const original of trades.filter(t => t.symbol === symbol && t.status === "OPEN")) {
+      let trade = { ...original };
+      const freshCandles = getNewClosedFuturesCandles(candles, trade.lastCheckedCandleTime);
+      if (!freshCandles.length) continue;
+      for (const candle of freshCandles) {
+        const result = evaluateTradeCandle(trade, candle);
+        trade = {
+          ...trade,
+          lastPrice: candle.close,
+          lastCheckedAt: new Date().toISOString(),
+          lastCheckedCandleTime: Number(candle.time)
+        };
+        checked++;
+        if (result.changed) {
+          trade = { ...result.trade, lastPrice: candle.close, lastCheckedAt: new Date().toISOString(), lastCheckedCandleTime: Number(candle.time) };
+          closed++;
+          break;
+        }
+      }
+      updates.push(trade);
+    }
+  });
+  if (updates.length) await persistFuturesTradeUpdates(env, updates);
+  return { checked, closed, errors };
+}
+
 async function registerPendingFuturesSignals(env, candidates) {
   if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) throw new Error("Durable signal storage is required.");
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
@@ -1842,7 +1908,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=this.env.SIGNAL_DELIVERY_SECRET;
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -1870,22 +1936,74 @@ export class SignalDeliveryCoordinator {
           const limit=Math.max(1,Math.min(20,Number(payload.limit)||15));
           return Response.json({ok:true,signals:active.slice(0,limit)});
         }
+        if(url.pathname==="/trades/list"){
+          const trades=await this.ctx.storage.get("active-futures-trades")||[];
+          return Response.json({ok:true,trades:trades.filter(t=>t?.status==="OPEN")});
+        }
+        if(url.pathname==="/trades/update"){
+          const current=await this.ctx.storage.get("active-futures-trades")||[];
+          const updates=Array.isArray(payload.trades)?payload.trades:[];
+          const byId=new Map(current.map(t=>[String(t.id),t]));
+          let updated=0,closed=0;
+          for(const candidate of updates){
+            if(!candidate?.id)continue;
+            const existing=byId.get(String(candidate.id));
+            if(!existing||existing.status!=="OPEN")continue;
+            const next={...existing,
+              lastPrice:Number(candidate.lastPrice)||existing.lastPrice,
+              lastCheckedAt:candidate.lastCheckedAt||existing.lastCheckedAt,
+              lastCheckedCandleTime:Math.max(Number(existing.lastCheckedCandleTime)||0,Number(candidate.lastCheckedCandleTime)||0)
+            };
+            if(["CLOSED_PROFIT","CLOSED_STOP"].includes(candidate.status)){
+              next.status=candidate.status;
+              next.closeReason=candidate.closeReason||candidate.status;
+              next.exitPrice=Number(candidate.exitPrice);
+              next.closePriceChangePercent=Number(candidate.closePriceChangePercent);
+              next.marginReturnPercent=Number(candidate.marginReturnPercent);
+              next.closedAt=candidate.closedAt||new Date().toISOString();
+              next.lockReleaseEligible=true;
+              closed++;
+            }
+            byId.set(String(existing.id),next);
+            updated++;
+          }
+          const all=[...byId.values()];
+          const open=all.filter(t=>t.status==="OPEN");
+          const history=all.filter(t=>t.status!=="OPEN").slice(-500);
+          await this.ctx.storage.put("active-futures-trades",[...open,...history]);
+          if(closed){
+            const pending=await this.ctx.storage.get("active-futures-pending")||[];
+            const closedKeys=new Set(all.filter(t=>["CLOSED_PROFIT","CLOSED_STOP"].includes(t.status)).map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
+            await this.ctx.storage.put("active-futures-pending",pending.filter(s=>!closedKeys.has(String(s.symbol).trim().toUpperCase()+"|"+s.side)));
+          }
+          return Response.json({ok:true,updated,closed,open:open.length});
+        }
         if(url.pathname==="/signals/register"){
           const now=Date.now();
           const current=await this.ctx.storage.get("active-futures-pending")||[];
           const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side));
+          const trades=await this.ctx.storage.get("active-futures-trades")||[];
+          const activeTradeKeys=new Set(trades.filter(t=>t?.status==="OPEN").map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
           const activeKeys=new Set(active.map(x=>String(x.symbol).trim().toUpperCase()+"|"+x.side));
           const seen=new Set();
           const fresh=[];
+          const newTrades=[];
           for(const signal of Array.isArray(payload.signals)?payload.signals:[]){
             if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
             const key=String(signal.symbol).trim().toUpperCase()+"|"+signal.side;
-            if(activeKeys.has(key)||seen.has(key))continue;
+            if(activeKeys.has(key)||activeTradeKeys.has(key)||seen.has(key))continue;
             seen.add(key);fresh.push(signal);
+            const trade=createTrackedFuturesTrade(signal,"signal-evaluation");
+            if(trade)newTrades.push(trade);
           }
           const merged=[...active,...fresh].slice(-150);
           await this.ctx.storage.put("active-futures-pending",merged);
-          return Response.json({ok:true,signals:fresh});
+          if(newTrades.length){
+            const open=trades.filter(t=>t?.status==="OPEN");
+            const history=trades.filter(t=>t?.status!=="OPEN").slice(-500);
+            await this.ctx.storage.put("active-futures-trades",[...open,...history,...newTrades]);
+          }
+          return Response.json({ok:true,signals:fresh,trackedTrades:newTrades.length});
         }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
@@ -2082,8 +2200,14 @@ async function runAutomaticFuturesAlertScan(env) {
   if (!acquireResponse.ok || !acquire.ok) throw new Error(acquire.error || "Could not acquire automatic scan lock.");
   if (!acquire.acquired) return { skipped: true, reason: "scan already running" };
   try {
+    let tracking = { checked: 0, closed: 0, errors: 0 };
+    try {
+      tracking = await monitorOpenFuturesTrades(env);
+    } catch (error) {
+      console.error("Open futures trade monitoring failed:", String(error?.stack || error?.message || error));
+    }
     const result = await runFuturesSignalScan(env);
-    return { scanned: true, signals: (result.signals || []).length, experimentalSignals: 0 };
+    return { scanned: true, signals: (result.signals || []).length, experimentalSignals: 0, tracking };
   } finally {
     const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
     if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
