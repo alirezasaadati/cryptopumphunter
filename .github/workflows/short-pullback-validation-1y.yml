@@ -1,0 +1,36 @@
+name: Futures SHORT pullback threshold validation (1y)
+on:
+  push:
+    branches: [short-pullback-experiments]
+    paths:
+      - ".github/workflows/short-pullback-validation-1y.yml"
+  workflow_dispatch:
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: short-pullback-experiments
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: node --check scripts/backtest-diagnostics.mjs
+      - name: Run one-year SHORT threshold backtest
+        env:
+          BACKTEST_DAYS: "365"
+          BACKTEST_SYMBOLS: "8"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+          BACKTEST_RANDOM_SEEDS: "30"
+          BACKTEST_FIXED_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_XRPUSD"
+        run: node scripts/backtest-diagnostics.mjs
+      - name: Upload SHORT validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-short-pullback-validation-1y
+          path: artifacts/
+          if-no-files-found: warn
