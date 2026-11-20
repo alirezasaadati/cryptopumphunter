@@ -53,7 +53,7 @@ test("per-chat storage keys are distinct and stable", () => {
 });
 
 test("signal alert uses the approved HTML layout, bold prices, spacing and direction label", () => {
-  const signal = {...base, symbol:"PF_BTCUSD", entry: 65000, stop: 66000, target1: 63500, target2: 62800, target3: 62000};
+  const signal = {...base, symbol:"PF_BTCUSD", entry: 65000, stop: 66000, target1: 63500};
   const short = formatFuturesSignalAlert(signal, 1);
   const long = formatFuturesSignalAlert({...signal, symbol:"PF_ETHUSD", side:"LONG"}, 2);
   assert.match(short, /^🟢 سیگنال معتبر\n\n/);
@@ -61,7 +61,8 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   assert.match(short, /جهت معامله: 🔴 شورت \/ Short/);
   assert.match(short, /جهت معامله: 🔴 شورت \/ Short\n\nقیمت ورود:/);
   assert.match(short, /قیمت ورود: <b>65,000\.00<\/b>\n\n🎯 تارگت اول: <b>63,500\.00<\/b>/);
-  assert.match(short, /🎯 تارگت سوم: <b>62,000\.00<\/b>\n\n⛔ حد ضرر: <b>66,000\.00<\/b>$/);
+  assert.match(short, /🎯 تارگت: <b>63,500\\.00<\\/b>\\n\\n⛔ حد ضرر: <b>66,000\\.00<\\/b>$/);
+  assert.doesNotMatch(short, /تارگت دوم|تارگت سوم/);
   assert.match(long, /^🟢 سیگنال معتبر/);
   assert.match(long, /نماد: <b>ETH<\/b>/);
   assert.match(long, /جهت معامله: 🟢 لانگ \/ Long/);
