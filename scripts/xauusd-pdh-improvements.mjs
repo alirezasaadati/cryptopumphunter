@@ -278,6 +278,40 @@ function hourlyTrendRegimes(bars) {
 function regimeAt(rs,t){let l=0,h=rs.length-1,b=null;while(l<=h){const m=(l+h)>>1;if(rs[m].closeTime<=t){b=rs[m];l=m+1;}else h=m-1;}return b?.regime||"UNCLASSIFIED";}
 function summarizeRegimes(ts){const o={};for(const r of ["BULLISH","BEARISH","NEUTRAL","UNCLASSIFIED"]){const a=ts.filter(t=>t.regime===r);o[r]={all:summarize(a),LONG:summarize(a.filter(t=>t.side==="LONG")),SHORT:summarize(a.filter(t=>t.side==="SHORT"))};}return o;}
 
+function addTargetOneDiagnostics(result, bars) {
+  const dirOf = side => side === "LONG" ? 1 : -1;
+  for (const trade of result.trades) {
+    const dir = dirOf(trade.side);
+    const isFixed = result.variant.management === "fixed2r";
+    const target1 = isFixed
+      ? trade.entryMid + dir * trade.riskPrice
+      : trade.targets[0]?.price;
+    let touched = false, touchTime = null, stopBeforeTarget = false;
+    const endTime = trade.exitTime ?? bars[bars.length - 1].time;
+    for (let i = bars.findIndex(b => b.time > trade.entryTime); i >= 0 && i < bars.length && bars[i].time <= endTime; i++) {
+      const b = bars[i];
+      const trigger = trade.symbol === "XAUUSD" ? (dir === 1 ? b.bid : b.ask) : b;
+      if (!trigger) continue;
+      const stopHit = dir === 1 ? trigger.low <= trade.stop : trigger.high >= trade.stop;
+      const targetHit = dir === 1 ? trigger.high >= target1 : trigger.low <= target1;
+      // Preserve the backtest's conservative same-candle rule: stop is evaluated first.
+      if (stopHit) { stopBeforeTarget = !touched; break; }
+      if (targetHit) { touched = true; touchTime = b.time; break; }
+    }
+    trade.target1 = { price: target1, label: isFixed ? "1R" : (trade.targets[0]?.label || "FIRST_TARGET"), touched, touchTime,
+      touchedBeforeFinalStop: touched && trade.exitReason === "STOP" };
+  }
+  const summarizeTouch = trades => ({
+    trades: trades.length,
+    target1Touched: trades.filter(t => t.target1?.touched).length,
+    target1NotTouched: trades.filter(t => !t.target1?.touched).length,
+    stoppedTrades: trades.filter(t => t.exitReason === "STOP").length,
+    stoppedAfterTarget1: trades.filter(t => t.exitReason === "STOP" && t.target1?.touched).length,
+    stoppedWithoutTarget1: trades.filter(t => t.exitReason === "STOP" && !t.target1?.touched).length
+  });
+  const oos = result.trades.filter(t => t.signalTime >= result.splitTime);
+  result.target1Touch = { overall: summarizeTouch(result.trades), outOfSample: summarizeTouch(oos) };
+}
 function runBacktest(symbol,bars,source,variant) {
   const startIndex=bars.findIndex(b=>b.time>=REQUESTED_START);
   const actual=bars.filter(b=>b.time>=REQUESTED_START&&b.time<END);
@@ -369,7 +403,7 @@ async function main(){
       {id:"baseline_london_plus_ny",management:"fixed2r",session:"london_ny"},
       {id:"split_targets_london_plus_ny",management:"split",session:"london_ny"}
     ];
-    const results=variants.map(v=>runBacktest("XAUUSD",xau,"Dukascopy M5 BID/ASK candles",v));
+    const results=variants.map(v=>runBacktest("XAUUSD",xau,"Dukascopy M5 BID/ASK candles",v));\n    for (const result of results) { result.splitTime = result.period.from ? Date.parse(result.period.from) + Math.floor((Date.parse(result.period.to)-Date.parse(result.period.from))*0.7) : 0; addTargetOneDiagnostics(result, xau); }
     const report={
       generatedAt:new Date().toISOString(),
       requestedPeriod:{from:new Date(REQUESTED_START).toISOString(),to:new Date(END).toISOString(),days:365},
@@ -406,7 +440,7 @@ async function main(){
     lines.push("","## Method notes","- Every variant uses the same XAUUSD data and chronological split.","- No maximum holding-time exit.","- For the split-target model, 50% is realized at previous-session EQ and 50% at the opposite previous-session extreme; stop remains unchanged.","- New York window is 08:00–11:00 New York local time and follows DST.","- This is a historical simulation; the sample and broker-specific costs limit conclusions.");
     await writeFile("artifacts/xauusd-pdh-improvements.md",lines.join("\n"));
     console.log(JSON.stringify({ok:true,period:report.requestedPeriod,data:report.data,newsFilter:report.newsFilter,
-      results:results.map(x=>({variant:x.variant,period:x.period,data:x.data,overall:x.overall,outOfSample:x.outOfSample})),
+      results:results.map(x=>({variant:x.variant,period:x.period,data:x.data,overall:x.overall,outOfSample:x.outOfSample,target1Touch:x.target1Touch})),
       artifacts:["artifacts/xauusd-pdh-improvements.md","artifacts/xauusd-pdh-improvements.json"]},null,2));
   } finally { await rm(temp,{recursive:true,force:true}); }
 }
