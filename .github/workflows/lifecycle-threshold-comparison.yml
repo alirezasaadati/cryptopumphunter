@@ -1,0 +1,30 @@
+name: Lifecycle backtest threshold comparison
+on:
+  workflow_dispatch:
+  push:
+    branches: [lifecycle-threshold-050-030-experiment]
+    paths:
+      - "scripts/backtest-lifecycle-threshold-comparison.mjs"
+      - ".github/workflows/lifecycle-threshold-comparison.yml"
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lifecycle-threshold-050-030-experiment
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: node --check scripts/backtest-lifecycle-threshold-comparison.mjs
+      - name: Run same-period baseline vs threshold comparison
+        run: node scripts/backtest-lifecycle-threshold-comparison.mjs
+      - name: Upload comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-threshold-comparison-30d
+          path: artifacts/
+          if-no-files-found: warn
