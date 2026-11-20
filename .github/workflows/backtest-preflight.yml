@@ -1,0 +1,30 @@
+name: Three-engine backtest data preflight
+on:
+  push:
+    branches: [backtest-three-engines]
+    paths:
+      - ".github/workflows/backtest-preflight.yml"
+  workflow_dispatch:
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify Kraken historical data and existing harness (preflight only)
+        env:
+          BACKTEST_DAYS: "90"
+          BACKTEST_SYMBOLS: "8"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+        run: node scripts/backtest-kraken.mjs
+      - name: Upload preflight artifact (not final three-engine result)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-data-preflight
+          path: artifacts/
+          if-no-files-found: warn
