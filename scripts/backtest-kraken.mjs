@@ -10,7 +10,9 @@ const SYMBOL_LIMIT = Math.max(1, Math.min(24, Number(process.env.BACKTEST_SYMBOL
 const FEE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_FEE || 0.0005));
 const SLIPPAGE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_SLIPPAGE || 0.0003));
 const MAX_HOLD_HOURS = 72;
-const TARGET_WEIGHTS = [0.40, 0.35, 0.25];
+const INITIAL_MARGIN_USD = 10;
+const LEVERAGE = 10;
+const POSITION_NOTIONAL_USD = INITIAL_MARGIN_USD * LEVERAGE;
 
 async function getJson(url) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(25000) });
@@ -94,7 +96,7 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
       if (target == null) continue;
       const touched = direction === 1 ? bar.high >= target : bar.low <= target;
       if (!touched) break;
-      const weight = [0.40, 0.35, 0.25][t];
+      const weight = targets.length === 1 ? 1 : [0.40, 0.35, 0.25][t];
       const exitFill = target * (1 - direction * slippage);
       const grossR = direction * (exitFill - entry) / risk;
       const feeR = fee * (entry + exitFill) / risk;
@@ -134,7 +136,12 @@ function summarize(trades) {
   const wins = trades.filter(t => t.netR > 0), losses = trades.filter(t => t.netR < 0);
   const grossWin = wins.reduce((s,t)=>s+t.netR,0), grossLoss = Math.abs(losses.reduce((s,t)=>s+t.netR,0));
   let equity = 0, peak = 0, maxDrawdown = 0;
-  for (const trade of trades) { equity += trade.netR; peak = Math.max(peak,equity); maxDrawdown = Math.max(maxDrawdown,peak-equity); }
+  let equityUsd = 0, peakUsd = 0, maxDrawdownUsd = 0;
+  for (const trade of trades) {
+    equity += trade.netR; peak = Math.max(peak,equity); maxDrawdown = Math.max(maxDrawdown,peak-equity);
+    equityUsd += Number(trade.netUsd || 0); peakUsd = Math.max(peakUsd,equityUsd);
+    maxDrawdownUsd = Math.max(maxDrawdownUsd,peakUsd-equityUsd);
+  }
   return {
     trades: trades.length, wins: wins.length, losses: losses.length,
     breakeven: trades.length-wins.length-losses.length,
@@ -142,7 +149,12 @@ function summarize(trades) {
     netR: trades.reduce((s,t)=>s+t.netR,0),
     expectancyR: trades.length ? trades.reduce((s,t)=>s+t.netR,0)/trades.length : 0,
     profitFactor: grossLoss ? grossWin/grossLoss : grossWin ? null : 0,
-    maxDrawdownR: maxDrawdown, targetHits: trades.reduce((s,t)=>s+t.targetHits,0),
+    maxDrawdownR: maxDrawdown, maxDrawdownUsd, netUsd: trades.reduce((s,t)=>s+Number(t.netUsd||0),0),
+    averageTp1ProfitUsd: trades.filter(t=>t.tp1Hit).length ? trades.filter(t=>t.tp1Hit).reduce((s,t)=>s+Number(t.netUsd||0),0)/trades.filter(t=>t.tp1Hit).length : 0,
+    averageStopLossUsd: trades.filter(t=>t.exitReason==="STOP").length ? trades.filter(t=>t.exitReason==="STOP").reduce((s,t)=>s+Number(t.netUsd||0),0)/trades.filter(t=>t.exitReason==="STOP").length : 0,
+    tp1Hits: trades.filter(t=>t.tp1Hit).length, stopLosses: trades.filter(t=>t.exitReason==="STOP").length,
+    timeExits: trades.filter(t=>t.exitReason==="TIME_EXIT").length,
+    targetHits: trades.reduce((s,t)=>s+t.targetHits,0),
     bySide: {
       LONG: sideMetrics(trades.filter(t=>t.side==="LONG")),
       SHORT: sideMetrics(trades.filter(t=>t.side==="SHORT"))
@@ -199,10 +211,12 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       const tradeCandles=oneHour.slice(i+1,Math.min(oneHour.length,i+1+MAX_HOLD_HOURS+1));
       const trade=simulateTrade({
         side:candidate.side,entry,stop:candidate.stop,
-        targets:[candidate.target1,candidate.target2,candidate.target3],
+        targets:[candidate.target1],
         candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
       });
       trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
+      trade.netUsd = trade.netR * (trade.risk / trade.entry) * POSITION_NOTIONAL_USD;
+      trade.tp1Hit = trade.targetHits > 0;
       trade.entryModel=mode === "baseline" ? "last_1h_close" : "next_1h_open";
       state.trades.push(trade);
       const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
@@ -237,10 +251,11 @@ async function main() {
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS},
     settings:{symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,feePerSidePct:FEE_PER_SIDE*100,
-      slippagePerSidePct:SLIPPAGE_PER_SIDE*100,maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
+      slippagePerSidePct:SLIPPAGE_PER_SIDE*100,maxHoldHours:MAX_HOLD_HOURS,
+      initialMarginUsd:INITIAL_MARGIN_USD,leverage:LEVERAGE,positionNotionalUsd:POSITION_NOTIONAL_USD,compounding:false,targetModel:"single TP1 closes 100% at 0.6R",
       sameCandleStopTargetRule:"stop first (conservative)",funding:"excluded",
       baselineEntry:"signal candle close",currentEntry:"next 1h candle open, adverse slippage applied",
-      currentFilters:"0.35% live/reference drift; 1.25 ATR max distance to 1h EMA20; 1.25 ATR max 15m reclaim extension; 15m momentum/pullback advisory only",
+      currentFilters:"0.30% maximum breakout distance; 0.35% live/reference drift; 1.25 ATR max distance to 1h EMA20; 1.25 ATR max 15m reclaim extension; 15m momentum/pullback advisory only",
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
     baseline:{signals:sum("baseline","signals"),valid:sum("baseline","valid"),risky:sum("baseline","risky"),metrics:summarize(allBaseline)},
     current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent)},
@@ -266,7 +281,7 @@ async function main() {
     "| Max drawdown | "+report.baseline.metrics.maxDrawdownR.toFixed(2)+"R | "+report.current.metrics.maxDrawdownR.toFixed(2)+"R |",
     "| Current filter rejections | — | "+report.current.rejected+" |",
     "| Signal count change | — | "+report.signalCountChangePct.toFixed(2)+"% |","",
-    "Assumptions: 0.05% fee and 0.03% slippage per side; 72h maximum hold; 40/35/25 partial exits; stop-first same-candle ambiguity.",
+    "Assumptions: $10 margin, 10x leverage, fixed $100 notional per trade (no compounding); 0.05% fee and 0.03% slippage per side; 72h maximum hold; one TP1 at 0.6R closes 100%; stop-first same-candle ambiguity.",
     "Funding excluded. Current universe is selected using present-day volume and therefore has survivorship/universe bias. This is a comparative simulation, not a guarantee of live fills.","",
     "| Symbol | Baseline signals | Current signals | Change | Current valid | Current risky | Current rejected |",
     "|---|---:|---:|---:|---:|---:|---:|",
