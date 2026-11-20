@@ -1,4 +1,4 @@
-// Pure Price Action engine v2.1 (corrected, tuned for realistic trade frequency).
+// Pure Price Action engine v2.2 (corrected, short-side hardened).
 // No indicators are used for signal decisions. ATR is used ONLY for stop sizing.
 export const PA_CONFIG = Object.freeze({
   MIN_CANDLES_4H: 30,
@@ -13,13 +13,16 @@ export const PA_CONFIG = Object.freeze({
   MIN_REWARD_RISK: 1.5,
   TARGET_R_MULTIPLES: [1.5, 2.2, 3],
   MIN_SCORE: 78,
+  MIN_SCORE_SHORT: 85,
   VOLUME_LOOKBACK: 20,
   MIN_BREAKOUT_VOLUME_RATIO: 1.1,
+  MIN_BREAKOUT_VOLUME_RATIO_SHORT: 1.4,
   MIN_REVERSAL_VOLUME_RATIO: 0.9,
   ATR_PERIOD: 14,
   MIN_STOP_ATR: 1.0,
   MAX_STOP_ATR: 2.5,
   TARGET_LEVEL_BUFFER_PCT: 0.0015,
+  TARGET_LEVEL_BUFFER_PCT_SHORT: 0.003,
   MIN_TP1_DISTANCE_R: 1.2,
   REQUIRE_4H_ALIGNMENT: false,
   ALLOW_4H_NEUTRAL: true,
@@ -122,6 +125,14 @@ function volumeRatio(candles, lookback = PA_CONFIG.VOLUME_LOOKBACK) {
   return Number(last.volume) / avg;
 }
 
+function minBreakoutVolume(side) {
+  return side === "SHORT" ? PA_CONFIG.MIN_BREAKOUT_VOLUME_RATIO_SHORT : PA_CONFIG.MIN_BREAKOUT_VOLUME_RATIO;
+}
+
+function minScoreFor(side) {
+  return side === "SHORT" ? PA_CONFIG.MIN_SCORE_SHORT : PA_CONFIG.MIN_SCORE;
+}
+
 function nearestBlockingLevel(swings, side, entry, target) {
   const isLong = side === "LONG";
   const levels = isLong
@@ -165,7 +176,8 @@ function makePlan({ symbol, side, strategyId, strategyName, score, reason, entry
   const blocking = nearestBlockingLevel(swings1h, side, entry, rTargets[0]);
   let tp1 = rTargets[0];
   if (blocking != null) {
-    const buffered = blocking * (1 - direction * PA_CONFIG.TARGET_LEVEL_BUFFER_PCT);
+    const bufferPct = side === "SHORT" ? PA_CONFIG.TARGET_LEVEL_BUFFER_PCT_SHORT : PA_CONFIG.TARGET_LEVEL_BUFFER_PCT;
+    const buffered = blocking * (1 - direction * bufferPct);
     const bufferedR = direction * (buffered - entry) / risk;
     if (bufferedR >= PA_CONFIG.MIN_TP1_DISTANCE_R) tp1 = buffered;
   }
@@ -211,7 +223,7 @@ function structureStrategy({ symbol, oneHour, fifteenMin, atr, structures }) {
   }
   if (!side) return null;
   const vr = volumeRatio(fifteenMin);
-  if (vr != null && vr < PA_CONFIG.MIN_BREAKOUT_VOLUME_RATIO) return null;
+  if (vr != null && vr < minBreakoutVolume(side)) return null;
   const swing = bestFreshSwing(swings, side, oneHour.length - 1);
   if (!swing) return null;
   const pad = levelBuffer(fifteenMin, trigger.close);
@@ -340,6 +352,9 @@ function directionalRejection(candidate, oneHourStructure, fourHourStructure) {
   const fourHourAligned = sideMatchesStructure(fourHourStructure, candidate.side);
   const fourHourNeutral = fourHourStructure === "RANGE" || fourHourStructure === "UNKNOWN";
   const fourHourOpposes = sideMatchesStructure(fourHourStructure, candidate.side === "LONG" ? "SHORT" : "LONG");
+  // Shorts require BOTH 1H and 4H bearish (hardened).
+  if (candidate.side === "SHORT" && (oneHourStructure !== "BEARISH" || fourHourStructure !== "BEARISH"))
+    return "شورت فقط با تأیید هم‌زمان ساختار نزولی 1H و 4H پذیرفته می‌شود.";
   if (PA_CONFIG.REQUIRE_4H_ALIGNMENT && !fourHourAligned) {
     if (fourHourNeutral && PA_CONFIG.ALLOW_4H_NEUTRAL) {
       if (candidate.score < PA_CONFIG.NEUTRAL_4H_MIN_SCORE)
@@ -352,12 +367,16 @@ function directionalRejection(candidate, oneHourStructure, fourHourStructure) {
   }
   if (sideMatchesStructure(oneHourStructure, candidate.side === "LONG" ? "SHORT" : "LONG"))
     return "جهت سیگنال با ساختار تأییدشده 1H مخالف است.";
+  if (fourHourOpposes) {
+    const reversalSetup = ["sr_rejection", "candlestick"].includes(candidate.strategyId);
+    if (!oneHourAligned || !reversalSetup || candidate.score < PA_CONFIG.NEUTRAL_4H_MIN_SCORE)
+      return `روند 4H مخالف است؛ فقط برگشت قوی با تأیید ساختار 1H و امتیاز حداقل ${PA_CONFIG.NEUTRAL_4H_MIN_SCORE} پذیرفته می‌شود.`;
+  }
   return null;
 }
-
 export function resolvePriceActionSignals(results, livePrice) {
   const price = Number(livePrice);
-  const qualified = (Array.isArray(results) ? results : []).filter(x => x && x.score >= PA_CONFIG.MIN_SCORE && finite(x.entry) && x.entry > 0);
+  const qualified = (Array.isArray(results) ? results : []).filter(x => x && x.score >= minScoreFor(x.side) && finite(x.entry) && x.entry > 0);
   const valid = qualified.filter(x => finite(price) && price > 0 && Math.abs(price - x.entry) / x.entry * 100 <= PA_CONFIG.MAX_ENTRY_DRIFT_PCT);
   if (!valid.length && qualified.length && finite(price) && price > 0) return {
     signals: [], conflict: false,
@@ -405,7 +424,7 @@ export function analyzePriceAction({ symbol, oneHour, fourHour, fifteenMin, live
     }
   });
   const candidates = evaluated.filter(x => x.candidate).map(x => x.candidate);
-  const qualified = candidates.filter(x => x.score >= PA_CONFIG.MIN_SCORE);
+  const qualified = candidates.filter(x => x.score >= minScoreFor(x.side));
   const directionalChecks = new Map(qualified.map(candidate => [candidate, directionalRejection(candidate, oneHourStructure, fourHourStructure)]));
   const directionallyValid = qualified.filter(candidate => !directionalChecks.get(candidate));
   const resolution = resolvePriceActionSignals(directionallyValid, livePrice);
