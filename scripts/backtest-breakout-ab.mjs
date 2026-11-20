@@ -214,9 +214,9 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   }
   return {
     symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,candles15m:fifteenMinute.length,
-    baseline:{signals:strategies.baseline.signals,valid:strategies.baseline.valid,risky:strategies.baseline.risky,metrics:summarize(strategies.baseline.trades)},
-    current:{signals:strategies.current.signals,valid:strategies.current.valid,risky:strategies.current.risky,rejected:strategies.current.rejected,rejectReasons:strategies.current.rejectReasons,metrics:summarize(strategies.current.trades)},
-    trades:{baseline:strategies.baseline.trades,current:strategies.current.trades}
+    withBreakout:{signals:strategies.withBreakout.signals,valid:strategies.withBreakout.valid,risky:strategies.withBreakout.risky,metrics:summarize(strategies.withBreakout.trades)},
+    withoutBreakout:{signals:strategies.withoutBreakout.signals,valid:strategies.withoutBreakout.valid,risky:strategies.withoutBreakout.risky,metrics:summarize(strategies.withoutBreakout.trades)},
+    trades:{withBreakout:strategies.withBreakout.trades,withoutBreakout:strategies.withoutBreakout.trades}
   };
 }
 async function main() {
@@ -231,10 +231,10 @@ async function main() {
   const results=[];
   for (const ticker of universe) {
     try { results.push(await backtestSymbol(ticker,fromMs,endMs)); }
-    catch(error) { results.push({symbol:ticker.symbol,error:error.message,baseline:{signals:0,metrics:summarize([])},current:{signals:0,metrics:summarize([])}}); }
+    catch(error) { results.push({symbol:ticker.symbol,error:error.message,withBreakout:{signals:0,metrics:summarize([])},withoutBreakout:{signals:0,metrics:summarize([])}}); }
   }
-  const allBaseline=results.flatMap(r=>r.trades?.baseline||[]).sort((a,b)=>a.entryTime-b.entryTime);
-  const allCurrent=results.flatMap(r=>r.trades?.current||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const allWith=results.flatMap(r=>r.trades?.withBreakout||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const allWithout=results.flatMap(r=>r.trades?.withoutBreakout||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const sum=(mode,key)=>results.reduce((n,r)=>n+Number(r[mode]?.[key]||0),0);
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
@@ -242,13 +242,13 @@ async function main() {
     settings:{symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,feePerSidePct:FEE_PER_SIDE*100,
       slippagePerSidePct:SLIPPAGE_PER_SIDE*100,maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
       sameCandleStopTargetRule:"stop first (conservative)",funding:"excluded",
-      baselineEntry:"signal candle close",currentEntry:"next 1h candle open, adverse slippage applied",
-      currentFilters:"0.35% live/reference drift; 1.25 ATR max distance to 1h EMA20; 1.25 ATR max 15m reclaim extension; 15m momentum/pullback advisory only",
+      entryModel:"next 1h candle open with adverse slippage, identical in both arms",
+      onlyDifference:"skipBreakoutFilter=true in withoutBreakout arm; every other engine filter and setting unchanged",
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
-    baseline:{signals:sum("withBreakout","signals"),valid:sum("baseline","valid"),risky:sum("baseline","risky"),metrics:summarize(allBaseline)},
-    current:{signals:sum("withoutBreakout","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent)},
-    signalCountChangePct:sum("baseline","signals")?((sum("current","signals")/sum("baseline","signals"))-1)*100:0,
-    symbols:results.map(({trades,...r})=>r),trades:{baseline:allBaseline,current:allCurrent}
+    withBreakout:{signals:sum("withBreakout","signals"),valid:sum("withBreakout","valid"),risky:sum("withBreakout","risky"),metrics:summarize(allWith)},
+    withoutBreakout:{signals:sum("withoutBreakout","signals"),valid:sum("withoutBreakout","valid"),risky:sum("withoutBreakout","risky"),metrics:summarize(allWithout)},
+    signalCountChangePct:sum("withBreakout","signals")?((sum("withoutBreakout","signals")/sum("withBreakout","signals"))-1)*100:0,
+    symbols:results.map(({trades,...r})=>r),trades:{withBreakout:allWith,withoutBreakout:allWithout}
   };
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/kraken-futures-backtest-comparison.json",JSON.stringify(report,null,2));
@@ -259,24 +259,31 @@ async function main() {
     "| Metric | Baseline | Current |",
     "|---|---:|---:|",
     "| Signals | "+report.withBreakout.signals+" | "+report.withoutBreakout.signals+" |",
-    "| Valid signals | "+report.baseline.valid+" | "+report.current.valid+" |",
-    "| Risky signals | "+report.baseline.risky+" | "+report.current.risky+" |",
-    "| Executed non-overlapping trades | "+report.baseline.metrics.trades+" | "+report.current.metrics.trades+" |",
-    "| Win rate | "+report.baseline.metrics.winRatePct.toFixed(2)+"% | "+report.current.metrics.winRatePct.toFixed(2)+"% |",
-    "| Expectancy | "+report.baseline.metrics.expectancyR.toFixed(3)+"R | "+report.current.metrics.expectancyR.toFixed(3)+"R |",
-    "| Profit factor | "+(report.baseline.metrics.profitFactor??"n/a")+" | "+(report.current.metrics.profitFactor??"n/a")+" |",
-    "| Net R | "+report.baseline.metrics.netR.toFixed(2)+"R | "+report.current.metrics.netR.toFixed(2)+"R |",
-    "| Max drawdown | "+report.baseline.metrics.maxDrawdownR.toFixed(2)+"R | "+report.current.metrics.maxDrawdownR.toFixed(2)+"R |",
-    "| Current filter rejections | — | "+report.current.rejected+" |",
+    "| Valid signals | "+report.withBreakout.valid+" | "+report.withoutBreakout.valid+" |",
+    "| Risky signals | "+report.withBreakout.risky+" | "+report.withoutBreakout.risky+" |",
+    "| Executed non-overlapping trades | "+report.withBreakout.metrics.trades+" | "+report.withoutBreakout.metrics.trades+" |",
+    "| Trades that hit any TP (TP1/TP2/TP3) | "+report.withBreakout.metrics.anyTpHit+" | "+report.withoutBreakout.metrics.anyTpHit+" |",
+    "| TP1 hit | "+report.withBreakout.metrics.tp1Hit+" | "+report.withoutBreakout.metrics.tp1Hit+" |",
+    "| TP2 hit | "+report.withBreakout.metrics.tp2Hit+" | "+report.withoutBreakout.metrics.tp2Hit+" |",
+    "| TP3 hit | "+report.withBreakout.metrics.tp3Hit+" | "+report.withoutBreakout.metrics.tp3Hit+" |",
+    "| Stop before any TP | "+report.withBreakout.metrics.stopBeforeAnyTp+" | "+report.withoutBreakout.metrics.stopBeforeAnyTp+" |",
+    "| Stop after partial TP | "+report.withBreakout.metrics.stopAfterTp+" | "+report.withoutBreakout.metrics.stopAfterTp+" |",
+    "| Time exit without TP | "+report.withBreakout.metrics.timeExitWithoutTp+" | "+report.withoutBreakout.metrics.timeExitWithoutTp+" |",
+    "| Win rate | "+report.withBreakout.metrics.winRatePct.toFixed(2)+"% | "+report.withoutBreakout.metrics.winRatePct.toFixed(2)+"% |",
+    "| Expectancy | "+report.withBreakout.metrics.expectancyR.toFixed(3)+"R | "+report.withoutBreakout.metrics.expectancyR.toFixed(3)+"R |",
+    "| Profit factor | "+(report.withBreakout.metrics.profitFactor??"n/a")+" | "+(report.withoutBreakout.metrics.profitFactor??"n/a")+" |",
+    "| Net R | "+report.withBreakout.metrics.netR.toFixed(2)+"R | "+report.withoutBreakout.metrics.netR.toFixed(2)+"R |",
+    "| Max drawdown | "+report.withBreakout.metrics.maxDrawdownR.toFixed(2)+"R | "+report.withoutBreakout.metrics.maxDrawdownR.toFixed(2)+"R |",
+    "| Current filter rejections | — | "+report.withoutBreakout.rejected+" |",
     "| Signal count change | — | "+report.signalCountChangePct.toFixed(2)+"% |","",
     "Assumptions: 0.05% fee and 0.03% slippage per side; 72h maximum hold; 40/35/25 partial exits; stop-first same-candle ambiguity. A trade is counted as TP-hit if any target was touched; STOP before TP is reported separately.",
     "Funding excluded. Current universe is selected using present-day volume and therefore has survivorship/universe bias. This is a comparative simulation, not a guarantee of live fills.","",
-    "| Symbol | Baseline signals | Current signals | Change | Current valid | Current risky | Current rejected |",
+    "| Symbol | With-filter signals | Without-filter signals | Change | With-filter trades | Without-filter trades |",
     "|---|---:|---:|---:|---:|---:|---:|",
     ...results.map(r=>"| "+r.symbol+" | "+(r.withBreakout?.signals||0)+" | "+(r.withoutBreakout?.signals||0)+" | "+(((r.current?.signals||0)-(r.baseline?.signals||0)))+" | "+(r.withoutBreakout?.valid||0)+" | "+(r.withoutBreakout?.risky||0)+" | "+(0)+" |")
   ];
   await writeFile("artifacts/kraken-futures-backtest-comparison.md",lines.join("\n"));
-  console.log(JSON.stringify({ok:true,baseline:report.baseline,current:report.current,signalCountChangePct:report.signalCountChangePct,symbols:report.symbols},null,2));
+  console.log(JSON.stringify({ok:true,withBreakout:report.withBreakout,withoutBreakout:report.withoutBreakout,signalCountChangePct:report.signalCountChangePct,symbols:report.symbols},null,2));
 }
 if (process.argv[1] && import.meta.url === new URL("file://" + process.argv[1]).href) {
   main().catch(error=>{console.error(error);process.exitCode=1;});
