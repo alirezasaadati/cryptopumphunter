@@ -30,15 +30,17 @@ test("single TP1 closes the full position; no second or third target is used", (
   assert.equal(Number(tradeResultR({side:"SHORT",actualEntry:100,initialRisk:5,currentStop:105,target1:97,tpHits:["TP1"]},true).toFixed(8)),0.6);
 });
 
-test("signal tracking accepts a single correctly ordered LONG or SHORT target", () => {
-  assert.equal(isValidFuturesSignalLevels({id:"l1",symbol:"PI_ETHUSD",side:"LONG",entry:100,stop:95,target1:105}), true);
-  assert.equal(isValidFuturesSignalLevels({id:"s1",symbol:"PI_ETHUSD",side:"SHORT",entry:100,stop:105,target1:95}), true);
+test("signal tracking accepts three correctly ordered LONG or SHORT targets", () => {
+  assert.equal(isValidFuturesSignalLevels({id:"l1",symbol:"PI_ETHUSD",side:"LONG",entry:100,stop:95,target1:107.5,target2:111,target3:115}), true);
+  assert.equal(isValidFuturesSignalLevels({id:"s1",symbol:"PI_ETHUSD",side:"SHORT",entry:100,stop:105,target1:92.5,target2:89,target3:85}), true);
 });
 
 test("signal tracking rejects missing, non-positive, and misordered levels", () => {
-  const base = {id:"x1",symbol:"PI_ETHUSD",side:"LONG",entry:100,stop:95,target1:105};
+  const base = {id:"x1",symbol:"PI_ETHUSD",side:"LONG",entry:100,stop:95,target1:107.5,target2:111,target3:115};
   assert.equal(isValidFuturesSignalLevels({...base,stop:101}), false);
   assert.equal(isValidFuturesSignalLevels({...base,target1:0}), false);
+  assert.equal(isValidFuturesSignalLevels({...base,target2:106}), false);
+  assert.equal(isValidFuturesSignalLevels({...base,target3:114}), false);
   assert.equal(isValidFuturesSignalLevels({...base,side:"SHORT"}), false);
   assert.equal(isValidFuturesSignalLevels({...base,id:""}), false);
 });
