@@ -184,7 +184,7 @@ test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
   assert.ok(result.target1>result.entry);
   assert.equal(result.target2,undefined);
   assert.equal(result.target3,undefined);
-  assert.equal((result.target1-result.entry)/(result.entry-result.stop),0.6);
+  assert.ok(Math.abs((result.target1-result.entry)/(result.entry-result.stop)-0.6)<1e-9);
   assert.equal(result.rewardRisk,0.6);
   assert.equal(result.candleTime,oneHour.at(-1).time);
 });
