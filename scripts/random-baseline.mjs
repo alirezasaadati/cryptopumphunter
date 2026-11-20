@@ -112,3 +112,5 @@ async function main(){
   console.log(JSON.stringify({period:report.period,candles:bars.length,summary:report.summary,bySide:report.bySide},null,2));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
+
+// Workflow trigger commit: isolated random baseline run.
