@@ -1,0 +1,26 @@
+name: Random baseline backtest
+on:
+  push:
+    branches: [random-baseline-backtest]
+    paths:
+      - "scripts/random-baseline.mjs"
+      - ".github/workflows/random-baseline.yml"
+  workflow_dispatch:
+jobs:
+  random-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Syntax check
+        run: node --check scripts/random-baseline.mjs
+      - name: Run random baseline
+        run: node scripts/random-baseline.mjs
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: random-baseline-report
+          path: artifacts/random-baseline-results.*
