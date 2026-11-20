@@ -1,12 +1,12 @@
-name: PA v2.2 100-symbol one-year backtest
+name: PA v2.2 30-symbol one-year backtest
 on:
   push:
     branches:
-      - experiment/pa-v22-100-symbols-1y
+      - experiment/pa-v22-30-symbols-1y
     paths:
       - "scripts/backtest-btc-1y.mjs"
-      - "scripts/backtest-pa-v22-100-symbols.mjs"
-      - ".github/workflows/pa-v22-100-symbols.yml"
+      - "scripts/backtest-pa-v22-30-symbols.mjs"
+      - ".github/workflows/pa-v22-30-symbols.yml"
       - "src/price-action-engine.js"
 jobs:
   backtest:
@@ -21,14 +21,14 @@ jobs:
         run: |
           node --check src/price-action-engine.js
           node --check scripts/backtest-btc-1y.mjs
-          node --check scripts/backtest-pa-v22-100-symbols.mjs
-      - name: Run 100-symbol historical backtest
-        run: node scripts/backtest-pa-v22-100-symbols.mjs
+          node --check scripts/backtest-pa-v22-30-symbols.mjs
+      - name: Run 30-symbol historical backtest
+        run: node scripts/backtest-pa-v22-30-symbols.mjs
       - name: Upload complete reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pa-v22-100-symbols-1y
+          name: pa-v22-30-symbols-1y
           path: artifacts/
           if-no-files-found: warn
           retention-days: 14
