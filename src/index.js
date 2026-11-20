@@ -1631,9 +1631,15 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   }
 
   const direction = side === "LONG" ? 1 : -1;
-  const target1 = entry + direction * risk * 1.5;
-  const target2 = entry + direction * risk * 2.5;
-  const target3 = entry + direction * risk * 3.5;
+  // Backtest-only override. Production calls retain the original [1.5, 2.5, 3.5] R targets.
+  const targetMultiples = Array.isArray(options.backtestTargetMultiples) &&
+    options.backtestTargetMultiples.length === 3 &&
+    options.backtestTargetMultiples.every(value => Number.isFinite(value) && value > 0)
+    ? options.backtestTargetMultiples
+    : [1.5, 2.5, 3.5];
+  const target1 = entry + direction * risk * targetMultiples[0];
+  const target2 = entry + direction * risk * targetMultiples[1];
+  const target3 = entry + direction * risk * targetMultiples[2];
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
   return {
@@ -1646,7 +1652,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     target1,
     target2,
     target3,
-    rewardRisk: 1.5,
+    rewardRisk: targetMultiples[0],
     rsi: rsiValue,
     ema20: e20,
     ema50: e50,
