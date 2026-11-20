@@ -40,7 +40,7 @@ test("signal tracking rejects missing, non-positive, and misordered levels", () 
   assert.equal(isValidFuturesSignalLevels({...base,stop:101}), false);
   assert.equal(isValidFuturesSignalLevels({...base,target1:0}), false);
   assert.equal(isValidFuturesSignalLevels({...base,target2:106}), false);
-  assert.equal(isValidFuturesSignalLevels({...base,target3:114}), false);
+  assert.equal(isValidFuturesSignalLevels({...base,target3:110}), false);
   assert.equal(isValidFuturesSignalLevels({...base,side:"SHORT"}), false);
   assert.equal(isValidFuturesSignalLevels({...base,id:""}), false);
 });
