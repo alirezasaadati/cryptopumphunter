@@ -93,7 +93,7 @@ function summarize(trades) {
   const shorts = closed.filter(t => t.side === "SHORT");
   const sum = xs => xs.reduce((n,t)=>n+Number(t.marginReturnPercent || 0),0);
   return {
-    signalsAccepted: trades.length,
+    tradesStarted: trades.length,
     closedTrades: closed.length,
     profitCloses: profits.length,
     stopCloses: stops.length,
@@ -222,7 +222,7 @@ async function main() {
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
-    metrics,bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
+    metrics,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),\n    bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
     trades:allTrades
@@ -234,7 +234,7 @@ async function main() {
     "Period: "+report.period.from+" — "+report.period.to+" ("+DAYS+" days)",
     "Symbols tested: "+report.symbolsTested+"/"+SYMBOL_LIMIT,"",
     "| Metric | Result |","|---|---:|",
-    "| Accepted signals | "+metrics.signalsAccepted+" |",
+    "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",\n    "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
     "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
     "| Stop closes | "+metrics.stopCloses+" |",
