@@ -1,0 +1,31 @@
+name: London PDH PDL three-market backtest
+on:
+  push:
+    branches: [experiment/london-pdh-pdl-three-markets]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install project dependencies
+        run: npm install
+      - name: Repository tests
+        run: npm test
+      - name: Validate backtest script
+        run: node --check scripts/london-pdh-pdl-three-markets.mjs
+      - name: Run three-market London PDH PDL backtest
+        run: node scripts/london-pdh-pdl-three-markets.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: london-pdh-pdl-three-markets
+          path: artifacts/london-pdh-pdl-three-markets.*
+          if-no-files-found: warn
+          retention-days: 30
