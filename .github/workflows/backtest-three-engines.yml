@@ -1,4 +1,4 @@
-name: Three-engine futures backtest (common fill model)
+name: Hybrid-only 12-month regime backtest
 on:
   push:
     branches: [backtest-three-engines]
@@ -10,7 +10,7 @@ on:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,17 +20,17 @@ jobs:
         run: |
           node --check scripts/candidate-engine.mjs
           node --check scripts/backtest-three-engines.mjs
-      - name: Run backtest
+      - name: Run hybrid-only 12-month backtest
         env:
-          BACKTEST_DAYS: "90"
+          BACKTEST_DAYS: "365"
           BACKTEST_SYMBOLS: "8"
           BACKTEST_FEE: "0.0005"
           BACKTEST_SLIPPAGE: "0.0003"
         run: node scripts/backtest-three-engines.mjs
-      - name: Upload report
+      - name: Upload hybrid report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: three-engine-backtest
+          name: hybrid-12m-backtest
           path: artifacts/
           if-no-files-found: warn
