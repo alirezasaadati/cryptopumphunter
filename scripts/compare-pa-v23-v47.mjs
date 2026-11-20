@@ -103,13 +103,14 @@ function addSignal(trade, trades, activeBySymbol) {
 function advanceTrade(active, bar, index, trades, activeBySymbol) {
   if (index <= active.entryIndex) return;
   const isLong = active.side === 'LONG';
-  const stopHit = isLong ? bar.low <= active.stop : bar.high >= active.stop;
+  const stopGap = isLong ? bar.open <= active.stop : bar.open >= active.stop;
+  const stopHit = stopGap || (isLong ? bar.low <= active.stop : bar.high >= active.stop);
   const t1Hit = isLong ? bar.high >= active.target1 : bar.low <= active.target1;
   const t2Hit = isLong ? bar.high >= active.target2 : bar.low <= active.target2;
   const t3Hit = isLong ? bar.high >= active.target3 : bar.low <= active.target3;
   // Conservative OHLC assumption: if stop and any target are touched in one bar, stop is first.
   if (stopHit) {
-    active.exitReason='STOP'; active.exitTime=bar.time; active.exitPrice=active.stop;
+    active.exitReason='STOP'; active.exitTime=bar.time; active.exitPrice=stopGap ? bar.open : active.stop;
     trades.push(active); activeBySymbol.delete(active.symbol); return;
   }
   if (t1Hit) { active.hitTP1=true; if (!active.tp1Time) active.tp1Time=bar.time; }
@@ -239,7 +240,7 @@ async function main() {
   }
   const report={metadata:{source:'Kraken Futures public trade candles',symbols:universe.map(x=>x.symbol),symbolSelection:'Top 8 currently eligible perpetuals by current quote volume; same fixed universe used for both engines and both periods.',signalWindowsDays:DAYS_LIST,signalEnd:new Date(SIGNAL_END).toISOString(),warmupDays:WARMUP_DAYS,
     execution:'Signals evaluated only on completed 15m candles; only completed 1h/4h candles are visible; entry at next 15m open; v2.3 stop/targets shifted by entry fill delta to preserve original level distances; same 15m exit candles for both engines.',
-    exitRule:'No maximum holding time. A trade remains open until stop or TP3. TP1/TP2 are milestones only. If stop and any target are touched in the same 15m candle, stop is assumed first. Positions still unresolved at latest available candle are marked OPEN_AT_END.',
+    exitRule:'No maximum holding time. A trade remains open until stop or TP3. TP1/TP2 are milestones only. If stop and any target are touched in the same 15m candle, stop is assumed first; a gap through stop is filled at the 15m open. Positions still unresolved at latest available candle are marked OPEN_AT_END.',
     constraints:'One concurrent trade per symbol per engine. Historical funding is not available in the candle feed; v4.7 funding adjustment is omitted, matching its no-funding-data branch. Fees, slippage and partial exits are excluded. Historical symbol-universe membership is not reconstructed; top current eligible contracts with at least 90% of required 210-day candle coverage are used.',skippedSymbols},
     candleCoverage:Object.fromEntries(universe.map(meta=>[meta.symbol,Object.fromEntries(RESOLUTIONS.map(r=>[r,{count:seriesBySymbol[meta.symbol][r].length,first:new Date(seriesBySymbol[meta.symbol][r][0].time).toISOString(),last:new Date(seriesBySymbol[meta.symbol][r].at(-1).time).toISOString()}]))])),results};
   await fs.writeFile(path.join(OUT,'comparison-report.json'),JSON.stringify(report,null,2));
