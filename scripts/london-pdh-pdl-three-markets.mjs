@@ -232,8 +232,9 @@ function calcTrade(symbol,bars,entryIndex,side,entryMid,stopMid,atrAtSweep,entry
   let exitMid=null,exitIndex=Math.min(bars.length-1,entryIndex+MAX_HOLD),reason="TIME_EXIT";
   for(let j=entryIndex;j<=exitIndex;j++){
     const b=bars[j];
-    const stopHit=dir===1?b.low<=stopMid:b.high>=stopMid;
-    const targetHit=dir===1?b.high>=target:b.low<=target;
+    const triggerBar=symbol==="XAUUSD"?(dir===1?b.bid:b.ask):b;
+    const stopHit=dir===1?triggerBar.low<=stopMid:triggerBar.high>=stopMid;
+    const targetHit=dir===1?triggerBar.high>=target:triggerBar.low<=target;
     if(stopHit){exitMid=stopMid;reason="STOP";exitIndex=j;break;}
     if(targetHit){exitMid=target;reason="TP_2R";exitIndex=j;break;}
   }
