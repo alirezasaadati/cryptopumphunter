@@ -1678,8 +1678,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
 
   const direction = side === "LONG" ? 1 : -1;
   const target1 = entry + direction * risk * 0.6;
-  const target2 = entry + direction * risk * 2.5;
-  const target3 = entry + direction * risk * 3.5;
+  const target2 = entry + direction * risk * 2.0;
+  const target3 = entry + direction * risk * 3.0;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
   return {
