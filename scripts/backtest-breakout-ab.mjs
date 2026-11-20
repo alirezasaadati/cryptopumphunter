@@ -74,14 +74,14 @@ function closeTrade(position, rawPrice, reason, time, config) {
   return position;
 }
 
-export function simulateTrade({ side, entry, stop, targets, candles, startIndex, fee = 0.0005, slippage = 0.0003, maxHoldHours = 72 }) {
+export function simulateTrade({ side, entry, stop, targets, candles, startIndex, fee = 0.0005, slippage = 0.0003, maxHoldHours = 72, closeAtMarginProfitPct = null }) {
   const direction = side === "LONG" ? 1 : -1;
   const risk = direction === 1 ? entry - stop : stop - entry;
   if (!(risk > 0) || !Number.isFinite(risk)) throw new Error("Invalid trade risk");
   const position = { side, entry, stop, risk, direction, remaining: 1, realizedR: 0, targetHits: 0, exitTime: null, exitReason: null };
   const config = { fee, slippage };
   const endIndex = Math.min(candles.length - 1, startIndex + maxHoldHours);
-  const marginProfitPrice = entry * (1 + direction * 0.01); // 10% on 10x margin = 1% favorable underlying move
+  const marginProfitPrice = closeAtMarginProfitPct == null ? null : entry * (1 + direction * (closeAtMarginProfitPct / 100) / 10); // margin ROI converted to underlying move at 10x
   let hit20PctMarginBeforeStop = false;
   let hit20PctMarginTime = null;
   let maxFavorablePctBeforeStop = 0;
@@ -99,10 +99,12 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
       ? (bar.high / entry - 1) * 100
       : (entry / bar.low - 1) * 100;
     maxFavorablePctBeforeStop = Math.max(maxFavorablePctBeforeStop, favorablePct);
-    const profitThresholdTouched = direction === 1 ? bar.high >= marginProfitPrice : bar.low <= marginProfitPrice;
-    if (!hit20PctMarginBeforeStop && profitThresholdTouched) {
+    const profitThresholdTouched = marginProfitPrice != null && (direction === 1 ? bar.high >= marginProfitPrice : bar.low <= marginProfitPrice);
+    if (profitThresholdTouched) {
       hit20PctMarginBeforeStop = true;
       hit20PctMarginTime = bar.time;
+      closeTrade(position, marginProfitPrice, "MARGIN_TARGET_" + closeAtMarginProfitPct, bar.time, config);
+      break;
     }
     for (let t = 0; t < targets.length && position.remaining > 0; t++) {
       const target = targets[t];
@@ -224,6 +226,14 @@ async function backtestSymbol(ticker, fromMs, toMs) {
         targets:[candidate.target1,candidate.target2,candidate.target3],
         candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
       });
+      trade.fixedMarginTargets = {};
+      for (const pct of [15,20,25,30]) {
+        trade.fixedMarginTargets[pct] = simulateTrade({
+          side:candidate.side,entry,stop:candidate.stop,targets:[null,null,null],
+          candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,
+          maxHoldHours:MAX_HOLD_HOURS,closeAtMarginProfitPct:pct
+        });
+      }
       trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
       trade.entryModel="next_1h_open";
       state.trades.push(trade);
@@ -255,6 +265,7 @@ async function main() {
   const allWith=results.flatMap(r=>r.trades?.withBreakout||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const allWithout=results.flatMap(r=>r.trades?.withoutBreakout||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const sum=(mode,key)=>results.reduce((n,r)=>n+Number(r[mode]?.[key]||0),0);
+  const fixedMarginSummary = (trades,pct) => summarize(trades.map(t=>t.fixedMarginTargets[pct]));
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS},
@@ -266,6 +277,12 @@ async function main() {
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
     withBreakout:{signals:sum("withBreakout","signals"),valid:sum("withBreakout","valid"),risky:sum("withBreakout","risky"),metrics:summarize(allWith)},
     withoutBreakout:{signals:sum("withoutBreakout","signals"),valid:sum("withoutBreakout","valid"),risky:sum("withoutBreakout","risky"),metrics:summarize(allWithout)},
+    fixedMarginTargets: {
+      marginRoiTargetsPct: [15,20,25,30],
+      underlyingMovePctAt10x: {15:1.5,20:2,25:2.5,30:3},
+      withBreakout: Object.fromEntries([15,20,25,30].map(p=>[p,fixedMarginSummary(allWith,p)])),
+      withoutBreakout: Object.fromEntries([15,20,25,30].map(p=>[p,fixedMarginSummary(allWithout,p)]))
+    },
     signalCountChangePct:sum("withBreakout","signals")?((sum("withoutBreakout","signals")/sum("withBreakout","signals"))-1)*100:0,
     symbols:results.map(({trades,...r})=>r),trades:{withBreakout:allWith,withoutBreakout:allWithout}
   };
@@ -297,6 +314,10 @@ async function main() {
     "| Max drawdown | "+report.withBreakout.metrics.maxDrawdownR.toFixed(2)+"R | "+report.withoutBreakout.metrics.maxDrawdownR.toFixed(2)+"R |",
     
     "| Signal count change | — | "+report.signalCountChangePct.toFixed(2)+"% |","",
+    "## Fixed full-exit margin ROI scenarios (10x leverage)","",
+    "| Target ROI on margin | Underlying move | With filter: trades / net R / PF | Without filter: trades / net R / PF |",
+    "|---:|---:|---:|---:|",
+    ...[15,20,25,30].map(p=>{const a=report.fixedMarginTargets.withBreakout[p],b=report.fixedMarginTargets.withoutBreakout[p];return "| "+p+"% | "+(p/10).toFixed(1)+"% | "+a.trades+" / "+a.netR.toFixed(2)+"R / "+(a.profitFactor??"n/a")+" | "+b.trades+" / "+b.netR.toFixed(2)+"R / "+(b.profitFactor??"n/a")+" |";}),"" ,
     "Assumptions: 0.05% fee and 0.03% slippage per side; 72h maximum hold; 40/35/25 partial exits; stop-first same-candle ambiguity. A trade is counted as TP-hit if any target was touched; STOP before TP is reported separately.",
     "Funding excluded. Current universe is selected using present-day volume and therefore has survivorship/universe bias. This is a comparative simulation, not a guarantee of live fills.","",
     "| Symbol | With-filter signals | Without-filter signals | Change | With-filter trades | Without-filter trades |",
