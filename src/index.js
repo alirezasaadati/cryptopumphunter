@@ -1631,28 +1631,30 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     return { symbol: ticker.symbol, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
   }
 
-  const breakoutPivot = findLatestConfirmed15mPivot(candles15m, side, 3, 3);
-  if (!breakoutPivot) {
-    return { symbol: ticker.symbol, side, rejected: "پیوت شکست معتبر ۱۵دقیقه‌ای در دسترس نیست" };
-  }
-  const breakoutEntryPrice = Number(ticker.last);
-  const breakoutDistancePct = side === "LONG"
-    ? (breakoutEntryPrice - breakoutPivot.price) / breakoutPivot.price * 100
-    : (breakoutPivot.price - breakoutEntryPrice) / breakoutPivot.price * 100;
-  if (!Number.isFinite(breakoutDistancePct) || breakoutDistancePct < 0 ||
-      breakoutDistancePct > FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT) {
-    return {
-      symbol: ticker.symbol,
-      side,
-      rejected: "فاصله ورود تا سطح شکست خارج از محدوده مجاز است",
-      breakoutDiagnostics: {
-        pivot: breakoutPivot,
-        signedDistancePct: breakoutDistancePct,
-        maxDistancePct: FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT
-      }
-    };
-  }
-  reasons.push("فاصله قیمت از پیوت شکست ۱۵دقیقه‌ای حداکثر ۰٫۳٪ است");
+  if (!options.skipBreakoutFilter) {
+    const breakoutPivot = findLatestConfirmed15mPivot(candles15m, side, 3, 3);
+    if (!breakoutPivot) {
+      return { symbol: ticker.symbol, side, rejected: "پیوت شکست معتبر ۱۵دقیقه‌ای در دسترس نیست" };
+    }
+    const breakoutEntryPrice = Number(ticker.last);
+    const breakoutDistancePct = side === "LONG"
+      ? (breakoutEntryPrice - breakoutPivot.price) / breakoutPivot.price * 100
+      : (breakoutPivot.price - breakoutEntryPrice) / breakoutPivot.price * 100;
+    if (!Number.isFinite(breakoutDistancePct) || breakoutDistancePct < 0 ||
+        breakoutDistancePct > FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT) {
+      return {
+        symbol: ticker.symbol,
+        side,
+        rejected: "فاصله ورود تا سطح شکست خارج از محدوده مجاز است",
+        breakoutDiagnostics: {
+          pivot: breakoutPivot,
+          signedDistancePct: breakoutDistancePct,
+          maxDistancePct: FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT
+        }
+      };
+    }
+    reasons.push("فاصله قیمت از پیوت شکست ۱۵دقیقه‌ای حداکثر ۰٫۳٪ است");
+    }
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
   if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
@@ -2258,4 +2260,4 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, mapLimit, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
+export { FUTURES_CONFIG, findLatestConfirmed15mPivot, mapLimit, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
