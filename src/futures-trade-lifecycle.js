@@ -84,7 +84,7 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
     closePriceChangePercent: priceChangePercent(trade.side, entry, exitPrice),
     marginReturnPercent: marginReturnPercent(trade.side, entry, exitPrice, options.leverage ?? FUTURES_TRADE_LEVERAGE),
     closedAt,
-    lockReleased: true
+    lockReleaseEligible: true
   };
   return { changed: true, reason, trade: updatedTrade };
 }
