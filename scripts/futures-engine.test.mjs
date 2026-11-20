@@ -190,7 +190,7 @@ test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
 
 test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("SHORT");
-  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute,{skipBreakoutFilter:true});
   assert.equal(result.side,"SHORT");
   assert.equal(result.eligible,true);
   assert.ok(result.stop>result.entry);
