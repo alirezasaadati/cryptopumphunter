@@ -11,6 +11,10 @@ jobs:
   benchmark:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        atr_multiplier: ["0.35", "0.50", "0.65", "0.75"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,11 +23,13 @@ jobs:
       - name: Validate benchmark script
         run: node --check scripts/benchmark-btc-trend-models.mjs
       - name: Run one-year BTC trend benchmark
+        env:
+          ATR_LABEL_MULTIPLIER: ${{ matrix.atr_multiplier }}
         run: node scripts/benchmark-btc-trend-models.mjs
       - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: btc-trend-model-benchmark
+          name: btc-trend-model-benchmark-${{ matrix.atr_multiplier }}
           path: artifacts/
           if-no-files-found: warn
