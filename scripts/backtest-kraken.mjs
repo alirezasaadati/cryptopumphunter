@@ -213,7 +213,7 @@ async function main() {
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/btc-single-target-30-margin-backtest.json",JSON.stringify(report,null,2));
   const md = [
-    "# BTC historical backtest — single 30% margin target 1.5R",
+    "# BTC historical backtest — single 30% margin ROI target",
     "",
     "Period: "+report.period.from+" to "+report.period.to+" ("+DAYS+" days)",
     "Symbol: "+SYMBOL,
@@ -221,7 +221,7 @@ async function main() {
     "",
     "| Outcome | Count |",
     "|---|---:|",
-    "| 30% margin target 1.5R hit | "+target30.length+" |",
+    "| 30% margin target hit | "+target30.length+" |",
     "| Direct stop loss | "+stops.length+" |",
     "| Still open at data end | "+open.length+" |",
     "| Closed trades | "+closed.length+" |",
