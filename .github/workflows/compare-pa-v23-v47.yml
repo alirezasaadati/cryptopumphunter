@@ -7,6 +7,8 @@ on:
       - "scripts/vendor/price-action-engine-v2.3.js"
       - ".github/workflows/compare-pa-v23-v47.yml"
       - "src/index.js"
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 jobs:
   historical-comparison:
