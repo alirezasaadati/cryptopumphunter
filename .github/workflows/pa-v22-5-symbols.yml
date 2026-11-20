@@ -1,0 +1,34 @@
+name: PA v2.2 5 highest-volume perpetuals one-year backtest
+on:
+  push:
+    branches:
+      - experiment/pa-v22-100-symbols-1y
+    paths:
+      - "scripts/backtest-pa-v22-5-symbols.mjs"
+      - "scripts/backtest-btc-1y.mjs"
+      - "src/price-action-engine.js"
+      - ".github/workflows/pa-v22-5-symbols.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify v2.2 engine and runner
+        run: |
+          node --check src/price-action-engine.js
+          node --check scripts/backtest-btc-1y.mjs
+          node --check scripts/backtest-pa-v22-5-symbols.mjs
+      - name: Run five-symbol one-year historical backtest
+        run: node scripts/backtest-pa-v22-5-symbols.mjs
+      - name: Upload complete reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pa-v22-5-symbols-1y
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
