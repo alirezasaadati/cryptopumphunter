@@ -1784,7 +1784,7 @@ async function monitorOpenFuturesTrades(env) {
   await mapLimit(symbols, 3, async symbol => {
     let candles;
     try {
-      candles = await getKrakenFuturesCandles(symbol, "1h");
+      candles = await getKrakenFuturesCandles(symbol, "5m");
     } catch (error) {
       errors++;
       console.error("Futures trade monitor candle fetch failed:", symbol, String(error?.message || error));
@@ -1975,15 +1975,17 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.put("active-futures-trades",[...open,...history]);
           if(closed){
             const pending=await this.ctx.storage.get("active-futures-pending")||[];
-            await this.ctx.storage.put("active-futures-pending",pending.filter(s=>!releasedKeys.has(String(s.symbol).trim().toUpperCase()+"|"+s.side)));
+            const releasedSignalIds=new Set(updates.filter(t=>["CLOSED_PROFIT","CLOSED_STOP"].includes(t?.status)).map(t=>String(t.signalId||"")));
+            await this.ctx.storage.put("active-futures-pending",pending.filter(s=>!releasedSignalIds.has(String(s.id))));
           }
           return Response.json({ok:true,updated,closed,open:open.length});
         }
         if(url.pathname==="/signals/register"){
           const now=Date.now();
           const current=await this.ctx.storage.get("active-futures-pending")||[];
-          const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side));
           const trades=await this.ctx.storage.get("active-futures-trades")||[];
+          const closedSignalIds=new Set(trades.filter(t=>["CLOSED_PROFIT","CLOSED_STOP"].includes(t?.status)).map(t=>String(t.signalId)));
+          const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side)&&!closedSignalIds.has(String(x?.id)));
           const activeTradeKeys=new Set(trades.filter(t=>t?.status==="OPEN").map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
           const activeKeys=new Set(active.map(x=>String(x.symbol).trim().toUpperCase()+"|"+x.side));
           const seen=new Set();
@@ -1998,12 +2000,12 @@ export class SignalDeliveryCoordinator {
             if(trade)newTrades.push(trade);
           }
           const merged=[...active,...fresh].slice(-150);
-          await this.ctx.storage.put("active-futures-pending",merged);
           if(newTrades.length){
             const open=trades.filter(t=>t?.status==="OPEN");
             const history=trades.filter(t=>t?.status!=="OPEN").slice(-500);
             await this.ctx.storage.put("active-futures-trades",[...open,...history,...newTrades]);
           }
+          await this.ctx.storage.put("active-futures-pending",merged);
           return Response.json({ok:true,signals:fresh,trackedTrades:newTrades.length});
         }
         if(url.pathname==="/scan-lock/acquire"){
