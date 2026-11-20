@@ -138,6 +138,7 @@ function summarize(trades) {
   return {
     trades: trades.length, wins: wins.length, losses: losses.length,
     anyTpHit: trades.filter(t=>t.targetHits>0).length,
+    totalStops: trades.filter(t=>t.exitReason==="STOP").length,
     tp1Hit: trades.filter(t=>t.targetHits>=1).length,
     tp2Hit: trades.filter(t=>t.targetHits>=2).length,
     tp3Hit: trades.filter(t=>t.targetHits>=3).length,
@@ -266,6 +267,7 @@ async function main() {
     "| TP1 hit | "+report.withBreakout.metrics.tp1Hit+" | "+report.withoutBreakout.metrics.tp1Hit+" |",
     "| TP2 hit | "+report.withBreakout.metrics.tp2Hit+" | "+report.withoutBreakout.metrics.tp2Hit+" |",
     "| TP3 hit | "+report.withBreakout.metrics.tp3Hit+" | "+report.withoutBreakout.metrics.tp3Hit+" |",
+    "| Total trades that hit stop | "+report.withBreakout.metrics.totalStops+" | "+report.withoutBreakout.metrics.totalStops+" |",
     "| Stop before any TP | "+report.withBreakout.metrics.stopBeforeAnyTp+" | "+report.withoutBreakout.metrics.stopBeforeAnyTp+" |",
     "| Stop after partial TP | "+report.withBreakout.metrics.stopAfterTp+" | "+report.withoutBreakout.metrics.stopAfterTp+" |",
     "| Time exit without TP | "+report.withBreakout.metrics.timeExitWithoutTp+" | "+report.withoutBreakout.metrics.timeExitWithoutTp+" |",
