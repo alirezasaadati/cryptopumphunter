@@ -182,3 +182,5 @@ async function main(){
 main().catch(error=>{console.error(error);process.exitCode=1;});
 
 // Re-run trigger: isolated historical validation script.
+
+// Trigger 180-day extended historical validation.
