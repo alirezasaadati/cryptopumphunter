@@ -1,4 +1,4 @@
-// Run the same 1-year Kraken perpetual backtest on the 30 most active USD-margined PF contracts.
+// Run the same 1-year Kraken perpetual backtest on the 10 most active USD-margined PF contracts.
 import { mkdir, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
@@ -19,12 +19,12 @@ async function getInstruments() {
     x.tradeable !== false
   );
   candidates.sort((a,b) => Number(b.volume24h || b.volume || 0) - Number(a.volume24h || a.volume || 0));
-  return candidates.slice(0, 30).map(x => x.symbol);
+  return candidates.slice(0, 10).map(x => x.symbol);
 }
 
 async function main() {
   const symbols = await getInstruments();
-  if (symbols.length < 30) console.log(`WARNING: Kraken returned only ${symbols.length} eligible PF USD contracts; testing all available.`);
+  if (symbols.length < 10) console.log(`WARNING: Kraken returned only ${symbols.length} eligible PF USD contracts; testing all available.`);
   console.log(`Selected ${symbols.length} symbols: ${symbols.join(", ")}`);
   await mkdir("artifacts", { recursive: true });
   const outcomes = [];
@@ -57,7 +57,7 @@ async function main() {
   const grossWin = wins.reduce((s,t) => s+t.netR, 0);
   const grossLoss = Math.abs(losses.reduce((s,t) => s+t.netR, 0));
   const summary = {
-    requestedSymbols: 30,
+    requestedSymbols: 10,
     testedSymbols: symbols.length,
     successfulSymbols: successful.length,
     failedSymbols: outcomes.length - successful.length,
@@ -89,9 +89,9 @@ async function main() {
   }, summary, perSymbol, failures: outcomes.filter(x => !x.ok), symbols, reports: reports.map(r => ({
     symbol: r.symbol, period: r.period, signals: r.signals, skipped: r.skipped, summary: r.summary, trades: r.trades
   })) };
-  await writeFile("artifacts/pa-v22-30-symbols-1y.json", JSON.stringify(result, null, 2));
+  await writeFile("artifacts/pa-v22-10-symbols-1y.json", JSON.stringify(result, null, 2));
   const lines = [
-    "# Pure Price Action v2.2 — 30-symbol one-year backtest", "",
+    "# Pure Price Action v2.2 — 10-symbol one-year backtest", "",
     `Generated: ${result.generatedAt}`,
     `Eligible symbols: ${symbols.length}; successful: ${successful.length}; failed: ${summary.failedSymbols}`,
     "Period: rolling 365 days per symbol | Fee: 0.05% per side | Slippage: 0.03% per side",
@@ -107,7 +107,7 @@ async function main() {
     ...outcomes.filter(x => !x.ok).map(x => `- ${x.symbol}: ${x.error}`),
     "", "Open positions are marked to their realized partial R only; unrealized P&L and funding are excluded."
   ];
-  await writeFile("artifacts/pa-v22-30-symbols-1y.md", lines.join("\n"));
+  await writeFile("artifacts/pa-v22-10-symbols-1y.md", lines.join("\n"));
   console.log("\\nAGGREGATE SUMMARY");
   console.log(JSON.stringify(summary, null, 2));
 }
