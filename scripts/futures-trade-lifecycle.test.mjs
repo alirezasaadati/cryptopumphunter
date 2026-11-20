@@ -51,6 +51,13 @@ test("ambiguous candle touching both stop and profit is resolved as stop", () =>
   assert.equal(result.trade.exitPrice, 95);
 });
 
+test("a candle opening beyond profit closes at the known opening price even if it later reaches stop", () => {
+  const result = evaluateTradeCandle(longTrade, {open:104, high:105, low:94, time:6});
+  assert.equal(result.reason, "CLOSED_PROFIT");
+  assert.equal(result.trade.exitPrice, 104);
+  assert.ok(Math.abs(result.trade.marginReturnPercent - 40) < 1e-9);
+});
+
 test("closed trades and candles that touch neither boundary are unchanged", () => {
   const closed = {...longTrade, status:"CLOSED_PROFIT"};
   assert.equal(evaluateTradeCandle(closed, {open:100, high:110, low:90}).changed, false);
