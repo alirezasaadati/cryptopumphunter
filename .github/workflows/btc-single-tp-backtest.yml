@@ -1,0 +1,27 @@
+name: BTC single TP1 1.5R historical backtest
+on:
+  workflow_dispatch:
+  push:
+    branches: [backtest/btc-single-tp-1-5r-20261120]
+    paths:
+      - "scripts/backtest-btc-single-tp.mjs"
+      - ".github/workflows/btc-single-tp-backtest.yml"
+      - "src/index.js"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 60-day BTC historical backtest
+        run: node scripts/backtest-btc-single-tp.mjs
+      - name: Upload BTC backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-single-tp-1-5r-backtest
+          path: artifacts/
+          if-no-files-found: warn
