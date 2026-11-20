@@ -20,6 +20,7 @@ jobs:
         run: |
           node --check scripts/candidate-engine.mjs
           node --check scripts/backtest-three-engines.mjs
+          node --check scripts/backtest-architectures.mjs
       - name: Run three-architecture comparison
         env:
           BACKTEST_DAYS: "365"
