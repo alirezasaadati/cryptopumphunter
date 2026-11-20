@@ -1,0 +1,31 @@
+name: Fibonacci Pullback Engine Tests
+
+on:
+  push:
+    branches:
+      - feature/fibonacci-pullback-engine
+    paths:
+      - "src/fibonacci-engine.js"
+      - "scripts/fibonacci-engine.test.mjs"
+      - "package.json"
+      - ".github/workflows/fibonacci-engine-tests.yml"
+  pull_request:
+    paths:
+      - "src/fibonacci-engine.js"
+      - "scripts/fibonacci-engine.test.mjs"
+      - "package.json"
+      - ".github/workflows/fibonacci-engine-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm test
