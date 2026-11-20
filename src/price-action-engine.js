@@ -1,4 +1,4 @@
-// Pure Price Action engine v2 (corrected).
+// Pure Price Action engine v2.1 (corrected, tuned for realistic trade frequency).
 // No indicators are used for signal decisions. ATR is used ONLY for stop sizing.
 export const PA_CONFIG = Object.freeze({
   MIN_CANDLES_4H: 30,
@@ -6,24 +6,24 @@ export const PA_CONFIG = Object.freeze({
   MIN_CANDLES_15M: 40,
   PIVOT_LEFT: 3,
   PIVOT_RIGHT: 3,
-  MAX_SWING_AGE_BARS: 60,
+  MAX_SWING_AGE_BARS: 80,
   LEVEL_TOLERANCE_PCT: 0.0018,
   MIN_RISK_PCT: 0.0015,
   MAX_RISK_PCT: 0.06,
   MIN_REWARD_RISK: 1.5,
   TARGET_R_MULTIPLES: [1.5, 2.2, 3],
-  MIN_SCORE: 80,
+  MIN_SCORE: 78,
   VOLUME_LOOKBACK: 20,
-  MIN_BREAKOUT_VOLUME_RATIO: 1.2,
-  MIN_REVERSAL_VOLUME_RATIO: 1.0,
+  MIN_BREAKOUT_VOLUME_RATIO: 1.1,
+  MIN_REVERSAL_VOLUME_RATIO: 0.9,
   ATR_PERIOD: 14,
   MIN_STOP_ATR: 1.0,
   MAX_STOP_ATR: 2.5,
   TARGET_LEVEL_BUFFER_PCT: 0.0015,
   MIN_TP1_DISTANCE_R: 1.2,
-  REQUIRE_4H_ALIGNMENT: true,
+  REQUIRE_4H_ALIGNMENT: false,
   ALLOW_4H_NEUTRAL: true,
-  NEUTRAL_4H_MIN_SCORE: 90,
+  NEUTRAL_4H_MIN_SCORE: 85,
   MAX_ENTRY_DRIFT_PCT: 0.35
 });
 
