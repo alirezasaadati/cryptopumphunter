@@ -253,10 +253,10 @@ async function main() {
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/kraken-futures-backtest-comparison.json",JSON.stringify(report,null,2));
   const lines=[
-    "# Kraken Futures — baseline vs current entry filters","",
+    "# Kraken Futures — 0.3% breakout filter A/B comparison","",
     "Period: "+report.period.from+" to "+report.period.to+" ("+DAYS+" days)",
     "Symbols successfully tested: "+report.settings.symbolsTested+"/"+SYMBOL_LIMIT,"",
-    "| Metric | Baseline | Current |",
+    "| Metric | With 0.3% filter | Without 0.3% filter |",
     "|---|---:|---:|",
     "| Signals | "+report.withBreakout.signals+" | "+report.withoutBreakout.signals+" |",
     "| Valid signals | "+report.withBreakout.valid+" | "+report.withoutBreakout.valid+" |",
@@ -274,13 +274,13 @@ async function main() {
     "| Profit factor | "+(report.withBreakout.metrics.profitFactor??"n/a")+" | "+(report.withoutBreakout.metrics.profitFactor??"n/a")+" |",
     "| Net R | "+report.withBreakout.metrics.netR.toFixed(2)+"R | "+report.withoutBreakout.metrics.netR.toFixed(2)+"R |",
     "| Max drawdown | "+report.withBreakout.metrics.maxDrawdownR.toFixed(2)+"R | "+report.withoutBreakout.metrics.maxDrawdownR.toFixed(2)+"R |",
-    "| Current filter rejections | — | "+report.withoutBreakout.rejected+" |",
+    
     "| Signal count change | — | "+report.signalCountChangePct.toFixed(2)+"% |","",
     "Assumptions: 0.05% fee and 0.03% slippage per side; 72h maximum hold; 40/35/25 partial exits; stop-first same-candle ambiguity. A trade is counted as TP-hit if any target was touched; STOP before TP is reported separately.",
     "Funding excluded. Current universe is selected using present-day volume and therefore has survivorship/universe bias. This is a comparative simulation, not a guarantee of live fills.","",
     "| Symbol | With-filter signals | Without-filter signals | Change | With-filter trades | Without-filter trades |",
-    "|---|---:|---:|---:|---:|---:|---:|",
-    ...results.map(r=>"| "+r.symbol+" | "+(r.withBreakout?.signals||0)+" | "+(r.withoutBreakout?.signals||0)+" | "+(((r.current?.signals||0)-(r.baseline?.signals||0)))+" | "+(r.withoutBreakout?.valid||0)+" | "+(r.withoutBreakout?.risky||0)+" | "+(0)+" |")
+    "|---|---:|---:|---:|---:|---:|",
+    ...results.map(r=>"| "+r.symbol+" | "+(r.withBreakout?.signals||0)+" | "+(r.withoutBreakout?.signals||0)+" | "+((r.withoutBreakout?.signals||0)-(r.withBreakout?.signals||0))+" | "+(r.withBreakout?.metrics?.trades||0)+" | "+(r.withoutBreakout?.metrics?.trades||0)+" |")
   ];
   await writeFile("artifacts/kraken-futures-backtest-comparison.md",lines.join("\n"));
   console.log(JSON.stringify({ok:true,withBreakout:report.withBreakout,withoutBreakout:report.withoutBreakout,signalCountChangePct:report.signalCountChangePct,symbols:report.symbols},null,2));
