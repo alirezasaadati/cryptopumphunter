@@ -1376,9 +1376,11 @@ const FUTURES_CONFIG = {
   ENTRY_CONFIRM_INTERVAL: "15m",
   SIGNAL_TTL_MINUTES: 60,
   MAX_ENTRY_DRIFT_PCT: 0.35,
-  MAX_ENTRY_EMA_DISTANCE_ATR: 3.0,
+  MAX_ENTRY_EMA_DISTANCE_ATR: 1.5,
   MAX_PULLBACK_DISTANCE_ATR: 0.35,
-  MAX_RECLAIM_EXTENSION_ATR: 3.0
+  MAX_RECLAIM_EXTENSION_ATR: 1.0,
+  TARGET_LEVERAGE: 10,
+  TARGET_ROI_LEVELS: [0.20, 0.40, 0.60, 0.80, 1.20]
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
@@ -1502,7 +1504,7 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
 
   const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
   if (!has15mData) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+    return { ok: false, rejected: "داده کافی ۱۵دقیقه‌ای برای تأیید نقطه ورود وجود ندارد", driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
   }
   const closes15m = candles15m.map(c => c.close);
   const ema9_15m = ema(closes15m, 9);
@@ -1511,7 +1513,7 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
   const last15m = candles15m[candles15m.length - 1];
   const recentPullback = candles15m.slice(-9, -1);
   if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+    return { ok: false, rejected: "اندیکاتورهای تأیید ورود در تایم‌فریم ۱۵دقیقه معتبر نیستند", driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
   }
 
   const aligned = side === "LONG"
@@ -1527,9 +1529,15 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
   if (reclaimExtensionAtr > FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR) {
     return { ok: false, rejected: "قیمت پس از حرکت تأییدی بیش از حد از محدوده ورود فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
   }
+  if (!touchedPullbackZone) {
+    return { ok: false, rejected: "پولبک معتبر به محدوده EMA21 در ۱۵دقیقه تشکیل نشده است", driftPct, emaDistanceAtr, reclaimExtensionAtr, momentumConfirmed: aligned, pullbackConfirmed: false };
+  }
+  if (!aligned) {
+    return { ok: false, rejected: "شروع مجدد مومنتوم در جهت روند در کندل ۱۵دقیقه تأیید نشد", driftPct, emaDistanceAtr, reclaimExtensionAtr, momentumConfirmed: false, pullbackConfirmed: true };
+  }
 
   return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
-    momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
+    momentumConfirmed: true, pullbackConfirmed: true };
 }
 
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
@@ -1611,11 +1619,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   }
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
-  if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
-    reasons.push("مومنتوم و پولبک ۱۵دقیقه‌ای تأیید شدند");
-  } else {
-    reasons.push("تأیید ۱۵دقیقه‌ای کامل نبود؛ سیگنال به‌دلیل آن حذف نشد");
-  }
+  reasons.push("پولبک به EMA21 و شروع مجدد مومنتوم در تایم‌فریم ۱۵دقیقه تأیید شدند");
 
   const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
   const swing = candles1h.slice(-8, -1);
@@ -1631,9 +1635,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   }
 
   const direction = side === "LONG" ? 1 : -1;
-  const target1 = entry + direction * risk * 1.5;
-  const target2 = entry + direction * risk * 2.5;
-  const target3 = entry + direction * risk * 3.5;
+  const targetPrices = FUTURES_CONFIG.TARGET_ROI_LEVELS.map(roi =>
+    entry * (1 + direction * roi / FUTURES_CONFIG.TARGET_LEVERAGE)
+  );
+  const [target1, target2, target3, target4, target5] = targetPrices;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
   return {
@@ -1646,7 +1651,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     target1,
     target2,
     target3,
-    rewardRisk: 1.5,
+    target4,
+    target5,
+    targetRoiLevels: FUTURES_CONFIG.TARGET_ROI_LEVELS,
+    targetLeverage: FUTURES_CONFIG.TARGET_LEVERAGE,
     rsi: rsiValue,
     ema20: e20,
     ema50: e50,
@@ -1676,9 +1684,11 @@ function formatFuturesSignal(item, index = 1) {
     `نماد: <b>${symbol}</b>\n\n` +
     `جهت معامله: ${sideLabel}\n\n` +
     `قیمت ورود: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
-    `🎯 تارگت اول: <b>${formatSignalPrice(item.target1)}</b>\n` +
-    `🎯 تارگت دوم: <b>${formatSignalPrice(item.target2)}</b>\n` +
-    `🎯 تارگت سوم: <b>${formatSignalPrice(item.target3)}</b>\n\n` +
+    `🎯 تارگت ۱ (۲۰٪): <b>${formatSignalPrice(item.target1)}</b>\n` +
+    `🎯 تارگت ۲ (۴۰٪): <b>${formatSignalPrice(item.target2)}</b>\n` +
+    `🎯 تارگت ۳ (۶۰٪): <b>${formatSignalPrice(item.target3)}</b>\n` +
+    `🎯 تارگت ۴ (۸۰٪): <b>${formatSignalPrice(item.target4)}</b>\n` +
+    `🎯 تارگت ۵ (۱۲۰٪): <b>${formatSignalPrice(item.target5)}</b>\n\n` +
     `⛔ حد ضرر: <b>${formatSignalPrice(item.stop)}</b>`;
 }
 
