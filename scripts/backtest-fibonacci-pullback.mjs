@@ -180,3 +180,5 @@ async function main(){
     artifacts:["artifacts/fibonacci-pullback-backtest.json","artifacts/fibonacci-pullback-backtest.md"]},null,2));
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Re-run trigger: isolated historical validation script.
