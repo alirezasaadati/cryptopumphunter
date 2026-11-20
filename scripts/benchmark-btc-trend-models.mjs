@@ -253,6 +253,7 @@ async function run() {
   const metrics={};
   for(const name of models) metrics[name]={all:freshMetrics(),oos:freshMetrics(),flips:0,previous:null,transitions:0};
   let observations=0, testRows=0;
+  const labelCounts={BULL:0,BEAR:0,NEUTRAL:0};
   const firstTestIndex=hourly.findIndex(c=>c.time>=dates.testStart);
   const splitIndex=firstTestIndex+Math.floor((hourly.length-firstTestIndex)*0.70);
 
@@ -278,6 +279,7 @@ async function run() {
         structure==="BEAR"&&down1&&down4&&adxStrong ? "BEAR" : "NEUTRAL"
     };
     observations++;
+    labelCounts[actual]++;
     for(const name of models) {
       const m=metrics[name];
       addPrediction(m.all,predictions[name],actual);
@@ -301,7 +303,8 @@ async function run() {
       split:"first 70% of scored chronological observations used as development period; final 30% reported as out-of-sample"},
     labelDefinition:{
       horizonHours:FORWARD_HOURS,
-      bullish:"24h forward close-to-close gain exceeds 0.75 × ATR(4h,14) × sqrt(6)",
+      atrMultiplier:ATR_LABEL_MULTIPLIER,
+      bullish:"24h forward close-to-close gain exceeds "+ATR_LABEL_MULTIPLIER+" × ATR(4h,14) × sqrt(6)",
       bearish:"24h forward close-to-close loss exceeds the same volatility threshold",
       neutral:"forward move remains inside the volatility threshold",
       note:"Labels use future prices only for evaluation; model inputs at each timestamp use closed candles available at that timestamp."
@@ -320,6 +323,7 @@ async function run() {
       costs:"Not applicable to trend classification; no trade PnL is simulated.",
       limitations:"The label is a 24h forward directional outcome, not a claim that a market regime can be known with certainty. Results depend on the stated ATR-scaled threshold."
     },
+    labelDistribution:{counts:labelCounts,alwaysNeutralAccuracyPct:100*labelCounts.NEUTRAL/observations},
     models:Object.fromEntries(models.map(name=>[name,{
       all:summarizeMetrics(metrics[name].all),
       outOfSample:summarizeMetrics(metrics[name].oos),
