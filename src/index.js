@@ -1945,6 +1945,7 @@ export class SignalDeliveryCoordinator {
           const updates=Array.isArray(payload.trades)?payload.trades:[];
           const byId=new Map(current.map(t=>[String(t.id),t]));
           let updated=0,closed=0;
+          const releasedKeys=new Set();
           for(const candidate of updates){
             if(!candidate?.id)continue;
             const existing=byId.get(String(candidate.id));
@@ -1962,6 +1963,7 @@ export class SignalDeliveryCoordinator {
               next.marginReturnPercent=Number(candidate.marginReturnPercent);
               next.closedAt=candidate.closedAt||new Date().toISOString();
               next.lockReleaseEligible=true;
+              releasedKeys.add(String(existing.symbol).trim().toUpperCase()+"|"+existing.side);
               closed++;
             }
             byId.set(String(existing.id),next);
@@ -1973,8 +1975,7 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.put("active-futures-trades",[...open,...history]);
           if(closed){
             const pending=await this.ctx.storage.get("active-futures-pending")||[];
-            const closedKeys=new Set(all.filter(t=>["CLOSED_PROFIT","CLOSED_STOP"].includes(t.status)).map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
-            await this.ctx.storage.put("active-futures-pending",pending.filter(s=>!closedKeys.has(String(s.symbol).trim().toUpperCase()+"|"+s.side)));
+            await this.ctx.storage.put("active-futures-pending",pending.filter(s=>!releasedKeys.has(String(s.symbol).trim().toUpperCase()+"|"+s.side)));
           }
           return Response.json({ok:true,updated,closed,open:open.length});
         }
