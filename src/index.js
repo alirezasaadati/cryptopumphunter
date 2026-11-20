@@ -1677,7 +1677,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   }
 
   const direction = side === "LONG" ? 1 : -1;
-  const target1 = entry + direction * risk * 0.6;
+  const target1 = entry + direction * risk * 1.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
   return {
@@ -1688,7 +1688,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     entry,
     stop,
     target1,
-    rewardRisk: 0.6,
+    rewardRisk: 1.5,
     rsi: rsiValue,
     ema20: e20,
     ema50: e50,
