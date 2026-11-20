@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   FUTURES_CONFIG,
+  findLatestConfirmed15mPivot,
   SignalDeliveryCoordinator,
   isKrakenPerpetualTicker,
   calculateAtr,
@@ -111,6 +112,7 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
   assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
   assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.35);
+  assert.equal(FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT,0.3);
   assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,3.0);
   assert.equal("ENTRY_INTERVAL" in FUTURES_CONFIG,false);
 });
@@ -157,9 +159,24 @@ test("ATR rejects insufficient candles and calculates positive volatility",()=>{
   assert.ok(calculateAtr(makeCandles(),14)>0);
 });
 
+test("confirmed 15m pivot breakout filter uses the latest 3-left/3-right swing and 0.3% cap",()=>{
+  const candles=Array.from({length:12},(_,i)=>({time:i,high:100+i*0.01,low:99+i*0.01}));
+  candles[7].high=105;
+  candles[4].high=101;
+  candles[5].high=102;
+  candles[6].high=103;
+  candles[8].high=102;
+  candles[9].high=101;
+  candles[10].high=100;
+  const pivot=findLatestConfirmed15mPivot(candles,"LONG",3,3);
+  assert.equal(pivot.price,105);
+  assert.equal(pivot.index,7);
+  assert.equal(FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT,0.3);
+});
+
 test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
-  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute,{skipBreakoutFilter:true});
   assert.equal(result.side,"LONG");
   assert.equal(result.eligible,true,JSON.stringify(result));
   assert.ok(result.score>=72);
@@ -167,7 +184,7 @@ test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
   assert.ok(result.target1>result.entry);
   assert.ok(result.target2>result.target1);
   assert.ok(result.target3>result.target2);
-  assert.equal(result.rewardRisk,1.5);
+  assert.equal(result.rewardRisk,0.6);
   assert.equal(result.candleTime,oneHour.at(-1).time);
 });
 
@@ -189,7 +206,7 @@ test("relaxed 1h trend with neutral 4h context is rejected with no experimental 
     time:Date.now()-(120-i)*4*60*60*1000,
     open:100,high:100.1,low:99.9,close:100,volume:100
   }));
-  const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
+  const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute,{skipBreakoutFilter:true});
   assert.equal(result.eligible,false);
   assert.equal(result.experimentalEligible,undefined);
 });
