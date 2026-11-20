@@ -1,4 +1,4 @@
-name: Three-engine futures backtest
+name: Three-engine futures backtest (common fill model)
 on:
   push:
     branches: [backtest-three-engines]
