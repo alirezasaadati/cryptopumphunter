@@ -1378,7 +1378,8 @@ const FUTURES_CONFIG = {
   MAX_ENTRY_DRIFT_PCT: 0.35,
   MAX_ENTRY_EMA_DISTANCE_ATR: 3.0,
   MAX_PULLBACK_DISTANCE_ATR: 0.35,
-  MAX_RECLAIM_EXTENSION_ATR: 3.0
+  MAX_RECLAIM_EXTENSION_ATR: 3.0,
+  MAX_BREAKOUT_DISTANCE_PCT: 0.3
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
@@ -1532,6 +1533,26 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
     momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
 }
 
+function findLatestConfirmed15mPivot(candles, side, left = 3, right = 3) {
+  if (!Array.isArray(candles) || candles.length < left + right + 1) return null;
+  const field = side === "LONG" ? "high" : "low";
+  for (let i = candles.length - right - 1; i >= left; i--) {
+    const value = Number(candles[i]?.[field]);
+    if (!Number.isFinite(value)) continue;
+    let pivot = true;
+    for (let j = i - left; j <= i + right; j++) {
+      if (j === i) continue;
+      const neighbor = Number(candles[j]?.[field]);
+      if (!Number.isFinite(neighbor) || (side === "LONG" ? neighbor >= value : neighbor <= value)) {
+        pivot = false;
+        break;
+      }
+    }
+    if (pivot) return { index: i, time: candles[i].time, price: value, type: side === "LONG" ? "swing_high" : "swing_low" };
+  }
+  return null;
+}
+
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
@@ -1609,6 +1630,29 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   if (!entryFilters.ok) {
     return { symbol: ticker.symbol, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
   }
+
+  const breakoutPivot = findLatestConfirmed15mPivot(candles15m, side, 3, 3);
+  if (!breakoutPivot) {
+    return { symbol: ticker.symbol, side, rejected: "پیوت شکست معتبر ۱۵دقیقه‌ای در دسترس نیست" };
+  }
+  const breakoutEntryPrice = Number(ticker.last);
+  const breakoutDistancePct = side === "LONG"
+    ? (breakoutEntryPrice - breakoutPivot.price) / breakoutPivot.price * 100
+    : (breakoutPivot.price - breakoutEntryPrice) / breakoutPivot.price * 100;
+  if (!Number.isFinite(breakoutDistancePct) || breakoutDistancePct < 0 ||
+      breakoutDistancePct > FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT) {
+    return {
+      symbol: ticker.symbol,
+      side,
+      rejected: "فاصله ورود تا سطح شکست خارج از محدوده مجاز است",
+      breakoutDiagnostics: {
+        pivot: breakoutPivot,
+        signedDistancePct: breakoutDistancePct,
+        maxDistancePct: FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT
+      }
+    };
+  }
+  reasons.push("فاصله قیمت از پیوت شکست ۱۵دقیقه‌ای حداکثر ۰٫۳٪ است");
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
   if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
@@ -1631,9 +1675,9 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   }
 
   const direction = side === "LONG" ? 1 : -1;
-  const target1 = entry + direction * risk * 1.5;
-  const target2 = entry + direction * risk * 2.5;
-  const target3 = entry + direction * risk * 3.5;
+  const target1 = entry + direction * risk * 0.6;
+  const target2 = entry + direction * risk * 2.0;
+  const target3 = entry + direction * risk * 3.0;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
   return {
@@ -1646,7 +1690,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     target1,
     target2,
     target3,
-    rewardRisk: 1.5,
+    rewardRisk: 0.6,
     rsi: rsiValue,
     ema20: e20,
     ema50: e50,
