@@ -1,3 +1,4 @@
+// Pure PDH/PDL sweep-reclaim experiment; no maximum holding-time exit.
 import { mkdir, readFile, writeFile, mkdtemp, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
