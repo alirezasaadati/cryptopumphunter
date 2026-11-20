@@ -28,7 +28,7 @@ test("LONG closes only when 30% margin target or stop is reached", () => {
   assert.equal(result.reason, "CLOSED_PROFIT");
   assert.equal(result.trade.exitPrice, 103);
   assert.equal(result.trade.marginReturnPercent, 30);
-  assert.equal(result.trade.lockReleased, true);
+  assert.equal(result.trade.lockReleaseEligible, true);
 });
 
 test("SHORT closes only when 30% margin target or stop is reached", () => {
