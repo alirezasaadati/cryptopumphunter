@@ -6,7 +6,7 @@ const FOUR_HOURS = 4 * HOUR;
 const DAY = 24 * HOUR;
 const TEST_DAYS = 365;
 const WARMUP_DAYS = 60;
-const FORWARD_HOURS = 24;
+const FORWARD_HOURS = Math.max(12, Math.min(168, Number(process.env.FORWARD_HOURS || 24)));
 const ATR_LABEL_MULTIPLIER = Math.max(0.1, Math.min(2, Number(process.env.ATR_LABEL_MULTIPLIER || 0.75)));
 const ADX_MIN = 20;
 const PIVOT_LEFT = 2;
@@ -203,6 +203,8 @@ function summarizeMetrics(m) {
     macroF1Pct:100*macroF1/3,
     directionalCoveragePct:100*m.directionalPredictions/n,
     directionalPrecisionPct:m.directionalPredictions ? 100*m.correctDirectional/m.directionalPredictions : 0,
+    conditionalDirectionalAccuracyPct:((m.matrix.BULL.BULL+m.matrix.BULL.BEAR+m.matrix.BEAR.BULL+m.matrix.BEAR.BEAR)>0)
+      ? 100*(m.matrix.BULL.BULL+m.matrix.BEAR.BEAR)/(m.matrix.BULL.BULL+m.matrix.BULL.BEAR+m.matrix.BEAR.BULL+m.matrix.BEAR.BEAR) : 0,
     predictedIntoNeutralPct:m.directionalPredictions ? 100*m.predictedIntoNeutral/m.directionalPredictions : 0,
     oppositeDirectionPct:m.directionalPredictions ? 100*m.oppositeDirection/m.directionalPredictions : 0,
     confusionMatrix:m.matrix
@@ -262,7 +264,7 @@ async function run() {
     const j=fourIndexByHour[i];
     if(j<0 || fAtr[j]==null || fAdx[j]==null || hE20[i]==null || hE50[i]==null || hRsi[i]==null ||
       fE20[j]==null || fE50[j]==null) continue;
-    const threshold=fAtr[j]*Math.sqrt(6)*ATR_LABEL_MULTIPLIER;
+    const threshold=fAtr[j]*Math.sqrt(FORWARD_HOURS/4)*ATR_LABEL_MULTIPLIER;
     const futureReturn=hourly[i+FORWARD_HOURS].close-hourly[i].close;
     const actual=futureReturn>threshold ? "BULL" : futureReturn < -threshold ? "BEAR" : "NEUTRAL";
     const structure=marketStructure(hourly,i);
@@ -304,7 +306,7 @@ async function run() {
     labelDefinition:{
       horizonHours:FORWARD_HOURS,
       atrMultiplier:ATR_LABEL_MULTIPLIER,
-      bullish:"24h forward close-to-close gain exceeds "+ATR_LABEL_MULTIPLIER+" × ATR(4h,14) × sqrt(6)",
+      bullish:"24h forward close-to-close gain exceeds "+ATR_LABEL_MULTIPLIER+" × ATR(4h,14) × sqrt("+ (FORWARD_HOURS/4) + ")",
       bearish:"24h forward close-to-close loss exceeds the same volatility threshold",
       neutral:"forward move remains inside the volatility threshold",
       note:"Labels use future prices only for evaluation; model inputs at each timestamp use closed candles available at that timestamp."
@@ -341,14 +343,14 @@ async function run() {
     "- Period: "+result.period.testStart+" to "+result.period.testEnd,
     "- Scored hourly observations: "+observations,
     "- OOS split: final 30% of chronological observations",
-    "- Label: "+result.labelDefinition.bullish+" / "+result.labelDefinition.bearish,
+    "- Label: "+result.labelDefinition.bullish+" / "+result.labelDefinition.bearish,\n    "- Always-neutral accuracy baseline: "+result.labelDistribution.alwaysNeutralAccuracyPct.toFixed(2)+"%, label counts: "+JSON.stringify(result.labelDistribution.counts),
     "",
-    "| Model | OOS accuracy | OOS macro-F1 | OOS directional precision | OOS coverage | Opposite-direction | Signal flip rate |",
+    "| Model | OOS accuracy | OOS macro-F1 | OOS directional precision | OOS conditional direction accuracy | OOS coverage | Opposite-direction | Signal flip rate |",
     "|---|---:|---:|---:|---:|---:|---:|",
     ...models.map(name=>{
       const x=result.models[name];
       return "| "+name+" | "+x.outOfSample.accuracyPct.toFixed(2)+"% | "+x.outOfSample.macroF1Pct.toFixed(2)+"% | "+
-        x.outOfSample.directionalPrecisionPct.toFixed(2)+"% | "+x.outOfSample.directionalCoveragePct.toFixed(2)+"% | "+
+        x.outOfSample.directionalPrecisionPct.toFixed(2)+"% | "+x.outOfSample.conditionalDirectionalAccuracyPct.toFixed(2)+"% | "+x.outOfSample.directionalCoveragePct.toFixed(2)+"% | "+
         x.outOfSample.oppositeDirectionPct.toFixed(2)+"% | "+x.signalFlipRatePct.toFixed(2)+"% |";
     }),
     "",
