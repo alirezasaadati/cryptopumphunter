@@ -103,7 +103,7 @@ async function loadBinanceSymbol(symbol, dir) {
     let csv = await fetchZipCsv(url, dir);
     if (csv) all.push(...parseBinance(csv));
     else {
-      const first = new Date(month);
+      const first = new Date(Math.max(month.getTime(), symbolStart));
       const next = new Date(Date.UTC(y, month.getUTCMonth()+1, 1));
       for (let d = new Date(first); d < next && d.getTime() < END; d.setUTCDate(d.getUTCDate()+1)) {
         const yy=d.getUTCFullYear(), mm=String(d.getUTCMonth()+1).padStart(2,"0"), dd=String(d.getUTCDate()).padStart(2,"0");
@@ -115,7 +115,7 @@ async function loadBinanceSymbol(symbol, dir) {
     }
     month = new Date(Date.UTC(y, month.getUTCMonth()+1, 1));
   }
-  const current = new Date(Date.UTC(new Date(END).getUTCFullYear(), new Date(END).getUTCMonth(), 1));
+  const current = new Date(Math.max(Date.UTC(new Date(END).getUTCFullYear(), new Date(END).getUTCMonth(), 1), symbolStart));
   for (let d = current; d.getTime() < END; d.setUTCDate(d.getUTCDate()+1)) {
     const yy=d.getUTCFullYear(), mm=String(d.getUTCMonth()+1).padStart(2,"0"), dd=String(d.getUTCDate()).padStart(2,"0");
     const daily = symbol + "-" + INTERVAL + "-" + yy + "-" + mm + "-" + dd + ".zip";
