@@ -234,7 +234,7 @@ async function main() {
   const endMs=Date.now(), startMs=endMs-DAYS*24*HOUR, fromMs=startMs-15*24*HOUR;
   const tickerData=await getJson(BASE+"/derivatives/api/v3/tickers");
   if (!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
-  const universe=tickerData.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&
+  const universe=tickerData.tickers.filter(t=>t?.symbol==="PF_XBTUSD"&&t?.tag==="perpetual"&&t.suspended!==true&&
     /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&
     Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME&&Number(t.last)>0)
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
