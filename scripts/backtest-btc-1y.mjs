@@ -468,7 +468,7 @@ async function runBacktest() {
   };
 
   await mkdir("artifacts", { recursive: true });
-  await writeFile("artifacts/backtest-btc-1y.json", JSON.stringify(report, null, 2));
+  await writeFile(`artifacts/${SYMBOL}-backtest-1y.json`, JSON.stringify(report, null, 2));
 
   // Markdown report
   const md = [];
@@ -550,7 +550,7 @@ async function runBacktest() {
   md.push("");
   md.push(`_Funding excluded. Entry uses next 1H open with adverse slippage. Not a guarantee of live fills._`);
 
-  await writeFile("artifacts/backtest-btc-1y.md", md.join("\n"));
+  await writeFile(`artifacts/${SYMBOL}-backtest-1y.md`, md.join("\n"));
 
   // Console summary
   console.log("═".repeat(60));
@@ -574,7 +574,7 @@ async function runBacktest() {
   console.log(`Signals (pre-overlap filter): ${signalCounts.total_signals} (LONG ${signalCounts.long} / SHORT ${signalCounts.short})`);
   console.log(`Exit reasons: ${Object.entries(summary.exitReasons).map(([r, c]) => `${r}=${c}`).join(", ")}`);
   console.log("═".repeat(60));
-  console.log(`📄 Reports: artifacts/backtest-btc-1y.md and .json\n`);
+  console.log(`📄 Reports: artifacts/${SYMBOL}-backtest-1y.md and .json\n`);
 
   return report;
 }
