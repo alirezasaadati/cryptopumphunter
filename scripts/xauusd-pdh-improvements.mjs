@@ -403,7 +403,8 @@ async function main(){
       {id:"baseline_london_plus_ny",management:"fixed2r",session:"london_ny"},
       {id:"split_targets_london_plus_ny",management:"split",session:"london_ny"}
     ];
-    const results=variants.map(v=>runBacktest("XAUUSD",xau,"Dukascopy M5 BID/ASK candles",v));\n    for (const result of results) { result.splitTime = result.period.from ? Date.parse(result.period.from) + Math.floor((Date.parse(result.period.to)-Date.parse(result.period.from))*0.7) : 0; addTargetOneDiagnostics(result, xau); }
+    const results=variants.map(v=>runBacktest("XAUUSD",xau,"Dukascopy M5 BID/ASK candles",v));
+    for (const result of results) { result.splitTime = result.period.from ? Date.parse(result.period.from) + Math.floor((Date.parse(result.period.to)-Date.parse(result.period.from))*0.7) : 0; addTargetOneDiagnostics(result, xau); }
     const report={
       generatedAt:new Date().toISOString(),
       requestedPeriod:{from:new Date(REQUESTED_START).toISOString(),to:new Date(END).toISOString(),days:365},
