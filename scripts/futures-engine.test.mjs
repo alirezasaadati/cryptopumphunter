@@ -111,7 +111,10 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
   assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
   assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.35);
-  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,3.0);
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,1.5);
+  assert.equal(FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR,1.0);
+  assert.equal(FUTURES_CONFIG.TARGET_LEVERAGE,10);
+  assert.deepEqual(FUTURES_CONFIG.TARGET_ROI_LEVELS,[0.20,0.40,0.60,0.80,1.20]);
   assert.equal("ENTRY_INTERVAL" in FUTURES_CONFIG,false);
 });
 
@@ -167,7 +170,11 @@ test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
   assert.ok(result.target1>result.entry);
   assert.ok(result.target2>result.target1);
   assert.ok(result.target3>result.target2);
-  assert.equal(result.rewardRisk,1.5);
+  assert.equal(result.targetLeverage,10);
+  assert.deepEqual(result.targetRoiLevels,[0.20,0.40,0.60,0.80,1.20]);
+  for (const [target,move] of [[result.target1,0.02],[result.target2,0.04],[result.target3,0.06],[result.target4,0.08],[result.target5,0.12]]) {
+    assert.ok(Math.abs(target-result.entry*(1+move))<1e-9);
+  }
   assert.equal(result.candleTime,oneHour.at(-1).time);
 });
 
@@ -180,6 +187,11 @@ test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
   assert.ok(result.target1<result.entry);
   assert.ok(result.target2<result.target1);
   assert.ok(result.target3<result.target2);
+  assert.ok(result.target4<result.target3);
+  assert.ok(result.target5<result.target4);
+  for (const [target,move] of [[result.target1,0.02],[result.target2,0.04],[result.target3,0.06],[result.target4,0.08],[result.target5,0.12]]) {
+    assert.ok(Math.abs(target-result.entry*(1-move))<1e-9);
+  }
 });
 
 
@@ -248,7 +260,7 @@ test("late-entry filter rejects an overextended price versus hourly EMA20",()=>{
   assert.match(result.rejected,/ورود دیرهنگام/);
 });
 
-test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=>{
+test("opposite 15m momentum rejects a candidate",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const altered=fifteenMinute.map(c=>({...c}));
   altered[altered.length-1].open=altered.at(-1).close+0.5;
@@ -258,11 +270,12 @@ test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=
     ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
     referencePrice:oneHour.at(-1).close,ema20,atr
   });
-  assert.equal(result.ok,true);
+  assert.equal(result.ok,false);
   assert.equal(result.momentumConfirmed,false);
+  assert.match(result.rejected,/مومنتوم/);
 });
 
-test("missing 15m pullback is diagnostic and does not suppress a candidate",()=>{
+test("missing 15m pullback rejects a candidate",()=>{
   const {ticker,oneHour}=makeSetup("LONG");
   const altered=makeCandles({count:120,slope:0.1,base:100}).map(c=>({...c,low:c.close-0.001}));
   const priorEma9=testEma(altered.slice(0,-1).map(c=>c.close),9);
@@ -274,6 +287,7 @@ test("missing 15m pullback is diagnostic and does not suppress a candidate",()=>
     ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
     referencePrice:oneHour.at(-1).close,ema20,atr
   });
-  assert.equal(result.ok,true);
+  assert.equal(result.ok,false);
   assert.equal(result.pullbackConfirmed,false);
+  assert.match(result.rejected,/پولبک/);
 });
