@@ -4,7 +4,7 @@ import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARG
 
 const BASE = "https://futures.kraken.com";
 const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
-const DAYS = Math.max(7, Math.min(180, Number(process.env.LIFECYCLE_BACKTEST_DAYS || 92));
+const DAYS = Math.max(7, Math.min(180, Number(process.env.LIFECYCLE_BACKTEST_DAYS || 92)));
 const CONFIGURED_START_MS = Number(process.env.LIFECYCLE_BACKTEST_START_MS || 0);
 const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 15;
