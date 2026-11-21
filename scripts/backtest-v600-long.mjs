@@ -213,3 +213,5 @@ async function main(){
   console.log(JSON.stringify({universe:report.universe,periods:report.periods.map(p=>({period:p.period,successfulSymbols:p.successfulSymbols,errors:p.errors,marketContext:p.marketContext,eligibleSignals:p.eligibleSignals,targets:Object.fromEntries(TARGETS.map(t=>[t.key,p.targets[t.key].metrics]))}))},null,2));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
+
+// Workflow trigger commit after adding the isolated v6.0 test workflow.
