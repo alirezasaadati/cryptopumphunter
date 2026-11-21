@@ -7,6 +7,8 @@ on:
     paths:
       - "scripts/backtest-futures-bull-market.mjs"
       - "scripts/futures-independent-signals.test.mjs"
+      - "scripts/futures-market-regime.mjs"
+      - "scripts/futures-market-regime.test.mjs"
       - "src/futures-independent-signals.js"
       - ".github/workflows/futures-bull-market-backtest.yml"
   workflow_dispatch:
