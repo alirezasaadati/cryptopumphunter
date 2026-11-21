@@ -27,6 +27,7 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
+      max-parallel: 4
       # Re-trigger full three-regime matrix after the prior run unexpectedly omitted bull.
       matrix:
         regime:
@@ -42,6 +43,50 @@ jobs:
             start_ms: "1685577600000"
             end_ms: "1693526400000"
             artifact: futures-regime-sideways-2023-summer
+          - name: bull-2024-q1
+            start_ms: "1704067200000"
+            end_ms: "1711929600000"
+            artifact: futures-regime-bull-2024-q1
+          - name: mixed-2024-q2
+            start_ms: "1711929600000"
+            end_ms: "1719792000000"
+            artifact: futures-regime-mixed-2024-q2
+          - name: range-2024-q3
+            start_ms: "1719792000000"
+            end_ms: "1727740800000"
+            artifact: futures-regime-range-2024-q3
+          - name: bull-2024-q4
+            start_ms: "1727740800000"
+            end_ms: "1735689600000"
+            artifact: futures-regime-bull-2024-q4
+          - name: bear-2025-q1
+            start_ms: "1735689600000"
+            end_ms: "1743465600000"
+            artifact: futures-regime-bear-2025-q1
+          - name: bull-2025-q2
+            start_ms: "1743465600000"
+            end_ms: "1751328000000"
+            artifact: futures-regime-bull-2025-q2
+          - name: mixed-2025-q3
+            start_ms: "1751328000000"
+            end_ms: "1759276800000"
+            artifact: futures-regime-mixed-2025-q3
+          - name: bear-2025-q4
+            start_ms: "1759276800000"
+            end_ms: "1767225600000"
+            artifact: futures-regime-bear-2025-q4
+          - name: mixed-2026-q1
+            start_ms: "1767225600000"
+            end_ms: "1775001600000"
+            artifact: futures-regime-mixed-2026-q1
+          - name: bull-2026-q2
+            start_ms: "1775001600000"
+            end_ms: "1782864000000"
+            artifact: futures-regime-bull-2026-q2
+          - name: mixed-2026-q3
+            start_ms: "1782864000000"
+            end_ms: "1790812800000"
+            artifact: futures-regime-mixed-2026-q3
     steps:
       - name: Checkout experimental branch
         uses: actions/checkout@v4
