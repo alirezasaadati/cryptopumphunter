@@ -53,23 +53,31 @@ function structureTrend(candles, side) {
   return side==="LONG" ? hh&&hl&&strength.plusDI>strength.minusDI : lh&&ll&&strength.minusDI>strength.plusDI;
 }
 function detectSweepReclaim(candles, side, lookback=12) {
-  if(candles.length<lookback+8)return null;
-  const last=candles.at(-1), prior=candles.slice(-(lookback+1),-1);
-  const level=side==="LONG"?Math.min(...prior.map(c=>Number(c.low))):Math.max(...prior.map(c=>Number(c.high)));
-  const swept=side==="LONG"?Number(last.low)<level&&Number(last.close)>level:Number(last.high)>level&&Number(last.close)<level;
-  if(!swept)return null;
-  // CHoCH confirmation: close beyond the most recent confirmed opposing-side pivot.
-  const pivots=confirmedPivots(candles.slice(0,-1),side==="LONG"?"high":"low");
-  const pivot=pivots.at(-1);
-  if(!pivot)return null;
-  const structureBreak=side==="LONG"?Number(last.close)>pivot.price:Number(last.close)<pivot.price;
-  if(!structureBreak)return null;
-  const range=Number(last.high)-Number(last.low),body=Math.abs(Number(last.close)-Number(last.open));
-  const directionalClose=side==="LONG"
-    ? Number(last.close)>=Number(last.low)+range*0.65
-    : Number(last.close)<=Number(last.high)-range*0.65;
-  if(!directionalClose||!range||body/range<0.35)return null;
-  return {level,sweepExtreme:side==="LONG"?Number(last.low):Number(last.high),pivotPrice:pivot.price};
+  if(candles.length<lookback+10)return null;
+  const lastIndex=candles.length-1,last=candles[lastIndex];
+  // A sweep/reclaim may happen first; the structure break is allowed to confirm
+  // on a later completed candle (within the following eight bars).
+  const firstSweep=Math.max(lookback,lastIndex-8);
+  let setup=null;
+  for(let k=firstSweep;k<lastIndex;k++){
+    const sweptBar=candles[k],prior=candles.slice(Math.max(0,k-lookback),k);
+    if(prior.length<lookback)continue;
+    const level=side==="LONG"?Math.min(...prior.map(c=>Number(c.low))):Math.max(...prior.map(c=>Number(c.high)));
+    const swept=side==="LONG"?Number(sweptBar.low)<level&&Number(sweptBar.close)>level:Number(sweptBar.high)>level&&Number(sweptBar.close)<level;
+    if(!swept)continue;
+    const pivots=confirmedPivots(candles.slice(0,k),side==="LONG"?"high":"low");
+    const pivot=pivots.at(-1);
+    if(!pivot)continue;
+    const structureBreak=side==="LONG"?Number(last.close)>pivot.price:Number(last.close)<pivot.price;
+    if(!structureBreak)continue;
+    const range=Number(last.high)-Number(last.low),body=Math.abs(Number(last.close)-Number(last.open));
+    const directionalClose=side==="LONG"
+      ? Number(last.close)>=Number(last.low)+range*0.60
+      : Number(last.close)<=Number(last.high)-range*0.60;
+    if(!directionalClose||!range||body/range<0.30)continue;
+    setup={level,sweepExtreme:side==="LONG"?Number(sweptBar.low):Number(sweptBar.high),pivotPrice:pivot.price,sweepTime:sweptBar.time,confirmationTime:last.time};
+  }
+  return setup;
 }
 export function analyzeIndependentSignal({side,candles4h,candles15m}) {
   if(!["LONG","SHORT"].includes(side)||!Array.isArray(candles4h)||!Array.isArray(candles15m))return null;
