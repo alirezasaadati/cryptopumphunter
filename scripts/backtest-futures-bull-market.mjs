@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
+import { analyzeIndependentSignal } from "../src/futures-independent-signals.js";
 import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARGET_PERCENT } from "../src/futures-trade-lifecycle.js";
 
 const BASE = "https://futures.kraken.com";
@@ -246,6 +247,54 @@ function summarize(trades) {
   };
 }
 
+
+function backtestIndependentEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMinute, testStart, toMs) {
+  const trades=[];
+  const locks=new Map();
+  let fourIndex=0, fifteenIndex=0, opportunities={LONG:0,SHORT:0}, lockSkips={LONG:0,SHORT:0};
+  for(let i=60;i<oneHour.length-1;i++){
+    const signalBar=oneHour[i], signalCloseTime=signalBar.time+INTERVALS["1h"];
+    if(signalCloseTime<testStart||signalCloseTime>=toMs)continue;
+    while(fourIndex<fourHour.length&&fourHour[fourIndex].time+INTERVALS["4h"]<=signalCloseTime)fourIndex++;
+    while(fifteenIndex<fifteenMinute.length&&fifteenMinute[fifteenIndex].time+INTERVALS["15m"]<=signalCloseTime)fifteenIndex++;
+    const closed4h=fourHour.slice(0,fourIndex);
+    const closed15m=fifteenMinute.slice(Math.max(0,fifteenIndex-160),fifteenIndex);
+    if(closed4h.length<FUTURES_CONFIG.MIN_CANDLES||closed15m.length<40)continue;
+    for(const side of ["LONG","SHORT"]){
+      const candidate=analyzeIndependentSignal({side,candles4h:closed4h,candles15m:closed15m});
+      if(!candidate)continue;
+      opportunities[side]++;
+      const lockKey=ticker.symbol+"|"+side;
+      if((locks.get(lockKey)||0)>signalCloseTime){lockSkips[side]++;continue;}
+      const entry=Number(oneHour[i+1].open), stop=Number(candidate.stop);
+      const distance=Math.abs((entry-stop)/entry)*100;
+      if(!Number.isFinite(entry)||entry<=0||(side==="LONG"?stop>=entry:stop<=entry)||!Number.isFinite(distance)||distance<=0||distance>8)continue;
+      const fillIndex=lowerBound(fiveMinute,signalCloseTime), fillBar=fiveMinute[fillIndex];
+      if(!fillBar||fillBar.time>=toMs)continue;
+      const trade={id:ticker.symbol+":"+side+":independent:"+signalCloseTime,symbol:ticker.symbol,side,status:"OPEN",engine:"independent-"+side.toLowerCase(),entry,signalEntry:candidate.entry,initialStop:stop,stop,signalTime:signalBar.time,entryTime:signalCloseTime,entryFillBarTime:fillBar.time,score:candidate.score,stopDistancePct:distance,ambiguousCandles:0,maxFavorableExcursionMarginPct:0,maxAdverseExcursionMarginPct:0,breakEvenActivated:false,setup:candidate.setup};
+      let closed=false;
+      for(let j=fillIndex;j<fiveMinute.length&&fiveMinute[j].time<toMs;j++){
+        const bar=fiveMinute[j];
+        if(candleAmbiguous(side,trade,bar))trade.ambiguousCandles++;
+        const evaluated=evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
+        if(evaluated.changed){
+          if(evaluated.trade.status==="CLOSED_PROFIT")trade.maxFavorableExcursionMarginPct=Math.max(trade.maxFavorableExcursionMarginPct,TARGET);
+          Object.assign(trade,evaluated.trade);trade.closedAtMs=bar.time+INTERVALS["5m"];closed=true;break;
+        }
+        if(bar.time!==fillBar.time){
+          const excursion=excursionForBar(side,entry,bar);
+          trade.maxFavorableExcursionMarginPct=Math.max(trade.maxFavorableExcursionMarginPct,excursion.favorable);
+          trade.maxAdverseExcursionMarginPct=Math.max(trade.maxAdverseExcursionMarginPct,excursion.adverse);
+        }
+      }
+      if(!closed){trade.status="OPEN_AT_BACKTEST_END";trade.lastMark=fiveMinute.at(-1)?.close??null;trade.marginReturnAtMarkPct=trade.lastMark?(side==="LONG"?1:-1)*((trade.lastMark-entry)/entry)*100*LEVERAGE:null;locks.set(lockKey,toMs);}
+      else locks.set(lockKey,trade.closedAtMs);
+      trades.push(trade);
+    }
+  }
+  return {trades,opportunities,lockSkips};
+}
+
 async function backtestSymbol(ticker, fromMs, toMs) {
   const [oneHour,fourHour,fifteenMinute,fiveMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs),
@@ -387,6 +436,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     trades.push(trade);
   }
 
+  const independent=backtestIndependentEngines(ticker,oneHour,fourHour,fifteenMinute,fiveMinute,testStart,toMs);
   const periodBars=oneHour.filter(c=>c.time>=testStart&&c.time<toMs);
   const periodPriceChangePct=periodBars.length>1?(periodBars.at(-1).close/periodBars[0].open-1)*100:null;
   return {
@@ -421,6 +471,9 @@ async function main() {
   const successful = results.filter(r=>!r.error);
   const allTrades = successful.flatMap(r=>r.trades).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
   const metrics = summarize(allTrades);
+  const independentTrades=successful.flatMap(r=>r.independentTrades||[]).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
+  const independentMetrics=summarize(independentTrades);
+  const engineComparison={currentLong:{...metrics.bySide.LONG},independentLong:{...independentMetrics.bySide.LONG},currentShort:{...metrics.bySide.SHORT},independentShort:{...independentMetrics.bySide.SHORT}};
   const diagnosticSummary = Object.fromEntries(["CLOSED_PROFIT","CLOSED_STOP"].map(status => {
     const rows = allTrades.filter(t => t.status === status);
     const n = key => rows.filter(t => t.signalDiagnostics?.[key] === true).length;
@@ -451,7 +504,7 @@ async function main() {
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies",
       historicalVolumeFilter:"per-signal rolling 24h estimate = sum(hourly base volume × hourly close); approximate quote turnover, not exact exchange ticker volume",},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
-    metrics,diagnosticSummary,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.eligibleSignalOpportunities,0),
+    metrics,independentMetrics,engineComparison,independentOpportunities:{LONG:successful.reduce((n,r)=>n+(r.independentOpportunities?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentOpportunities?.SHORT||0),0)},independentLockSkips:{LONG:successful.reduce((n,r)=>n+(r.independentLockSkips?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentLockSkips?.SHORT||0),0)},diagnosticSummary,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.eligibleSignalOpportunities,0),
     bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
@@ -490,6 +543,10 @@ async function main() {
     "| Risk-normalized return (fixed "+RISK_PER_TRADE_PCT+"% risk/trade, additive) | "+metrics.totalRiskSizedReturnPct.toFixed(2)+"% |",
     "| Risk-normalized max drawdown (additive) | "+metrics.maxRiskSizedDrawdownPct.toFixed(2)+"% |",
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
+    "", "## Independent engines versus current strategy",
+    "| Engine | Signals started | Closed | Wins | Stops | Win rate | Net margin return | Max drawdown |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ...[["Current LONG",metrics.bySide.LONG],["Independent LONG",independentMetrics.bySide.LONG],["Current SHORT",metrics.bySide.SHORT],["Independent SHORT",independentMetrics.bySide.SHORT]].map(([name,m])=>"| "+name+" | "+m.signalsIssued+" | "+m.closedTrades+" | "+m.profitCloses+" | "+m.stopCloses+" | "+m.winRatePct.toFixed(2)+"% | "+m.marginReturnPct.toFixed(2)+"% | "+(name.startsWith("Independent")?summarize(independentTrades.filter(t=>t.side=== (name.endsWith("LONG")?"LONG":"SHORT"))).maxDrawdownMarginPct:summarize(allTrades.filter(t=>t.side===(name.endsWith("LONG")?"LONG":"SHORT"))).maxDrawdownMarginPct).toFixed(2)+"% |"),
     "| Same-side lock skips | "+report.lockSkips+" |",
     "| Rejected signal opportunities | "+report.rejectedSignals+" |",
     "| Rejected by historical 24h volume | "+report.rejectedByHistoricalVolume+" |",
@@ -501,7 +558,7 @@ async function main() {
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
   await writeFile("artifacts/futures-lifecycle-backtest.md",rows.join("\n"));
-  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,diagnosticSummary,entryOrders:report.entryOrders,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals,rejectedStructuralStops:report.rejectedStructuralStops},null,2));
+  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,independentMetrics,engineComparison,independentOpportunities:report.independentOpportunities,diagnosticSummary,entryOrders:report.entryOrders,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals,rejectedStructuralStops:report.rejectedStructuralStops},null,2));
   if (!successful.length) process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
