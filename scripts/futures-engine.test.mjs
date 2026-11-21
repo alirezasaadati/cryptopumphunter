@@ -176,6 +176,8 @@ test("confirmed 15m pivot breakout filter uses the latest 3-left/3-right swing a
 
 test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  // Make the fixture satisfy the production LONG-only 0.5% distance threshold.
+  oneHour.at(-3).high = oneHour.at(-1).close * 1.006;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute,{skipBreakoutFilter:true});
   assert.equal(result.side,"LONG");
   assert.equal(result.eligible,true,JSON.stringify(result));
