@@ -445,7 +445,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     periodPriceChangePct,
     candles:{ "1h":oneHour.length, "4h":fourHour.length, "15m":fifteenMinute.length, "5m":fiveMinute.length },
     eligibleSignalOpportunities, skippedBySameSideLock:skippedByLock, rejectedSignals, rejectedByHistoricalVolume, rejectedStructuralStops,
-    entryOrders, metrics:summarize(trades), trades
+    entryOrders, metrics:summarize(trades), independentTrades:independent.trades,
+    independentOpportunities:independent.opportunities, independentLockSkips:independent.lockSkips, trades
   };
 }
 
