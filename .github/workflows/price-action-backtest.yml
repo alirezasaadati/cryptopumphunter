@@ -1,0 +1,59 @@
+name: Price Action Strategy Validation
+on:
+  pull_request:
+    paths:
+      - "scripts/backtest-price-action.mjs"
+      - "src/price-action-engine.js"
+      - "scripts/price-action-engine.test.mjs"
+      - ".github/workflows/price-action-backtest.yml"
+      - "package.json"
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: candlestick_baseline
+            confirmation: baseline
+            strategies: candlestick
+          - name: candlestick_volume
+            confirmation: volume
+            strategies: candlestick
+          - name: candlestick_breakout_volume
+            confirmation: volume
+            strategies: candlestick,breakout_retest
+          - name: candlestick_macd
+            confirmation: macd
+            strategies: candlestick
+          - name: candlestick_breakout_macd
+            confirmation: macd
+            strategies: candlestick,breakout_retest
+          - name: candlestick_breakout_macd_volume
+            confirmation: macd_volume
+            strategies: candlestick,breakout_retest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Run engine unit tests
+        run: node --test scripts/price-action-engine.test.mjs
+      - name: Run 30-day strategy-specific historical backtest
+        run: node scripts/backtest-price-action.mjs
+        env:
+          PA_BACKTEST_DAYS: "30"
+          PA_BACKTEST_OFFSET_DAYS: "14"
+          PA_BACKTEST_SYMBOLS: "8"
+          PA_BACKTEST_CONFIRMATION: ${{ matrix.confirmation }}
+          PA_BACKTEST_STRATEGIES: ${{ matrix.strategies }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: price-action-${{ matrix.name }}-report
+          path: artifacts/
+          if-no-files-found: warn

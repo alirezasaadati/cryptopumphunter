@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  PA_CONFIG, validateCandles, findSwings, describeStructure, analyzePriceAction, resolvePriceActionSignals
+  PA_CONFIG, validateCandles, findSwings, describeStructure, analyzePriceAction, resolvePriceActionSignals, calculateATR, volumeConfirmed, relativeVolumeRatio, calculateMACD
 } from "../src/price-action-engine.js";
 
 function flatCandles(n=100, price=100, step=900000) {
@@ -209,4 +209,59 @@ test("late-entry filtering happens before conflict resolution",()=>{
   assert.equal(result.conflict,false);
   assert.equal(result.signals.length,1);
   assert.equal(result.signals[0].side,"LONG");
+});
+
+test("isolated strategy mode evaluates only the requested Price Action strategy",()=>{
+  const oneHour=structuralCandles();
+  const fifteenMin=triggerCandles({open:101.1,high:101.6,low:101,close:101.4});
+  const result=analyzePriceAction({
+    symbol:"PF_TESTUSD",oneHour,fourHour,fifteenMin,livePrice:101.4,
+    strategyIds:["market_structure"]
+  });
+  assert.deepEqual(result.diagnostics.map(x=>x.strategyId),["market_structure"]);
+  assert.ok(result.signals.length>0);
+  assert.ok(result.signals.every(x=>x.strategyId==="market_structure"));
+});
+
+
+test("Wilder ATR returns a positive smoothed true range",()=>{
+  const data=flatCandles(30,100);
+  assert.ok(calculateATR(data,14)>0);
+  assert.equal(calculateATR(data,40),null);
+});
+
+test("volume confirmation rejects materially weak trigger volume but allows unavailable volume",()=>{
+  const data=flatCandles(25,100);
+  data[24].volume=50;
+  assert.equal(volumeConfirmed(data),false);
+  data[24].volume=100;
+  assert.equal(volumeConfirmed(data),true);
+  data.forEach(c=>{delete c.volume;});
+  assert.equal(volumeConfirmed(data),true);
+});
+
+
+test("relative volume ratio compares the closed trigger candle with the prior 20 candles",()=>{
+  const data=flatCandles(25,100);
+  data.forEach((c,i)=>{c.volume=i===24?150:100;});
+  assert.equal(relativeVolumeRatio(data),1.5);
+  data[24].volume=0;
+  assert.equal(relativeVolumeRatio(data),null);
+});
+
+test("MACD returns bullish and bearish momentum values from closed candles",()=>{
+  const rising=flatCandles(80,100).map((c,i)=>({...c,open:100+i*0.2,high:101+i*0.2,low:99+i*0.2,close:100+i*0.2}));
+  const falling=flatCandles(80,100).map((c,i)=>({...c,open:116-i*0.2,high:117-i*0.2,low:115-i*0.2,close:116-i*0.2}));
+  const bull=calculateMACD(rising),bear=calculateMACD(falling);
+  assert.ok(bull && bull.macd>bull.signal);
+  assert.ok(bear && bear.macd<bear.signal);
+  assert.equal(calculateMACD(rising.slice(0,20)),null);
+});
+
+test("confirmation modes are explicit and stricter volume rejects unavailable volume",()=>{
+  const rising=flatCandles(80,100).map((c,i)=>({...c,open:100+i*0.2,high:101+i*0.2,low:99+i*0.2,close:100+i*0.2,volume:100}));
+  rising.at(-1).volume=150;
+  assert.equal(relativeVolumeRatio(rising),1.5);
+  rising.forEach(c=>{delete c.volume;});
+  assert.equal(relativeVolumeRatio(rising),null);
 });
