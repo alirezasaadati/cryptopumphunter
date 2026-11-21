@@ -7,6 +7,7 @@ on:
       - experimental/ema-pullback-long-filters-v2
       - experimental/ema-pullback-long-optimized-python-v2
       - experimental/ema-pullback-long-balanced-v3
+      - experimental/ema-pullback-long-tp-evaluation
     paths:
       - "src/futures-breakout-retest-long.js"
       - "src/futures-breakout-retest-long-a.js"
