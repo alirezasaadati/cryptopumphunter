@@ -315,6 +315,7 @@ function backtestIndependentEngines(ticker, oneHour, fourHour, fifteenMinute, fi
 function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMinute, testStart, toMs, btcCandles) {
   const trades = [], locks = new Map();
   let fourIndex = 0, hourIndex = 0, btc1hIndex = 0, btc4hIndex = 0, btc1dIndex = 0;
+  let btcRegimeKey = "", symbolRegimeKey = "", cachedBtcRegimes = null, cachedSymbolRegimes = null;
   const emit = (engine, side, candidate, signalCloseTime, signalBar, closed15m, historicalQuoteVolume, regimeContext) => {
     const lockKey = engine + "|" + ticker.symbol + "|" + side;
     if ((locks.get(lockKey) || 0) > signalCloseTime) return;
@@ -389,10 +390,17 @@ function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMi
     const closedBtc4h = btcCandles["4h"].slice(0, btc4hIndex);
     const closedBtc1d = btcCandles["1d"].slice(0, btc1dIndex);
     if (closed4h.length < FUTURES_CONFIG.MIN_CANDLES || closed15m.length < 40 || closed1h.length < 60) continue;
-    const regimeContext = {
-      btc: classifyRegimeSet({ "1h": closedBtc1h, "4h": closedBtc4h, "1d": closedBtc1d }),
-      symbol: classifyRegimeSet({ "1h": closed1h, "4h": closed4h, "1d": aggregateDailyFrom4h(closed4h) })
-    };
+    const nextBtcRegimeKey = btc1hIndex + "|" + btc4hIndex + "|" + btc1dIndex;
+    if (nextBtcRegimeKey !== btcRegimeKey) {
+      cachedBtcRegimes = classifyRegimeSet({ "1h": closedBtc1h, "4h": closedBtc4h, "1d": closedBtc1d });
+      btcRegimeKey = nextBtcRegimeKey;
+    }
+    const nextSymbolRegimeKey = hourIndex + "|" + fourIndex;
+    if (nextSymbolRegimeKey !== symbolRegimeKey) {
+      cachedSymbolRegimes = classifyRegimeSet({ "1h": closed1h, "4h": closed4h, "1d": aggregateDailyFrom4h(closed4h) });
+      symbolRegimeKey = nextSymbolRegimeKey;
+    }
+    const regimeContext = { btc: cachedBtcRegimes, symbol: cachedSymbolRegimes };
     const lastHour = closed1h.at(-1);
     const historicalQuoteVolume = closed1h.slice(-24).reduce((sum, candle) => sum + Number(candle.volume) * Number(candle.close), 0);
     if (!Number.isFinite(historicalQuoteVolume) || historicalQuoteVolume < FUTURES_CONFIG.MIN_QUOTE_VOLUME) continue;
