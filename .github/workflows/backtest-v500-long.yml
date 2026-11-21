@@ -1,0 +1,32 @@
+name: v5.0 LONG-only bullish historical backtest
+
+on:
+  push:
+    branches: [backtest/v500-long-engine-20261122]
+    paths:
+      - "scripts/backtest-v500-long.mjs"
+      - "src/v50-engine.mjs"
+      - ".github/workflows/backtest-v500-long.yml"
+
+jobs:
+  backtest-long:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run multi-symbol v5.0 LONG-only backtest
+        env:
+          BACKTEST_SYMBOL_LIMIT: "10"
+          BACKTEST_FEE_PER_SIDE: "0.0005"
+          BACKTEST_SLIPPAGE_PER_SIDE: "0.0003"
+        run: node scripts/backtest-v500-long.mjs
+      - name: Upload LONG backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v500-long-bullish-backtest
+          path: artifacts/v500-long-backtest.*
+          if-no-files-found: warn
