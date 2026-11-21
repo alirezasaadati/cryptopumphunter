@@ -106,6 +106,27 @@ function candleAmbiguous(side, trade, candle) {
   const profitAtOpen = side === "LONG" ? candle.open >= target : candle.open <= target;
   return stopHit && profitHit && !stopAtOpen && !profitAtOpen;
 }
+function excursionForBar(side, entry, bar) {
+  if (side === "LONG") return {
+    favorable: Math.max(0, (bar.high / entry - 1) * LEVERAGE * 100),
+    adverse: Math.max(0, (1 - bar.low / entry) * LEVERAGE * 100)
+  };
+  return {
+    favorable: Math.max(0, (entry / bar.low - 1) * LEVERAGE * 100),
+    adverse: Math.max(0, (bar.high / entry - 1) * LEVERAGE * 100)
+  };
+}
+function excursionStats(rows) {
+  const values = key => rows.map(t => Number(t[key])).filter(Number.isFinite).sort((a,b)=>a-b);
+  const stats = xs => {
+    const pct = p => xs.length ? xs[Math.min(xs.length-1, Math.ceil(p*xs.length)-1)] : null;
+    return { count:xs.length, average:xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null, median:pct(.5), p90:pct(.9), min:xs[0]??null, max:xs.at(-1)??null };
+  };
+  return { count:rows.length, mfeMarginPct:stats(values("maxFavorableExcursionMarginPct")), maeMarginPct:stats(values("maxAdverseExcursionMarginPct")),
+    touchedFavorable10Pct:rows.filter(t=>t.maxFavorableExcursionMarginPct>=10).length,
+    touchedFavorable15Pct:rows.filter(t=>t.maxFavorableExcursionMarginPct>=15).length,
+    touchedFavorable20Pct:rows.filter(t=>t.maxFavorableExcursionMarginPct>=20).length };
+}
 function summarize(trades) {
   const closed = trades.filter(t => t.status === "CLOSED_PROFIT" || t.status === "CLOSED_STOP");
   const profits = closed.filter(t => t.status === "CLOSED_PROFIT");
@@ -151,6 +172,7 @@ function summarize(trades) {
     averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
     maxDrawdownMarginPct: maxDrawdown,
     ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
+    excursion: { allClosed: excursionStats(closed), stopped: excursionStats(stops), profitable: excursionStats(profits) },
     bySide: {
       LONG: { trades: longs.length, profitCloses: longs.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: longs.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(longs) },
       SHORT: { trades: shorts.length, profitCloses: shorts.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: shorts.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(shorts) }
@@ -212,7 +234,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
       entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
       signalTime: signalBar.time, entryTime: signalCloseTime,
-      score: candidate.score, stopDistancePct: Math.abs((entry-Number(candidate.stop))/entry)*100, signalDiagnostics: signalDiagnostics(candidate,candidate.side,oneHour.slice(0,i+1),closed4h), ambiguousCandles: 0
+      score: candidate.score, stopDistancePct: Math.abs((entry-Number(candidate.stop))/entry)*100, signalDiagnostics: signalDiagnostics(candidate,candidate.side,oneHour.slice(0,i+1),closed4h), ambiguousCandles: 0,
+      maxFavorableExcursionMarginPct: 0, maxAdverseExcursionMarginPct: 0
     };
     let candleIndex = lowerBound(fiveMinute,signalCloseTime);
     let closed = false;
@@ -221,11 +244,17 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       if (candleAmbiguous(candidate.side,trade,bar)) trade.ambiguousCandles++;
       const evaluated = evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
       if (evaluated.changed) {
+        // Exclude the exit candle from excursions; for a target close only the known target is credited.
+        if (evaluated.trade.status === "CLOSED_PROFIT") trade.maxFavorableExcursionMarginPct = Math.max(trade.maxFavorableExcursionMarginPct, TARGET);
         Object.assign(trade,evaluated.trade);
         trade.closedAtMs = bar.time + INTERVALS["5m"];
         closed = true;
         break;
       }
+      // Completed 5m bars strictly before the exit candle contribute to MAE/MFE.
+      const excursion = excursionForBar(candidate.side,entry,bar);
+      trade.maxFavorableExcursionMarginPct = Math.max(trade.maxFavorableExcursionMarginPct,excursion.favorable);
+      trade.maxAdverseExcursionMarginPct = Math.max(trade.maxAdverseExcursionMarginPct,excursion.adverse);
     }
     if (!closed) {
       trade.status = "OPEN_AT_BACKTEST_END";
