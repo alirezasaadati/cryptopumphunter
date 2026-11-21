@@ -4,7 +4,7 @@ import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARG
 
 const BASE = "https://futures.kraken.com";
 const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
-const DAYS = Math.max(7, Math.min(60, Number(process.env.LIFECYCLE_BACKTEST_DAYS || 30)));
+const DAYS = Math.max(7, Math.min(60, Number(process.env.LIFECYCLE_BACKTEST_DAYS || 60)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 15;
 const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
@@ -126,7 +126,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   const trades = [];
   const lockUntil = new Map();
   let fourIndex = 0, fifteenIndex = 0;
-  let acceptedSignals = 0, skippedByLock = 0, rejectedSignals = 0;
+  let acceptedSignals = 0, skippedByLock = 0, rejectedSignals = 0, rejectedByHistoricalVolume = 0;
   const testStart = toMs - DAYS * 86400000;
 
   for (let i = 60; i < oneHour.length - 1; i++) {
@@ -140,8 +140,16 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (closed4h.length < FUTURES_CONFIG.MIN_CANDLES || closed15m.length < 40) continue;
 
     const nextBar = oneHour[i+1];
+    // Approximate historical 24h quote turnover from closed hourly base-volume × close.
+    // This avoids leaking today's ticker.volumeQuote into past signal eligibility.
+    const historicalQuoteVolume = oneHour.slice(Math.max(0, i-23), i+1)
+      .reduce((sum, candle) => sum + Number(candle.volume) * Number(candle.close), 0);
+    if (!Number.isFinite(historicalQuoteVolume) || historicalQuoteVolume < FUTURES_CONFIG.MIN_QUOTE_VOLUME) {
+      rejectedByHistoricalVolume++;
+      continue;
+    }
     const tickerAtSignal = {
-      symbol: ticker.symbol, last: nextBar.open, quoteVolume: Number(ticker.volumeQuote)||0,
+      symbol: ticker.symbol, last: nextBar.open, quoteVolume: historicalQuoteVolume,
       priceChangePercent: historicalChange(oneHour,i), premium: { lastFundingRate: null }
     };
     let candidate;
@@ -188,7 +196,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   return {
     symbol:ticker.symbol,
     candles:{ "1h":oneHour.length, "4h":fourHour.length, "15m":fifteenMinute.length, "5m":fiveMinute.length },
-    signalsAccepted:acceptedSignals, skippedBySameSideLock:skippedByLock, rejectedSignals,
+    signalsAccepted:acceptedSignals, skippedBySameSideLock:skippedByLock, rejectedSignals, rejectedByHistoricalVolume,
     metrics:summarize(trades), trades
   };
 }
@@ -222,12 +230,14 @@ async function main() {
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
       lock:"independent symbol+side lock until close; opposite side may overlap",
-      universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
+      universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies",
+      historicalVolumeFilter:"per-signal rolling 24h estimate = sum(hourly base volume × hourly close); approximate quote turnover, not exact exchange ticker volume",},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
     metrics,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
     bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
+    rejectedByHistoricalVolume:successful.reduce((n,r)=>n+r.rejectedByHistoricalVolume,0),
     trades:allTrades
   };
   await mkdir("artifacts",{recursive:true});
@@ -250,11 +260,12 @@ async function main() {
     "| Max drawdown (additive margin-return points) | "+metrics.maxDrawdownMarginPct.toFixed(2)+"% |",
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
     "| Same-side lock skips | "+report.lockSkips+" |",
-    "| Rejected signal opportunities | "+report.rejectedSignals+" |","",
+    "| Rejected signal opportunities | "+report.rejectedSignals+" |",
+    "| Rejected by historical 24h volume | "+report.rejectedByHistoricalVolume+" |","",
     "| Symbol | Signals | Closed | Profit | Stop | LONG | SHORT | Net margin % |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
     ...successful.map(r=>"| "+r.symbol+" | "+r.signalsAccepted+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.longs+" | "+r.metrics.shorts+" | "+r.metrics.totalMarginReturnPct.toFixed(2)+" |"),
-    "", "Limitations: 5m OHLC cannot identify intrabar path; ambiguous candles use stop-first. Stop execution is assumed at the stop or gap open. Liquidation, funding, fees, and slippage are excluded. Universe selection uses current volume, so survivorship bias applies.",
+    "", "Limitations: historical quote turnover is approximated from hourly base volume × close; current-contract universe still has survivorship bias. 5m OHLC cannot identify intrabar path; ambiguous candles use stop-first. Stop execution is assumed at the stop or gap open. Liquidation, funding, fees, and slippage are excluded. Universe selection uses current volume, so survivorship bias applies.",
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
   await writeFile("artifacts/futures-lifecycle-backtest.md",rows.join("\n"));
