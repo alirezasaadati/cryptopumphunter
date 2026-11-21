@@ -1,8 +1,9 @@
-name: "Experimental LONG engine comparison - A/B and EMA pullback baseline vs filtered variant"
+name: "Experimental regime-split LONG and SHORT backtests"
 on:
   workflow_dispatch:
   push:
     branches:
+      - experimental/regime-split-short-backtest
       - experimental/breakout-retest-long
       - experimental/ema-pullback-long-filters-v2
       - experimental/ema-pullback-long-optimized-python-v2
@@ -15,11 +16,12 @@ on:
       - "scripts/ema-pullback-long.test.mjs"
       - "scripts/backtest-breakout-retest-long.mjs"
       - "scripts/backtest-breakout-retest-long.test.mjs"
+      - "scripts/backtest-kraken-short-regime.mjs"
       - ".github/workflows/breakout-retest-long-backtest.yml"
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,10 +33,12 @@ jobs:
         env:
           BREAKOUT_BACKTEST_DAYS: "60"
         run: node scripts/backtest-breakout-retest-long.mjs
-      - name: Upload comparison report
+      - name: Run isolated 60-day bearish-regime SHORT backtest
+        run: node scripts/backtest-kraken-short-regime.mjs
+      - name: Upload comparison reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: breakout-retest-long-comparison
+          name: regime-split-backtest-reports
           path: artifacts/
           if-no-files-found: warn
