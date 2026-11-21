@@ -101,7 +101,7 @@ async function main(){
  // Event-driven account simulation. Exit events are processed before entries at equal timestamps.
  const events=[];
  for(const t of candidates){events.push({time:t.entryTime,type:"ENTRY",trade:t});events.push({time:t.exitTime,type:"EXIT",trade:t});}
- events.sort((a,b)=>a.time-b.time||(a.type==="EXIT"?-1:1)||(a.trade.symbol.localeCompare(b.trade.symbol)));
+ events.sort((a,b)=>a.time-b.time||((a.type==="EXIT"?0:1)-(b.type==="EXIT"?0:1))||a.trade.symbol.localeCompare(b.trade.symbol));
  let balance=INITIAL_BALANCE,locked=0,openBySymbol=new Map(),accepted=[],skipped={occupiedSymbol:0,insufficientFreeMargin:0};
  for(const ev of events){
   const t=ev.trade;
