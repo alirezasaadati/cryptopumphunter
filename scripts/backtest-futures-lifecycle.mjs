@@ -112,7 +112,7 @@ function excursionForBar(side, entry, bar) {
     adverse: Math.max(0, (1 - bar.low / entry) * LEVERAGE * 100)
   };
   return {
-    favorable: Math.max(0, (entry / bar.low - 1) * LEVERAGE * 100),
+    favorable: Math.max(0, ((entry - bar.low) / entry) * LEVERAGE * 100),
     adverse: Math.max(0, (bar.high / entry - 1) * LEVERAGE * 100)
   };
 }
