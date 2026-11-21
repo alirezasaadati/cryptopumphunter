@@ -396,3 +396,5 @@ async function main() {
   if (periods.every(p => p.symbolsSucceeded.length === 0)) throw new Error("No symbols completed successfully");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
+
+// Execution trigger: rerun the unchanged v4.9.0 strategy harness on GitHub-hosted historical-data runner.
