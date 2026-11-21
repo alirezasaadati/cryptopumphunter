@@ -1,0 +1,35 @@
+name: EMA20 Pullback LONG Historical Backtest
+on:
+  push:
+    branches: [experimental/ema20-pullback-long]
+    paths:
+      - "scripts/backtest-ema20-pullback-long.mjs"
+      - "src/futures-ema20-pullback-long.js"
+      - ".github/workflows/ema20-pullback-long-backtest.yml"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Historical days
+        required: false
+        default: "180"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Run historical backtest
+        env:
+          EMA20_BACKTEST_DAYS: ${{ github.event.inputs.days || '180' }}
+          EMA20_BACKTEST_SYMBOLS: "10"
+          EMA20_BACKTEST_LEVERAGE: "10"
+        run: node scripts/backtest-ema20-pullback-long.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ema20-pullback-long-backtest
+          path: artifacts/
+          if-no-files-found: error
