@@ -1,7 +1,7 @@
 // Experimental LONG engine: faithful JS port of the user's optimized long_engine.py.
-// This file is isolated on experimental/ema-pullback-long-optimized-python-v2.
+// This file is isolated on experimental/ema-pullback-long-balanced-v3.
 // No production or SHORT engine code is changed.
-export const EMA_PULLBACK_LONG_VERSION = "2.0.0-python-optimized";
+export const EMA_PULLBACK_LONG_VERSION = "3.0.0-balanced-pullback";
 
 const finite = v => Number.isFinite(Number(v));
 const num = v => finite(v) ? Number(v) : null;
@@ -102,14 +102,14 @@ function computeIndicators(candles, cfg) {
 }
 const DEFAULTS = {
   emaFast: 21, emaMid: 50, emaSlow: 100, emaTrend: 200,
-  adxLen: 14, adxMinStrong: 28, adxMinWeak: 23,
+  adxLen: 14, adxMinStrong: 25, adxMinWeak: 20,
   rsiLen: 14, rsiMin: 50, rsiMax: 72,
-  atrLen: 14, atrSlMult: 1.2, rrTp1: 1.5, rrTp2: 2.5,
-  volMaLen: 20, minBars: 210, minConfidence: 70
+  atrLen: 14, atrSlMult: 1.5, rrTp1: 1.2, rrTp2: 2.5,
+  volMaLen: 20, minBars: 210, minConfidence: 60
 };
 function detectRegime(row, cfg) {
   const slope = row.emaMidPrev5 ? (row.emaMid - row.emaMidPrev5) / row.emaMidPrev5 : 0;
-  const buyersDominant = row.dmp - row.dmn >= 5;
+  const buyersDominant = row.dmp - row.dmn >= 3;
   if (row.close < row.emaTrend) return "DOWNTREND";
   const strongStack = row.close > row.emaFast && row.emaFast > row.emaMid && row.emaMid > row.emaSlow;
   if (strongStack && row.adx >= cfg.adxMinStrong && row.rsi >= 55 && slope > 0 && buyersDominant) return "STRONG_UPTREND";
@@ -120,18 +120,16 @@ function detectRegime(row, cfg) {
 function confirmEntry(candles, row) {
   const last = candles[candles.length - 1];
   const recent = candles.slice(-2);
-  const touchedFast = recent.some(x => num(x.low) <= row.emaFast * 1.005);
-  const touchedMid = recent.some(x => num(x.low) <= row.emaMid * 1.005);
-  if (!touchedFast && !touchedMid) return [false, "قیمت به حمایت EMA پولبک نکرده است"];
+  const touchedFast = recent.some(x => num(x.low) <= row.emaFast * 1.01);
+  const touchedMid = recent.some(x => num(x.low) <= row.emaMid * 1.01);
+  if (!touchedFast && !touchedMid) return [false, "قیمت به حمایت EMA نزدیک نشده است"];
   const body = Math.abs(num(last.close) - num(last.open));
   const range = num(last.high) - num(last.low);
   if (range <= 0) return [false, "کندل بدون دامنه"];
   const upperWick = num(last.high) - Math.max(num(last.close), num(last.open));
-  if (upperWick > range * 0.25) return [false, "سایه بالایی کندل بیش از حد بزرگ است (فشار فروش)"];
-  if (body < range * 0.5) return [false, "بدنه کندل به اندازه کافی قوی نیست"];
-  if (num(last.close) < num(last.open)) return [false, "کندل تاییدیه قرمز است"];
-  if (!(num(last.volume) >= row.volMa * 0.9)) return [false, "حجم کافی نیست"];
-  return [true, "تاییدیه کامل (پولبک + کندل قوی + حجم)"];
+  if (upperWick > range * 0.40) return [false, "سایه بالایی کندل بیش از حد بزرگ است"];
+    if (!(num(last.volume) >= row.volMa * 0.7)) return [false, "حجم بسیار پایین است"];
+  return [true, "تاییدیه ورود در پولبک"];
 }
 function calcLevels(row, cfg) {
   const entry = row.close;
@@ -146,12 +144,11 @@ function confidence(row, regime, cfg) {
   let score = 0;
   if (regime === "STRONG_UPTREND") score += 40;
   else if (regime === "WEAK_UPTREND") score += 25;
-  if (row.adx >= cfg.adxMinStrong) score += 15;
-  else if (row.adx >= cfg.adxMinWeak) score += 8;
-  if (row.rsi >= 55 && row.rsi <= 65) score += 15;
-  else if (row.rsi >= 50 && row.rsi < 55) score += 8;
-  if (row.dmp > row.dmn) score += 15;
-  if (row.volume > row.volMa * 1.2) score += 15;
+  if (row.adx >= cfg.adxMinStrong) score += 20;
+  else if (row.adx >= cfg.adxMinWeak) score += 10;
+  if (row.rsi >= 50 && row.rsi <= 65) score += 20;
+  else if (row.rsi > 65 && row.rsi <= 72) score += 5;
+  if (row.dmp > row.dmn) score += 20;
   return Math.min(score, 100);
 }
 
