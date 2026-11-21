@@ -14,7 +14,7 @@ const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
 const FEE_PER_SIDE = 0.0005;
 const SLIPPAGE_PER_SIDE = 0.0003;
 const LEVERAGE = FUTURES_TRADE_LEVERAGE;
-const VARIANTS = ["baseline", "btc_1h", "btc_1h_4h"];
+// Keep each policy isolated so the historical comparison never mutates production behavior.\nconst VARIANTS = ["baseline", "btc_1h", "btc_1h_4h"];
 
 async function getJson(url, attempt = 0) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
