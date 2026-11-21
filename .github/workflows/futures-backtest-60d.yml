@@ -1,4 +1,4 @@
-name: Futures 60-day lifecycle backtest
+name: Futures 60-day out-of-sample structural stop validation
 
 on:
   workflow_dispatch:
@@ -28,11 +28,7 @@ jobs:
           - stop_mode: original
             buffer_atr: "0.2"
           - stop_mode: pivot15m
-            buffer_atr: "0.2"
-          - stop_mode: pivot15m
             buffer_atr: "0.5"
-          - stop_mode: pivot15m
-            buffer_atr: "1.0"
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -50,7 +46,7 @@ jobs:
         env:
           LIFECYCLE_BACKTEST_DAYS: "60"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
-          LIFECYCLE_BACKTEST_END_MS: "1790090998724"
+          LIFECYCLE_BACKTEST_END_MS: "1795258800000"
           LIFECYCLE_BREAK_EVEN_MARGIN_PCT: "0"
           LIFECYCLE_STRUCTURAL_STOP_MODE: "${{ matrix.stop_mode }}"
           LIFECYCLE_STRUCTURAL_STOP_BUFFER_ATR: "${{ matrix.buffer_atr }}"
@@ -61,7 +57,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: futures-lifecycle-stop-${{ matrix.stop_mode }}-${{ matrix.buffer_atr }}atr-60d
+          name: futures-lifecycle-oos-${{ matrix.stop_mode }}-${{ matrix.buffer_atr }}atr-60d
           path: |
             artifacts/futures-lifecycle-backtest.json
             artifacts/futures-lifecycle-backtest.md
