@@ -113,7 +113,7 @@ const MAIN_MENU = {
       { text: "🔌 تست اتصال", callback_data: "test" }
     ],
     [
-      { text: "👥 دعوت از دوستان", callback_data: "invite" }
+      { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
     ],
     [
       { text: "ℹ️ درباره", callback_data: "about" }
@@ -1044,10 +1044,9 @@ async function handleCallback(query, env) {
     }
     if (action === "invite") {
       await sendMessage(env, chatId,
-        "🚀 برای حمایت از توسعه و فعال ماندن Crypto Pump Hunter و همچنین بهره‌مندی از مزایای احتمالی ثبت‌نام، از طریق لینک اختصاصی زیر عضو صرافی LBank شوید.\n\n" +
-        "🎁 با ثبت‌نام از این لینک، از فرصت دریافت بونوس‌ها و طرح‌های تشویقی صرافی مطلع شوید.\n\n" +
-        "🔗 لینک ثبت‌نام:\nhttps://www.lbk.pub/ref/67XF8\n\n" +
-        "❤️ حمایت شما به ادامه توسعه امکانات و خدمات بهتر ربات کمک می‌کند.", BACK_MENU);
+        "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
+        "( برای بررسی دقیق علل سود و زیان هر کاربر ) کنید اقدام .\n\n" +
+        "🔗 لینک : https://www.lbk.pub/ref/67XF8", BACK_MENU);
       return;
     }
     if (action === "futures") {
