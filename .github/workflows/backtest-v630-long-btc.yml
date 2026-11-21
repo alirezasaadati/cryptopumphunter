@@ -1,0 +1,30 @@
+name: v6.3.0 LONG-only BTC macro historical backtest
+
+on:
+  push:
+    branches: [backtest/v630-long-btc-macro-20261122]
+    paths:
+      - "scripts/backtest-v630-long-btc.mjs"
+      - "src/v63-long-btc-engine.mjs"
+      - ".github/workflows/backtest-v630-long-btc.yml"
+
+jobs:
+  backtest-long:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run v6.3.0 LONG-only historical backtest
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: node scripts/backtest-v630-long-btc.mjs
+      - name: Upload v6.3.0 LONG backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v630-long-btc-historical-backtest
+          path: artifacts/v630-long-btc-backtest.*
+          if-no-files-found: warn
