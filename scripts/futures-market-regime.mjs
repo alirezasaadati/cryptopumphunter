@@ -35,7 +35,7 @@ function directionalStrength(candles) {
   return denominator > 0 ? Math.abs(pdi - mdi) / denominator * 100 : 0;
 }
 
-export function classifyMarketRegime(candles) {
+function classifyRaw(candles) {
   if (!Array.isArray(candles) || candles.length < 60) {
     return { regime: "INSUFFICIENT", direction: "NEUTRAL", strength: "UNKNOWN", adxProxy: null, emaSpreadPct: null, ema50SlopePct: null };
   }
@@ -60,6 +60,18 @@ export function classifyMarketRegime(candles) {
     direction, strength, adxProxy,
     emaSpreadPct: spread, ema50SlopePct: slope
   };
+}
+
+export function classifyMarketRegime(candles) {
+  const latest = classifyRaw(candles);
+  if (latest.direction === "NEUTRAL" || latest.direction !== "BULL" && latest.direction !== "BEAR") return latest;
+  const previous1 = classifyRaw(candles.slice(0, -1));
+  const previous2 = classifyRaw(candles.slice(0, -2));
+  // Three consecutive closed-candle classifications are required to avoid regime flicker.
+  if (previous1.direction !== latest.direction || previous2.direction !== latest.direction) {
+    return { ...latest, regime: "NEUTRAL", direction: "NEUTRAL", strength: "NEUTRAL", candidateDirection: latest.direction, confirmationBars: 1 };
+  }
+  return { ...latest, confirmationBars: 3 };
 }
 
 export function combineMarketRegimes(left, right) {
