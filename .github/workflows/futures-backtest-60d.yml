@@ -37,7 +37,7 @@ jobs:
         env:
           LIFECYCLE_BACKTEST_DAYS: "60"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
-          LIFECYCLE_BACKTEST_END_MS: "1795274998724"
+          LIFECYCLE_BACKTEST_END_MS: "1790090998724"
         run: node scripts/backtest-futures-lifecycle.mjs
       - name: Upload backtest report
         if: always()
