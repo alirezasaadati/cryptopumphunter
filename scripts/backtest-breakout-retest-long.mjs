@@ -210,7 +210,7 @@ function runEmaPullbackEngine({symbol,data,testStartMs,testEndMs,engine="C",anal
 }
 
 function summarize(trades) {
-  const closed=trades.filter(t=>["TP1","TP2","STOP"].includes(t.status));
+  const closed=trades.filter(t=>["TP1","TP2","PROFIT_30","STOP"].includes(t.status));
   const wins=closed.filter(t=>t.status==="TP1"||t.status==="TP2"||t.status==="PROFIT_30"),stops=closed.filter(t=>t.status==="STOP");
   let equity=0,peak=0,maxDrawdown=0;
   for(const t of [...closed].sort((a,b)=>a.exitTime-b.exitTime)){
