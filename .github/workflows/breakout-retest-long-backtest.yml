@@ -1,4 +1,4 @@
-name: Experimental breakout-retest LONG A-B historical comparison
+name: Experimental LONG engine comparison: A/B and EMA pullback baseline vs filtered variant
 on:
   workflow_dispatch:
   push:
@@ -23,7 +23,7 @@ jobs:
           node-version: 22
       - name: Run tests
         run: npm test
-      - name: Run matched historical A-B backtest
+      - name: Run matched historical LONG backtest
         env:
           BREAKOUT_BACKTEST_DAYS: "60"
         run: node scripts/backtest-breakout-retest-long.mjs
