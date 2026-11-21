@@ -1,5 +1,5 @@
 // Independent LONG engine derived from the user's long_engine.py (experimental only).
-export const EMA_PULLBACK_LONG_VERSION = "1.0.0";
+export const EMA_PULLBACK_LONG_VERSION = "1.1.0";
 
 const finite = v => Number.isFinite(Number(v));
 const num = v => finite(v) ? Number(v) : null;
@@ -57,7 +57,7 @@ function indicators(candles,cfg){
   for(let i=5;i<c.length;i++)if(eSlow[i]!==null&&eSlow[i-5])slope[i]=(eSlow[i]-eSlow[i-5])/eSlow[i-5];
   return candles.map((_,i)=>({emaFast:eFast[i],emaMid:eMid[i],emaSlow:eSlow[i],emaTrend:eTrend[i],adx:adx[i],dmp:dmp[i],dmn:dmn[i],rsi:rs[i],atr:atr[i],volMa:volumeMa[i],emaSlowSlope:slope[i]}));
 }
-const DEFAULTS={emaFast:21,emaMid:50,emaSlow:100,emaTrend:200,adxLen:14,adxMinStrong:25,adxMinWeak:18,rsiLen:14,rsiMin:50,rsiMax:72,atrLen:14,atrSlMult:1.5,rrTp1:1.5,rrTp2:3,volMaLen:20,minBars:210,minConfidence:55};
+const DEFAULTS={emaFast:21,emaMid:50,emaSlow:100,emaTrend:200,adxLen:14,adxMinStrong:25,adxMinWeak:22,rsiLen:14,rsiMin:50,rsiMax:72,atrLen:14,atrSlMult:1.5,rrTp1:1.5,rrTp2:3,volMaLen:20,minBars:210,minConfidence:55};
 function regimeOf(row,cfg){
   const price=row.close;
   if(price<row.emaTrend||row.emaSlowSlope<-.001)return "DOWNTREND";
@@ -96,12 +96,12 @@ export function analyzeEmaPullbackLong({symbol,candles,options={}}){
   const bullish=body>0&&closePosition>=.6;
   const recent=candles.slice(-3);
   const pulled=recent.some(x=>num(x.low)<=row.emaFast*1.005)||recent.some(x=>num(x.low)<=row.emaMid*1.005);
-  const volumeOk=row.volume>=row.volMa*.8;
+  const volumeOk=row.volume>row.volMa;
   if(!bullish)return reject("confirmation_candle_not_bullish",regime);
   if(!pulled)return reject("no_ema_pullback",regime);
   if(!volumeOk)return reject("volume_below_threshold",regime);
   const entry=row.close,slAtr=entry-row.atr*cfg.atrSlMult,slEma=row.emaMid*.998;
-  let stop=Math.min(slAtr,slEma),risk=entry-stop;
+  let stop=Math.max(slAtr,slEma),risk=entry-stop;
   if(risk<=0){risk=entry*.01;stop=entry-risk;}
   const tp1=entry+risk*cfg.rrTp1,tp2=entry+risk*cfg.rrTp2;
   const confidence=confidenceOf(row,regime,cfg);
