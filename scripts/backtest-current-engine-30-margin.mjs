@@ -33,7 +33,7 @@ async function getJson(url) {
 
 async function fetchCandles(symbol, resolution, fromMs, toMs) {
   const interval = MS[resolution];
-  const chunkMs = interval * 3500;
+  const chunkMs = interval * 700;
   const all = [];
   for (let start = fromMs; start < toMs; start += chunkMs) {
     const url = new URL(API + "/trade/" + encodeURIComponent(symbol) + "/" + resolution);
@@ -113,7 +113,7 @@ function simulateTrade(candidate, bars5m, entryTime) {
       const grossMarginRoiPct = Number(result.trade.marginReturnPercent);
       const costs = estimateCosts(candidate.entry, Number(result.trade.exitPrice));
       return {
-        status: result.reason, exitReason: result.reason === "CLOSED_PROFIT" ? "TARGET_30_MARGIN" : "STOP",
+        symbol: candidate.symbol, status: result.reason, exitReason: result.reason === "CLOSED_PROFIT" ? "TARGET_30_MARGIN" : "STOP",
         entryTime, exitTime: candle.time + MS["5m"], entry: candidate.entry, exit: Number(result.trade.exitPrice),
         stop: candidate.stop, side: candidate.side, score: candidate.score,
         grossMarginRoiPct, costMarginRoiPct: costs.costMarginRoiPct,
@@ -128,7 +128,7 @@ function simulateTrade(candidate, bars5m, entryTime) {
   const gross = marginReturnPercent(candidate.side, candidate.entry, mark, LEVERAGE) ?? 0;
   const costs = estimateCosts(candidate.entry, mark);
   return {
-    status: "OPEN", exitReason: "OPEN_AT_END", entryTime, exitTime: null,
+    symbol: candidate.symbol, status: "OPEN", exitReason: "OPEN_AT_END", entryTime, exitTime: null,
     entry: candidate.entry, mark, stop: candidate.stop, side: candidate.side, score: candidate.score,
     grossMarginRoiPct: gross, costMarginRoiPct: costs.costMarginRoiPct,
     netMarginRoiPct: gross - costs.costMarginRoiPct,
@@ -195,6 +195,15 @@ async function backtestSymbol(ticker, window) {
   if (h1.length < 100 || h4.length < FUTURES_CONFIG.MIN_CANDLES || m15.length < 120 || !m5.length) {
     throw new Error("Insufficient history: 1h=" + h1.length + " 4h=" + h4.length + " 15m=" + m15.length + " 5m=" + m5.length);
   }
+  const coverage = {
+    h1: { from: h1[0]?.time, to: h1.at(-1)?.time + MS["1h"], count: h1.length },
+    h4: { from: h4[0]?.time, to: h4.at(-1)?.time + MS["4h"], count: h4.length },
+    m15: { from: m15[0]?.time, to: m15.at(-1)?.time + MS["15m"], count: m15.length },
+    m5: { from: m5[0]?.time, to: m5.at(-1)?.time + MS["5m"], count: m5.length }
+  };
+  if (coverage.m5.from > window.startMs + MS["5m"] || coverage.m5.to < window.endMs - MS["5m"]) {
+    throw new Error("Incomplete 5m coverage for " + ticker.symbol + ": " + JSON.stringify(coverage.m5));
+  }
 
   const candidates = [];
   for (let i = 60; i < h1.length - 1; i++) {
@@ -229,7 +238,7 @@ async function backtestSymbol(ticker, window) {
       });
     }
   }
-  return { symbol: ticker.symbol, candles: { h1: h1.length, h4: h4.length, m15: m15.length, m5: m5.length }, candidates, m5 };
+  return { symbol: ticker.symbol, candles: { h1: h1.length, h4: h4.length, m15: m15.length, m5: m5.length }, coverage, candidates, m5 };
 }
 
 function mainWindow(now) {
