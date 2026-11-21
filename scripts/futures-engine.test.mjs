@@ -172,7 +172,8 @@ test("confirmed 15m pivot breakout filter uses the latest 3-left/3-right swing w
   const pivot=findLatestConfirmed15mPivot(candles,"LONG",3,3);
   assert.equal(pivot.price,105);
   assert.equal(pivot.index,7);
-  assert.equal(FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT,0.3);
+  assert.equal(FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT_LONG,0.5);
+  assert.equal(FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT_SHORT,0.3);
 });
 
 test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
