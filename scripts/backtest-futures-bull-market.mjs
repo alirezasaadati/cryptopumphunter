@@ -260,6 +260,8 @@ function backtestIndependentEngines(ticker, oneHour, fourHour, fifteenMinute, fi
     const closed4h=fourHour.slice(0,fourIndex);
     const closed15m=fifteenMinute.slice(Math.max(0,fifteenIndex-160),fifteenIndex);
     if(closed4h.length<FUTURES_CONFIG.MIN_CANDLES||closed15m.length<40)continue;
+    const historicalQuoteVolume=oneHour.slice(Math.max(0,i-23),i+1).reduce((sum,candle)=>sum+Number(candle.volume)*Number(candle.close),0);
+    if(!Number.isFinite(historicalQuoteVolume)||historicalQuoteVolume<FUTURES_CONFIG.MIN_QUOTE_VOLUME)continue;
     for(const side of ["LONG","SHORT"]){
       const candidate=analyzeIndependentSignal({side,candles4h:closed4h,candles15m:closed15m});
       if(!candidate)continue;
