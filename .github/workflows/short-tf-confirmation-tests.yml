@@ -1,0 +1,24 @@
+name: Short timeframe confirmation engine tests
+on:
+  push:
+    branches: [short-tf-confirmation-engine]
+    paths:
+      - "src/short-tf-confirmation.js"
+      - "scripts/short-tf-confirmation.test.mjs"
+      - ".github/workflows/short-tf-confirmation-tests.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/short-tf-confirmation.js"
+      - "scripts/short-tf-confirmation.test.mjs"
+      - ".github/workflows/short-tf-confirmation-tests.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check src/short-tf-confirmation.js
+      - run: node --test scripts/short-tf-confirmation.test.mjs
