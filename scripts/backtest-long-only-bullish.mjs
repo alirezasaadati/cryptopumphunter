@@ -211,7 +211,7 @@ async function main() {
   const tickerData = await getJson(BASE + "/derivatives/api/v3/tickers");
   if (!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
   const universe = tickerData.tickers.filter(t => t?.tag==="perpetual" && t.suspended!==true &&
-    String(t.symbol||"") === "PF_XBTUSD" &&
+    /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||"")) &&
     Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME && Number(t.last)>0)
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
@@ -262,12 +262,12 @@ async function main() {
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
     "| Same-side lock skips | "+report.lockSkips+" |",
     "| Rejected signal opportunities | "+report.rejectedSignals+" |","",
-    "BTC market change during test: "+(successful[0]?.marketChangePct == null ? "n/a" : successful[0].marketChangePct.toFixed(2)+"%"),
+    "BTC market change during test: "+(successful.find(r=>r.symbol==="PF_XBTUSD")?.marketChangePct == null ? "n/a" : successful.find(r=>r.symbol==="PF_XBTUSD").marketChangePct.toFixed(2)+"%"),
     "",
-    "| Symbol | BTC period change | LONG signals | Trades | TP +30% margin | Direct stops | Net margin % |",
+    "| Symbol | Period price change | LONG signals | Trades | TP +30% margin | Direct stops | Net margin % |",
     "|---|---:|---:|---:|---:|---:|---:|",
     ...successful.map(r=>"| "+r.symbol+" | "+(r.marketChangePct == null ? "n/a" : r.marketChangePct.toFixed(2)+"%")+" | "+r.signalsAccepted+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.totalMarginReturnPct.toFixed(2)+" |"),
-    "", "Limitations: 5m OHLC cannot identify intrabar path; ambiguous candles use stop-first. Stop execution is assumed at the stop or gap open. Funding and liquidation are excluded. Fees (0.05% per side) and slippage (0.03% per side) are included. Only the current BTC perpetual contract is tested; contract-history limitations may apply.",
+    "", "Limitations: 5m OHLC cannot identify intrabar path; ambiguous candles use stop-first. Stop execution is assumed at the stop or gap open. Funding and liquidation are excluded. Fees (0.05% per side) and slippage (0.03% per side) are included. Universe uses the top currently liquid Kraken perpetuals, which introduces survivorship/listing-history bias; contracts without full historical candles are reported as symbol errors.",
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
   await writeFile("artifacts/futures-lifecycle-backtest.md",rows.join("\n"));
