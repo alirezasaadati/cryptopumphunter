@@ -1,0 +1,29 @@
+name: Backtest supplied v4.9.0 signal engine
+on:
+  push:
+    branches: [backtest/v490-signal-engine-20261122]
+    paths:
+      - "scripts/backtest-v490.mjs"
+      - "src/v49-engine.mjs"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run v4.9.0 historical backtest
+        env:
+          BACKTEST_SYMBOL_LIMIT: "10"
+          BACKTEST_FEE_PER_SIDE: "0.0005"
+          BACKTEST_SLIPPAGE_PER_SIDE: "0.0003"
+        run: node scripts/backtest-v490.mjs
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v490-signal-engine-backtest
+          path: artifacts/
+          if-no-files-found: warn
