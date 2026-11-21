@@ -61,6 +61,33 @@ async function fetchHistoricalCandles(symbol, resolution, fromMs, toMs) {
   return [...byTime.values()].sort((a,b)=>a.time-b.time);
 }
 
+function emaValue(values, period) {
+  if (values.length < period) return null;
+  const multiplier = 2 / (period + 1);
+  let value = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < values.length; i++) value = values[i] * multiplier + value * (1 - multiplier);
+  return value;
+}
+function signalDiagnostics(candidate, side, candles1h, candles4h) {
+  const closes4h = candles4h.map(c => Number(c.close));
+  const ema20_4h = emaValue(closes4h, 20), ema50_4h = emaValue(closes4h, 50);
+  const last1h = candles1h.at(-1), price = Number(last1h.close);
+  const up1h = Number(candidate.ema20) > Number(candidate.ema50) && price > Number(candidate.ema20);
+  const down1h = Number(candidate.ema20) < Number(candidate.ema50) && price < Number(candidate.ema20);
+  const up4h = Number.isFinite(ema20_4h) && Number.isFinite(ema50_4h) && ema20_4h > ema50_4h;
+  const down4h = Number.isFinite(ema20_4h) && Number.isFinite(ema50_4h) && ema20_4h < ema50_4h;
+  const trend1h = up1h ? "UP" : down1h ? "DOWN" : "MIXED";
+  const trend4h = up4h ? "UP" : down4h ? "DOWN" : "MIXED";
+  const aligned1h = side === "LONG" ? trend1h === "UP" : trend1h === "DOWN";
+  const aligned4h = side === "LONG" ? trend4h === "UP" : trend4h === "DOWN";
+  return {
+    trend1h, trend4h, aligned1h, aligned4h, bothAligned: aligned1h && aligned4h,
+    rsi: Number(candidate.rsi),
+    ema20DistancePct: Number.isFinite(price) && Number(candidate.ema20) > 0 ? (price / Number(candidate.ema20) - 1) * 100 : null,
+    atrPct: Number.isFinite(price) && price > 0 ? Number(candidate.atr) / price * 100 : null,
+    volumeRatio: Number(candidate.volumeRatio)
+  };
+}
 function historicalChange(candles, index) {
   const old = candles[index - 24], now = candles[index];
   return !old || old.close <= 0 ? 0 : ((now.close / old.close) - 1) * 100;
@@ -185,7 +212,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
       entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
       signalTime: signalBar.time, entryTime: signalCloseTime,
-      score: candidate.score, stopDistancePct: Math.abs((entry-Number(candidate.stop))/entry)*100, ambiguousCandles: 0
+      score: candidate.score, stopDistancePct: Math.abs((entry-Number(candidate.stop))/entry)*100, signalDiagnostics: signalDiagnostics(candidate,candidate.side,oneHour.slice(0,i+1),closed4h), ambiguousCandles: 0
     };
     let candleIndex = lowerBound(fiveMinute,signalCloseTime);
     let closed = false;
@@ -240,6 +267,15 @@ async function main() {
   const successful = results.filter(r=>!r.error);
   const allTrades = successful.flatMap(r=>r.trades).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
   const metrics = summarize(allTrades);
+  const diagnosticSummary = Object.fromEntries(["CLOSED_PROFIT","CLOSED_STOP"].map(status => {
+    const rows = allTrades.filter(t => t.status === status);
+    const n = key => rows.filter(t => t.signalDiagnostics?.[key] === true).length;
+    const avg = key => { const v=rows.map(t=>Number(t.signalDiagnostics?.[key])).filter(Number.isFinite); return v.length ? v.reduce((a,b)=>a+b,0)/v.length : null; };
+    return [status,{count:rows.length,aligned1h:n("aligned1h"),aligned4h:n("aligned4h"),bothAligned:n("bothAligned"),
+      trend4hOpposite:rows.filter(t=>t.signalDiagnostics?.trend4h!=="MIXED"&&!t.signalDiagnostics?.aligned4h).length,
+      averageRsi:avg("rsi"),averageEma20DistancePct:avg("ema20DistancePct"),averageAtrPct:avg("atrPct"),
+      averageVolumeRatio:avg("volumeRatio"),averageScore:rows.length?rows.reduce((a,t)=>a+Number(t.score||0),0)/rows.length:null}];
+  }));
   const report = {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
@@ -254,7 +290,7 @@ async function main() {
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies",
       historicalVolumeFilter:"per-signal rolling 24h estimate = sum(hourly base volume × hourly close); approximate quote turnover, not exact exchange ticker volume",},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
-    metrics,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.eligibleSignalOpportunities,0),
+    metrics,diagnosticSummary,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.eligibleSignalOpportunities,0),
     bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
@@ -290,7 +326,7 @@ async function main() {
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
   await writeFile("artifacts/futures-lifecycle-backtest.md",rows.join("\n"));
-  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals},null,2));
+  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,diagnosticSummary,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals},null,2));
   if (!successful.length) process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
