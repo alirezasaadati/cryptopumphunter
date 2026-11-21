@@ -1,4 +1,4 @@
-name: Experimental LONG engine comparison: A/B and EMA pullback baseline vs filtered variant
+name: "Experimental LONG engine comparison - A/B and EMA pullback baseline vs filtered variant"
 on:
   workflow_dispatch:
   push:
