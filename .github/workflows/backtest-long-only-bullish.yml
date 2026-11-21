@@ -1,0 +1,25 @@
+name: LONG-only bullish-period historical backtest
+on:
+  push:
+    branches: [backtest/long-only-bullish-2024]
+    paths:
+      - "scripts/backtest-long-only-bullish.mjs"
+      - ".github/workflows/backtest-long-only-bullish.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run LONG-only Kraken historical backtest
+        run: node scripts/backtest-long-only-bullish.mjs
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-only-bullish-backtest-2024
+          path: artifacts/
+          if-no-files-found: warn
