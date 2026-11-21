@@ -1,4 +1,4 @@
-name: Futures historical bull-market backtest
+name: Futures historical regime comparison
 
 on:
   push:
@@ -15,13 +15,30 @@ permissions:
   contents: read
 
 concurrency:
-  group: futures-bull-market-backtest
+  group: futures-regime-comparison
   cancel-in-progress: false
 
 jobs:
   backtest:
+    name: "${{ matrix.regime.name }} market"
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        regime:
+          - name: bull-2023-q4
+            start_ms: "1696118400000"
+            end_ms: "1704067200000"
+            artifact: futures-regime-bull-2023-q4
+          - name: bear-2022-q2
+            start_ms: "1651363200000"
+            end_ms: "1659312000000"
+            artifact: futures-regime-bear-2022-q2
+          - name: sideways-2023-summer
+            start_ms: "1685577600000"
+            end_ms: "1693526400000"
+            artifact: futures-regime-sideways-2023-summer
     steps:
       - name: Checkout experimental branch
         uses: actions/checkout@v4
@@ -33,10 +50,10 @@ jobs:
           node-version: 22
       - name: Run repository tests
         run: npm test
-      - name: Run current-strategy bull-market backtest
+      - name: Run current and independent engine backtests
         env:
-          LIFECYCLE_BACKTEST_START_MS: "1696118400000"
-          LIFECYCLE_BACKTEST_END_MS: "1704067200000"
+          LIFECYCLE_BACKTEST_START_MS: "${{ matrix.regime.start_ms }}"
+          LIFECYCLE_BACKTEST_END_MS: "${{ matrix.regime.end_ms }}"
           LIFECYCLE_BACKTEST_DAYS: "92"
           LIFECYCLE_BACKTEST_SYMBOLS: "9"
           LIFECYCLE_BREAK_EVEN_MARGIN_PCT: "0"
@@ -45,11 +62,11 @@ jobs:
           LIFECYCLE_RISK_PER_TRADE_PCT: "1"
           LIFECYCLE_BACKTEST_SYMBOL_LIST: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_XRPUSD,PF_ADAUSD,PF_DOGEUSD,PF_LINKUSD,PF_LTCUSD,PF_BCHUSD"
         run: node scripts/backtest-futures-bull-market.mjs
-      - name: Upload bull-market report
+      - name: Upload regime report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: futures-current-strategy-bull-market-2023-q4
+          name: ${{ matrix.regime.artifact }}
           path: |
             artifacts/futures-lifecycle-backtest.json
             artifacts/futures-lifecycle-backtest.md
