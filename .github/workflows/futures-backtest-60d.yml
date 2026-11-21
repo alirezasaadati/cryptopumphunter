@@ -20,6 +20,11 @@ concurrency:
 
 jobs:
   backtest:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        break_even_margin_pct: [10, 15, 20]
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -38,12 +43,13 @@ jobs:
           LIFECYCLE_BACKTEST_DAYS: "60"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
           LIFECYCLE_BACKTEST_END_MS: "1790090998724"
+          LIFECYCLE_BREAK_EVEN_MARGIN_PCT: "${{ matrix.break_even_margin_pct }}"
         run: node scripts/backtest-futures-lifecycle.mjs
       - name: Upload backtest report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: futures-lifecycle-backtest-60d
+          name: futures-lifecycle-be-${{ matrix.break_even_margin_pct }}-60d
           path: |
             artifacts/futures-lifecycle-backtest.json
             artifacts/futures-lifecycle-backtest.md
