@@ -248,7 +248,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
 }
 
 async function main() {
-  const endMs = Date.now();
+  const configuredEndMs = Number(process.env.LIFECYCLE_BACKTEST_END_MS || 0);
+  const endMs = Number.isFinite(configuredEndMs) && configuredEndMs > 0 ? configuredEndMs : Date.now();
   const startMs = endMs - DAYS*86400000;
   const fromMs = startMs - WARMUP_DAYS*86400000;
   const tickerData = await getJson(BASE + "/derivatives/api/v3/tickers");
