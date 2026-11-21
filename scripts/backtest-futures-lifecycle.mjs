@@ -9,6 +9,7 @@ const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKT
 const WARMUP_DAYS = 15;
 const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
 const LEVERAGE = FUTURES_TRADE_LEVERAGE;
+const BREAK_EVEN_TRIGGER = Math.max(0, Number(process.env.LIFECYCLE_BREAK_EVEN_MARGIN_PCT || 0));
 
 async function getJson(url, attempt = 0) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
@@ -140,7 +141,9 @@ function summarize(trades) {
   const longs = closed.filter(t => t.side === "LONG");
   const shorts = closed.filter(t => t.side === "SHORT");
   const sum = xs => xs.reduce((n,t)=>n+Number(t.marginReturnPercent || 0),0);
-  const stopLosses = stops.map(t => Math.abs(Number(t.marginReturnPercent || 0))).filter(Number.isFinite).sort((a,b)=>a-b);
+  const stopLosses = stops.map(t => Math.abs(Number(t.marginReturnPercent || 0))).filter(x=>Number.isFinite(x) && x > 0).sort((a,b)=>a-b);
+  const breakEvenStops = stops.filter(t => t.breakEvenActivated === true && Math.abs(Number(t.marginReturnPercent || 0)) < 1e-9);
+  const lossStops = stops.filter(t => Number(t.marginReturnPercent || 0) < -1e-9);
   const percentile = (values, p) => values.length ? values[Math.min(values.length-1, Math.ceil(p*values.length)-1)] : null;
   const stopLossStats = {
     count: stopLosses.length,
@@ -164,6 +167,9 @@ function summarize(trades) {
     closedTrades: closed.length,
     profitCloses: profits.length,
     stopCloses: stops.length,
+    lossStopCloses: lossStops.length,
+    breakEvenActivatedTrades: trades.filter(t=>t.breakEvenActivated===true).length,
+    breakEvenStopCloses: breakEvenStops.length,
     openAtEnd: trades.length - closed.length,
     longs: longs.length,
     shorts: shorts.length,
@@ -235,7 +241,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
       signalTime: signalBar.time, entryTime: signalCloseTime,
       score: candidate.score, stopDistancePct: Math.abs((entry-Number(candidate.stop))/entry)*100, signalDiagnostics: signalDiagnostics(candidate,candidate.side,oneHour.slice(0,i+1),closed4h), ambiguousCandles: 0,
-      maxFavorableExcursionMarginPct: 0, maxAdverseExcursionMarginPct: 0
+      maxFavorableExcursionMarginPct: 0, maxAdverseExcursionMarginPct: 0,
+      breakEvenActivated: false
     };
     let candleIndex = lowerBound(fiveMinute,signalCloseTime);
     let closed = false;
@@ -255,6 +262,11 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       const excursion = excursionForBar(candidate.side,entry,bar);
       trade.maxFavorableExcursionMarginPct = Math.max(trade.maxFavorableExcursionMarginPct,excursion.favorable);
       trade.maxAdverseExcursionMarginPct = Math.max(trade.maxAdverseExcursionMarginPct,excursion.adverse);
+      if (BREAK_EVEN_TRIGGER > 0 && !trade.breakEvenActivated && trade.maxFavorableExcursionMarginPct >= BREAK_EVEN_TRIGGER) {
+        // Activate only after the 5m candle closes; the entry stop is active from the next candle.
+        trade.currentStop = entry;
+        trade.breakEvenActivated = true;
+      }
     }
     if (!closed) {
       trade.status = "OPEN_AT_BACKTEST_END";
@@ -314,6 +326,8 @@ async function main() {
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"one evaluation per completed 1h candle; signal generated from closed 1h/4h/15m candles; entry approximated at next 1h open; exits evaluated on subsequent 5m OHLC",
+      breakEvenTriggerMarginPct: BREAK_EVEN_TRIGGER,
+      breakEvenRule: BREAK_EVEN_TRIGGER > 0 ? "after a completed 5m candle reaches the configured favorable margin return, move stop to entry for subsequent candles" : "disabled",
       scheduler:"live Worker cron is every 5 minutes; this runner does not yet replay each 5-minute scan, so repeated intra-hour scan/TTL behavior is not represented",
       lifecycleSemantics:"the live Durable Object creates a SIGNAL_EVALUATION trade when a signal is registered; this is not evidence of a user accepting or an exchange order filling",
       lock:"independent symbol+side lock until close; opposite side may overlap",
@@ -338,7 +352,10 @@ async function main() {
     "| Signal-evaluation lifecycles started (not exchange fills) | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
     "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
-    "| Stop closes | "+metrics.stopCloses+" |",
+    "| Stop closes (including break-even exits) | "+metrics.stopCloses+" |",
+    "| Loss stop closes | "+metrics.lossStopCloses+" |",
+    "| Break-even activated trades | "+metrics.breakEvenActivatedTrades+" |",
+    "| Break-even exits | "+metrics.breakEvenStopCloses+" |
     "| Open at end | "+metrics.openAtEnd+" |",
     "| LONG / SHORT | "+metrics.longs+" / "+metrics.shorts+" |",
     "| Win rate | "+metrics.winRatePct.toFixed(2)+"% |",
