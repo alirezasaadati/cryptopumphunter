@@ -10,6 +10,8 @@ const WARMUP_DAYS = 15;
 const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
 const LEVERAGE = FUTURES_TRADE_LEVERAGE;
 const SHORT_MAX_VOLUME_RATIO = Math.max(0, Number(process.env.LIFECYCLE_SHORT_MAX_VOLUME_RATIO || 0));
+const SHORT_MIN_ATR_PCT = Math.max(0, Number(process.env.LIFECYCLE_SHORT_MIN_ATR_PCT || 0));
+const SHORT_MAX_EMA20_DISTANCE_PCT = Math.max(0, Number(process.env.LIFECYCLE_SHORT_MAX_EMA20_DISTANCE_PCT || 0));
 
 async function getJson(url, attempt = 0) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
@@ -204,7 +206,11 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     catch { rejectedSignals++; continue; }
     if (!candidate || candidate.eligible !== true || !["LONG","SHORT"].includes(candidate.side)) { rejectedSignals++; continue; }
     eligibleSignalOpportunities++;
-    if (SHORT_MAX_VOLUME_RATIO > 0 && candidate.side === "SHORT" && Number(candidate.volumeRatio) > SHORT_MAX_VOLUME_RATIO) { skippedByVolumeFilter++; continue; }
+    const diagnostics = signalDiagnostics(candidate,candidate.side,oneHour.slice(0,i+1),closed4h);
+    const failsVolume = SHORT_MAX_VOLUME_RATIO > 0 && Number(candidate.volumeRatio) > SHORT_MAX_VOLUME_RATIO;
+    const failsAtr = SHORT_MIN_ATR_PCT > 0 && Number(diagnostics.atrPct) < SHORT_MIN_ATR_PCT;
+    const failsEmaExtension = SHORT_MAX_EMA20_DISTANCE_PCT > 0 && Math.abs(Number(diagnostics.ema20DistancePct)) > SHORT_MAX_EMA20_DISTANCE_PCT;
+    if (candidate.side === "SHORT" && (failsVolume || failsAtr || failsEmaExtension)) { skippedByVolumeFilter++; continue; }
     const lockKey = ticker.symbol + "|" + candidate.side;
     if ((lockUntil.get(lockKey) || 0) > signalCloseTime) { skippedByLock++; continue; }
 
@@ -214,7 +220,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
       entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
       signalTime: signalBar.time, entryTime: signalCloseTime,
-      score: candidate.score, stopDistancePct: Math.abs((entry-Number(candidate.stop))/entry)*100, signalDiagnostics: signalDiagnostics(candidate,candidate.side,oneHour.slice(0,i+1),closed4h), ambiguousCandles: 0
+      score: candidate.score, stopDistancePct: Math.abs((entry-Number(candidate.stop))/entry)*100, signalDiagnostics: diagnostics, ambiguousCandles: 0
     };
     let candleIndex = lowerBound(fiveMinute,signalCloseTime);
     let closed = false;
@@ -290,7 +296,7 @@ async function main() {
       scheduler:"live Worker cron is every 5 minutes; this runner does not yet replay each 5-minute scan, so repeated intra-hour scan/TTL behavior is not represented",
       lifecycleSemantics:"the live Durable Object creates a SIGNAL_EVALUATION trade when a signal is registered; this is not evidence of a user accepting or an exchange order filling",
       lock:"independent symbol+side lock until close; opposite side may overlap",
-      experimentalShortVolumeFilter:SHORT_MAX_VOLUME_RATIO > 0 ? { enabled:true, maxVolumeRatio:SHORT_MAX_VOLUME_RATIO, appliesTo:"SHORT only", timing:"after signal eligibility, before same-side lock and trade entry" } : { enabled:false },
+      experimentalShortFilters:{ appliesTo:"SHORT only", maxVolumeRatio:SHORT_MAX_VOLUME_RATIO || null, minAtrPct:SHORT_MIN_ATR_PCT || null, maxAbsEma20DistancePct:SHORT_MAX_EMA20_DISTANCE_PCT || null, timing:"after signal eligibility, before same-side lock and trade entry" },
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies",
       historicalVolumeFilter:"per-signal rolling 24h estimate = sum(hourly base volume × hourly close); approximate quote turnover, not exact exchange ticker volume",},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
