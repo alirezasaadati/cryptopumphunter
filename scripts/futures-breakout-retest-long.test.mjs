@@ -14,9 +14,9 @@ function validFixture() {
   const p=65, level=106.0;
   c[p]={...c[p],open:105.7,high:level,low:105.6,close:105.8};
   for(let i=p-3;i<=p+3;i++) if(i!==p) c[i]={...c[i],high:105.85};
-  c[70]={...c[70],open:105.9,high:106.35,low:105.85,close:106.3,volume:150};
+  c[71]={...c[71],open:105.9,high:106.35,low:105.85,close:106.3,volume:150};
   // Keep the intervening closes above the broken level.
-  for(let i=71;i<79;i++) c[i]={...c[i],open:106.1,high:106.3,low:106.0,close:106.15};
+  for(let i=72;i<79;i++) c[i]={...c[i],open:106.1,high:106.3,low:106.0,close:106.15};
   c[79]={...c[79],open:105.9,high:106.3,low:105.5,close:106.2,volume:120};
   return c;
 }
