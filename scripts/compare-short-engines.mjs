@@ -352,3 +352,5 @@ async function main() {
   },null,2));
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Trigger the dedicated same-window SHORT comparison workflow; strategy copies remain unchanged.
