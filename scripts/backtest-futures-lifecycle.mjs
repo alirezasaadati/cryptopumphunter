@@ -450,7 +450,7 @@ async function main() {
     "| Eligible signal opportunities (before lock) | "+report.eligibleSignalOpportunities+" |",
     "| Signal-evaluation lifecycles started (not exchange fills) | "+metrics.tradesStarted+" |",
     "| Entry orders placed / filled / expired / invalidated | "+report.entryOrders.placed+" / "+report.entryOrders.filled+" / "+report.entryOrders.expired+" / "+report.entryOrders.invalidated+" |",
-    "| Entry fill rate | "+(report.entryOrders.placed?((report.entryOrders.filled/report.entryOrders.placed)*100).toFixed(2):"0.00")+"% |
+    "| Entry fill rate | "+(report.entryOrders.placed?((report.entryOrders.filled/report.entryOrders.placed)*100).toFixed(2):"0.00")+"% |",
     "| Closed trades | "+metrics.closedTrades+" |",
     "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
     "| Stop closes (including break-even exits) | "+metrics.stopCloses+" |",
