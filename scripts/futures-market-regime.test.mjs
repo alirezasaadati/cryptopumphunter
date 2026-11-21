@@ -4,7 +4,7 @@ import { classifyMarketRegime, combineMarketRegimes, isSideAllowedByRegime } fro
 
 function trendCandles(direction = 1, count = 100) {
   return Array.from({ length: count }, (_, i) => {
-    const close = 100 + direction * i * 1.1;
+    const close = 300 + direction * i * 1.1;
     return { time: i * 3600000, open: close - direction * 0.25, high: close + 0.5, low: close - 0.5, close, volume: 100 };
   });
 }
