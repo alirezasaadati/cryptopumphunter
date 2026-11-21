@@ -249,18 +249,18 @@ function summarize(trades) {
 
 
 function backtestIndependentEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMinute, testStart, toMs) {
-  const trades=[];
-  const locks=new Map();
-  let fourIndex=0, fifteenIndex=0, opportunities={LONG:0,SHORT:0}, lockSkips={LONG:0,SHORT:0};
-  for(let i=60;i<oneHour.length-1;i++){
-    const signalBar=oneHour[i], signalCloseTime=signalBar.time+INTERVALS["1h"];
+  const trades=[],locks=new Map();
+  let fourIndex=0, opportunities={LONG:0,SHORT:0},lockSkips={LONG:0,SHORT:0};
+  for(let i=60;i<fifteenMinute.length-1;i++){
+    const signalBar=fifteenMinute[i],signalCloseTime=signalBar.time+INTERVALS["15m"];
     if(signalCloseTime<testStart||signalCloseTime>=toMs)continue;
     while(fourIndex<fourHour.length&&fourHour[fourIndex].time+INTERVALS["4h"]<=signalCloseTime)fourIndex++;
-    while(fifteenIndex<fifteenMinute.length&&fifteenMinute[fifteenIndex].time+INTERVALS["15m"]<=signalCloseTime)fifteenIndex++;
     const closed4h=fourHour.slice(0,fourIndex);
-    const closed15m=fifteenMinute.slice(Math.max(0,fifteenIndex-160),fifteenIndex);
+    const closed15m=fifteenMinute.slice(Math.max(0,i+1-160),i+1);
     if(closed4h.length<FUTURES_CONFIG.MIN_CANDLES||closed15m.length<40)continue;
-    const historicalQuoteVolume=oneHour.slice(Math.max(0,i-23),i+1).reduce((sum,candle)=>sum+Number(candle.volume)*Number(candle.close),0);
+    const eligibleHourIndex=lowerBound(oneHour,signalCloseTime)-1;
+    if(eligibleHourIndex<23)continue;
+    const historicalQuoteVolume=oneHour.slice(eligibleHourIndex-23,eligibleHourIndex+1).reduce((sum,candle)=>sum+Number(candle.volume)*Number(candle.close),0);
     if(!Number.isFinite(historicalQuoteVolume)||historicalQuoteVolume<FUTURES_CONFIG.MIN_QUOTE_VOLUME)continue;
     for(const side of ["LONG","SHORT"]){
       const candidate=analyzeIndependentSignal({side,candles4h:closed4h,candles15m:closed15m});
@@ -268,11 +268,11 @@ function backtestIndependentEngines(ticker, oneHour, fourHour, fifteenMinute, fi
       opportunities[side]++;
       const lockKey=ticker.symbol+"|"+side;
       if((locks.get(lockKey)||0)>signalCloseTime){lockSkips[side]++;continue;}
-      const entry=Number(oneHour[i+1].open), stop=Number(candidate.stop);
+      const fillIndex=lowerBound(fiveMinute,signalCloseTime),fillBar=fiveMinute[fillIndex];
+      if(!fillBar||fillBar.time>=toMs)continue;
+      const entry=Number(fillBar.open),stop=Number(candidate.stop);
       const distance=Math.abs((entry-stop)/entry)*100;
       if(!Number.isFinite(entry)||entry<=0||(side==="LONG"?stop>=entry:stop<=entry)||!Number.isFinite(distance)||distance<=0||distance>8)continue;
-      const fillIndex=lowerBound(fiveMinute,signalCloseTime), fillBar=fiveMinute[fillIndex];
-      if(!fillBar||fillBar.time>=toMs)continue;
       const trade={id:ticker.symbol+":"+side+":independent:"+signalCloseTime,symbol:ticker.symbol,side,status:"OPEN",engine:"independent-"+side.toLowerCase(),entry,signalEntry:candidate.entry,initialStop:stop,stop,signalTime:signalBar.time,entryTime:signalCloseTime,entryFillBarTime:fillBar.time,score:candidate.score,stopDistancePct:distance,ambiguousCandles:0,maxFavorableExcursionMarginPct:0,maxAdverseExcursionMarginPct:0,breakEvenActivated:false,setup:candidate.setup};
       let closed=false;
       for(let j=fillIndex;j<fiveMinute.length&&fiveMinute[j].time<toMs;j++){
@@ -296,7 +296,6 @@ function backtestIndependentEngines(ticker, oneHour, fourHour, fifteenMinute, fi
   }
   return {trades,opportunities,lockSkips};
 }
-
 async function backtestSymbol(ticker, fromMs, toMs) {
   const [oneHour,fourHour,fifteenMinute,fiveMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs),
