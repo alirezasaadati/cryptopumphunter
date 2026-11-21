@@ -6,6 +6,8 @@ on:
       - experimental/futures-backtest-60d
     paths:
       - "scripts/backtest-futures-bull-market.mjs"
+      - "scripts/futures-independent-signals.test.mjs"
+      - "src/futures-independent-signals.js"
       - ".github/workflows/futures-bull-market-backtest.yml"
   workflow_dispatch:
 
