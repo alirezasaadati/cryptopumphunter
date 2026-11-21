@@ -1,0 +1,24 @@
+# Dedicated Engine V5 Worker configuration.
+# Create a NEW D1 database and NEW R2 bucket before deployment.
+# Never point these bindings at the production bot's resources.
+
+name = "cryptopumphunter-engine-v5"
+main = "src/index.js"
+compatibility_date = "2026-11-19"
+
+[vars]
+ENGINE_STAGE = "foundation-only"
+ENGINE_MODE = "paper"
+
+[[d1_databases]]
+binding = "ENGINE_DB"
+database_name = "cryptopumphunter-engine-v5"
+database_id = "REPLACE_WITH_NEW_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "ENGINE_ARCHIVE"
+bucket_name = "cryptopumphunter-engine-v5-archive"
+
+# Deliberately no [[kv_namespaces]] binding.
+# Deliberately no production bot secrets or Durable Object bindings.
