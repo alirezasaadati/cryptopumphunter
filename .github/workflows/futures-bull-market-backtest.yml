@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
+      # Re-trigger full three-regime matrix after the prior run unexpectedly omitted bull.
       matrix:
         regime:
           - name: bull-2023-q4
