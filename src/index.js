@@ -1045,7 +1045,7 @@ async function handleCallback(query, env) {
     if (action === "invite") {
       await sendMessage(env, chatId,
         "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
-        "( برای بررسی دقیق علل سود و زیان هر کاربر ) کنید اقدام .\n\n" +
+        "( برای بررسی دقیق علل سود و زیان هر کاربر ) اقدام کنید .\n\n" +
         "🔗 لینک : https://www.lbk.pub/ref/67XF8", BACK_MENU);
       return;
     }
