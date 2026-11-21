@@ -6,6 +6,8 @@ on:
     paths:
       - 'src/futures-breakout-retest-long.js'
       - 'src/futures-breakout-retest-long-a.js'
+      - 'src/ema-pullback-long.js'
+      - 'scripts/ema-pullback-long.test.mjs'
       - 'scripts/futures-breakout-retest-long.test.mjs'
       - 'scripts/futures-breakout-retest-long-a.test.mjs'
       - '.github/workflows/breakout-retest-long-tests.yml'
