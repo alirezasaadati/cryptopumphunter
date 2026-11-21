@@ -1,0 +1,25 @@
+name: Backtest v4.8.0 account at 30 percent margin TP
+on:
+  push:
+    branches: [backtest/v480-account-30pct-20261122]
+    paths:
+      - "scripts/backtest-v480-account.mjs"
+      - "src/v480-engine.mjs"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run account simulation
+        run: node scripts/backtest-v480-account.mjs
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v480-account-30pct
+          path: artifacts/
+          if-no-files-found: warn
