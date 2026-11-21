@@ -11,6 +11,7 @@ const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
 const LEVERAGE = FUTURES_TRADE_LEVERAGE;
 const BREAK_EVEN_TRIGGER = Math.max(0, Number(process.env.LIFECYCLE_BREAK_EVEN_MARGIN_PCT || 0));
 const STRUCTURAL_STOP_MODE = String(process.env.LIFECYCLE_STRUCTURAL_STOP_MODE || "original").toLowerCase();
+const ENTRY_PULLBACK_PCT = Math.max(0, Math.min(5, Number(process.env.LIFECYCLE_ENTRY_PULLBACK_PCT || 0)));
 const STRUCTURAL_STOP_BUFFER_ATR = Math.max(0, Number(process.env.LIFECYCLE_STRUCTURAL_STOP_BUFFER_ATR || 0.2));
 const RISK_PER_TRADE_PCT = Math.max(0.01, Number(process.env.LIFECYCLE_RISK_PER_TRADE_PCT || 1));
 const FIXED_SYMBOLS = String(process.env.LIFECYCLE_BACKTEST_SYMBOL_LIST || "").split(",").map(x=>x.trim()).filter(Boolean);
@@ -242,6 +243,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
 
   const trades = [];
   const lockUntil = new Map();
+  const entryOrders={placed:0,filled:0,expired:0,invalidated:0};
   let fourIndex = 0, fifteenIndex = 0;
   let eligibleSignalOpportunities = 0, skippedByLock = 0, rejectedSignals = 0, rejectedByHistoricalVolume = 0, rejectedStructuralStops = 0;
   const testStart = toMs - DAYS * 86400000;
@@ -277,7 +279,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const lockKey = ticker.symbol + "|" + candidate.side;
     if ((lockUntil.get(lockKey) || 0) > signalCloseTime) { skippedByLock++; continue; }
 
-    const entry = Number(candidate.entry);
+    const signalEntry = Number(candidate.entry);
     let stop=Number(candidate.stop), protectivePivot=null, structuralAtr15m=null;
     if(STRUCTURAL_STOP_MODE==="pivot15m"){
       protectivePivot=findLatestProtectivePivot(closed15m,candidate.side,2,2);
@@ -286,41 +288,71 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       stop=candidate.side==="LONG"
         ? protectivePivot.price-structuralAtr15m*STRUCTURAL_STOP_BUFFER_ATR
         : protectivePivot.price+structuralAtr15m*STRUCTURAL_STOP_BUFFER_ATR;
-      const directionValid=candidate.side==="LONG"?stop<entry:stop>entry;
-      const distancePct=Math.abs((entry-stop)/entry)*100;
-      if(!directionValid||!Number.isFinite(distancePct)||distancePct<0.2||distancePct>8){rejectedStructuralStops++;continue;}
     }
+
+    const limitPrice = candidate.side==="LONG"
+      ? signalEntry*(1-ENTRY_PULLBACK_PCT/100)
+      : signalEntry*(1+ENTRY_PULLBACK_PCT/100);
+    entryOrders.placed++;
+    let fillIndex = lowerBound(fiveMinute,signalCloseTime);
+    let entry = signalEntry, fillBar = null, fillTime = signalCloseTime;
+    const expiresAt = signalCloseTime + FUTURES_CONFIG.SIGNAL_TTL_MINUTES*60000;
+    if(ENTRY_PULLBACK_PCT>0){
+      fillBar=null;
+      for(let j=fillIndex;j<fiveMinute.length&&fiveMinute[j].time<Math.min(expiresAt,toMs);j++){
+        const bar=fiveMinute[j];
+        const touched=candidate.side==="LONG"?bar.low<=limitPrice:bar.high>=limitPrice;
+        if(!touched)continue;
+        // A limit order receives price improvement if the 5m bar opens beyond its limit.
+        entry=candidate.side==="LONG"?Math.min(limitPrice,bar.open):Math.max(limitPrice,bar.open);
+        fillBar=bar;fillIndex=j;fillTime=bar.time;
+        break;
+      }
+      if(!fillBar){entryOrders.expired++;continue;}
+    } else {
+      fillBar=fiveMinute[fillIndex]||null;
+      if(!fillBar||fillBar.time>=toMs){entryOrders.expired++;continue;}
+    }
+
+    const directionValid=candidate.side==="LONG"?stop<entry:stop>entry;
+    const stopDistancePct=Math.abs((entry-stop)/entry)*100;
+    if(!directionValid||!Number.isFinite(stopDistancePct)||stopDistancePct<=0||stopDistancePct>8){
+      entryOrders.invalidated++;
+      continue;
+    }
+    entryOrders.filled++;
     const trade = {
       id: ticker.symbol + ":" + candidate.side + ":" + signalCloseTime,
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
-      entry, initialStop: stop, stop,
+      entry, signalEntry, requestedLimitPrice:ENTRY_PULLBACK_PCT>0?limitPrice:null,
+      entryPullbackPct:ENTRY_PULLBACK_PCT, initialStop: stop, stop,
       protectivePivotPrice:protectivePivot?.price??null, structuralAtr15m,
       stopMode:STRUCTURAL_STOP_MODE,
-      signalTime: signalBar.time, entryTime: signalCloseTime,
-      score: candidate.score, stopDistancePct: Math.abs((entry-stop)/entry)*100, signalDiagnostics: signalDiagnostics(candidate,candidate.side,oneHour.slice(0,i+1),closed4h), ambiguousCandles: 0,
+      signalTime: signalBar.time, entryTime: fillTime,
+      entryFillBarTime:fillBar.time,
+      score: candidate.score, stopDistancePct, signalDiagnostics: signalDiagnostics(candidate,candidate.side,oneHour.slice(0,i+1),closed4h), ambiguousCandles: 0,
       maxFavorableExcursionMarginPct: 0, maxAdverseExcursionMarginPct: 0,
       breakEvenActivated: false
     };
-    let candleIndex = lowerBound(fiveMinute,signalCloseTime);
+    let candleIndex = ENTRY_PULLBACK_PCT>0?fillIndex:lowerBound(fiveMinute,signalCloseTime);
     let closed = false;
     for (; candleIndex < fiveMinute.length && fiveMinute[candleIndex].time < toMs; candleIndex++) {
       const bar = fiveMinute[candleIndex];
+      if (bar.time < fillTime) continue;
       if (candleAmbiguous(candidate.side,trade,bar)) trade.ambiguousCandles++;
       const evaluated = evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
       if (evaluated.changed) {
-        // Exclude the exit candle from excursions; for a target close only the known target is credited.
+        // Conservative: if the fill candle also touches the stop, count the fill and stop in that candle.
         if (evaluated.trade.status === "CLOSED_PROFIT") trade.maxFavorableExcursionMarginPct = Math.max(trade.maxFavorableExcursionMarginPct, TARGET);
         Object.assign(trade,evaluated.trade);
         trade.closedAtMs = bar.time + INTERVALS["5m"];
         closed = true;
         break;
       }
-      // Completed 5m bars strictly before the exit candle contribute to MAE/MFE.
       const excursion = excursionForBar(candidate.side,entry,bar);
       trade.maxFavorableExcursionMarginPct = Math.max(trade.maxFavorableExcursionMarginPct,excursion.favorable);
       trade.maxAdverseExcursionMarginPct = Math.max(trade.maxAdverseExcursionMarginPct,excursion.adverse);
       if (BREAK_EVEN_TRIGGER > 0 && !trade.breakEvenActivated && trade.maxFavorableExcursionMarginPct >= BREAK_EVEN_TRIGGER) {
-        // Activate only after the 5m candle closes; the entry stop is active from the next candle.
         trade.currentStop = entry;
         trade.breakEvenActivated = true;
       }
@@ -329,7 +361,6 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       trade.status = "OPEN_AT_BACKTEST_END";
       trade.lastMark = fiveMinute.at(-1)?.close ?? null;
       trade.marginReturnAtMarkPct = trade.lastMark ? (candidate.side==="LONG" ? 1 : -1) * ((trade.lastMark-entry)/entry) * 100 * LEVERAGE : null;
-      // Preserve the same-side lock through the sample end for still-open trades.
       lockUntil.set(lockKey,toMs);
     } else {
       lockUntil.set(lockKey,trade.closedAtMs);
@@ -341,7 +372,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     symbol:ticker.symbol,
     candles:{ "1h":oneHour.length, "4h":fourHour.length, "15m":fifteenMinute.length, "5m":fiveMinute.length },
     eligibleSignalOpportunities, skippedBySameSideLock:skippedByLock, rejectedSignals, rejectedByHistoricalVolume, rejectedStructuralStops,
-    metrics:summarize(trades), trades
+    entryOrders, metrics:summarize(trades), trades
   };
 }
 
@@ -387,6 +418,8 @@ async function main() {
       breakEvenTriggerMarginPct: BREAK_EVEN_TRIGGER,
       breakEvenRule: BREAK_EVEN_TRIGGER > 0 ? "after a completed 5m candle reaches the configured favorable margin return, move stop to entry for subsequent candles" : "disabled",
       structuralStopMode:STRUCTURAL_STOP_MODE, structuralStopBufferAtr15m:STRUCTURAL_STOP_BUFFER_ATR,
+      entryPullbackPct:ENTRY_PULLBACK_PCT, entryOrderExpiryMinutes:FUTURES_CONFIG.SIGNAL_TTL_MINUTES,
+      entryExecutionRule:ENTRY_PULLBACK_PCT>0?"limit at signal entry adjusted by pullback; fill only if a subsequent 5m candle touches within the live 60-minute signal TTL; price improvement at candle open; unfilled orders expire; same-candle fill/stop is counted conservatively as a filled stop":"market-style baseline at next 1h open; no limit wait",
       structuralStopPivotRule:"latest confirmed 15m protective swing pivot with 2 candles left/right; LONG uses swing low, SHORT uses swing high",
       positionSizingModel:"fixed risk per trade; normalized return = realized price move / initial stop distance × risk percentage; additive, not compounded; aggregate simultaneous open risk is not capped",
       scheduler:"live Worker cron is every 5 minutes; this runner does not yet replay each 5-minute scan, so repeated intra-hour scan/TTL behavior is not represented",
@@ -401,6 +434,7 @@ async function main() {
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
     rejectedByHistoricalVolume:successful.reduce((n,r)=>n+r.rejectedByHistoricalVolume,0),
     rejectedStructuralStops:successful.reduce((n,r)=>n+r.rejectedStructuralStops,0),
+    entryOrders:successful.reduce((a,r)=>({placed:a.placed+r.entryOrders.placed,filled:a.filled+r.entryOrders.filled,expired:a.expired+r.entryOrders.expired,invalidated:a.invalidated+r.entryOrders.invalidated}),{placed:0,filled:0,expired:0,invalidated:0}),
     trades:allTrades
   };
   await mkdir("artifacts",{recursive:true});
@@ -412,6 +446,8 @@ async function main() {
     "| Metric | Result |","|---|---:|",
     "| Eligible signal opportunities (before lock) | "+report.eligibleSignalOpportunities+" |",
     "| Signal-evaluation lifecycles started (not exchange fills) | "+metrics.tradesStarted+" |",
+    "| Entry orders placed / filled / expired / invalidated | "+report.entryOrders.placed+" / "+report.entryOrders.filled+" / "+report.entryOrders.expired+" / "+report.entryOrders.invalidated+" |",
+    "| Entry fill rate | "+(report.entryOrders.placed?((report.entryOrders.filled/report.entryOrders.placed)*100).toFixed(2):"0.00")+"% |
     "| Closed trades | "+metrics.closedTrades+" |",
     "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
     "| Stop closes (including break-even exits) | "+metrics.stopCloses+" |",
@@ -438,7 +474,7 @@ async function main() {
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
   await writeFile("artifacts/futures-lifecycle-backtest.md",rows.join("\n"));
-  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,diagnosticSummary,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals,rejectedStructuralStops:report.rejectedStructuralStops},null,2));
+  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,diagnosticSummary,entryOrders:report.entryOrders,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals,rejectedStructuralStops:report.rejectedStructuralStops},null,2));
   if (!successful.length) process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
