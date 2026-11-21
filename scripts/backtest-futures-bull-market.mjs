@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
 import { analyzeIndependentSignal } from "../src/futures-independent-signals.js";
-import { classifyRegimeSet, isSideAllowedByRegime } from "./futures-market-regime.mjs";
+import { classifyRegimeSet } from "./futures-market-regime.mjs";
 import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARGET_PERCENT } from "../src/futures-trade-lifecycle.js";
 
 const BASE = "https://futures.kraken.com";
@@ -401,6 +401,19 @@ function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMi
       symbolRegimeKey = nextSymbolRegimeKey;
     }
     const regimeContext = { btc: cachedBtcRegimes, symbol: cachedSymbolRegimes };
+    // True pre-signal gate: only compare engines when BTC 1h+4h and the symbol 4h
+    // agree on direction. Neutral/conflicting regimes produce no signal and do not
+    // consume an engine lock. The selected direction is fixed before either engine runs.
+    const btcGate = cachedBtcRegimes["1h+4h"];
+    const symbolGate = cachedSymbolRegimes["4h"];
+    if (!btcGate || !symbolGate ||
+        !["BULL", "BEAR"].includes(btcGate.direction) ||
+        btcGate.direction !== symbolGate.direction) continue;
+    const permittedSide = btcGate.direction === "BULL" ? "LONG" : "SHORT";
+    const regimeBucket = btcGate.direction + "_" +
+      (btcGate.strength === "STRONG" && symbolGate.strength === "STRONG" ? "STRONG" : "WEAK");
+    regimeContext.selected = { btcTimeframe: "1h+4h", symbolTimeframe: "4h",
+      direction: btcGate.direction, regime: regimeBucket, permittedSide };
     const lastHour = closed1h.at(-1);
     const historicalQuoteVolume = closed1h.slice(-24).reduce((sum, candle) => sum + Number(candle.volume) * Number(candle.close), 0);
     if (!Number.isFinite(historicalQuoteVolume) || historicalQuoteVolume < FUTURES_CONFIG.MIN_QUOTE_VOLUME) continue;
@@ -413,13 +426,13 @@ function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMi
     };
     try {
       const current = analyzeFuturesSymbol(tickerAtSignal, closed1h, closed4h, closed15m);
-      if (current?.eligible === true && ["LONG", "SHORT"].includes(current.side)) {
+      if (current?.eligible === true && current.side === permittedSide) {
         emit("current-matched", current.side, current, signalCloseTime, signalBar, closed15m, historicalQuoteVolume, regimeContext);
       }
     } catch {}
 
     // Independent engine uses the exact same signal timestamp, fill candle and stop/exit rules.
-    for (const side of ["LONG", "SHORT"]) {
+    for (const side of [permittedSide]) {
       const candidate = analyzeIndependentSignal({ side, candles4h: closed4h, candles15m: closed15m });
       if (candidate) emit("new-matched", side, candidate, signalCloseTime, signalBar, closed15m, historicalQuoteVolume, regimeContext);
     }
@@ -616,17 +629,15 @@ async function main() {
   const engineComparison={currentLong:{...metrics.bySide.LONG},independentLong:{...independentMetrics.bySide.LONG},currentShort:{...metrics.bySide.SHORT},independentShort:{...independentMetrics.bySide.SHORT}};
   const regimeTimeframes = ["1h","4h","1d","1h+4h","4h+1d"];
   const regimeEvaluation = {};
-  for (const btcTf of regimeTimeframes) for (const symbolTf of regimeTimeframes) {
-    const accepted = matchedTrades.filter(t => isSideAllowedByRegime(t.side, t.regimeContext?.btc?.[btcTf]) && isSideAllowedByRegime(t.side, t.regimeContext?.symbol?.[symbolTf]));
-    const currentRows = accepted.filter(t => t.engine === "current-matched");
-    const newRows = accepted.filter(t => t.engine === "new-matched");
-    const countByRegime = rows => Object.fromEntries(["BULL_STRONG","BULL_WEAK","BEAR_STRONG","BEAR_WEAK"].map(name => [name, rows.filter(t => t.regimeContext?.btc?.[btcTf]?.regime === name).length]));
-    regimeEvaluation[btcTf+"|"+symbolTf] = {
-      btcTimeframe: btcTf, symbolTimeframe: symbolTf,
-      acceptedSignals: accepted.length,
-      blockedByDirectionOrNeutral: matchedTrades.length - accepted.length,
+  for (const regime of ["BULL_STRONG","BULL_WEAK","BEAR_STRONG","BEAR_WEAK"]) {
+    const rows = matchedTrades.filter(t => t.regimeContext?.selected?.regime === regime);
+    const currentRows = rows.filter(t => t.engine === "current-matched");
+    const newRows = rows.filter(t => t.engine === "new-matched");
+    regimeEvaluation[regime] = {
+      btcTimeframe: "1h+4h", symbolTimeframe: "4h",
+      permittedSide: regime.startsWith("BULL") ? "LONG" : "SHORT",
       current: summarize(currentRows), new: summarize(newRows),
-      btcRegimeSignalCounts: countByRegime(accepted)
+      signals: rows.length
     };
   }
   const diagnosticSummary = Object.fromEntries(["CLOSED_PROFIT","CLOSED_STOP"].map(status => {
@@ -660,7 +671,7 @@ async function main() {
       historicalVolumeFilter:"per-signal rolling 24h estimate = sum(hourly base volume × hourly close); approximate quote turnover, not exact exchange ticker volume",},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
     metrics,independentMetrics,matchedMetrics,matchedTrades,engineComparison,
-    marketRegime:{version:"1.0.0",btcSymbol:"PF_XBTUSD",classificationUsesClosedCandlesOnly:true,neutralPolicy:"no trades",directionPolicy:"BULL permits LONG only; BEAR permits SHORT only",strengthThresholds:{adxProxyMin:22,emaSpreadPctMin:0.35,ema50SlopePctMin:0.08},timeframesCompared:regimeTimeframes,btcCandles:{"1h":btcCandles["1h"].length,"4h":btcCandles["4h"].length,"1d":btcCandles["1d"].length},evaluation:regimeEvaluation},independentOpportunities:{LONG:successful.reduce((n,r)=>n+(r.independentOpportunities?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentOpportunities?.SHORT||0),0)},independentLockSkips:{LONG:successful.reduce((n,r)=>n+(r.independentLockSkips?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentLockSkips?.SHORT||0),0)},diagnosticSummary,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.eligibleSignalOpportunities,0),
+    marketRegime:{version:"1.0.0",btcSymbol:"PF_XBTUSD",classificationUsesClosedCandlesOnly:true,executionGate:"pre-signal; BTC 1h+4h and symbol 4h must agree; neutral/conflicting blocks before engine evaluation and before lock use",neutralPolicy:"no trades",directionPolicy:"BULL permits LONG only; BEAR permits SHORT only",strengthThresholds:{adxProxyMin:22,emaSpreadPctMin:0.35,ema50SlopePctMin:0.08},selectedTimeframes:{btc:"1h+4h",symbol:"4h"},timeframesCompared:regimeTimeframes,btcCandles:{"1h":btcCandles["1h"].length,"4h":btcCandles["4h"].length,"1d":btcCandles["1d"].length},evaluation:regimeEvaluation},independentOpportunities:{LONG:successful.reduce((n,r)=>n+(r.independentOpportunities?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentOpportunities?.SHORT||0),0)},independentLockSkips:{LONG:successful.reduce((n,r)=>n+(r.independentLockSkips?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentLockSkips?.SHORT||0),0)},diagnosticSummary,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.eligibleSignalOpportunities,0),
     bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
