@@ -1,0 +1,55 @@
+name: Futures historical bull-market backtest
+
+on:
+  push:
+    branches:
+      - experimental/futures-backtest-60d
+    paths:
+      - "scripts/backtest-futures-bull-market.mjs"
+      - ".github/workflows/futures-bull-market-backtest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: futures-bull-market-backtest
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+        with:
+          ref: experimental/futures-backtest-60d
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run repository tests
+        run: npm test
+      - name: Run current-strategy bull-market backtest
+        env:
+          LIFECYCLE_BACKTEST_START_MS: "1696118400000"
+          LIFECYCLE_BACKTEST_END_MS: "1704067200000"
+          LIFECYCLE_BACKTEST_DAYS: "92"
+          LIFECYCLE_BACKTEST_SYMBOLS: "9"
+          LIFECYCLE_BREAK_EVEN_MARGIN_PCT: "0"
+          LIFECYCLE_STRUCTURAL_STOP_MODE: "original"
+          LIFECYCLE_ENTRY_PULLBACK_PCT: "0"
+          LIFECYCLE_RISK_PER_TRADE_PCT: "1"
+          LIFECYCLE_BACKTEST_SYMBOL_LIST: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_XRPUSD,PF_ADAUSD,PF_DOGEUSD,PF_LINKUSD,PF_LTCUSD,PF_BCHUSD"
+        run: node scripts/backtest-futures-bull-market.mjs
+      - name: Upload bull-market report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-current-strategy-bull-market-2023-q4
+          path: |
+            artifacts/futures-lifecycle-backtest.json
+            artifacts/futures-lifecycle-backtest.md
+          if-no-files-found: warn
+          retention-days: 30
