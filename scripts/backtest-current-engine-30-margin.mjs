@@ -4,7 +4,7 @@ import { analyzeFuturesSymbol, FUTURES_CONFIG, getKrakenFuturesUniverse } from "
 import { evaluateTradeCandle, marginReturnPercent, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARGET_PERCENT } from "../src/futures-trade-lifecycle.js";
 
 const API = "https://futures.kraken.com/api/charts/v1";
-const MS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
+const MS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000 };
 const DAYS = Number(process.env.CURRENT_ENGINE_BACKTEST_DAYS || 60);
 const MARGIN_USD = 10;
 const LEVERAGE = FUTURES_TRADE_LEVERAGE;
@@ -43,7 +43,7 @@ async function fetchCandles(symbol, resolution, fromMs, toMs) {
     if (!Array.isArray(data.candles)) throw new Error("Missing " + resolution + " candles for " + symbol);
     for (const row of data.candles) {
       const candle = {
-        time: Number(row.time), open: Number(row.open), high: Number(row.high),
+        time: Number(row.time) < 1e12 ? Number(row.time) * 1000 : Number(row.time), open: Number(row.open), high: Number(row.high),
         low: Number(row.low), close: Number(row.close), volume: Number(row.volume)
       };
       if (Number.isFinite(candle.time) &&
