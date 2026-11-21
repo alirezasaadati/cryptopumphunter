@@ -243,7 +243,7 @@ async function main() {
   await writeFile("artifacts/futures-lifecycle-backtest.json",JSON.stringify(report,null,2));
   const rows = [
     "# Futures lifecycle historical backtest","",
-    "Period: "+report.period.from+" — "+report.period.to+" ("+DAYS+" days)",
+    "Period: "+report.period.from+" — "+report.period.to+" ("+report.period.days+" days)",
     "Symbols tested: "+report.symbolsTested+"/"+SYMBOL_LIMIT,"",
     "| Metric | Result |","|---|---:|",
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
