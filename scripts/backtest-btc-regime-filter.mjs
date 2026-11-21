@@ -135,7 +135,7 @@ function summarize(trades) {
   };
 }
 function simulateTrade(ticker, candidate, signalBar, signalCloseTime, fiveMinute, toMs) {
-  const entry=Number(candidate.entry)*(1+SLIPPAGE_PER_SIDE);
+  const entry=Number(candidate.entry)*(candidate.side==="LONG"?1+SLIPPAGE_PER_SIDE:1-SLIPPAGE_PER_SIDE);
   const trade={
     id:ticker.symbol+":"+candidate.side+":"+signalCloseTime,symbol:ticker.symbol,side:candidate.side,status:"OPEN",
     entry,actualEntry:entry,initialStop:Number(candidate.stop),stop:Number(candidate.stop),
@@ -148,7 +148,7 @@ function simulateTrade(ticker, candidate, signalBar, signalCloseTime, fiveMinute
     const evaluated=evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
     if(evaluated.changed){
       Object.assign(trade,evaluated.trade);
-      const exitFill=Number(trade.exitPrice)*(1-SLIPPAGE_PER_SIDE);
+      const exitFill=Number(trade.exitPrice)*(candidate.side==="LONG"?1-SLIPPAGE_PER_SIDE:1+SLIPPAGE_PER_SIDE);
       const netMovePct=((exitFill-entry)/entry)*100*(candidate.side==="LONG"?1:-1);
       trade.exitFill=exitFill;
       trade.marginReturnPercent=netMovePct*LEVERAGE-(FEE_PER_SIDE*2*100*LEVERAGE);
