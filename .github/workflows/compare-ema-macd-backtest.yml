@@ -1,0 +1,40 @@
+name: EMA MACD RSI comparison backtest
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/compare-ema-macd-backtest.mjs"
+      - ".github/workflows/compare-ema-macd-backtest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Run repository tests
+        run: npm test
+      - name: Run 60-day 24-symbol comparison
+        env:
+          BACKTEST_DAYS: "60"
+          BACKTEST_SYMBOLS: "24"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+        run: node scripts/compare-ema-macd-backtest.mjs
+      - name: Upload comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ema-macd-vs-current-backtest
+          path: artifacts/
+          if-no-files-found: warn
