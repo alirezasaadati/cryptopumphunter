@@ -355,7 +355,7 @@ async function main() {
     "| Stop closes (including break-even exits) | "+metrics.stopCloses+" |",
     "| Loss stop closes | "+metrics.lossStopCloses+" |",
     "| Break-even activated trades | "+metrics.breakEvenActivatedTrades+" |",
-    "| Break-even exits | "+metrics.breakEvenStopCloses+" |
+    "| Break-even exits | "+metrics.breakEvenStopCloses+" |,
     "| Open at end | "+metrics.openAtEnd+" |",
     "| LONG / SHORT | "+metrics.longs+" / "+metrics.shorts+" |",
     "| Win rate | "+metrics.winRatePct.toFixed(2)+"% |",
