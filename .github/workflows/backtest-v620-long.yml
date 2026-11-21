@@ -1,0 +1,30 @@
+name: v6.2.0 LONG-only multi-period historical backtest
+
+on:
+  push:
+    branches: [backtest/v620-long-engine-20261122]
+    paths:
+      - "scripts/backtest-v620-long.mjs"
+      - "src/v62-long-engine.mjs"
+      - ".github/workflows/backtest-v620-long.yml"
+
+jobs:
+  backtest-long:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run multi-symbol v6.2.0 LONG-only historical backtest
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: node scripts/backtest-v620-long.mjs
+      - name: Upload v6.2.0 LONG backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v620-long-historical-backtest
+          path: artifacts/v620-long-backtest.*
+          if-no-files-found: warn
