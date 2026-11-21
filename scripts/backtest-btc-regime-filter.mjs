@@ -67,7 +67,11 @@ async function fetchHistoricalCandles(symbol, resolution, fromMs, toMs) {
   return [...byTime.values()].sort((a,b)=>a.time-b.time);
 }
 
-function historicalChange(candles, index) {\n  const old=candles[index-24],now=candles[index];\n  return !old||old.close<=0?0:((now.close/old.close)-1)*100;\n}\nfunction ema(values, period) {
+function historicalChange(candles, index) {
+  const old=candles[index-24],now=candles[index];
+  return !old||old.close<=0?0:((now.close/old.close)-1)*100;
+}
+function ema(values, period) {
   if (values.length < period) return null;
   const k = 2 / (period + 1);
   let value = values.slice(0,period).reduce((a,b)=>a+b,0) / period;
