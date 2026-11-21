@@ -6,10 +6,10 @@ function rising(n=100,start=100,step=.12){
   return Array.from({length:n},(_,i)=>{const c=start+i*step;return{time:i*900000,open:c-.03,high:c+.12,low:c-.12,close:c,volume:100};});
 }
 function fixture(){
-  const candles=rising(80,100,.15);
+  const candles=rising(80,100,.01);
   const p=candles.at(-1);
   p.open=p.close-.12;p.low=p.close-.18;p.high=p.close+.05;
-  const btcCandles=rising(80,300,.2);
+  const btcCandles=rising(80,300,.02);
   return {symbol:"TEST-PERP",candles,btcCandles};
 }
 test("engine is independently versioned",()=>assert.equal(EMA20_PULLBACK_LONG_VERSION,"1.0.0"));
