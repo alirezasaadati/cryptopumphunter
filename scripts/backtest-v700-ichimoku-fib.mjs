@@ -90,8 +90,8 @@ function simulate(candles, signalIndex, setup, targetR) {
   return finish(gross>0?"OPEN_WIN":gross<0?"OPEN_LOSS":"BREAKEVEN",gross,last.close,entry,risk,last.time,candles.length-1-signalIndex);
 }
 function finish(outcome,grossR,exit,entry,risk,exitTime,holdBars){
-  const costs=(entry*(FEE_RATE+SLIPPAGE_RATE)+exit*(FEE_RATE+SLIPPAGE_RATE))*2/risk;
-  // Cost model: round-trip taker fee + adverse slippage on both legs.
+  const costs=(entry*(FEE_RATE+SLIPPAGE_RATE)+exit*(FEE_RATE+SLIPPAGE_RATE))/risk;
+  // Cost model: round-trip taker fee + adverse slippage on entry and exit.
   return {outcome,grossR,netR:grossR-costs,entry,exit,risk,exitTime,holdBars,costR:costs};
 }
 function summarize(trades){
@@ -114,18 +114,18 @@ for(const period of PERIODS){
       const candles=all.filter(c=>c.time>=fetchStart&&c.time<fetchEnd);
       if(candles.length<CFG.MIN_CANDLES+5){failures.push({period:period.name,symbol,error:`Only ${candles.length} candles`});continue;}
       const tradesByTarget={2:[],3.5:[]};
-      let blockedUntil=-1;
-      for(let i=CFG.MIN_CANDLES-1;i<candles.length-1;i++){
-        if(candles[i].time<start||candles[i].time>=end||i<=blockedUntil) continue;
-        const setup=analyzeAt(symbol,candles.slice(0,i+1));
-        if(!setup) continue;
-        const t1=simulate(candles,i,setup,CFG.TARGET_1_R);
-        const t2=simulate(candles,i,setup,CFG.TARGET_2_R);
-        if(!t1||!t2) continue;
-        tradesByTarget[2].push({...t1,symbol,period:period.name,signalTime:setup.signalTime});
-        tradesByTarget[3.5].push({...t2,symbol,period:period.name,signalTime:setup.signalTime});
-        // Avoid overlapping positions in the same symbol. Use the longer simulated holding time.
-        blockedUntil=i+Math.max(t1.holdBars,t2.holdBars);
+      for(const targetR of [CFG.TARGET_1_R,CFG.TARGET_2_R]){
+        let blockedUntil=-1;
+        for(let i=CFG.MIN_CANDLES-1;i<candles.length-1;i++){
+          if(candles[i].time<start||candles[i].time>=end||i<=blockedUntil) continue;
+          const setup=analyzeAt(symbol,candles.slice(0,i+1));
+          if(!setup) continue;
+          const trade=simulate(candles,i,setup,targetR);
+          if(!trade) continue;
+          tradesByTarget[targetR].push({...trade,symbol,period:period.name,signalTime:setup.signalTime});
+          // Keep each target's trade stream independent; no overlapping positions per symbol.
+          blockedUntil=i+trade.holdBars;
+        }
       }
       for(const [target,trades] of Object.entries(tradesByTarget)){
         results.push({period:period.name,symbol,targetR:Number(target),...summarize(trades),tradeDetails:trades});
