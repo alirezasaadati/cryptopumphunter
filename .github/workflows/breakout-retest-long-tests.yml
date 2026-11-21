@@ -5,7 +5,9 @@ on:
       - experimental/breakout-retest-long
     paths:
       - 'src/futures-breakout-retest-long.js'
+      - 'src/futures-breakout-retest-long-a.js'
       - 'scripts/futures-breakout-retest-long.test.mjs'
+      - 'scripts/futures-breakout-retest-long-a.test.mjs'
       - '.github/workflows/breakout-retest-long-tests.yml'
   workflow_dispatch:
 jobs:
