@@ -5,15 +5,19 @@ import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARG
 const BASE = "https://futures.kraken.com";
 const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
 const PERIODS = [
-  { name: "LONG_bullish", side: "LONG", start: "2024-10-01T00:00:00Z", end: "2024-11-30T00:00:00Z" },
-  { name: "SHORT_bearish", side: "SHORT", start: "2025-02-01T00:00:00Z", end: "2025-04-02T00:00:00Z" }
+  { name: "LONG_bull_2024_Q1", side: "LONG", start: "2024-02-01T00:00:00Z", end: "2024-04-01T00:00:00Z" },
+  { name: "LONG_bull_2025_Q2", side: "LONG", start: "2025-04-01T00:00:00Z", end: "2025-05-31T00:00:00Z" },
+  { name: "SHORT_bear_2024_Q3", side: "SHORT", start: "2024-07-01T00:00:00Z", end: "2024-08-30T00:00:00Z" },
+  { name: "SHORT_bear_2025_Q1", side: "SHORT", start: "2025-01-15T00:00:00Z", end: "2025-03-16T00:00:00Z" }
 ];
 const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 15;
-const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
+const TARGET = 17;
 const FEE_PER_SIDE = 0.0005;
 const SLIPPAGE_PER_SIDE = 0.0003;
-const LEVERAGE = FUTURES_TRADE_LEVERAGE;
+const LEVERAGE = 25;
+const STARTING_CAPITAL_USD = 100;
+const MARGIN_PER_TRADE_USD = 20;
 // Keep each policy isolated so the historical comparison never mutates production behavior.
 const VARIANTS = ["baseline", "btc_1h", "btc_1h_4h"];
 
@@ -145,13 +149,13 @@ function simulateTrade(ticker, candidate, signalBar, signalCloseTime, fiveMinute
   for(let i=lowerBound(fiveMinute,signalCloseTime);i<fiveMinute.length&&fiveMinute[i].time<toMs;i++){
     const bar=fiveMinute[i];
     if(candleAmbiguous(candidate.side,trade,bar))trade.ambiguousCandles++;
-    const evaluated=evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
+    const evaluated=evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]},{leverage:LEVERAGE,targetMarginPercent:TARGET});
     if(evaluated.changed){
       Object.assign(trade,evaluated.trade);
       const exitFill=Number(trade.exitPrice)*(candidate.side==="LONG"?1-SLIPPAGE_PER_SIDE:1+SLIPPAGE_PER_SIDE);
       const netMovePct=((exitFill-entry)/entry)*100*(candidate.side==="LONG"?1:-1);
       trade.exitFill=exitFill;
-      trade.marginReturnPercent=netMovePct*LEVERAGE-(FEE_PER_SIDE*2*100*LEVERAGE);
+      trade.marginReturnPercent=Math.max(-100,netMovePct*LEVERAGE-(FEE_PER_SIDE*2*100*LEVERAGE));
       trade.closedAtMs=bar.time+INTERVALS["5m"];
       closed=true;break;
     }
@@ -159,9 +163,55 @@ function simulateTrade(ticker, candidate, signalBar, signalCloseTime, fiveMinute
   if(!closed){
     trade.status="OPEN_AT_BACKTEST_END";
     trade.lastMark=fiveMinute.at(-1)?.close??null;
-    trade.marginReturnAtMarkPct=trade.lastMark?(candidate.side==="LONG"?1:-1)*((trade.lastMark-entry)/entry)*100*LEVERAGE:null;
+    if(trade.lastMark){const markFill=trade.lastMark*(candidate.side==="LONG"?1-SLIPPAGE_PER_SIDE:1+SLIPPAGE_PER_SIDE);const markMove=((markFill-entry)/entry)*100*(candidate.side==="LONG"?1:-1);trade.marginReturnAtMarkPct=Math.max(-100,markMove*LEVERAGE-(FEE_PER_SIDE*2*100*LEVERAGE));}else trade.marginReturnAtMarkPct=null;
   }
   return trade;
+}
+
+function portfolioSummary(allTrades, periodEndMs) {
+  const ordered=[...allTrades].sort((a,b)=>a.entryTime-b.entryTime||a.symbol.localeCompare(b.symbol));
+  let cash=STARTING_CAPITAL_USD;
+  const active=[];
+  const accepted=[];
+  let skippedInsufficientCapital=0;
+  const release=(position, markToMarket=false)=>{
+    const pct=markToMarket?Number(position.marginReturnAtMarkPct||0):Number(position.marginReturnPercent||0);
+    const pnl=Math.max(-MARGIN_PER_TRADE_USD,MARGIN_PER_TRADE_USD*pct/100);
+    cash+=MARGIN_PER_TRADE_USD+pnl;
+    position.portfolioPnlUsd=pnl;
+    position.portfolioReturnPct=pct;
+    position.portfolioMarkedAtEnd=markToMarket;
+  };
+  for(const trade of ordered){
+    for(let i=active.length-1;i>=0;i--){
+      if(active[i].closedAtMs!==null&&active[i].closedAtMs<=trade.entryTime){
+        release(active[i]);active.splice(i,1);
+      }
+    }
+    if(cash+1e-9<MARGIN_PER_TRADE_USD){skippedInsufficientCapital++;continue;}
+    cash-=MARGIN_PER_TRADE_USD;
+    accepted.push(trade);
+    active.push(trade);
+  }
+  for(const position of active){
+    if(position.status==="OPEN_AT_BACKTEST_END") release(position,true);
+    else release(position);
+  }
+  const wins=accepted.filter(t=>t.status==="CLOSED_PROFIT");
+  const stops=accepted.filter(t=>t.status==="CLOSED_STOP");
+  const open=accepted.filter(t=>t.status==="OPEN_AT_BACKTEST_END");
+  const winnerProfitUsd=wins.reduce((s,t)=>s+Math.max(0,Number(t.portfolioPnlUsd||0)),0);
+  const stopLossUsd=stops.reduce((s,t)=>s+Math.abs(Math.min(0,Number(t.portfolioPnlUsd||0))),0);
+  const netProfitUsd=cash-STARTING_CAPITAL_USD;
+  return {
+    startingCapitalUsd:STARTING_CAPITAL_USD,marginPerTradeUsd:MARGIN_PER_TRADE_USD,
+    leverage:LEVERAGE,targetMarginProfitPct:TARGET,targetGrossProfitUsd:MARGIN_PER_TRADE_USD*TARGET/100,
+    tradesTaken:accepted.length,tpTrades:wins.length,stopTrades:stops.length,openAtEnd:open.length,
+    skippedInsufficientCapital,winningTradesProfitUsd:winnerProfitUsd,stoppedTradesLossUsd:stopLossUsd,
+    netProfitUsd,finalAccountUsd:cash,accountGrowthPct:netProfitUsd/STARTING_CAPITAL_USD*100,
+    accountGrew:cash>STARTING_CAPITAL_USD,ambiguous5mCandles:accepted.reduce((n,t)=>n+(t.ambiguousCandles||0),0),
+    liquidationLossCap:"Each isolated $20 margin loss is capped at $20 (100% of allocated margin); exact Kraken liquidation price/maintenance tiers are not modeled."
+  };
 }
 
 async function backtestSymbol(ticker, period, fromMs, toMs, btc1h, btc4h) {
@@ -229,9 +279,9 @@ async function main(){
     }
     const successful=results.filter(r=>!r.error);
     const variants=Object.fromEntries(VARIANTS.map(v=>{
-      const trades=successful.flatMap(r=>r.state[v].trades).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
+      const trades=successful.flatMap(r=>r.state[v].trades).sort((a,b)=>a.entryTime-b.entryTime);
       return [v,{
-        metrics:summarize(trades),
+        metrics:portfolioSummary(trades,endMs),
         btcBlocked:successful.reduce((n,r)=>n+r.state[v].blockedByBtc,0),
         sameSideLockSkips:successful.reduce((n,r)=>n+r.state[v].skippedByLock,0),
         eligibleCandidates:successful.reduce((n,r)=>n+r.state[v].eligibleCandidates,0),
@@ -252,22 +302,22 @@ async function main(){
       btc_1h:"Block LONG when closed BTC 1h regime is BEARISH; block SHORT when BULLISH; NEUTRAL passes",
       btc_1h_4h:"Same directional block, but BTC regime is directional only when closed 1h and 4h regimes agree; otherwise NEUTRAL passes"
     },
-    rules:{leverage:LEVERAGE,targetMarginReturnPct:TARGET,feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
+    rules:{startingCapitalUsd:STARTING_CAPITAL_USD,marginPerTradeUsd:MARGIN_PER_TRADE_USD,leverage:LEVERAGE,targetMarginProfitPct:TARGET,feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
       entry:"signal on completed 1h/4h/15m candles; enter at next 1h open",exit:"5m OHLC lifecycle; stop-first on ambiguous candles",
       funding:"excluded",universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,periods:periodReports
   };
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/btc-regime-backtest.json",JSON.stringify(report,null,2));
-  const rows=["# BTC regime filter comparison","",
-    "Production code was not changed. LONG and SHORT were evaluated in separate directional market windows.","",
-    "| Period | Side | BTC change | Symbols | Variant | Eligible | BTC blocked | Trades | Wins | Stops | Win rate | Net margin ROI | Avg ROI/trade | Max DD |",
-    "|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"];
+  const rows=["# BTC regime filter comparison — fixed-capital account simulation","",
+    "Production code was not changed. Each period is simulated with $100 initial capital and fixed $20 margin per trade at 25x leverage; periods are evaluated independently.","",
+    "| Period | Side | BTC change | Symbols | Variant | Eligible | BTC blocked | Trades | TP | Stops | Skipped (capital) | Winner profit $ | Stop loss $ | Net P/L $ | Final $ | Growth |",
+    "|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"];
   for(const p of periodReports)for(const v of VARIANTS){
     const x=p.variants[v],m=x.metrics;
-    rows.push("| "+p.name+" | "+p.side+" | "+(p.btcMarketChangePct??0).toFixed(2)+"% | "+p.symbolsTested+" | "+v+" | "+x.eligibleCandidates+" | "+x.btcBlocked+" | "+m.tradesStarted+" | "+m.profitCloses+" | "+m.stopCloses+" | "+m.winRatePct.toFixed(2)+"% | "+m.totalMarginReturnPct.toFixed(2)+"% | "+m.averageMarginReturnPct.toFixed(2)+"% | "+m.maxDrawdownMarginPct.toFixed(2)+"% |");
+    rows.push("| "+p.name+" | "+p.side+" | "+(p.btcMarketChangePct??0).toFixed(2)+"% | "+p.symbolsTested+" | "+v+" | "+x.eligibleCandidates+" | "+x.btcBlocked+" | "+m.tradesTaken+" | "+m.tpTrades+" | "+m.stopTrades+" | "+m.skippedInsufficientCapital+" | $"+m.winningTradesProfitUsd.toFixed(2)+" | $"+m.stoppedTradesLossUsd.toFixed(2)+" | $"+m.netProfitUsd.toFixed(2)+" | $"+m.finalAccountUsd.toFixed(2)+" | "+m.accountGrowthPct.toFixed(2)+"% |");
   }
-  rows.push("","BTC 1h regime: EMA20/EMA50 alignment plus close relative to EMA20. BTC 4h regime: EMA20/EMA50 alignment. The multi-timeframe variant only declares BULLISH/BEARISH when 1h and 4h agree; all other cases are NEUTRAL and pass through.",
+  rows.push("","BTC 1h regime: EMA20/EMA50 alignment plus close relative to EMA20. BTC 4h regime: EMA20/EMA50 alignment. The multi-timeframe variant only declares BULLISH/BEARISH when 1h and 4h agree; all other cases are NEUTRAL and pass through.",\n    "Portfolio: $100 initial capital, fixed $20 isolated margin per trade, 25x leverage, 17% gross margin TP ($3.40 gross per winner). Trades are accepted chronologically only when $20 free cash is available. Stop losses are capped at 100% of that trade margin; exact liquidation tiers are not modeled.",
     "Limitations: current top-volume universe creates survivorship/listing bias; funding and liquidation are excluded; 5m OHLC cannot identify intrabar path; ambiguous candles use stop-first; results are historical and not a guarantee.");
   await writeFile("artifacts/btc-regime-backtest.md",rows.join("\n"));
   console.log(JSON.stringify({ok:periodReports.every(p=>p.symbolsTested>0),periods:periodReports.map(p=>({name:p.name,side:p.side,btcMarketChangePct:p.btcMarketChangePct,symbolsTested:p.symbolsTested,variants:Object.fromEntries(VARIANTS.map(v=>[v,p.variants[v].metrics]))})),errors:periodReports.map(p=>p.symbolErrors)},null,2));
