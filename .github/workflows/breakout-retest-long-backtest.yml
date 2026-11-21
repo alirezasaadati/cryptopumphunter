@@ -17,6 +17,7 @@ on:
       - "scripts/backtest-breakout-retest-long.mjs"
       - "scripts/backtest-breakout-retest-long.test.mjs"
       - "scripts/backtest-kraken-short-regime.mjs"
+      - "scripts/backtest-current-engine-30-margin.mjs"
       - ".github/workflows/breakout-retest-long-backtest.yml"
 jobs:
   backtest:
@@ -35,6 +36,10 @@ jobs:
         run: node scripts/backtest-breakout-retest-long.mjs
       - name: Run isolated 60-day bearish-regime SHORT backtest
         run: node scripts/backtest-kraken-short-regime.mjs
+      - name: Run full current Production engine 30% margin ROI backtest
+        env:
+          CURRENT_ENGINE_BACKTEST_DAYS: "60"
+        run: node scripts/backtest-current-engine-30-margin.mjs
       - name: Upload comparison reports
         if: always()
         uses: actions/upload-artifact@v4
