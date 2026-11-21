@@ -1383,7 +1383,9 @@ const FUTURES_CONFIG = {
   MAX_ENTRY_EMA_DISTANCE_ATR: 3.0,
   MAX_PULLBACK_DISTANCE_ATR: 0.35,
   MAX_RECLAIM_EXTENSION_ATR: 3.0,
-  MAX_BREAKOUT_DISTANCE_PCT: 0.3
+  // Separate breakout distance limits: relax LONG only; preserve SHORT at 0.3%.
+  MAX_BREAKOUT_DISTANCE_PCT_LONG: 0.5,
+  MAX_BREAKOUT_DISTANCE_PCT_SHORT: 0.3
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
@@ -1657,8 +1659,11 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     const breakoutDistancePct = side === "LONG"
       ? (breakoutEntryPrice - breakoutPivot.price) / breakoutPivot.price * 100
       : (breakoutPivot.price - breakoutEntryPrice) / breakoutPivot.price * 100;
+    const maxBreakoutDistancePct = side === "LONG"
+      ? FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT_LONG
+      : FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT_SHORT;
     if (!Number.isFinite(breakoutDistancePct) || breakoutDistancePct < 0 ||
-        breakoutDistancePct > FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT) {
+        breakoutDistancePct > maxBreakoutDistancePct) {
       return {
         symbol: ticker.symbol,
         side,
@@ -1666,11 +1671,13 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
         breakoutDiagnostics: {
           pivot: breakoutPivot,
           signedDistancePct: breakoutDistancePct,
-          maxDistancePct: FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT
+          maxDistancePct: maxBreakoutDistancePct
         }
       };
     }
-    reasons.push("فاصله قیمت از پیوت شکست ۱۵دقیقه‌ای حداکثر ۰٫۳٪ است");
+    reasons.push(side === "LONG"
+      ? "فاصله قیمت از پیوت شکست ۱۵دقیقه‌ای حداکثر ۰٫۵٪ است"
+      : "فاصله قیمت از پیوت شکست ۱۵دقیقه‌ای حداکثر ۰٫۳٪ است");
   }
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
