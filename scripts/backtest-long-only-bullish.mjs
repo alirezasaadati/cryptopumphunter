@@ -194,8 +194,10 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     trades.push(trade);
   }
 
+  const periodCandles = oneHour.filter(c => c.time >= START_MS && c.time < END_MS);
+  const marketChangePct = periodCandles.length >= 2 ? ((periodCandles.at(-1).close / periodCandles[0].close) - 1) * 100 : null;
   return {
-    symbol:ticker.symbol,
+    symbol:ticker.symbol, marketChangePct,
     candles:{ "1h":oneHour.length, "4h":fourHour.length, "15m":fifteenMinute.length, "5m":fiveMinute.length },
     signalsAccepted:acceptedSignals, skippedBySameSideLock:skippedByLock, rejectedSignals,
     metrics:summarize(trades), trades
@@ -228,7 +230,7 @@ async function main() {
     rules:{side:"LONG only",leverage:LEVERAGE,targetMarginReturnPct:TARGET,requiredFavorablePriceMovePct:TARGET/LEVERAGE,feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
       exit:"close only at +30% margin return or configured stop",tp1Tp2Tp3:"ignored for closing",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
-      fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
+      fees:"included: 0.05% per side; net margin return subtracts round-trip fees",funding:"excluded",
       execution:"LONG-only eligible signal from closed 1h/4h/15m candles; adverse 0.03% entry/exit slippage; exits evaluated on subsequent 5m OHLC",
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
@@ -260,9 +262,11 @@ async function main() {
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
     "| Same-side lock skips | "+report.lockSkips+" |",
     "| Rejected signal opportunities | "+report.rejectedSignals+" |","",
-    "| Symbol | Signals | Closed | Profit | Stop | LONG | SHORT | Net margin % |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|",
-    ...successful.map(r=>"| "+r.symbol+" | "+r.signalsAccepted+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.longs+" | "+r.metrics.shorts+" | "+r.metrics.totalMarginReturnPct.toFixed(2)+" |"),
+    "BTC market change during test: "+(successful[0]?.marketChangePct == null ? "n/a" : successful[0].marketChangePct.toFixed(2)+"%"),
+    "",
+    "| Symbol | BTC period change | LONG signals | Trades | TP +30% margin | Direct stops | Net margin % |",
+    "|---|---:|---:|---:|---:|---:|---:|",
+    ...successful.map(r=>"| "+r.symbol+" | "+(r.marketChangePct == null ? "n/a" : r.marketChangePct.toFixed(2)+"%")+" | "+r.signalsAccepted+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.totalMarginReturnPct.toFixed(2)+" |"),
     "", "Limitations: 5m OHLC cannot identify intrabar path; ambiguous candles use stop-first. Stop execution is assumed at the stop or gap open. Funding and liquidation are excluded. Fees (0.05% per side) and slippage (0.03% per side) are included. Only the current BTC perpetual contract is tested; contract-history limitations may apply.",
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
