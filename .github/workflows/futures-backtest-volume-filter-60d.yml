@@ -35,7 +35,7 @@ jobs:
         env:
           LIFECYCLE_BACKTEST_DAYS: "60"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
-          LIFECYCLE_BACKTEST_END_MS: "1795274998724"
+          LIFECYCLE_BACKTEST_END_MS: "1790090998724"
           LIFECYCLE_SHORT_MAX_VOLUME_RATIO: "2"
         run: node scripts/backtest-futures-volume-filter.mjs
       - name: Upload experiment report
