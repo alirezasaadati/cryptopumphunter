@@ -1,0 +1,180 @@
+name: MTF Futures Engine Tests and Backtests
+on:
+  push:
+    branches: [experiment/mtf-futures-engine]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/mtf-futures-engine.js'
+      - 'scripts/mtf-futures-engine.test.mjs'
+      - 'scripts/backtest-mtf-futures.mjs'
+      - '.github/workflows/mtf-futures-engine.yml'
+permissions:
+  contents: read
+jobs:
+  validate-and-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check src/mtf-futures-engine.js
+      - run: node --check scripts/backtest-mtf-futures.mjs
+      - run: node --test scripts/mtf-futures-engine.test.mjs
+      - name: 30-day baseline backtest
+        run: BACKTEST_DAYS=30 BACKTEST_SYMBOLS=10 node scripts/backtest-mtf-futures.mjs
+      - name: Preserve 30-day baseline report
+        run: mkdir -p artifacts/30d && cp artifacts/mtf-futures-backtest.* artifacts/30d/
+      - name: 90-day baseline backtest
+        run: BACKTEST_DAYS=90 BACKTEST_SYMBOLS=10 node scripts/backtest-mtf-futures.mjs
+      - name: Preserve 90-day baseline report
+        run: mkdir -p artifacts/90d && cp artifacts/mtf-futures-backtest.* artifacts/90d/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtf-futures-baseline-reports
+          path: artifacts/
+          retention-days: 30
+  fixed-margin-target:
+    needs: validate-and-backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 90-day fixed 25% margin ROI backtest at 10x
+        env:
+          BACKTEST_DAYS: '90'
+          BACKTEST_SYMBOLS: '10'
+          BACKTEST_LEVERAGE: '10'
+          MTF_TARGET_MODE: MARGIN_ROI
+        run: node scripts/backtest-mtf-futures.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtf-fixed-25pct-margin-roi-10x
+          path: artifacts/mtf-futures-backtest.*
+          retention-days: 30
+  stop-risk-ablation:
+    needs: validate-and-backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - name: cap_1_00pct
+            max_risk: '0.0100'
+          - name: cap_1_25pct
+            max_risk: '0.0125'
+          - name: cap_1_50pct
+            max_risk: '0.0150'
+          - name: cap_1_75pct
+            max_risk: '0.0175'
+          - name: cap_2_00pct
+            max_risk: '0.0200'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 90-day 10x fixed-margin-target stop-risk cap backtest
+        env:
+          BACKTEST_DAYS: '90'
+          BACKTEST_SYMBOLS: '10'
+          BACKTEST_LEVERAGE: '10'
+          MTF_TARGET_MODE: MARGIN_ROI
+          MTF_MAX_RISK_PCT: ${{ matrix.max_risk }}
+        run: node scripts/backtest-mtf-futures.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtf-stop-risk-${{ matrix.name }}
+          path: artifacts/mtf-futures-backtest.*
+          retention-days: 30
+  entry-ablation:
+    needs: validate-and-backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - name: baseline
+            mode: BOTH
+            volume: '1.15'
+          - name: volume_1_00
+            mode: BOTH
+            volume: '1.00'
+          - name: volume_1_30
+            mode: BOTH
+            volume: '1.30'
+          - name: breakout_only
+            mode: BREAKOUT
+            volume: '1.15'
+          - name: reclaim_only
+            mode: RECLAIM
+            volume: '1.15'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 90-day entry variant backtest
+        env:
+          BACKTEST_DAYS: '90'
+          BACKTEST_SYMBOLS: '10'
+          MTF_ENTRY_MODE: ${{ matrix.mode }}
+          MTF_MIN_VOLUME_RATIO: ${{ matrix.volume }}
+        run: node scripts/backtest-mtf-futures.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtf-entry-${{ matrix.name }}
+          path: artifacts/mtf-futures-backtest.*
+          retention-days: 30
+
+  channel-controller-backtest:
+    needs: validate-and-backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - allocation: front_loaded
+            move_be: 'false'
+          - allocation: equal
+            move_be: 'false'
+          - allocation: back_loaded
+            move_be: 'false'
+          - allocation: front_loaded
+            move_be: 'true'
+          - allocation: equal
+            move_be: 'true'
+          - allocation: back_loaded
+            move_be: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check src/channel-controller.js
+      - run: node --check scripts/backtest-channel-controller.mjs
+      - run: node --test scripts/channel-controller.test.mjs
+      - name: 90-day channel-controller backtest
+        env:
+          BACKTEST_DAYS: '90'
+          BACKTEST_SYMBOLS: '10'
+          BACKTEST_LEVERAGE: '10'
+          CHANNEL_ALLOCATION: ${{ matrix.allocation }}
+          CHANNEL_MOVE_BE: ${{ matrix.move_be }}
+        run: node scripts/backtest-channel-controller.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: channel-controller-${{ matrix.allocation }}-be-${{ matrix.move_be }}
+          path: artifacts/mtf-futures-backtest.*
+          retention-days: 30
