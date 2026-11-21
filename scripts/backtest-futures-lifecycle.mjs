@@ -299,7 +299,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const expiresAt = signalCloseTime + FUTURES_CONFIG.SIGNAL_TTL_MINUTES*60000;
     if(ENTRY_PULLBACK_PCT>0){
       fillBar=null;
-      for(let j=fillIndex;j<fiveMinute.length&&fiveMinute[j].time<Math.min(expiresAt,toMs);j++){
+      for(let j=fillIndex;j<fiveMinute.length&&fiveMinute[j].time+INTERVALS["5m"]<=Math.min(expiresAt,toMs);j++){
         const bar=fiveMinute[j];
         const touched=candidate.side==="LONG"?bar.low<=limitPrice:bar.high>=limitPrice;
         if(!touched)continue;
@@ -349,9 +349,12 @@ async function backtestSymbol(ticker, fromMs, toMs) {
         closed = true;
         break;
       }
-      const excursion = excursionForBar(candidate.side,entry,bar);
-      trade.maxFavorableExcursionMarginPct = Math.max(trade.maxFavorableExcursionMarginPct,excursion.favorable);
-      trade.maxAdverseExcursionMarginPct = Math.max(trade.maxAdverseExcursionMarginPct,excursion.adverse);
+      // The fill candle is evaluated for stop/target safety, but its pre-fill path is unknowable; exclude it from MAE/MFE.
+      if(bar.time!==fillTime){
+        const excursion = excursionForBar(candidate.side,entry,bar);
+        trade.maxFavorableExcursionMarginPct = Math.max(trade.maxFavorableExcursionMarginPct,excursion.favorable);
+        trade.maxAdverseExcursionMarginPct = Math.max(trade.maxAdverseExcursionMarginPct,excursion.adverse);
+      }
       if (BREAK_EVEN_TRIGGER > 0 && !trade.breakEvenActivated && trade.maxFavorableExcursionMarginPct >= BREAK_EVEN_TRIGGER) {
         trade.currentStop = entry;
         trade.breakEvenActivated = true;
