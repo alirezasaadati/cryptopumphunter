@@ -1,0 +1,30 @@
+name: Compare production and v4.9.0 SHORT engines
+on:
+  push:
+    branches: [backtest/v490-signal-engine-20261122]
+    paths:
+      - "scripts/compare-short-engines.mjs"
+      - "src/current-main-engine.mjs"
+      - "src/v49-engine.mjs"
+jobs:
+  compare-short:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run same-window multi-symbol SHORT comparison
+        env:
+          BACKTEST_SYMBOL_LIMIT: "10"
+          BACKTEST_FEE_PER_SIDE: "0.0005"
+          BACKTEST_SLIPPAGE_PER_SIDE: "0.0003"
+        run: node scripts/compare-short-engines.mjs
+      - name: Upload comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: short-engine-same-window-comparison
+          path: artifacts/short-engine-same-window-comparison.*
+          if-no-files-found: warn
