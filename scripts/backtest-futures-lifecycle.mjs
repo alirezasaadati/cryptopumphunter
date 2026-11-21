@@ -92,8 +92,27 @@ function summarize(trades) {
   const longs = closed.filter(t => t.side === "LONG");
   const shorts = closed.filter(t => t.side === "SHORT");
   const sum = xs => xs.reduce((n,t)=>n+Number(t.marginReturnPercent || 0),0);
+  const stopLosses = stops.map(t => Math.abs(Number(t.marginReturnPercent || 0))).filter(Number.isFinite).sort((a,b)=>a-b);
+  const percentile = (values, p) => values.length ? values[Math.min(values.length-1, Math.ceil(p*values.length)-1)] : null;
+  const stopLossStats = {
+    count: stopLosses.length,
+    averageMarginLossPct: stopLosses.length ? stopLosses.reduce((a,b)=>a+b,0)/stopLosses.length : null,
+    medianMarginLossPct: percentile(stopLosses,0.5),
+    p90MarginLossPct: percentile(stopLosses,0.9),
+    minMarginLossPct: stopLosses.length ? stopLosses[0] : null,
+    maxMarginLossPct: stopLosses.length ? stopLosses.at(-1) : null,
+    buckets: {
+      under10: stopLosses.filter(x=>x<10).length,
+      from10To20: stopLosses.filter(x=>x>=10&&x<20).length,
+      from20To30: stopLosses.filter(x=>x>=20&&x<30).length,
+      from30To50: stopLosses.filter(x=>x>=30&&x<50).length,
+      from50To80: stopLosses.filter(x=>x>=50&&x<80).length,
+      atLeast80: stopLosses.filter(x=>x>=80).length
+    }
+  };
   return {
     tradesStarted: trades.length,
+    stopLossStats,
     closedTrades: closed.length,
     profitCloses: profits.length,
     stopCloses: stops.length,
@@ -166,7 +185,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
       entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
       signalTime: signalBar.time, entryTime: signalCloseTime,
-      score: candidate.score, ambiguousCandles: 0
+      score: candidate.score, stopDistancePct: Math.abs((entry-Number(candidate.stop))/entry)*100, ambiguousCandles: 0
     };
     let candleIndex = lowerBound(fiveMinute,signalCloseTime);
     let closed = false;
