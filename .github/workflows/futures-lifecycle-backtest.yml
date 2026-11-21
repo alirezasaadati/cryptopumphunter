@@ -2,7 +2,7 @@ name: Experimental futures lifecycle backtest
 on:
   workflow_dispatch:
   push:
-    branches: [feature/leveraged-profit-close-lifecycle]
+    branches: [experimental/futures-backtest-60d]
     paths:
       - "scripts/backtest-futures-lifecycle.mjs"
       - ".github/workflows/futures-lifecycle-backtest.yml"
@@ -19,7 +19,7 @@ jobs:
           node-version: 22
       - name: Run lifecycle historical backtest
         env:
-          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_DAYS: "60"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
         run: node scripts/backtest-futures-lifecycle.mjs
       - name: Upload lifecycle report
