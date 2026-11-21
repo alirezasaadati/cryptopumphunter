@@ -1,10 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
 import { analyzeIndependentSignal } from "../src/futures-independent-signals.js";
+import { classifyRegimeSet, isSideAllowedByRegime } from "./futures-market-regime.mjs";
 import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARGET_PERCENT } from "../src/futures-trade-lifecycle.js";
 
 const BASE = "https://futures.kraken.com";
-const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
+const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000 };
 const DAYS = Math.max(7, Math.min(180, Number(process.env.LIFECYCLE_BACKTEST_DAYS || 92)));
 const CONFIGURED_START_MS = Number(process.env.LIFECYCLE_BACKTEST_START_MS || 0);
 const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKTEST_SYMBOLS || 10)));
@@ -100,6 +101,20 @@ function historicalChange(candles, index) {
   const old = candles[index - 24], now = candles[index];
   return !old || old.close <= 0 ? 0 : ((now.close / old.close) - 1) * 100;
 }
+function aggregateDailyFrom4h(candles) {
+  const groups = new Map();
+  for (const candle of candles) {
+    const day = Math.floor(candle.time / 86400000) * 86400000;
+    if (!groups.has(day)) groups.set(day, []);
+    groups.get(day).push(candle);
+  }
+  return [...groups.entries()].filter(([, rows]) => rows.length === 6).map(([time, rows]) => ({
+    time, open: rows[0].open, high: Math.max(...rows.map(x => x.high)),
+    low: Math.min(...rows.map(x => x.low)), close: rows.at(-1).close,
+    volume: rows.reduce((sum, x) => sum + x.volume, 0)
+  })).sort((a,b) => a.time-b.time);
+}
+
 function lowerBound(candles, time) {
   let lo = 0, hi = candles.length;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (candles[mid].time < time) lo = mid + 1; else hi = mid; }
@@ -297,10 +312,10 @@ function backtestIndependentEngines(ticker, oneHour, fourHour, fifteenMinute, fi
   return {trades,opportunities,lockSkips};
 }
 
-function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMinute, testStart, toMs) {
+function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMinute, testStart, toMs, btcCandles) {
   const trades = [], locks = new Map();
-  let fourIndex = 0, hourIndex = 0;
-  const emit = (engine, side, candidate, signalCloseTime, signalBar, closed15m, historicalQuoteVolume) => {
+  let fourIndex = 0, hourIndex = 0, btc1hIndex = 0, btc4hIndex = 0, btc1dIndex = 0;
+  const emit = (engine, side, candidate, signalCloseTime, signalBar, closed15m, historicalQuoteVolume, regimeContext) => {
     const lockKey = engine + "|" + ticker.symbol + "|" + side;
     if ((locks.get(lockKey) || 0) > signalCloseTime) return;
     const fillIndex = lowerBound(fiveMinute, signalCloseTime);
@@ -324,7 +339,7 @@ function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMi
       maxFavorableExcursionMarginPct: 0, maxAdverseExcursionMarginPct: 0,
       breakEvenActivated: false,
       signalSetup: candidate.setup || candidate.reason || null,
-      historicalQuoteVolume
+      historicalQuoteVolume, regimeContext
     };
     let closed = false;
     for (let j = fillIndex; j < fiveMinute.length && fiveMinute[j].time < toMs; j++) {
@@ -367,7 +382,17 @@ function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMi
     const closed4h = fourHour.slice(0, fourIndex);
     const closed15m = fifteenMinute.slice(Math.max(0, i + 1 - 160), i + 1);
     const closed1h = oneHour.slice(0, hourIndex);
+    while (btc1hIndex < btcCandles["1h"].length && btcCandles["1h"][btc1hIndex].time + INTERVALS["1h"] <= signalCloseTime) btc1hIndex++;
+    while (btc4hIndex < btcCandles["4h"].length && btcCandles["4h"][btc4hIndex].time + INTERVALS["4h"] <= signalCloseTime) btc4hIndex++;
+    while (btc1dIndex < btcCandles["1d"].length && btcCandles["1d"][btc1dIndex].time + INTERVALS["1d"] <= signalCloseTime) btc1dIndex++;
+    const closedBtc1h = btcCandles["1h"].slice(0, btc1hIndex);
+    const closedBtc4h = btcCandles["4h"].slice(0, btc4hIndex);
+    const closedBtc1d = btcCandles["1d"].slice(0, btc1dIndex);
     if (closed4h.length < FUTURES_CONFIG.MIN_CANDLES || closed15m.length < 40 || closed1h.length < 60) continue;
+    const regimeContext = {
+      btc: classifyRegimeSet({ "1h": closedBtc1h, "4h": closedBtc4h, "1d": closedBtc1d }),
+      symbol: classifyRegimeSet({ "1h": closed1h, "4h": closed4h, "1d": aggregateDailyFrom4h(closed4h) })
+    };
     const lastHour = closed1h.at(-1);
     const historicalQuoteVolume = closed1h.slice(-24).reduce((sum, candle) => sum + Number(candle.volume) * Number(candle.close), 0);
     if (!Number.isFinite(historicalQuoteVolume) || historicalQuoteVolume < FUTURES_CONFIG.MIN_QUOTE_VOLUME) continue;
@@ -381,20 +406,20 @@ function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMi
     try {
       const current = analyzeFuturesSymbol(tickerAtSignal, closed1h, closed4h, closed15m);
       if (current?.eligible === true && ["LONG", "SHORT"].includes(current.side)) {
-        emit("current-matched", current.side, current, signalCloseTime, signalBar, closed15m, historicalQuoteVolume);
+        emit("current-matched", current.side, current, signalCloseTime, signalBar, closed15m, historicalQuoteVolume, regimeContext);
       }
     } catch {}
 
     // Independent engine uses the exact same signal timestamp, fill candle and stop/exit rules.
     for (const side of ["LONG", "SHORT"]) {
       const candidate = analyzeIndependentSignal({ side, candles4h: closed4h, candles15m: closed15m });
-      if (candidate) emit("new-matched", side, candidate, signalCloseTime, signalBar, closed15m, historicalQuoteVolume);
+      if (candidate) emit("new-matched", side, candidate, signalCloseTime, signalBar, closed15m, historicalQuoteVolume, regimeContext);
     }
   }
   return trades;
 }
 
-async function backtestSymbol(ticker, fromMs, toMs) {
+async function backtestSymbol(ticker, fromMs, toMs, btcCandles) {
   const [oneHour,fourHour,fifteenMinute,fiveMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs),
     fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs),
@@ -536,7 +561,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   }
 
   const independent=backtestIndependentEngines(ticker,oneHour,fourHour,fifteenMinute,fiveMinute,testStart,toMs);
-  const matchedTrades=backtestMatchedEngines(ticker,oneHour,fourHour,fifteenMinute,fiveMinute,testStart,toMs);
+  const matchedTrades=backtestMatchedEngines(ticker,oneHour,fourHour,fifteenMinute,fiveMinute,testStart,toMs,btcCandles);
   const periodBars=oneHour.filter(c=>c.time>=testStart&&c.time<toMs);
   const periodPriceChangePct=periodBars.length>1?(periodBars.at(-1).close/periodBars[0].open-1)*100:null;
   return {
@@ -564,9 +589,10 @@ async function main() {
     :eligibleTickers.sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
 
+  const btcCandles = Object.fromEntries(await Promise.all(["1h","4h","1d"].map(async timeframe => [timeframe, await fetchHistoricalCandles("PF_XBTUSD", timeframe, fromMs, endMs)])));
   const results = [];
   for (const ticker of universe) {
-    try { results.push(await backtestSymbol(ticker,fromMs,endMs)); }
+    try { results.push(await backtestSymbol(ticker,fromMs,endMs,btcCandles)); }
     catch (error) { results.push({symbol:ticker.symbol,error:String(error?.message||error)}); }
   }
   const successful = results.filter(r=>!r.error);
@@ -580,6 +606,21 @@ async function main() {
     new:summarize(matchedTrades.filter(t=>t.engine==="new-matched"))
   };
   const engineComparison={currentLong:{...metrics.bySide.LONG},independentLong:{...independentMetrics.bySide.LONG},currentShort:{...metrics.bySide.SHORT},independentShort:{...independentMetrics.bySide.SHORT}};
+  const regimeTimeframes = ["1h","4h","1d","1h+4h","4h+1d"];
+  const regimeEvaluation = {};
+  for (const btcTf of regimeTimeframes) for (const symbolTf of regimeTimeframes) {
+    const accepted = matchedTrades.filter(t => isSideAllowedByRegime(t.side, t.regimeContext?.btc?.[btcTf]) && isSideAllowedByRegime(t.side, t.regimeContext?.symbol?.[symbolTf]));
+    const currentRows = accepted.filter(t => t.engine === "current-matched");
+    const newRows = accepted.filter(t => t.engine === "new-matched");
+    const countByRegime = rows => Object.fromEntries(["BULL_STRONG","BULL_WEAK","BEAR_STRONG","BEAR_WEAK"].map(name => [name, rows.filter(t => t.regimeContext?.btc?.[btcTf]?.regime === name).length]));
+    regimeEvaluation[btcTf+"|"+symbolTf] = {
+      btcTimeframe: btcTf, symbolTimeframe: symbolTf,
+      acceptedSignals: accepted.length,
+      blockedByDirectionOrNeutral: matchedTrades.length - accepted.length,
+      current: summarize(currentRows), new: summarize(newRows),
+      btcRegimeSignalCounts: countByRegime(accepted)
+    };
+  }
   const diagnosticSummary = Object.fromEntries(["CLOSED_PROFIT","CLOSED_STOP"].map(status => {
     const rows = allTrades.filter(t => t.status === status);
     const n = key => rows.filter(t => t.signalDiagnostics?.[key] === true).length;
@@ -610,7 +651,8 @@ async function main() {
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies",
       historicalVolumeFilter:"per-signal rolling 24h estimate = sum(hourly base volume × hourly close); approximate quote turnover, not exact exchange ticker volume",},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
-    metrics,independentMetrics,matchedMetrics,matchedTrades,engineComparison,independentOpportunities:{LONG:successful.reduce((n,r)=>n+(r.independentOpportunities?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentOpportunities?.SHORT||0),0)},independentLockSkips:{LONG:successful.reduce((n,r)=>n+(r.independentLockSkips?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentLockSkips?.SHORT||0),0)},diagnosticSummary,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.eligibleSignalOpportunities,0),
+    metrics,independentMetrics,matchedMetrics,matchedTrades,engineComparison,
+    marketRegime:{version:"1.0.0",btcSymbol:"PF_XBTUSD",classificationUsesClosedCandlesOnly:true,neutralPolicy:"no trades",directionPolicy:"BULL permits LONG only; BEAR permits SHORT only",strengthThresholds:{adxProxyMin:22,emaSpreadPctMin:0.35,ema50SlopePctMin:0.08},timeframesCompared:regimeTimeframes,btcCandles:{"1h":btcCandles["1h"].length,"4h":btcCandles["4h"].length,"1d":btcCandles["1d"].length},evaluation:regimeEvaluation},independentOpportunities:{LONG:successful.reduce((n,r)=>n+(r.independentOpportunities?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentOpportunities?.SHORT||0),0)},independentLockSkips:{LONG:successful.reduce((n,r)=>n+(r.independentLockSkips?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentLockSkips?.SHORT||0),0)},diagnosticSummary,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.eligibleSignalOpportunities,0),
     bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
