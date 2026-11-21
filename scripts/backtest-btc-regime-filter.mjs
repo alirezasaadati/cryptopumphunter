@@ -67,7 +67,7 @@ async function fetchHistoricalCandles(symbol, resolution, fromMs, toMs) {
   return [...byTime.values()].sort((a,b)=>a.time-b.time);
 }
 
-function ema(values, period) {
+function historicalChange(candles, index) {\n  const old=candles[index-24],now=candles[index];\n  return !old||old.close<=0?0:((now.close/old.close)-1)*100;\n}\nfunction ema(values, period) {
   if (values.length < period) return null;
   const k = 2 / (period + 1);
   let value = values.slice(0,period).reduce((a,b)=>a+b,0) / period;
@@ -180,7 +180,7 @@ async function backtestSymbol(ticker, period, fromMs, toMs, btc1h, btc4h) {
     if(closed4h.length<FUTURES_CONFIG.MIN_CANDLES||closed15m.length<40)continue;
     const nextBar=oneHour[i+1];
     const tickerAtSignal={symbol:ticker.symbol,last:nextBar.open,quoteVolume:Number(ticker.volumeQuote)||0,
-      priceChangePercent:0,premium:{lastFundingRate:null}};
+      priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}};
     let candidate;
     try{candidate=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m);}
     catch{continue;}
