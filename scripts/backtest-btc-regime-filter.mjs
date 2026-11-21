@@ -12,12 +12,12 @@ const PERIODS = [
 ];
 const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 15;
-const TARGET = 17;
+const TARGET = 30;
 const FEE_PER_SIDE = 0.0005;
 const SLIPPAGE_PER_SIDE = 0.0003;
-const LEVERAGE = 25;
+const LEVERAGE = 10;
 const STARTING_CAPITAL_USD = 100;
-const MARGIN_PER_TRADE_USD = 20;
+const MARGIN_PER_TRADE_USD = 10;
 // Keep each policy isolated so the historical comparison never mutates production behavior.
 const VARIANTS = ["baseline", "btc_1h", "btc_1h_4h"];
 
@@ -310,7 +310,7 @@ async function main(){
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/btc-regime-backtest.json",JSON.stringify(report,null,2));
   const rows=["# BTC regime filter comparison — fixed-capital account simulation","",
-    "Production code was not changed. Each period is simulated with $100 initial capital and fixed $20 margin per trade at 25x leverage; periods are evaluated independently.","",
+    "Production code was not changed. Each period is simulated with $100 initial capital and fixed $10 margin per trade at 10x leverage; periods are evaluated independently.","",
     "| Period | Side | BTC change | Symbols | Variant | Eligible | BTC blocked | Trades | TP | Stops | Skipped (capital) | Winner profit $ | Stop loss $ | Net P/L $ | Final $ | Growth |",
     "|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"];
   for(const p of periodReports)for(const v of VARIANTS){
