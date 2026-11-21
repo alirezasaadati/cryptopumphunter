@@ -737,3 +737,5 @@ async function main() {
   if (!successful.length) process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Matched comparison runner; production strategy source remains untouched.
