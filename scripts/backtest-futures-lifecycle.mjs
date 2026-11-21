@@ -10,6 +10,10 @@ const WARMUP_DAYS = 15;
 const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
 const LEVERAGE = FUTURES_TRADE_LEVERAGE;
 const BREAK_EVEN_TRIGGER = Math.max(0, Number(process.env.LIFECYCLE_BREAK_EVEN_MARGIN_PCT || 0));
+const STRUCTURAL_STOP_MODE = String(process.env.LIFECYCLE_STRUCTURAL_STOP_MODE || "original").toLowerCase();
+const STRUCTURAL_STOP_BUFFER_ATR = Math.max(0, Number(process.env.LIFECYCLE_STRUCTURAL_STOP_BUFFER_ATR || 0.2));
+const RISK_PER_TRADE_PCT = Math.max(0.01, Number(process.env.LIFECYCLE_RISK_PER_TRADE_PCT || 1));
+const FIXED_SYMBOLS = String(process.env.LIFECYCLE_BACKTEST_SYMBOL_LIST || "").split(",").map(x=>x.trim()).filter(Boolean);
 
 async function getJson(url, attempt = 0) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
@@ -107,6 +111,32 @@ function candleAmbiguous(side, trade, candle) {
   const profitAtOpen = side === "LONG" ? candle.open >= target : candle.open <= target;
   return stopHit && profitHit && !stopAtOpen && !profitAtOpen;
 }
+function calculateAtrLocal(candles, period = 14) {
+  if (!Array.isArray(candles) || candles.length < period + 1) return null;
+  const ranges = [];
+  for (let i=1;i<candles.length;i++) {
+    const c=candles[i], previousClose=Number(candles[i-1].close);
+    ranges.push(Math.max(Number(c.high)-Number(c.low),Math.abs(Number(c.high)-previousClose),Math.abs(Number(c.low)-previousClose)));
+  }
+  const recent=ranges.slice(-period);
+  return recent.length===period?recent.reduce((a,b)=>a+b,0)/period:null;
+}
+function findLatestProtectivePivot(candles, side, left=2, right=2) {
+  if (!Array.isArray(candles)||candles.length<left+right+1) return null;
+  const field=side==="LONG"?"low":"high";
+  for(let i=candles.length-right-1;i>=left;i--){
+    const value=Number(candles[i]?.[field]);
+    if(!Number.isFinite(value))continue;
+    let pivot=true;
+    for(let j=i-left;j<=i+right;j++){
+      if(j===i)continue;
+      const neighbor=Number(candles[j]?.[field]);
+      if(!Number.isFinite(neighbor)||(side==="LONG"?neighbor<=value:neighbor>=value)){pivot=false;break;}
+    }
+    if(pivot)return{index:i,time:candles[i].time,price:value};
+  }
+  return null;
+}
 function excursionForBar(side, entry, bar) {
   if (side === "LONG") return {
     favorable: Math.max(0, (bar.high / entry - 1) * LEVERAGE * 100),
@@ -141,6 +171,15 @@ function summarize(trades) {
   const longs = closed.filter(t => t.side === "LONG");
   const shorts = closed.filter(t => t.side === "SHORT");
   const sum = xs => xs.reduce((n,t)=>n+Number(t.marginReturnPercent || 0),0);
+  const riskSizedReturn = t => {
+    const distance=Number(t.stopDistancePct), margin=Number(t.marginReturnPercent||0);
+    return Number.isFinite(distance)&&distance>0?(margin/LEVERAGE/distance)*RISK_PER_TRADE_PCT:0;
+  };
+  let riskEquity=0,riskPeak=0,riskMaxDrawdown=0;
+  for(const trade of [...closed].sort((a,b)=>a.closedAtMs-b.closedAtMs)){
+    riskEquity+=riskSizedReturn(trade);riskPeak=Math.max(riskPeak,riskEquity);
+    riskMaxDrawdown=Math.max(riskMaxDrawdown,riskPeak-riskEquity);
+  }
   const stopLosses = stops.map(t => Math.abs(Number(t.marginReturnPercent || 0))).filter(x=>Number.isFinite(x) && x > 0).sort((a,b)=>a-b);
   const breakEvenStops = stops.filter(t => t.breakEvenActivated === true && Math.abs(Number(t.marginReturnPercent || 0)) < 1e-9);
   const lossStops = stops.filter(t => Number(t.marginReturnPercent || 0) < -1e-9);
@@ -177,6 +216,10 @@ function summarize(trades) {
     totalMarginReturnPct: sum(closed),
     averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
     maxDrawdownMarginPct: maxDrawdown,
+    riskPerTradePct:RISK_PER_TRADE_PCT,
+    totalRiskSizedReturnPct:closed.reduce((n,t)=>n+riskSizedReturn(t),0),
+    averageRiskSizedReturnPct:closed.length?closed.reduce((n,t)=>n+riskSizedReturn(t),0)/closed.length:0,
+    maxRiskSizedDrawdownPct:riskMaxDrawdown,
     ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
     excursion: { allClosed: excursionStats(closed), stopped: excursionStats(stops), profitable: excursionStats(profits) },
     bySide: {
@@ -200,7 +243,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   const trades = [];
   const lockUntil = new Map();
   let fourIndex = 0, fifteenIndex = 0;
-  let eligibleSignalOpportunities = 0, skippedByLock = 0, rejectedSignals = 0, rejectedByHistoricalVolume = 0;
+  let eligibleSignalOpportunities = 0, skippedByLock = 0, rejectedSignals = 0, rejectedByHistoricalVolume = 0, rejectedStructuralStops = 0;
   const testStart = toMs - DAYS * 86400000;
 
   for (let i = 60; i < oneHour.length - 1; i++) {
@@ -235,12 +278,26 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if ((lockUntil.get(lockKey) || 0) > signalCloseTime) { skippedByLock++; continue; }
 
     const entry = Number(candidate.entry);
+    let stop=Number(candidate.stop), protectivePivot=null, structuralAtr15m=null;
+    if(STRUCTURAL_STOP_MODE==="pivot15m"){
+      protectivePivot=findLatestProtectivePivot(closed15m,candidate.side,2,2);
+      structuralAtr15m=calculateAtrLocal(closed15m,14);
+      if(!protectivePivot||!Number.isFinite(structuralAtr15m)||structuralAtr15m<=0){rejectedStructuralStops++;continue;}
+      stop=candidate.side==="LONG"
+        ? protectivePivot.price-structuralAtr15m*STRUCTURAL_STOP_BUFFER_ATR
+        : protectivePivot.price+structuralAtr15m*STRUCTURAL_STOP_BUFFER_ATR;
+      const directionValid=candidate.side==="LONG"?stop<entry:stop>entry;
+      const distancePct=Math.abs((entry-stop)/entry)*100;
+      if(!directionValid||!Number.isFinite(distancePct)||distancePct<0.2||distancePct>8){rejectedStructuralStops++;continue;}
+    }
     const trade = {
       id: ticker.symbol + ":" + candidate.side + ":" + signalCloseTime,
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
-      entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
+      entry, initialStop: stop, stop,
+      protectivePivotPrice:protectivePivot?.price??null, structuralAtr15m,
+      stopMode:STRUCTURAL_STOP_MODE,
       signalTime: signalBar.time, entryTime: signalCloseTime,
-      score: candidate.score, stopDistancePct: Math.abs((entry-Number(candidate.stop))/entry)*100, signalDiagnostics: signalDiagnostics(candidate,candidate.side,oneHour.slice(0,i+1),closed4h), ambiguousCandles: 0,
+      score: candidate.score, stopDistancePct: Math.abs((entry-stop)/entry)*100, signalDiagnostics: signalDiagnostics(candidate,candidate.side,oneHour.slice(0,i+1),closed4h), ambiguousCandles: 0,
       maxFavorableExcursionMarginPct: 0, maxAdverseExcursionMarginPct: 0,
       breakEvenActivated: false
     };
@@ -283,7 +340,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   return {
     symbol:ticker.symbol,
     candles:{ "1h":oneHour.length, "4h":fourHour.length, "15m":fifteenMinute.length, "5m":fiveMinute.length },
-    eligibleSignalOpportunities, skippedBySameSideLock:skippedByLock, rejectedSignals, rejectedByHistoricalVolume,
+    eligibleSignalOpportunities, skippedBySameSideLock:skippedByLock, rejectedSignals, rejectedByHistoricalVolume, rejectedStructuralStops,
     metrics:summarize(trades), trades
   };
 }
@@ -295,10 +352,11 @@ async function main() {
   const fromMs = startMs - WARMUP_DAYS*86400000;
   const tickerData = await getJson(BASE + "/derivatives/api/v3/tickers");
   if (!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
-  const universe = tickerData.tickers.filter(t => t?.tag==="perpetual" && t.suspended!==true &&
-    /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||"")) &&
-    Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME && Number(t.last)>0)
-    .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
+  const allPerpetuals=tickerData.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&/^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&Number(t.last)>0);
+  const eligibleTickers=allPerpetuals.filter(t=>Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME);
+  const bySymbol=new Map(allPerpetuals.map(t=>[t.symbol,t]));
+  const universe=FIXED_SYMBOLS.length?FIXED_SYMBOLS.map(symbol=>bySymbol.get(symbol)).filter(Boolean)
+    :eligibleTickers.sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
 
   const results = [];
@@ -328,6 +386,9 @@ async function main() {
       execution:"one evaluation per completed 1h candle; signal generated from closed 1h/4h/15m candles; entry approximated at next 1h open; exits evaluated on subsequent 5m OHLC",
       breakEvenTriggerMarginPct: BREAK_EVEN_TRIGGER,
       breakEvenRule: BREAK_EVEN_TRIGGER > 0 ? "after a completed 5m candle reaches the configured favorable margin return, move stop to entry for subsequent candles" : "disabled",
+      structuralStopMode:STRUCTURAL_STOP_MODE, structuralStopBufferAtr15m:STRUCTURAL_STOP_BUFFER_ATR,
+      structuralStopPivotRule:"latest confirmed 15m protective swing pivot with 2 candles left/right; LONG uses swing low, SHORT uses swing high",
+      positionSizingModel:"fixed risk per trade; normalized return = realized price move / initial stop distance × risk percentage; additive, not compounded; aggregate simultaneous open risk is not capped",
       scheduler:"live Worker cron is every 5 minutes; this runner does not yet replay each 5-minute scan, so repeated intra-hour scan/TTL behavior is not represented",
       lifecycleSemantics:"the live Durable Object creates a SIGNAL_EVALUATION trade when a signal is registered; this is not evidence of a user accepting or an exchange order filling",
       lock:"independent symbol+side lock until close; opposite side may overlap",
@@ -339,6 +400,7 @@ async function main() {
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
     rejectedByHistoricalVolume:successful.reduce((n,r)=>n+r.rejectedByHistoricalVolume,0),
+    rejectedStructuralStops:successful.reduce((n,r)=>n+r.rejectedStructuralStops,0),
     trades:allTrades
   };
   await mkdir("artifacts",{recursive:true});
@@ -362,10 +424,13 @@ async function main() {
     "| Sum margin return (not compounded) | "+metrics.totalMarginReturnPct.toFixed(2)+"% |",
     "| Average margin return / trade | "+metrics.averageMarginReturnPct.toFixed(2)+"% |",
     "| Max drawdown (additive margin-return points) | "+metrics.maxDrawdownMarginPct.toFixed(2)+"% |",
+    "| Risk-normalized return (fixed "+RISK_PER_TRADE_PCT+"% risk/trade, additive) | "+metrics.totalRiskSizedReturnPct.toFixed(2)+"% |",
+    "| Risk-normalized max drawdown (additive) | "+metrics.maxRiskSizedDrawdownPct.toFixed(2)+"% |",
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
     "| Same-side lock skips | "+report.lockSkips+" |",
     "| Rejected signal opportunities | "+report.rejectedSignals+" |",
-    "| Rejected by historical 24h volume | "+report.rejectedByHistoricalVolume+" |","",
+    "| Rejected by historical 24h volume | "+report.rejectedByHistoricalVolume+" |",
+    "| Rejected by structural stop validity | "+report.rejectedStructuralStops+" |","",
     "| Symbol | Signals | Closed | Profit | Stop | LONG | SHORT | Net margin % |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
     ...successful.map(r=>"| "+r.symbol+" | "+r.eligibleSignalOpportunities+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.longs+" | "+r.metrics.shorts+" | "+r.metrics.totalMarginReturnPct.toFixed(2)+" |"),
@@ -373,7 +438,7 @@ async function main() {
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
   await writeFile("artifacts/futures-lifecycle-backtest.md",rows.join("\n"));
-  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,diagnosticSummary,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals},null,2));
+  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,diagnosticSummary,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals,rejectedStructuralStops:report.rejectedStructuralStops},null,2));
   if (!successful.length) process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
