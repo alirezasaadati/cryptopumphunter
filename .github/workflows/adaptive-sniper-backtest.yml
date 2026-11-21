@@ -1,0 +1,30 @@
+name: Adaptive Sniper strategy backtest
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/adaptive-sniper-backtest.mjs"
+      - ".github/workflows/adaptive-sniper-backtest.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Repository tests
+        run: npm test
+      - name: 60-day comparison on up to 24 contracts
+        run: node scripts/adaptive-sniper-backtest.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: adaptive-sniper-backtest
+          path: artifacts/
+          if-no-files-found: warn
