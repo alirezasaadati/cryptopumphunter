@@ -419,24 +419,23 @@ function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMi
 
     // Selected portfolio: new LONG engine in BTC bull regimes; current SHORT engine
     // in BTC bear regimes. The opposite engine is not evaluated at all.
-    if (permittedSide === "LONG") {
-      const tickerAtSignal = {
-        symbol: ticker.symbol, last: signalBar.close, quoteVolume: historicalQuoteVolume,
-        priceChangePercent: historicalChange(closed1h, closed1h.length - 1),
-        premium: { lastFundingRate: null }
-      };
-      try {
-        const current = analyzeFuturesSymbol(tickerAtSignal, closed1h, closed4h, closed15m);
-        if (current?.eligible === true && current.side === "LONG") {
-          emit("current-matched", current.side, current, signalCloseTime, signalBar, closed15m, historicalQuoteVolume, regimeContext);
-        }
-      } catch {}
-    }
-
-    if (!selectedPortfolio || permittedSide === "LONG") {
+    const tickerAtSignal = {
+      symbol: ticker.symbol, last: signalBar.close, quoteVolume: historicalQuoteVolume,
+      priceChangePercent: historicalChange(closed1h, closed1h.length - 1),
+      premium: { lastFundingRate: null }
+    };
+    try {
+      const current = analyzeFuturesSymbol(tickerAtSignal, closed1h, closed4h, closed15m);
+      if (current?.eligible === true && current.side === "LONG") {
+        emit("current-matched", current.side, current, signalCloseTime, signalBar, closed15m, historicalQuoteVolume, regimeContext);
+      }
+    } catch {}
+    try {
       const candidate = analyzeMirrorLongSymbol(tickerAtSignal, closed1h, closed4h, closed15m);
-      if (candidate?.eligible === true && candidate.side === "LONG") emit("new-matched", "LONG", candidate, signalCloseTime, signalBar, closed15m, historicalQuoteVolume, regimeContext);
-    }
+      if (candidate?.eligible === true && candidate.side === "LONG") {
+        emit("new-matched", "LONG", candidate, signalCloseTime, signalBar, closed15m, historicalQuoteVolume, regimeContext);
+      }
+    } catch {}
   }
   return trades;
 }
@@ -582,7 +581,9 @@ async function backtestSymbol(ticker, fromMs, toMs, btcCandles) {
     trades.push(trade);
   }
 
-  const independent=backtestIndependentEngines(ticker,oneHour,fourHour,fifteenMinute,fiveMinute,testStart,toMs);
+  // This experiment compares only the current LONG engine with its mirrored LONG.
+  // The legacy independent LONG/SHORT experiment is intentionally not invoked.
+  const independent={trades:[],opportunities:{LONG:0,SHORT:0},lockSkips:{LONG:0,SHORT:0}};
   const matchedTrades=backtestMatchedEngines(ticker,oneHour,fourHour,fifteenMinute,fiveMinute,testStart,toMs,btcCandles);
   const periodBars=oneHour.filter(c=>c.time>=testStart&&c.time<toMs);
   const periodPriceChangePct=periodBars.length>1?(periodBars.at(-1).close/periodBars[0].open-1)*100:null;
