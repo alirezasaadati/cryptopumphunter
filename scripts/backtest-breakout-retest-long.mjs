@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { analyzeBreakoutRetestLongA } from "../src/futures-breakout-retest-long-a.js";
 import { analyzeBreakoutRetestLong } from "../src/futures-breakout-retest-long.js";
 import { analyzeEmaPullbackLong } from "../src/ema-pullback-long.js";
+import { analyzeEmaPullbackLong as analyzeEmaPullbackLongBaseline } from "../src/ema-pullback-long-baseline.js";
 
 const CHARTS_API = "https://futures.kraken.com/api/charts/v1";
 const FUTURES_API = "https://futures.kraken.com/derivatives/api/v3";
@@ -165,19 +166,19 @@ export function resolveLongTrade({ candles, entryIndex, stopPrice, leverage=LEVE
   return{status:"OPEN_AT_END",entryPrice,targetPrice,stopPrice:stop,lastMark:last?last.close:null,exitTime:null,ambiguousCandles,marginRoiAtEndPct:last?(last.close/entryPrice-1)*leverage*100:null};
 }
 
-function runEmaPullbackEngine({symbol,data,testStartMs,testEndMs}) {
+function runEmaPullbackEngine({symbol,data,testStartMs,testEndMs,engine="C",analyzer=analyzeEmaPullbackLong}) {
   const trades=[];let lockUntil=0;
   const startIndex=lowerBound(data.h4,testStartMs-RESOLUTION_MS["4h"]);
   for(let i=Math.max(startIndex,210);i<data.h4.length;i++){
     const signalCandle=data.h4[i],signalCloseTime=signalCandle.time+RESOLUTION_MS["4h"];
     if(signalCloseTime<testStartMs||signalCloseTime>=testEndMs||signalCloseTime<lockUntil)continue;
     const candles=data.h4.slice(Math.max(0,i+1-500),i+1);
-    const candidate=analyzeEmaPullbackLong({symbol,candles});
+    const candidate=analyzer({symbol,candles});
     if(!candidate||candidate.eligible!==true)continue;
     const entryIndex=lowerBound(data.m5,signalCloseTime),entryBar=data.m5[entryIndex];
     if(!entryBar||entryBar.time>=testEndMs||entryBar.time-signalCloseTime>RESOLUTION_MS["5m"])continue;
     const outcome=resolveLongTrade({candles:data.m5,entryIndex,stopPrice:candidate.stop});
-    trades.push({engine:"C",symbol,signalTime:signalCandle.time,signalCloseTime,plannedEntry:candidate.entry,
+    trades.push({engine,symbol,signalTime:signalCandle.time,signalCloseTime,plannedEntry:candidate.entry,
       entryPrice:outcome.entryPrice??null,stopPrice:candidate.stop,targetPrice:outcome.targetPrice??null,
       status:outcome.status,exitTime:outcome.exitTime??null,exitPrice:outcome.exitPrice??null,
       marginRoiPct:outcome.marginRoiPct??null,marginRoiAtEndPct:outcome.marginRoiAtEndPct??null,
@@ -270,8 +271,9 @@ async function main() {
       const data={m15,h1,h4,m5,btc15};
       const A=runEngine({engine:"A",symbol,data,testStartMs,testEndMs});
       const B=runEngine({engine:"B",symbol,data,testStartMs,testEndMs});
-      const C=runEmaPullbackEngine({symbol,data,testStartMs,testEndMs});
-      results.push({symbol,candles:{"15m":m15.length,"1h":h1.length,"4h":h4.length,"5m":m5.length},A,B,C});
+      const C=runEmaPullbackEngine({symbol,data,testStartMs,testEndMs,engine:"C",analyzer:analyzeEmaPullbackLongBaseline});
+      const D=runEmaPullbackEngine({symbol,data,testStartMs,testEndMs,engine:"D",analyzer:analyzeEmaPullbackLong});
+      results.push({symbol,candles:{"15m":m15.length,"1h":h1.length,"4h":h4.length,"5m":m5.length},A,B,C,D});
     }catch(error){results.push({symbol,error:String(error?.message||error)});}
   }
   const good=results.filter(r=>!r.error);
@@ -296,39 +298,40 @@ async function main() {
       costs:"fees, funding and slippage excluded; gross results",
       sameSymbolConcurrency:"one open LONG per symbol at a time",
       dataSource:"Kraken Futures charts API only; no Bybit data or fallback",
-      comparison:"A and B use identical 15m symbols, bullish window and execution rules; C uses the same symbols and bullish window with 4h signal candles and 5m execution"
+      comparison:"A and B use identical 15m symbols, bullish window and execution rules; C and D use the same symbols and bullish window with 4h signal candles and 5m execution; C is the unchanged baseline and D applies the requested changes"
     },
-    aggregate:{A:aggregate("A"),B:aggregate("B"),C:aggregate("C")},
-    bySymbol:good.map(r=>({symbol:r.symbol,candles:r.candles,A:r.A.metrics,B:r.B.metrics,C:r.C.metrics})),
+    aggregate:{A:aggregate("A"),B:aggregate("B"),C:aggregate("C"),D:aggregate("D")},
+    bySymbol:good.map(r=>({symbol:r.symbol,candles:r.candles,A:r.A.metrics,B:r.B.metrics,C:r.C.metrics,D:r.D.metrics})),
     trades:{
       A:good.flatMap(r=>r.A.trades).sort((a,b)=>a.signalCloseTime-b.signalCloseTime),
       B:good.flatMap(r=>r.B.trades).sort((a,b)=>a.signalCloseTime-b.signalCloseTime),
-      C:good.flatMap(r=>r.C.trades).sort((a,b)=>a.signalCloseTime-b.signalCloseTime)
+      C:good.flatMap(r=>r.C.trades).sort((a,b)=>a.signalCloseTime-b.signalCloseTime),
+      D:good.flatMap(r=>r.D.trades).sort((a,b)=>a.signalCloseTime-b.signalCloseTime)
     }
   };
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/breakout-retest-long-comparison.json",JSON.stringify(report,null,2));
-  const a=report.aggregate.A,b=report.aggregate.B,c=report.aggregate.C;
+  const a=report.aggregate.A,b=report.aggregate.B,c=report.aggregate.C,d=report.aggregate.D;
   const md=[
     "# Kraken bullish-regime LONG comparison: A/B breakout-retest vs C EMA pullback","",
     "Period: "+report.marketRegime.from+" — "+report.marketRegime.to+" ("+regime.days+" days)",
     "BTC regime: daily close above EMA50 and EMA50 rising for every day in window.",
     "Symbols: "+symbols.join(", "),"",
-    "| Metric | A: source baseline | B: breakout-retest | C: EMA pullback (4h) |",
+    "| Metric | A: source baseline | B: breakout-retest | C: EMA pullback original | D: EMA pullback modified |",
     "|---|---:|---:|---:|",
-    "| Signals | "+a.signals+" | "+b.signals+" | "+c.signals+" |",
-    "| Closed trades | "+a.closedTrades+" | "+b.closedTrades+" | "+c.closedTrades+" |",
-    "| Wins (+30% margin ROI before stop) | "+a.wins30PctBeforeStop+" | "+b.wins30PctBeforeStop+" | "+c.wins30PctBeforeStop+" |",
-    "| Stop-first losses | "+a.stopFirst+" | "+b.stopFirst+" | "+c.stopFirst+" |",
-    "| Open at end | "+a.openAtEnd+" | "+b.openAtEnd+" | "+c.openAtEnd+" |",
-    "| Win rate | "+a.winRatePct.toFixed(2)+"% | "+b.winRatePct.toFixed(2)+"% | "+c.winRatePct.toFixed(2)+"% |",
-    "| Gross margin ROI points | "+a.totalMarginRoiPct.toFixed(2)+"% | "+b.totalMarginRoiPct.toFixed(2)+"% | "+c.totalMarginRoiPct.toFixed(2)+"% |",
-    "| Average ROI / closed trade | "+a.averageMarginRoiPct.toFixed(2)+"% | "+b.averageMarginRoiPct.toFixed(2)+"% | "+c.averageMarginRoiPct.toFixed(2)+"% |",
-    "| Max drawdown (additive ROI points) | "+a.maxDrawdownMarginPoints.toFixed(2)+"% | "+b.maxDrawdownMarginPoints.toFixed(2)+"% | "+c.maxDrawdownMarginPoints.toFixed(2)+"% |",
-    "| Ambiguous 5m candles | "+a.ambiguous5mCandles+" | "+b.ambiguous5mCandles+" | "+c.ambiguous5mCandles+" |",
-    "","| Symbol | A signals/win% | B signals/win% | C signals/win% |",
+    "| Signals | "+a.signals+" | "+b.signals+" | "+c.signals+" | "+d.signals+" |",
+    "| Closed trades | "+a.closedTrades+" | "+b.closedTrades+" | "+c.closedTrades+" | "+d.closedTrades+" |",
+    "| Wins (+30% margin ROI before stop) | "+a.wins30PctBeforeStop+" | "+b.wins30PctBeforeStop+" | "+c.wins30PctBeforeStop+" | "+d.wins30PctBeforeStop+" |",
+    "| Stop-first losses | "+a.stopFirst+" | "+b.stopFirst+" | "+c.stopFirst+" | "+d.stopFirst+" |",
+    "| Open at end | "+a.openAtEnd+" | "+b.openAtEnd+" | "+c.openAtEnd+" | "+d.openAtEnd+" |",
+    "| Win rate | "+a.winRatePct.toFixed(2)+"% | "+b.winRatePct.toFixed(2)+"% | "+c.winRatePct.toFixed(2)+"% | "+d.winRatePct.toFixed(2)+"% |",
+    "| Gross margin ROI points | "+a.totalMarginRoiPct.toFixed(2)+"% | "+b.totalMarginRoiPct.toFixed(2)+"% | "+c.totalMarginRoiPct.toFixed(2)+"% | "+d.totalMarginRoiPct.toFixed(2)+"% |",
+    "| Average ROI / closed trade | "+a.averageMarginRoiPct.toFixed(2)+"% | "+b.averageMarginRoiPct.toFixed(2)+"% | "+c.averageMarginRoiPct.toFixed(2)+"% | "+d.averageMarginRoiPct.toFixed(2)+"% |",
+    "| Max drawdown (additive ROI points) | "+a.maxDrawdownMarginPoints.toFixed(2)+"% | "+b.maxDrawdownMarginPoints.toFixed(2)+"% | "+c.maxDrawdownMarginPoints.toFixed(2)+"% | "+d.maxDrawdownMarginPoints.toFixed(2)+"% |",
+    "| Ambiguous 5m candles | "+a.ambiguous5mCandles+" | "+b.ambiguous5mCandles+" | "+c.ambiguous5mCandles+" | "+d.ambiguous5mCandles+" |",
+    "","| Symbol | A signals/win% | B signals/win% | C original | D modified |",
     "|---|---:|---:|---:|",
-    ...report.bySymbol.map(r=>"| "+r.symbol+" | "+r.A.signals+" / "+r.A.winRatePct.toFixed(2)+"% | "+r.B.signals+" / "+r.B.winRatePct.toFixed(2)+"% | "+r.C.signals+" / "+r.C.winRatePct.toFixed(2)+"% |"),
+    ...report.bySymbol.map(r=>"| "+r.symbol+" | "+r.A.signals+" / "+r.A.winRatePct.toFixed(2)+"% | "+r.B.signals+" / "+r.B.winRatePct.toFixed(2)+"% | "+r.C.signals+" / "+r.C.winRatePct.toFixed(2)+"% | "+r.D.signals+" / "+r.D.winRatePct.toFixed(2)+"% |"),
     "","## Limitations",
     "- Gross performance excludes fees, funding and slippage.",
     "- 5m OHLC cannot reveal exact intrabar path; same-candle target/stop touches count as stop-first.",
