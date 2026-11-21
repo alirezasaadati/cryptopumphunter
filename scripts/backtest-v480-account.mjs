@@ -160,3 +160,5 @@ async function main(){
  console.log(JSON.stringify({account:report.account,counts:report.counts,results:report.results,errors},null,2));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
+
+// Account simulation harness only; v4.8.0 strategy module remains unchanged.
