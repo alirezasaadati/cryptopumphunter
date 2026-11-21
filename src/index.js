@@ -1372,6 +1372,9 @@ const FUTURES_CONFIG = {
   KLINE_LIMIT: 120,
   MIN_CANDLES: 60,
   MIN_SCORE: 72,
+  MIN_SCORE_LONG: 65,
+  MIN_LONG_VOLUME_RATIO: 0.65,
+  MIN_LONG_DISTANCE_FROM_HIGH: 0.003,
   INTERVAL: "1h",
   CONFIRM_INTERVAL: "4h",
   ENTRY_CONFIRM_INTERVAL: "15m",
@@ -1597,7 +1600,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
 
   const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
   const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
-  const relaxedLong = up1h && !down4h && rsiValue >= 40 && rsiValue <= 75;
+  const relaxedLong = up1h && !down4h && rsiValue >= 42 && rsiValue <= 72;
   const relaxedShort = down1h && !up4h && rsiValue >= 25 && rsiValue <= 60;
   const strictSetup = strictLong || strictShort;
 
@@ -1695,15 +1698,19 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const target2 = entry + direction * risk * 2.2;
   const target3 = entry + direction * risk * 3;
   score = Math.max(0, Math.min(100, Math.round(score)));
-  const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
-  if (eligible && !passesLongDistanceThreshold(side, candles1h, 0.005)) {
+  // LONG has an isolated relaxed eligibility path; SHORT retains its original strict gate.
+  const eligible = side === "LONG"
+    ? (score >= FUTURES_CONFIG.MIN_SCORE_LONG && volumeRatio >= FUTURES_CONFIG.MIN_LONG_VOLUME_RATIO)
+    : (strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75);
+  const longDistanceThreshold = side === "LONG" ? FUTURES_CONFIG.MIN_LONG_DISTANCE_FROM_HIGH : 0.005;
+  if (eligible && !passesLongDistanceThreshold(side, candles1h, longDistanceThreshold)) {
     return {
       symbol: ticker.symbol,
       side,
       score,
-      rejected: "فاصله قیمت بسته‌شدن کندل ۱ساعته تا بیشترین High سه کندل تکمیل‌شده کمتر از ۰٫۵٪ است",
+      rejected: `فاصله قیمت بسته‌شدن کندل ۱ساعته تا بیشترین High سه کندل تکمیل‌شده کمتر از ${(longDistanceThreshold * 100).toLocaleString("fa-IR")}٪ است`,
       longDistanceThreshold: {
-        thresholdPct: 0.5,
+        thresholdPct: longDistanceThreshold * 100,
         referencePrice,
         maxHighLast3: Math.max(...candles1h.slice(-3).map(c => Number(c.high))),
         eligible: false
