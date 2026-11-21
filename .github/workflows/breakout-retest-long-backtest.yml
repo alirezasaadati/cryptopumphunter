@@ -6,6 +6,7 @@ on:
       - experimental/breakout-retest-long
       - experimental/ema-pullback-long-filters-v2
       - experimental/ema-pullback-long-optimized-python-v2
+      - experimental/ema-pullback-long-balanced-v3
     paths:
       - "src/futures-breakout-retest-long.js"
       - "src/futures-breakout-retest-long-a.js"
