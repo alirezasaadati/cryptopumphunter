@@ -1,0 +1,50 @@
+name: Futures 60-day lifecycle backtest
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experimental/futures-backtest-60d
+    paths:
+      - "scripts/backtest-futures-lifecycle.mjs"
+      - "src/index.js"
+      - "src/futures-trade-lifecycle.js"
+      - ".github/workflows/futures-backtest-60d.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: futures-backtest-60d
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+        with:
+          ref: experimental/futures-backtest-60d
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run repository tests
+        run: npm test
+      - name: Run 60-day futures lifecycle backtest
+        env:
+          LIFECYCLE_BACKTEST_DAYS: "60"
+          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+        run: node scripts/backtest-futures-lifecycle.mjs
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-lifecycle-backtest-60d
+          path: |
+            artifacts/futures-lifecycle-backtest.json
+            artifacts/futures-lifecycle-backtest.md
+          if-no-files-found: warn
+          retention-days: 30
