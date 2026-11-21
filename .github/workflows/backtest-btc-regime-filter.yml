@@ -1,7 +1,7 @@
 name: BTC regime filter historical comparison
 on:
   push:
-    branches: [experiment/btc-regime-filter-60d-20261121]
+    branches: [experiment/btc-regime-capital-10usd-10x-tp30]
     paths:
       - "scripts/backtest-btc-regime-filter.mjs"
       - ".github/workflows/backtest-btc-regime-filter.yml"
