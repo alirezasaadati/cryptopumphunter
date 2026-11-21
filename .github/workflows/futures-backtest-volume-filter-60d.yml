@@ -18,6 +18,51 @@ concurrency:
 
 jobs:
   backtest:
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - name: volume-1.50
+            volume: "1.50"
+            atr: "0"
+            ema: "0"
+          - name: volume-1.75
+            volume: "1.75"
+            atr: "0"
+            ema: "0"
+          - name: volume-2.00
+            volume: "2.00"
+            atr: "0"
+            ema: "0"
+          - name: volume-2.25
+            volume: "2.25"
+            atr: "0"
+            ema: "0"
+          - name: atr-min-0.50
+            volume: "0"
+            atr: "0.50"
+            ema: "0"
+          - name: atr-min-0.80
+            volume: "0"
+            atr: "0.80"
+            ema: "0"
+          - name: atr-min-1.00
+            volume: "0"
+            atr: "1.00"
+            ema: "0"
+          - name: ema-extension-max-0.50
+            volume: "0"
+            atr: "0"
+            ema: "0.50"
+          - name: ema-extension-max-1.00
+            volume: "0"
+            atr: "0"
+            ema: "1.00"
+          - name: ema-extension-max-1.50
+            volume: "0"
+            atr: "0"
+            ema: "1.50"
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -36,13 +81,15 @@ jobs:
           LIFECYCLE_BACKTEST_DAYS: "60"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
           LIFECYCLE_BACKTEST_END_MS: "1790090998724"
-          LIFECYCLE_SHORT_MAX_VOLUME_RATIO: "2"
+          LIFECYCLE_SHORT_MAX_VOLUME_RATIO: ${{ matrix.volume }}
+          LIFECYCLE_SHORT_MIN_ATR_PCT: ${{ matrix.atr }}
+          LIFECYCLE_SHORT_MAX_EMA20_DISTANCE_PCT: ${{ matrix.ema }}
         run: node scripts/backtest-futures-volume-filter.mjs
       - name: Upload experiment report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: futures-lifecycle-volume-filter-60d
+          name: futures-lifecycle-${{ matrix.name }}-60d
           path: |
             artifacts/futures-lifecycle-backtest.json
             artifacts/futures-lifecycle-backtest.md
