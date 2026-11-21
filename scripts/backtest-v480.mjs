@@ -283,7 +283,8 @@ async function main() {
       perSymbol: multi.map(x => ({
         symbol: x.symbol, marketChangePct: x.marketChangePct, eligibleSignals: x.eligibleSignals,
         rejected: x.rejected, targets: Object.fromEntries(TARGETS.map(t => [t.key, x.byTarget[t.key].metrics]))
-      }))
+      })),
+      _rawResults: successful
     });
   }
 
@@ -338,7 +339,7 @@ async function main() {
     assumptions: {
       signalEvaluation: "One evaluation per completed 1h candle; only 1h, 4h and 15m candles closed by signal time are passed to the exact supplied analyzeFuturesSymbol logic.",
       entry: "Next 1h candle open (the ticker.last passed to the engine).",
-      funding: "Historical funding was unavailable in the chart-candle response; ticker.premium.lastFundingRate is null, so the v4.8 relative-funding score penalty is not applied.",
+      funding: "Historical funding was unavailable in the chart-candle response; the test supplies null, which Number(null) converts to 0 in the supplied function, so the v4.8 relative-funding penalty is not triggered.",
       outcomes: "Three independent tests per eligible signal: target1 (1.5R), target2 (2.2R), target3 (3R). Each target test runs until its target or the original stop is first reached; one active trade per symbol and target at a time.",
       candleResolution: "5m OHLC for exits; same-candle stop-first, except a candle opening beyond the target is treated as target first.",
       costs: { feePerSide: FEE, adverseSlippagePerSide: SLIPPAGE },
