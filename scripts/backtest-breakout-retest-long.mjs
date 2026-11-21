@@ -5,6 +5,7 @@ import { analyzeBreakoutRetestLong } from "../src/futures-breakout-retest-long.j
 import { analyzeEmaPullbackLong } from "../src/ema-pullback-long.js";
 import { analyzeEmaPullbackLong as analyzeEmaPullbackLongBaseline } from "../src/ema-pullback-long-baseline.js";
 
+// Experimental comparison: C is the unchanged EMA-pullback baseline; D applies the requested filters.
 const CHARTS_API = "https://futures.kraken.com/api/charts/v1";
 const FUTURES_API = "https://futures.kraken.com/derivatives/api/v3";
 const RESOLUTION_MS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000 };
