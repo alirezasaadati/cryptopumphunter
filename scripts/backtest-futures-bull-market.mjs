@@ -296,6 +296,104 @@ function backtestIndependentEngines(ticker, oneHour, fourHour, fifteenMinute, fi
   }
   return {trades,opportunities,lockSkips};
 }
+
+function backtestMatchedEngines(ticker, oneHour, fourHour, fifteenMinute, fiveMinute, testStart, toMs) {
+  const trades = [], locks = new Map();
+  let fourIndex = 0, hourIndex = 0;
+  const emit = (engine, side, candidate, signalCloseTime, signalBar, closed15m, historicalQuoteVolume) => {
+    const lockKey = engine + "|" + ticker.symbol + "|" + side;
+    if ((locks.get(lockKey) || 0) > signalCloseTime) return;
+    const fillIndex = lowerBound(fiveMinute, signalCloseTime);
+    const fillBar = fiveMinute[fillIndex];
+    if (!fillBar || fillBar.time >= toMs) return;
+    const entry = Number(fillBar.open);
+    const atr = calculateAtrLocal(closed15m, 14);
+    if (!Number.isFinite(atr) || atr <= 0 || !Number.isFinite(entry) || entry <= 0) return;
+    // Identical protective-stop policy for both engines: 1.5 x confirmed 15m ATR.
+    const stop = side === "LONG" ? entry - 1.5 * atr : entry + 1.5 * atr;
+    const stopDistancePct = Math.abs((entry - stop) / entry) * 100;
+    if (!Number.isFinite(stopDistancePct) || stopDistancePct < 0.15 || stopDistancePct > 8) return;
+    const trade = {
+      id: ticker.symbol + ":" + engine + ":" + side + ":" + signalCloseTime,
+      symbol: ticker.symbol, side, engine, status: "OPEN",
+      entry, signalEntry: Number(candidate.entry ?? signalBar.close),
+      initialStop: stop, stop, stopMode: "matched-1.5x-15m-ATR",
+      signalTime: signalBar.time, entryTime: signalCloseTime,
+      entryFillBarTime: fillBar.time, score: Number(candidate.score || 0),
+      stopDistancePct, ambiguousCandles: 0,
+      maxFavorableExcursionMarginPct: 0, maxAdverseExcursionMarginPct: 0,
+      breakEvenActivated: false,
+      signalSetup: candidate.setup || candidate.reason || null,
+      historicalQuoteVolume
+    };
+    let closed = false;
+    for (let j = fillIndex; j < fiveMinute.length && fiveMinute[j].time < toMs; j++) {
+      const bar = fiveMinute[j];
+      if (candleAmbiguous(side, trade, bar)) trade.ambiguousCandles++;
+      const evaluated = evaluateTradeCandle(trade, { ...bar, time: bar.time + INTERVALS["5m"] });
+      if (evaluated.changed) {
+        if (evaluated.trade.status === "CLOSED_PROFIT") {
+          trade.maxFavorableExcursionMarginPct = Math.max(trade.maxFavorableExcursionMarginPct, TARGET);
+        }
+        Object.assign(trade, evaluated.trade);
+        trade.closedAtMs = bar.time + INTERVALS["5m"];
+        closed = true;
+        break;
+      }
+      if (bar.time !== fillBar.time) {
+        const excursion = excursionForBar(side, entry, bar);
+        trade.maxFavorableExcursionMarginPct = Math.max(trade.maxFavorableExcursionMarginPct, excursion.favorable);
+        trade.maxAdverseExcursionMarginPct = Math.max(trade.maxAdverseExcursionMarginPct, excursion.adverse);
+      }
+    }
+    if (!closed) {
+      trade.status = "OPEN_AT_BACKTEST_END";
+      trade.lastMark = fiveMinute.at(-1)?.close ?? null;
+      trade.marginReturnAtMarkPct = trade.lastMark
+        ? (side === "LONG" ? 1 : -1) * ((trade.lastMark - entry) / entry) * 100 * LEVERAGE : null;
+      locks.set(lockKey, toMs);
+    } else {
+      locks.set(lockKey, trade.closedAtMs);
+    }
+    trades.push(trade);
+  };
+
+  for (let i = 60; i < fifteenMinute.length - 1; i++) {
+    const signalBar = fifteenMinute[i];
+    const signalCloseTime = signalBar.time + INTERVALS["15m"];
+    if (signalCloseTime < testStart || signalCloseTime >= toMs) continue;
+    while (fourIndex < fourHour.length && fourHour[fourIndex].time + INTERVALS["4h"] <= signalCloseTime) fourIndex++;
+    while (hourIndex < oneHour.length && oneHour[hourIndex].time + INTERVALS["1h"] <= signalCloseTime) hourIndex++;
+    const closed4h = fourHour.slice(0, fourIndex);
+    const closed15m = fifteenMinute.slice(Math.max(0, i + 1 - 160), i + 1);
+    const closed1h = oneHour.slice(0, hourIndex);
+    if (closed4h.length < FUTURES_CONFIG.MIN_CANDLES || closed15m.length < 40 || closed1h.length < 60) continue;
+    const lastHour = closed1h.at(-1);
+    const historicalQuoteVolume = closed1h.slice(-24).reduce((sum, candle) => sum + Number(candle.volume) * Number(candle.close), 0);
+    if (!Number.isFinite(historicalQuoteVolume) || historicalQuoteVolume < FUTURES_CONFIG.MIN_QUOTE_VOLUME) continue;
+
+    // Current engine is reevaluated on the same completed 15m scan schedule as the new engine.
+    const tickerAtSignal = {
+      symbol: ticker.symbol, last: signalBar.close, quoteVolume: historicalQuoteVolume,
+      priceChangePercent: historicalChange(closed1h, closed1h.length - 1),
+      premium: { lastFundingRate: null }
+    };
+    try {
+      const current = analyzeFuturesSymbol(tickerAtSignal, closed1h, closed4h, closed15m);
+      if (current?.eligible === true && ["LONG", "SHORT"].includes(current.side)) {
+        emit("current-matched", current.side, current, signalCloseTime, signalBar, closed15m, historicalQuoteVolume);
+      }
+    } catch {}
+
+    // Independent engine uses the exact same signal timestamp, fill candle and stop/exit rules.
+    for (const side of ["LONG", "SHORT"]) {
+      const candidate = analyzeIndependentSignal({ side, candles4h: closed4h, candles15m: closed15m });
+      if (candidate) emit("new-matched", side, candidate, signalCloseTime, signalBar, closed15m, historicalQuoteVolume);
+    }
+  }
+  return trades;
+}
+
 async function backtestSymbol(ticker, fromMs, toMs) {
   const [oneHour,fourHour,fifteenMinute,fiveMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs),
@@ -438,6 +536,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   }
 
   const independent=backtestIndependentEngines(ticker,oneHour,fourHour,fifteenMinute,fiveMinute,testStart,toMs);
+  const matchedTrades=backtestMatchedEngines(ticker,oneHour,fourHour,fifteenMinute,fiveMinute,testStart,toMs);
   const periodBars=oneHour.filter(c=>c.time>=testStart&&c.time<toMs);
   const periodPriceChangePct=periodBars.length>1?(periodBars.at(-1).close/periodBars[0].open-1)*100:null;
   return {
@@ -446,7 +545,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     candles:{ "1h":oneHour.length, "4h":fourHour.length, "15m":fifteenMinute.length, "5m":fiveMinute.length },
     eligibleSignalOpportunities, skippedBySameSideLock:skippedByLock, rejectedSignals, rejectedByHistoricalVolume, rejectedStructuralStops,
     entryOrders, metrics:summarize(trades), independentTrades:independent.trades,
-    independentOpportunities:independent.opportunities, independentLockSkips:independent.lockSkips, trades
+    independentOpportunities:independent.opportunities, independentLockSkips:independent.lockSkips, matchedTrades, trades
   };
 }
 
@@ -475,6 +574,11 @@ async function main() {
   const metrics = summarize(allTrades);
   const independentTrades=successful.flatMap(r=>r.independentTrades||[]).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
   const independentMetrics=summarize(independentTrades);
+  const matchedTrades=successful.flatMap(r=>r.matchedTrades||[]).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
+  const matchedMetrics={
+    current:summarize(matchedTrades.filter(t=>t.engine==="current-matched")),
+    new:summarize(matchedTrades.filter(t=>t.engine==="new-matched"))
+  };
   const engineComparison={currentLong:{...metrics.bySide.LONG},independentLong:{...independentMetrics.bySide.LONG},currentShort:{...metrics.bySide.SHORT},independentShort:{...independentMetrics.bySide.SHORT}};
   const diagnosticSummary = Object.fromEntries(["CLOSED_PROFIT","CLOSED_STOP"].map(status => {
     const rows = allTrades.filter(t => t.status === status);
@@ -506,7 +610,7 @@ async function main() {
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies",
       historicalVolumeFilter:"per-signal rolling 24h estimate = sum(hourly base volume × hourly close); approximate quote turnover, not exact exchange ticker volume",},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
-    metrics,independentMetrics,engineComparison,independentOpportunities:{LONG:successful.reduce((n,r)=>n+(r.independentOpportunities?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentOpportunities?.SHORT||0),0)},independentLockSkips:{LONG:successful.reduce((n,r)=>n+(r.independentLockSkips?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentLockSkips?.SHORT||0),0)},diagnosticSummary,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.eligibleSignalOpportunities,0),
+    metrics,independentMetrics,matchedMetrics,matchedTrades,engineComparison,independentOpportunities:{LONG:successful.reduce((n,r)=>n+(r.independentOpportunities?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentOpportunities?.SHORT||0),0)},independentLockSkips:{LONG:successful.reduce((n,r)=>n+(r.independentLockSkips?.LONG||0),0),SHORT:successful.reduce((n,r)=>n+(r.independentLockSkips?.SHORT||0),0)},diagnosticSummary,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.eligibleSignalOpportunities,0),
     bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
