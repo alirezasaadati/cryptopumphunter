@@ -24,7 +24,15 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        stop_mode: [original, pivot15m]
+        include:
+          - stop_mode: original
+            buffer_atr: "0.2"
+          - stop_mode: pivot15m
+            buffer_atr: "0.2"
+          - stop_mode: pivot15m
+            buffer_atr: "0.5"
+          - stop_mode: pivot15m
+            buffer_atr: "1.0"
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -45,7 +53,7 @@ jobs:
           LIFECYCLE_BACKTEST_END_MS: "1790090998724"
           LIFECYCLE_BREAK_EVEN_MARGIN_PCT: "0"
           LIFECYCLE_STRUCTURAL_STOP_MODE: "${{ matrix.stop_mode }}"
-          LIFECYCLE_STRUCTURAL_STOP_BUFFER_ATR: "0.2"
+          LIFECYCLE_STRUCTURAL_STOP_BUFFER_ATR: "${{ matrix.buffer_atr }}"
           LIFECYCLE_RISK_PER_TRADE_PCT: "1"
           LIFECYCLE_BACKTEST_SYMBOL_LIST: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_ZECUSD,PF_HYPEUSD,PF_XRPUSD,PF_NEARUSD,PF_NVDAXUSD,PF_ADAUSD"
         run: node scripts/backtest-futures-lifecycle.mjs
@@ -53,7 +61,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: futures-lifecycle-stop-${{ matrix.stop_mode }}-60d
+          name: futures-lifecycle-stop-${{ matrix.stop_mode }}-${{ matrix.buffer_atr }}atr-60d
           path: |
             artifacts/futures-lifecycle-backtest.json
             artifacts/futures-lifecycle-backtest.md
