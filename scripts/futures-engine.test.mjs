@@ -112,7 +112,8 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
   assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
   assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.35);
-  assert.equal(FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT,0.3);
+  assert.equal(FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT_LONG,0.5);
+  assert.equal(FUTURES_CONFIG.MAX_BREAKOUT_DISTANCE_PCT_SHORT,0.3);
   assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,3.0);
   assert.equal("ENTRY_INTERVAL" in FUTURES_CONFIG,false);
 });
@@ -159,7 +160,7 @@ test("ATR rejects insufficient candles and calculates positive volatility",()=>{
   assert.ok(calculateAtr(makeCandles(),14)>0);
 });
 
-test("confirmed 15m pivot breakout filter uses the latest 3-left/3-right swing and 0.3% cap",()=>{
+test("confirmed 15m pivot breakout filter uses the latest 3-left/3-right swing with LONG 0.5% and SHORT 0.3% caps",()=>{
   const candles=Array.from({length:12},(_,i)=>({time:i,high:100+i*0.01,low:99+i*0.01}));
   candles[7].high=105;
   candles[4].high=101;
