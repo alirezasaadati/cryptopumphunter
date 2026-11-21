@@ -1718,10 +1718,12 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
       eligible: false
     };
   }
+  const baselineEligible = side === "LONG" && strictLong && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75 && passesLongDistanceThreshold("LONG", candles1h, 0.005);
   return {
     symbol: ticker.symbol,
     side,
     score,
+    baselineEligible,
     price: entry,
     entry,
     stop,
