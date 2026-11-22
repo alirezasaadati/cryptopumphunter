@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: "20"
       - name: Run v10.5 historical backtest
-        run: node scripts/backtest-v10-5-one-year.mjs | tee backtest.log
+        run: set -o pipefail; node scripts/backtest-v10-5-one-year.mjs | tee backtest.log
       - name: Upload report and trade ledger
         uses: actions/upload-artifact@v4
         with:
@@ -29,4 +29,5 @@ jobs:
             out/summary.json
             out/trades.csv
             backtest.log
+          if-no-files-found: error
           retention-days: 14
