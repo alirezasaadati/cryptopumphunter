@@ -40,8 +40,8 @@ export function formatFuturesSignalAlert(signal, index = 1) {
     `جهت معامله: ${side}\n\n` +
     `قیمت ورود: <b>${formatSignalPrice(signal?.entry)}</b>\n\n` +
     `🎯 تارگت اول (1.5R): <b>${formatSignalPrice(signal?.target1)}</b>\n\n` +
-    `🎯 تارگت دوم (2.2R): <b>${formatSignalPrice(signal?.target2)}</b>\n\n` +
-    `🎯 تارگت سوم (3R): <b>${formatSignalPrice(signal?.target3)}</b>\n\n` +
+    `🎯 تارگت دوم (2.5R): <b>${formatSignalPrice(signal?.target2)}</b>\n\n` +
+    `🎯 تارگت سوم (3.5R): <b>${formatSignalPrice(signal?.target3)}</b>\n\n` +
     `⛔ حد ضرر: <b>${formatSignalPrice(signal?.stop)}</b>`;
 }
 

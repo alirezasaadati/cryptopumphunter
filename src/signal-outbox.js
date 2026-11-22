@@ -5,6 +5,6 @@ export function signalOutboxKey(chatId, signalId) {
 export function signalOutboxAction(record) {
   if (record?.status === "ARCHIVED") return "done";
   if (record?.status === "SENDING" || record?.status === "UNCERTAIN") return "reconcile";
-  if (record?.status === "SENT") return "archive";
+  if (record?.status === "SENT" || record?.status === "ARCHIVE_PENDING") return "archive";
   return "send";
 }

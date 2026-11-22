@@ -89,7 +89,18 @@ test("admin signal listing returns recent unexpired signals from Durable Object 
 
 test("Durable Object supplies the 60-minute expiry when a new signal omits expiresAt",async()=>{
   const state=new Map([["active-futures-pending",[]],["active-futures-trades",[]]]);
-  const ctx={storage:{get:async key=>state.get(key),put:async(key,value)=>state.set(key,value),delete:async key=>state.delete(key)}};
+  const ctx={storage:{
+    get:async key=>state.get(key),
+    put:async(key,value)=>state.set(key,value),
+    delete:async key=>state.delete(key),
+    transaction:async callback=>{
+      const draft=new Map(state);
+      const tx={get:async key=>draft.get(key),put:async(key,value)=>draft.set(key,value),delete:async key=>draft.delete(key)};
+      const result=await callback(tx);
+      state.clear();for(const [key,value] of draft)state.set(key,value);
+      return result;
+    }
+  }};
   const coordinator=new SignalDeliveryCoordinator(ctx,{SIGNAL_DELIVERY_SECRET:"test-secret"});
   const now=Date.now();
   const signal={id:"missing-expiry",symbol:"PF_TESTUSD",side:"LONG",entry:100,stop:98,target1:103,target2:105,target3:107,score:68,createdAt:now};
@@ -112,7 +123,18 @@ test("open trade older than four hours does not block a fresh signal for the sam
   const oldTrade={id:"old-trade",signalId:"old-signal",symbol:"PF_TESTUSD",side:"LONG",status:"OPEN",
     createdAt:new Date(Date.now()-5*60*60*1000).toISOString()};
   const state=new Map([["active-futures-pending",[]],["active-futures-trades",[oldTrade]]]);
-  const ctx={storage:{get:async key=>state.get(key),put:async(key,value)=>state.set(key,value),delete:async key=>state.delete(key)}};
+  const ctx={storage:{
+    get:async key=>state.get(key),
+    put:async(key,value)=>state.set(key,value),
+    delete:async key=>state.delete(key),
+    transaction:async callback=>{
+      const draft=new Map(state);
+      const tx={get:async key=>draft.get(key),put:async(key,value)=>draft.set(key,value),delete:async key=>draft.delete(key)};
+      const result=await callback(tx);
+      state.clear();for(const [key,value] of draft)state.set(key,value);
+      return result;
+    }
+  }};
   const coordinator=new SignalDeliveryCoordinator(ctx,{SIGNAL_DELIVERY_SECRET:"test-secret"});
   const now=Date.now();
   const signal={id:"fresh-after-old-trade",symbol:"PF_TESTUSD",side:"LONG",entry:100,stop:98,target1:103,target2:105,target3:107,score:68,createdAt:now,expiresAt:now+3600000};

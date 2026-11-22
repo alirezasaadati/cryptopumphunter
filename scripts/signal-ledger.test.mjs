@@ -79,6 +79,7 @@ test("outbox sends only queued work and resumes archive after confirmed Telegram
   assert.equal(signalOutboxAction(null),"send");
   assert.equal(signalOutboxAction({status:"QUEUED"}),"send");
   assert.equal(signalOutboxAction({status:"SENT",telegramMessageId:42}),"archive");
+  assert.equal(signalOutboxAction({status:"ARCHIVE_PENDING",telegramMessageId:42}),"archive");
   assert.equal(signalOutboxAction({status:"ARCHIVED"}),"done");
 });
 

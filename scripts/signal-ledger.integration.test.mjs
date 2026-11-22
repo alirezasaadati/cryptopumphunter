@@ -37,7 +37,19 @@ function memoryStorage() {
     data,
     async get(key) { const value = data.get(key); return value === undefined ? undefined : structuredClone(value); },
     async put(key, value) { data.set(key, structuredClone(value)); },
-    async delete(key) { return data.delete(key); }
+    async delete(key) { return data.delete(key); },
+    async transaction(callback) {
+      const draft = new Map([...data.entries()].map(([key, value]) => [key, structuredClone(value)]));
+      const tx = {
+        async get(key) { const value = draft.get(key); return value === undefined ? undefined : structuredClone(value); },
+        async put(key, value) { draft.set(key, structuredClone(value)); },
+        async delete(key) { return draft.delete(key); }
+      };
+      const result = await callback(tx);
+      data.clear();
+      for (const [key, value] of draft) data.set(key, value);
+      return result;
+    }
   };
 }
 
@@ -85,6 +97,7 @@ test("archive keeps closed outcomes and open signals independently queryable", a
 test("outbox recovery policy distinguishes safe resume from ambiguous delivery", () => {
   assert.equal(signalOutboxAction({ status: "QUEUED" }), "send");
   assert.equal(signalOutboxAction({ status: "SENT", telegramMessageId: 77 }), "archive");
+  assert.equal(signalOutboxAction({ status: "ARCHIVE_PENDING", telegramMessageId: 77 }), "archive");
   assert.equal(signalOutboxAction({ status: "ARCHIVED" }), "done");
   assert.equal(signalOutboxAction({ status: "SENDING" }), "reconcile");
   assert.equal(signalOutboxAction({ status: "UNCERTAIN" }), "reconcile");
