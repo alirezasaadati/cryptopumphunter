@@ -2157,7 +2157,44 @@ async function reconcileSignalOutbox(env,ownerId,token,action){
   await showUncertainSignalOutbox(env,ownerId);
 }
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت و پیگیری نتایج معاملات در این نسخه غیرفعال است.")}
+async function notifyOwnerScanDiagnostics(env, message, throttleKey, ttlSeconds) {
+  const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
+  if (!ownerId) {
+    console.error("SCAN_DIAGNOSTIC_OWNER_MISSING", JSON.stringify({ timestamp: new Date().toISOString() }));
+    return false;
+  }
+  if (env.APP_KV && throttleKey) {
+    try {
+      if (await env.APP_KV.get(throttleKey)) return false;
+      await env.APP_KV.put(throttleKey, new Date().toISOString(), { expirationTtl: ttlSeconds });
+    } catch (error) {
+      console.error("SCAN_DIAGNOSTIC_THROTTLE_FAILED", String(error?.message || error));
+    }
+  }
+  try {
+    await sendLongMessage(env, ownerId, message);
+    return true;
+  } catch (error) {
+    console.error("SCAN_DIAGNOSTIC_TELEGRAM_FAILED", String(error?.stack || error?.message || error));
+    return false;
+  }
+}
+
 async function runAutomaticFuturesAlertScan(env) {
+  try {
+    return await runAutomaticFuturesAlertScanInternal(env);
+  } catch (error) {
+    const diagnostic = String(error?.stack || error?.message || error).slice(0, 1400);
+    console.error("AUTOMATIC_FUTURES_SCAN_FATAL", JSON.stringify({
+      timestamp: new Date().toISOString(), version: CONFIG.VERSION, error: diagnostic
+    }));
+    await notifyOwnerScanDiagnostics(env, "🚨 خطای اجرای اسکن زمان‌بندی‌شده فیوچرز\n\n" + diagnostic,
+      "futures:scan-diagnostic:fatal", 15 * 60);
+    return { scanned: false, error: diagnostic };
+  }
+}
+
+async function runAutomaticFuturesAlertScanInternal(env) {
   if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) {
     throw new Error("SIGNAL_DELIVERY and SIGNAL_DELIVERY_SECRET are required for scan coordination.");
   }
@@ -2169,13 +2206,48 @@ async function runAutomaticFuturesAlertScan(env) {
   if (!acquire.acquired) return { skipped: true, reason: "scan already running" };
   try {
     let tracking = { checked: 0, closed: 0, errors: 0 };
+    let trackingError = null;
     try {
       tracking = await monitorOpenFuturesTrades(env);
     } catch (error) {
+      trackingError = String(error?.message || error).slice(0, 500);
       console.error("Open futures trade monitoring failed:", String(error?.stack || error?.message || error));
     }
     const result = await runFuturesSignalScan(env);
-    return { scanned: true, signals: (result.signals || []).length, experimentalSignals: 0, tracking };
+    if (result.diagnostics) result.diagnostics.trackingError = trackingError;
+    const diagnostics = result.diagnostics || {};
+    const noSignalMessage = [
+      "🧪 گزارش تشخیصی اسکن خودکار فیوچرز",
+      "━━━━━━━━━━━━━━━━━━",
+      "نسخه: " + CONFIG.VERSION,
+      "زمان: " + (diagnostics.finishedAt || new Date().toISOString()),
+      "نمادهای واجد حجم: " + (diagnostics.universeCount ?? "—"),
+      "نمادهای تحلیل‌شده: " + (diagnostics.analyzedCount ?? "—"),
+      "نمادهای بررسی‌نشده به‌علت محدودیت زمان: " + (diagnostics.notAnalyzedCount ?? "—"),
+      "خطاهای دریافت/تحلیل: " + (diagnostics.analysisErrorCount ?? "—"),
+      "ردشده‌ها: " + (diagnostics.rejectedCount ?? "—"),
+      "سیگنال واجد شرایط: " + (diagnostics.eligibleCount ?? "—"),
+      "ثبت‌شده: " + (diagnostics.registeredCount ?? "—"),
+      "ارسال موفق: " + (diagnostics.delivery?.delivered ?? "—"),
+      "ارسال ناموفق: " + (diagnostics.delivery?.failed ?? "—"),
+      "مدت اسکن: " + (diagnostics.durationMs != null ? Math.round(diagnostics.durationMs / 1000) + " ثانیه" : "—"),
+      "",
+      "مهم‌ترین دلایل رد:",
+      ...(diagnostics.topRejections || []).map(x => "• " + x.reason + ": " + x.count),
+      diagnostics.deliveryError ? "\nخطای ارسال: " + diagnostics.deliveryError : "",
+      diagnostics.trackingError ? "\nخطای پایش معاملات: " + diagnostics.trackingError : "",
+      "━━━━━━━━━━━━━━━━━━",
+      diagnostics.signalCount ? "سیگنال صادر شد؛ این پیام گزارش خطا/وضعیت نیست." :
+        "در این نوبت سیگنالی واجد شرایط پیدا نشد."
+    ].filter(Boolean).join("\n");
+    if (diagnostics.analysisErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError) {
+      await notifyOwnerScanDiagnostics(env, noSignalMessage,
+        "futures:scan-diagnostic:issue", 15 * 60);
+    } else if ((diagnostics.signalCount || 0) === 0) {
+      await notifyOwnerScanDiagnostics(env, noSignalMessage,
+        "futures:scan-diagnostic:no-signal", 6 * 60 * 60);
+    }
+    return { scanned: true, signals: (result.signals || []).length, experimentalSignals: 0, tracking, diagnostics };
   } finally {
     const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
     if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
@@ -2186,7 +2258,26 @@ async function runFuturesSignalScan(env, options = {}) {
   const started = Date.now();
   const universe = await getKrakenFuturesUniverse();
   if (!universe.length) {
-    return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [] };
+    const finishedAt = new Date().toISOString();
+    const diagnostics = {
+      startedAt: new Date(started).toISOString(),
+      finishedAt,
+      durationMs: Date.now() - started,
+      universeCount: 0,
+      analyzedCount: 0,
+      notAnalyzedCount: 0,
+      analysisErrorCount: 0,
+      rejectedCount: 0,
+      eligibleCount: 0,
+      signalCount: 0,
+      registeredCount: 0,
+      delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
+      deliveryError: null,
+      universeError: "Kraken returned no active PI/PF USD perpetuals above the configured 24h quote-volume threshold.",
+      topRejections: [{ reason: "هیچ نماد واجد حداقل حجم ۲۴ساعته پیدا نشد.", count: 1 }]
+    };
+    console.error("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
+    return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [], diagnostics };
   }
 
   // Universe is already filtered to active PI/PF USD perpetuals with the minimum 24h quote volume and sorted by descending volume.
@@ -2194,12 +2285,14 @@ async function runFuturesSignalScan(env, options = {}) {
   const filteredUniverse = universe;
 
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
+  let analysisErrorCount = 0;
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
       const oneHour = await getKrakenFuturesCandles(ticker.symbol, "1h");
       return analyzeFuturesSymbol(ticker, oneHour, [], [], options);
     } catch (error) {
-      return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل" };
+      analysisErrorCount++;
+      return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticType: "data_or_analysis_error" };
     }
   }, () => Date.now() < analysisDeadline);
 
@@ -2219,13 +2312,41 @@ async function runFuturesSignalScan(env, options = {}) {
     }));
 
   const signals = await registerPendingFuturesSignals(env, generatedSignals);
+  let delivery = { newSignals: signals.length, recipients: 0, delivered: 0, failed: 0 };
+  let deliveryError = null;
   try {
-    await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
+    delivery = await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
   } catch (error) {
+    deliveryError = String(error?.message || error).slice(0, 700);
     console.error("Immediate futures alert dispatch failed:", String(error?.stack || error?.message || error));
   }
 
   const analyzedCount = analyzed.filter(Boolean).length;
+  const rejectionCounts = new Map();
+  for (const item of analyzed) {
+    if (!item || item.eligible === true) continue;
+    const reason = String(item.rejected || "علت رد نامشخص").slice(0, 180);
+    rejectionCounts.set(reason, (rejectionCounts.get(reason) || 0) + 1);
+  }
+  const finishedAt = new Date().toISOString();
+  const diagnostics = {
+    startedAt: new Date(started).toISOString(),
+    finishedAt,
+    durationMs: Date.now() - started,
+    universeCount: filteredUniverse.length,
+    analyzedCount,
+    notAnalyzedCount: Math.max(0, filteredUniverse.length - analyzedCount),
+    analysisErrorCount,
+    rejectedCount: analyzed.filter(x => x && x.eligible !== true).length,
+    eligibleCount: eligibleCandidates.length,
+    signalCount: signals.length,
+    registeredCount: signals.length,
+    delivery,
+    deliveryError,
+    topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count).slice(0, 6)
+  };
+  console.log("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
   const report =
     `📈 CRYPTO PUMP HUNTER V10.6 — STRICT SHORT HYBRID\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
@@ -2242,7 +2363,7 @@ async function runFuturesSignalScan(env, options = {}) {
     "📡 منبع داده: Kraken Derivatives Futures\n" +
     "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست.";
 
-  return { report, signals, experimentalSent: 0, analyzed };
+  return { report, signals, experimentalSent: 0, analyzed, diagnostics };
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
