@@ -106,7 +106,7 @@ function candidateAt(candles,i,engine,omit) {
   return {side,entry,stop,risk,target:entry-risk*TARGET_R,signalTime:last.time,atrPct,rsi:rv,distanceEma20Pct:d};
 }
 function simulate(candles,startIndex,c) {
-  const entry=c.entry*(1+SLIPPAGE),stop=c.stop,target=c.target;
+  const entry=c.entry*(1-SLIPPAGE),stop=c.stop,target=c.target;
   const risk=stop-entry;
   const maxIndex=Math.min(candles.length-1,startIndex+72);
   let exit= candles[maxIndex].close,reason="TIME",exitTime=candles[maxIndex].time;
