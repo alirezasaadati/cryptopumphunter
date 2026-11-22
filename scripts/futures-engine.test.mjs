@@ -381,6 +381,11 @@ test("volume priority bonus tiers are 0, 5, and 10 without changing qualificatio
   assert.equal(low.priorityScore,low.baseScore);
   assert.equal(medium.priorityScore,medium.baseScore+5);
   assert.equal(high.priorityScore,high.baseScore+10);
+  assert.equal(low.score,medium.score);
+  assert.equal(medium.score,high.score);
+  assert.equal(low.score,low.baseScore);
+  assert.equal(medium.score,medium.baseScore);
+  assert.equal(high.score,high.baseScore);
   assert.equal(low.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE,true);
   assert.equal(medium.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE,true);
   assert.equal(high.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE,true);
