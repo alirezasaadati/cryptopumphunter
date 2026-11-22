@@ -180,6 +180,7 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME,5_000_000);
   assert.equal(FUTURES_CONFIG.MIN_CANDLES,60);
   assert.equal(FUTURES_CONFIG.MIN_SCORE,65);
+  assert.equal(FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO,0.5);
   assert.equal(FUTURES_CONFIG.INTERVAL,"1h");
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
   assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
@@ -292,6 +293,30 @@ test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.ok(result.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE);
   assert.ok(result.volumeRatio>=FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO);
+});
+
+test("HIGH_RISK rejects relative volume below 0.5x",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  oneHour.at(-1).volume=avg*0.49;
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,undefined);
+  assert.match(result.rejected,/کمتر از حداقل مسیر پرریسک/);
+  assert.equal(result.entryDiagnostics.minimumHighRiskVolumeRatio,0.5);
+  assert.ok(result.entryDiagnostics.volumeRatio<0.5);
+});
+
+test("HIGH_RISK accepts relative volume exactly at the 0.5x floor",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  oneHour.at(-1).volume=avg*0.5;
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.highRiskEligible,true);
+  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.ok(result.volumeRatio>=0.5);
 });
 
 test("strict SHORT setup below standard score/volume falls back to HIGH_RISK",()=>{
