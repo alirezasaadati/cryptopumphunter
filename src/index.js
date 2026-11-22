@@ -2402,11 +2402,12 @@ async function runFuturesSignalScan(env, options = {}) {
     deliveryError,
     stageCounts: Object.fromEntries([...stageCounts.entries()].sort((a, b) => b[1] - a[1])),
     candleCounts: { min: candleCountSamples.length ? Math.min(...candleCountSamples.map(x => x.completeCandles)) : null, max: candleCountSamples.length ? Math.max(...candleCountSamples.map(x => x.completeCandles)) : null, samples: candleCountSamples.slice(0, 12) },
+    rejectionSamples: analyzed.filter(x => x && x.eligible !== true).slice(0, 20).map(x => ({ symbol: x.symbol, stage: x.diagnosticStage || "UNKNOWN", reason: x.rejected || null, details: x.diagnosticDetails || null, completeCandles: x.scanDiagnostics?.completeCandleCount ?? null })),
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count).slice(0, 6)
   };
   console.log("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
-  console.log("AUTOMATIC_FUTURES_STAGE_DIAGNOSTICS", JSON.stringify({ timestamp: finishedAt, version: CONFIG.VERSION, stageCounts: diagnostics.stageCounts, candleCounts: diagnostics.candleCounts }));
+  console.log("AUTOMATIC_FUTURES_STAGE_DIAGNOSTICS", JSON.stringify({ timestamp: finishedAt, version: CONFIG.VERSION, stageCounts: diagnostics.stageCounts, candleCounts: diagnostics.candleCounts, rejectionSamples: diagnostics.rejectionSamples }));
   const report =
     `📈 CRYPTO PUMP HUNTER V10.6 — STRICT SHORT HYBRID\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
