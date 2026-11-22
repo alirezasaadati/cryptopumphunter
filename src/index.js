@@ -6,7 +6,8 @@ import { evaluateTradeCandle } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
   VERSION: "11.2.0",
-  PENDING_TTL: 604800
+  PENDING_TTL: 604800,
+  TRADE_MONITOR_STUCK_AFTER_MS: 2 * 60 * 60 * 1000
 };
 
 
@@ -963,12 +964,45 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/menu - نمایش منوی اصلی\n" +
         "/futures - دریافت سیگنال‌های فیوچرز\n" +
         "/diagfutures - گزارش تشخیصی فقط‌خواندنی (مالک)\n" +
+        "/close_trade <ID> - بستن دستی رکورد پایش (مالک؛ نه معامله صرافی)\n" +
         "/scan - اسکن دستی بازار اسپات\n" +
         "/status - وضعیت ربات\n" +
         "/help - راهنما\n\n" +
         "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
         menuForChat(env, chatId)
       );
+      return;
+    }
+
+    if (command === "/close_trade") {
+      if (!isOwner(chatId, env)) {
+        await sendMessage(env, chatId, "⛔ این دستور فقط برای مالک ربات فعال است.");
+        return;
+      }
+      const tradeId = String(message?.text || "").trim().split(/\\s+/)[1] || "";
+      if (!tradeId) {
+        await sendMessage(env, chatId, "شناسه معامله را وارد کن: /close_trade <ID>");
+        return;
+      }
+      const openTrades = await getOpenFuturesTrades(env);
+      const trade = openTrades.find(item => String(item.id) === tradeId);
+      if (!trade) {
+        await sendMessage(env, chatId, "معامله OPEN با این شناسه پیدا نشد؛ هیچ تغییری انجام نشد.");
+        return;
+      }
+      const exitPrice = Number(trade.lastPrice || trade.actualEntry || trade.plannedEntry);
+      const change = priceChangePercent(trade.side, trade.actualEntry || trade.plannedEntry, exitPrice);
+      const closedAt = new Date().toISOString();
+      await persistFuturesTradeUpdates(env, [{
+        id: trade.id, status: "CLOSED_MANUAL", closeReason: "OWNER_MANUAL_TRACKING_RESET",
+        exitPrice, closePriceChangePercent: change, marginReturnPercent: change * FUTURES_DISPLAY_LEVERAGE,
+        closedAt, lastPrice: exitPrice, lastCheckedAt: trade.lastCheckedAt,
+        lastCheckedCandleTime: trade.lastCheckedCandleTime
+      }]);
+      await sendMessage(env, chatId,
+        "✅ رکورد پایش با موفقیت بسته شد و قفل نماد/جهت آزاد شد.\n" +
+        "قیمت مبنا: " + formatSignalPrice(exitPrice) + "\n" +
+        "⚠️ این دستور فقط رکورد داخلی ربات را می‌بندد؛ موقعیت واقعی صرافی را نمی‌بندد. بررسی و بستن موقعیت صرافی باید جداگانه انجام شود.");
       return;
     }
 
@@ -1968,45 +2002,89 @@ async function persistFuturesTradeUpdates(env, updates) {
   return payload;
 }
 
-async function monitorOpenFuturesTrades(env) {
+async function monitorOpenFuturesTrades(env, now = Date.now()) {
   const trades = await getOpenFuturesTrades(env);
-  if (!trades.length) return { checked: 0, closed: 0, errors: 0 };
-  const symbols = [...new Set(trades.map(t => t.symbol).filter(Boolean))];
+  const openTrades = trades.filter(t => t?.status === "OPEN");
+  if (!openTrades.length) return { checked: 0, closed: 0, errors: 0, errorDetails: [], stuckCount: 0, stuckTrades: [] };
+  const symbols = [...new Set(openTrades.map(t => t.symbol).filter(Boolean))];
   const updates = [];
+  const errorDetails = [];
   let checked = 0, closed = 0, errors = 0;
+  const timestamp = new Date(now).toISOString();
+  const recordError = (trade, stage, error) => {
+    const detail = {
+      tradeId: String(trade.id || ""),
+      symbol: String(trade.symbol || ""),
+      side: String(trade.side || ""),
+      stage,
+      message: String(error?.message || error).slice(0, 400),
+      at: timestamp
+    };
+    errorDetails.push(detail);
+    const history = [...(Array.isArray(trade.monitorErrorHistory) ? trade.monitorErrorHistory : []), detail].slice(-5);
+    updates.push({ ...trade, lastMonitorAttemptAt: timestamp, lastMonitorError: detail, monitorErrorAt: timestamp, monitorErrorHistory: history });
+    errors++;
+    console.error("FUTURES_TRADE_MONITOR_ERROR", JSON.stringify(detail));
+  };
   await mapLimit(symbols, 3, async symbol => {
+    const symbolTrades = openTrades.filter(t => t.symbol === symbol);
     let candles;
     try {
       candles = await getKrakenFuturesCandles(symbol, "5m");
     } catch (error) {
-      errors++;
-      console.error("Futures trade monitor candle fetch failed:", symbol, String(error?.message || error));
+      for (const trade of symbolTrades) recordError(trade, "CANDLE_FETCH", error);
       return;
     }
-    for (const original of trades.filter(t => t.symbol === symbol && t.status === "OPEN")) {
-      let trade = { ...original };
-      const freshCandles = getNewClosedFuturesCandles(candles, trade.lastCheckedCandleTime);
-      if (!freshCandles.length) continue;
-      for (const candle of freshCandles) {
-        const result = evaluateTradeCandle(trade, { ...candle, time: Number(candle.time) + 300000 });
-        trade = {
-          ...trade,
-          lastPrice: candle.close,
-          lastCheckedAt: new Date().toISOString(),
-          lastCheckedCandleTime: Number(candle.time)
-        };
-        checked++;
-        if (result.changed) {
-          trade = { ...result.trade, lastPrice: candle.close, lastCheckedAt: new Date().toISOString(), lastCheckedCandleTime: Number(candle.time) };
-          closed++;
-          break;
+    for (const original of symbolTrades) {
+      let trade = { ...original, lastMonitorAttemptAt: timestamp };
+      try {
+        const freshCandles = getNewClosedFuturesCandles(candles, trade.lastCheckedCandleTime);
+        for (const candle of freshCandles) {
+          const result = evaluateTradeCandle(trade, { ...candle, time: Number(candle.time) + 300000 });
+          trade = {
+            ...trade,
+            lastPrice: candle.close,
+            lastCheckedAt: timestamp,
+            lastCheckedCandleTime: Number(candle.time),
+            lastMonitorError: null
+          };
+          checked++;
+          if (result.changed) {
+            trade = {
+              ...result.trade, lastPrice: candle.close, lastCheckedAt: timestamp,
+              lastCheckedCandleTime: Number(candle.time), lastMonitorAttemptAt: timestamp,
+              lastMonitorError: null
+            };
+            closed++;
+            break;
+          }
         }
+        updates.push(trade);
+      } catch (error) {
+        recordError(original, "CANDLE_EVALUATION", error);
       }
-      updates.push(trade);
     }
   });
-  if (updates.length) await persistFuturesTradeUpdates(env, updates);
-  return { checked, closed, errors };
+  let persistenceError = null;
+  if (updates.length) {
+    try {
+      await persistFuturesTradeUpdates(env, updates);
+    } catch (error) {
+      errors++;
+      persistenceError = String(error?.message || error).slice(0, 400);
+      errorDetails.push({ stage: "PERSISTENCE", message: persistenceError, at: timestamp });
+      console.error("FUTURES_TRADE_MONITOR_PERSISTENCE_ERROR", persistenceError);
+    }
+  }
+  const stuckTrades = openTrades.filter(trade => {
+    const lastChecked = Date.parse(trade.lastCheckedAt || trade.createdAt || 0);
+    return !Number.isFinite(lastChecked) || now - lastChecked >= CONFIG.TRADE_MONITOR_STUCK_AFTER_MS;
+  }).map(trade => ({
+    tradeId: String(trade.id || ""), symbol: String(trade.symbol || ""),
+    side: String(trade.side || ""), lastCheckedAt: trade.lastCheckedAt || null,
+    ageMs: Math.max(0, now - (Date.parse(trade.lastCheckedAt || trade.createdAt || 0) || 0))
+  }));
+  return { checked, closed, errors, errorDetails: errorDetails.slice(0, 12), stuckCount: stuckTrades.length, stuckTrades: stuckTrades.slice(0, 10), persistenceError };
 }
 
 async function registerPendingFuturesSignals(env, candidates) {
@@ -2180,9 +2258,15 @@ export class SignalDeliveryCoordinator {
             const next={...existing,
               lastPrice:Number(candidate.lastPrice)||existing.lastPrice,
               lastCheckedAt:candidate.lastCheckedAt||existing.lastCheckedAt,
-              lastCheckedCandleTime:Math.max(Number(existing.lastCheckedCandleTime)||0,Number(candidate.lastCheckedCandleTime)||0)
+              lastCheckedCandleTime:Math.max(Number(existing.lastCheckedCandleTime)||0,Number(candidate.lastCheckedCandleTime)||0),
+              lastMonitorAttemptAt:candidate.lastMonitorAttemptAt||existing.lastMonitorAttemptAt,
+              lastMonitorError:candidate.lastMonitorError===null?null:(candidate.lastMonitorError||existing.lastMonitorError),
+              monitorErrorAt:candidate.monitorErrorAt||existing.monitorErrorAt,
+              monitorErrorHistory:Array.isArray(candidate.monitorErrorHistory)
+                ? candidate.monitorErrorHistory.slice(-5)
+                : (existing.monitorErrorHistory||[])
             };
-            if(["CLOSED_PROFIT","CLOSED_STOP"].includes(candidate.status)){
+            if(["CLOSED_PROFIT","CLOSED_STOP","CLOSED_MANUAL"].includes(candidate.status)){
               next.status=candidate.status;
               next.closeReason=candidate.closeReason||candidate.status;
               next.exitPrice=Number(candidate.exitPrice);
@@ -2212,7 +2296,7 @@ export class SignalDeliveryCoordinator {
           const now=Date.now();
           const current=await this.ctx.storage.get("active-futures-pending")||[];
           const trades=await this.ctx.storage.get("active-futures-trades")||[];
-          const closedSignalIds=new Set(trades.filter(t=>["CLOSED_PROFIT","CLOSED_STOP"].includes(t?.status)).map(t=>String(t.signalId)));
+          const closedSignalIds=new Set(trades.filter(t=>["CLOSED_PROFIT","CLOSED_STOP","CLOSED_MANUAL"].includes(t?.status)).map(t=>String(t.signalId)));
           const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side)&&!closedSignalIds.has(String(x?.id)));
           const activeKeys=new Set(active.map(x=>String(x.symbol).trim().toUpperCase()+"|"+x.side));
           // An OPEN tracked trade owns its symbol-side until the lifecycle monitor
@@ -2568,6 +2652,10 @@ async function runAutomaticFuturesAlertScanInternal(env) {
       "ثبت‌شده: " + (diagnostics.registeredCount ?? "—"),
       "کاندیداهای ثبت‌نشده: " + (diagnostics.unregisteredCandidateCount ?? 0),
       "رکوردهای ارسال نامشخص: " + (diagnostics.uncertainOutboxCount ?? "—"),
+      "معاملات OPEN بدون بررسی کندل در ۲ ساعت اخیر: " + (tracking.stuckCount ?? "—"),
+      "خطاهای داخلی پایش معاملات: " + (tracking.errors ?? 0),
+      ...(tracking.errorDetails || []).map(x => "• پایش " + (x.symbol || "") + " / " + (x.stage || "ERROR") + ": " + x.message),
+      ...(tracking.stuckTrades || []).map(x => "⚠️ معامله گیرکرده: " + x.symbol + " " + x.side + " | ID: " + x.tradeId + " | آخرین بررسی: " + (x.lastCheckedAt || "نامشخص")),
       "ارسال موفق: " + (diagnostics.delivery?.delivered ?? "—"),
       "ارسال ناموفق: " + (diagnostics.delivery?.failed ?? "—"),
       "مدت اسکن: " + (diagnostics.durationMs != null ? Math.round(diagnostics.durationMs / 1000) + " ثانیه" : "—"),
@@ -2580,7 +2668,7 @@ async function runAutomaticFuturesAlertScanInternal(env) {
       diagnostics.signalCount ? "سیگنال صادر شد؛ این پیام گزارش خطا/وضعیت نیست." :
         "در این نوبت سیگنالی واجد شرایط پیدا نشد."
     ].filter(Boolean).join("\n");
-    if (diagnostics.analysisErrorCount > 0 || diagnostics.fifteenMinuteDataErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError) {
+    if (diagnostics.analysisErrorCount > 0 || diagnostics.fifteenMinuteDataErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError || tracking.errors > 0 || tracking.stuckCount > 0) {
       await notifyOwnerScanDiagnostics(env, noSignalMessage,
         "futures:scan-diagnostic:issue", 15 * 60);
     } else if ((diagnostics.signalCount || 0) === 0) {
