@@ -1724,10 +1724,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
         longRsiOk, shortRsiOk, longTrendOk:up1h||up4h, shortTrendOk:down1h||down4h, failedChecks:failed } };
   }
 
-  // Keep the legacy volume contribution inside qualificationScore so existing
-  // STANDARD/HIGH_RISK eligibility thresholds do not change.
-  const legacyVolumeScore = volumeRatio >= 1.5 ? 18 : volumeRatio >= 1.0 ? 12 : 4;
-  score += legacyVolumeScore;
+  // Relative volume no longer contributes to eligibility score; it only
+  // supplies the independent priority bonus below.
   if (volumeRatio >= 1.0) reasons.push("حجم نسبی حداقل برابر میانگین است");
   else if (volumeRatio >= 0.5) reasons.push("حجم نسبی متوسط است");
   else reasons.push("حجم نسبی پایین است؛ بدون پاداش اولویت");
@@ -1750,9 +1748,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   } else {
     reasons.push("داده فاندینگ در دسترس نبود");
   }
-  // Remove the legacy volume points from the ranking score, then apply only
-  // the new tiered bonus. Qualification score remains unchanged for compatibility.
-  const priorityBaseScore = score - legacyVolumeScore;
+  // Qualification uses the base score only; volume bonus affects ranking only.
+  const priorityBaseScore = score;
   const priorityScore = priorityBaseScore + volumePriorityBonus;
 
   const fourHourOpposes = side === "LONG" ? down4h : up4h;
