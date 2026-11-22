@@ -956,12 +956,24 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/start - معرفی و شروع\n" +
         "/menu - نمایش منوی اصلی\n" +
         "/futures - دریافت سیگنال‌های فیوچرز\n" +
+        "/diagfutures - گزارش تشخیصی فقط‌خواندنی (مالک)\n" +
         "/scan - اسکن دستی بازار اسپات\n" +
         "/status - وضعیت ربات\n" +
         "/help - راهنما\n\n" +
         "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
         menuForChat(env, chatId)
       );
+      return;
+    }
+
+    if (command === "/diagfutures") {
+      if (!isOwner(chatId, env)) {
+        await sendMessage(env, chatId, "⛔ این دستور فقط برای مالک ربات فعال است.");
+        return;
+      }
+      await sendMessage(env, chatId, "🧪 بررسی تشخیصی فقط‌خواندنی شروع شد؛ هیچ سیگنالی ثبت یا ارسال نمی‌شود.");
+      const diagnostic = await runFuturesEntryDiagnostics();
+      await sendLongMessage(env, chatId, formatFuturesEntryDiagnostics(diagnostic));
       return;
     }
 
@@ -1581,9 +1593,6 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
 
   const atrPct = (atr / last.close) * 100;
   if (!Number.isFinite(atrPct)) throw new Error("محاسبه ATR درصدی نامعتبر است.");
-  if (atrPct > FUTURES_CONFIG.MAX_ATR_PCT) {
-    return { symbol, rejected: `نوسان (ATR) بیش از حد بالاست (${atrPct.toFixed(2)}%).` };
-  }
 
   let mode = null;
   let stopPrice = null;
@@ -1611,6 +1620,26 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     currentHighAbovePreviousHigh: last.high > prev.high,
     bodyExceedsHalfCandleRange: candleRange > 0 && bodyToRangeRatio > 0.5
   };
+  const entryConditionDiagnostics = {
+    close: last.close,
+    ema20: e20,
+    ema50: e50,
+    rsi14: rsiValue,
+    distanceToEma20Pct: distanceToE20,
+    atrPct,
+    trendShort: trendConditions,
+    rallyFade: { ...rallyBaseConditions, ...rallyCandleConditions, bodyToRangeRatio }
+  };
+
+  if (atrPct > FUTURES_CONFIG.MAX_ATR_PCT) {
+    return {
+      symbol,
+      rejected: `نوسان (ATR) بیش از حد بالاست (${atrPct.toFixed(2)}%).`,
+      diagnosticStage: "ATR_FILTER",
+      diagnosticDetails: { atrPct, maxAtrPct: FUTURES_CONFIG.MAX_ATR_PCT },
+      entryConditionDiagnostics
+    };
+  }
 
   if (isDowntrend) {
     mode = "TREND_SHORT";
@@ -1629,16 +1658,8 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     return {
       symbol,
       rejected: "شرایط سخت‌گیرانه ورود فراهم نیست.",
-      entryConditionDiagnostics: {
-        close: last.close,
-        ema20: e20,
-        ema50: e50,
-        rsi14: rsiValue,
-        distanceToEma20Pct: distanceToE20,
-        atrPct,
-        trendShort: trendConditions,
-        rallyFade: { ...rallyBaseConditions, ...rallyCandleConditions, bodyToRangeRatio }
-      }
+      diagnosticStage: "ENTRY_SETUP",
+      entryConditionDiagnostics
     };
   }
 
@@ -1647,27 +1668,30 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     : ticker.last;
   const entry = Number(entrySource);
   if (!Number.isFinite(entry) || entry <= 0) {
-    return { symbol, rejected: "قیمت ورود نامعتبر است." };
+    return { symbol, rejected: "قیمت ورود نامعتبر است.", diagnosticStage: "ENTRY_PRICE", entryConditionDiagnostics };
   }
   if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
-    return { symbol, rejected: "قیمت استاپ نامعتبر است." };
+    return { symbol, rejected: "قیمت استاپ نامعتبر است.", diagnosticStage: "STOP_VALIDATION", entryConditionDiagnostics };
   }
 
   const risk = stopPrice - entry;
   const riskPct = (risk / entry) * 100;
   if (!Number.isFinite(risk) || !Number.isFinite(riskPct) || risk <= 0) {
-    return { symbol, rejected: "استاپ در موقعیت معتبر برای معامله SHORT قرار ندارد." };
+    return { symbol, rejected: "استاپ در موقعیت معتبر برای معامله SHORT قرار ندارد.", diagnosticStage: "STOP_SIDE_VALIDATION", diagnosticDetails: { entry, stopPrice, risk, riskPct }, entryConditionDiagnostics };
   }
   if (riskPct > FUTURES_CONFIG.MAX_RISK_PCT || riskPct < FUTURES_CONFIG.MIN_RISK_PCT) {
     return {
       symbol,
-      rejected: `ریسک استاپ (${riskPct.toFixed(2)}%) خارج از محدوده مجاز است.`
+      rejected: `ریسک استاپ (${riskPct.toFixed(2)}%) خارج از محدوده مجاز است.`,
+      diagnosticStage: "RISK_FILTER",
+      diagnosticDetails: { riskPct, minRiskPct: FUTURES_CONFIG.MIN_RISK_PCT, maxRiskPct: FUTURES_CONFIG.MAX_RISK_PCT, entry, stopPrice },
+      entryConditionDiagnostics
     };
   }
 
   const target1 = entry - risk * FUTURES_CONFIG.TARGET_1_R;
   if (!Number.isFinite(target1) || target1 <= 0) {
-    return { symbol, rejected: "قیمت تارگت نامعتبر است." };
+    return { symbol, rejected: "قیمت تارگت نامعتبر است.", diagnosticStage: "TARGET_VALIDATION", entryConditionDiagnostics };
   }
 
   // target2/target3 are compatibility levels for the existing display/tracker schema.
@@ -1676,7 +1700,7 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
   const target3 = entry - risk * 3.0;
   if (![target2,target3].every(v => Number.isFinite(v) && v > 0) ||
       !(target3 < target2 && target2 < target1 && target1 < entry && entry < stopPrice)) {
-    return { symbol, rejected: "سطوح قیمت سیگنال معتبر نیستند." };
+    return { symbol, rejected: "سطوح قیمت سیگنال معتبر نیستند.", diagnosticStage: "TARGET_VALIDATION", diagnosticDetails: { entry, stopPrice, target1, target2, target3 }, entryConditionDiagnostics };
   }
 
   return {
@@ -1699,7 +1723,9 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     rsi: rsiValue,
     ema20: e20,
     ema50: e50,
-    eligible: true
+    eligible: true,
+    diagnosticStage: "ELIGIBLE",
+    entryConditionDiagnostics: { ...entryConditionDiagnostics, selectedEngine: mode }
   };
 }
 
@@ -2281,6 +2307,86 @@ async function runAutomaticFuturesAlertScanInternal(env) {
     const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
     if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
   }
+}
+
+// Owner-only, read-only diagnostics. This path reads public Kraken market data only;
+// it never registers signals, writes KV/DO state, or delivers trading alerts.
+async function runFuturesEntryDiagnostics() {
+  const startedAt = new Date().toISOString();
+  const universe = await getKrakenFuturesUniverse();
+  const analyzed = await mapLimit(
+    universe.slice(0, 30),
+    FUTURES_CONFIG.CONCURRENCY,
+    async ticker => {
+      try {
+        const candles = await getKrakenFuturesCandles(ticker.symbol, "1h");
+        const result = analyzeFuturesSymbol(ticker, candles, [], []);
+        return {
+          symbol: ticker.symbol,
+          stage: result.diagnosticStage || (result.eligible ? "ELIGIBLE" : "UNKNOWN"),
+          reason: result.rejected || null,
+          candleCount: candles.length,
+          conditions: result.entryConditionDiagnostics || null,
+          details: result.diagnosticDetails || null
+        };
+      } catch (error) {
+        return {
+          symbol: ticker.symbol,
+          stage: "DATA_OR_ANALYSIS_ERROR",
+          reason: String(error?.message || error).slice(0, 220),
+          candleCount: null,
+          conditions: null
+        };
+      }
+    }
+  );
+  const stageCounts = {};
+  const conditions = { trendShort: {}, rallyFade: {} };
+  for (const item of analyzed) {
+    stageCounts[item.stage] = (stageCounts[item.stage] || 0) + 1;
+    for (const [engine, flags] of [
+      ["trendShort", item.conditions?.trendShort],
+      ["rallyFade", item.conditions?.rallyFade]
+    ]) {
+      for (const [name, passed] of Object.entries(flags || {})) {
+        if (typeof passed !== "boolean") continue;
+        const counts = conditions[engine][name] || (conditions[engine][name] = { passed: 0, failed: 0 });
+        counts[passed ? "passed" : "failed"]++;
+      }
+    }
+  }
+  return {
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    universeCount: universe.length,
+    sampledCount: analyzed.length,
+    stageCounts,
+    conditions,
+    samples: analyzed
+  };
+}
+
+function formatFuturesEntryDiagnostics(d) {
+  const lines = [
+    "🧪 گزارش تشخیصی فقط‌خواندنی فیوچرز",
+    "━━━━━━━━━━━━━━━━━━",
+    "نمادهای واجد حجم در بازار: " + d.universeCount,
+    "نمادهای نمونه‌گیری و تحلیل‌شده: " + d.sampledCount,
+    "",
+    "مراحل رد/قبولی:"
+  ];
+  for (const [stage, count] of Object.entries(d.stageCounts || {})) lines.push("• " + stage + ": " + count);
+  for (const [engine, flags] of Object.entries(d.conditions || {})) {
+    lines.push("", engine === "trendShort" ? "شروط TREND_SHORT (قبول/رد):" : "شروط RALLY_FADE (قبول/رد):");
+    for (const [name, counts] of Object.entries(flags || {})) lines.push("• " + name + ": " + counts.passed + "/" + counts.failed);
+  }
+  lines.push("", "نمونه نمادها:");
+  for (const item of (d.samples || []).slice(0, 15)) {
+    lines.push("• " + item.symbol + " | " + item.stage + " | کندل: " + (item.candleCount ?? "—") +
+      (item.reason ? " | " + item.reason : ""));
+  }
+  lines.push("", "⛔ این گزارش فقط‌خواندنی است؛ هیچ سیگنالی ثبت، ارسال یا معامله‌ای اجرا نشده است.");
+  return lines.join("\n");
 }
 
 async function runFuturesSignalScan(env, options = {}) {
