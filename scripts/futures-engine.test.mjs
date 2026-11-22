@@ -178,6 +178,7 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.REQUEST_TIMEOUT_MS,12000);
   assert.equal(FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN,20);
   assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME,5_000_000);
+  assert.equal(FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME,1_000_000);
   assert.equal(FUTURES_CONFIG.MIN_CANDLES,60);
   assert.equal(FUTURES_CONFIG.MIN_SCORE,65);
   assert.equal(FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO,0.5);
@@ -223,7 +224,8 @@ test("Kraken perpetual filter accepts only liquid PI/PF USD perpetuals",()=>{
   assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:8_000_000,last:50_000}),true);
   assert.equal(isKrakenPerpetualTicker({tag:"month",symbol:"PF_XBTUSD",volumeQuote:8_000_000,last:50_000}),false);
   assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"BTC/USD",volumeQuote:8_000_000,last:50_000}),false);
-  assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:1_000,last:50_000}),false);
+  assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:1_000_000,last:50_000}),true);
+  assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:999_999,last:50_000}),false);
 });
 
 test("ATR rejects insufficient candles and calculates positive volatility",()=>{
@@ -286,6 +288,7 @@ test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=
   const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
   oneHour.at(-1).volume=avg*0.6;
   ticker.priceChangePercent=0;
+  ticker.quoteVolume=2_000_000;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.side,"LONG");
   assert.equal(result.eligible,true,JSON.stringify(result));
@@ -293,6 +296,31 @@ test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.ok(result.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE);
   assert.ok(result.volumeRatio>=FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO);
+  assert.equal(result.quoteVolume,2_000_000);
+});
+
+test("HIGH_RISK rejects quote volume below the 1M USD safety floor",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  ticker.quoteVolume=999_999;
+  oneHour.at(-1).volume=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,undefined);
+  assert.match(result.rejected,/کف ایمنی مسیر پرریسک/);
+  assert.equal(result.entryDiagnostics.minimumHighRiskQuoteVolume,1_000_000);
+});
+
+test("Kraken universe includes symbols above 1M USD for HIGH_RISK evaluation",async()=>{
+  const originalFetch=globalThis.fetch;
+  const tickers=[
+    {tag:"perpetual",symbol:"PF_TESTLOWUSD",volumeQuote:2_000_000,last:10,suspended:false},
+    {tag:"perpetual",symbol:"PF_TESTDEADUSD",volumeQuote:999_999,last:10,suspended:false}
+  ];
+  globalThis.fetch=async()=>new Response(JSON.stringify({tickers}),{status:200});
+  try {
+    const universe=await getKrakenFuturesUniverse();
+    assert.deepEqual(universe.map(x=>x.symbol),["PF_TESTLOWUSD"]);
+  } finally { globalThis.fetch=originalFetch; }
 });
 
 test("HIGH_RISK rejects relative volume below 0.5x",()=>{
