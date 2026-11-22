@@ -97,6 +97,7 @@ test("archive keeps closed outcomes and open signals independently queryable", a
 test("outbox recovery policy distinguishes safe resume from ambiguous delivery", () => {
   assert.equal(signalOutboxAction({ status: "QUEUED" }), "send");
   assert.equal(signalOutboxAction({ status: "SENT", telegramMessageId: 77 }), "archive");
+  assert.equal(signalOutboxAction({ status: "ARCHIVE_PENDING", telegramMessageId: 77 }), "archive");
   assert.equal(signalOutboxAction({ status: "ARCHIVED" }), "done");
   assert.equal(signalOutboxAction({ status: "SENDING" }), "reconcile");
   assert.equal(signalOutboxAction({ status: "UNCERTAIN" }), "reconcile");
