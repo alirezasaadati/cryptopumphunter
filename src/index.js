@@ -1715,13 +1715,48 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   }
 
   const fourHourOpposes = side === "LONG" ? down4h : up4h;
-  const entryFilters = options.skipEntryFilters
-    ? { ok: true, skippedForBaseline: true }
-    : strictSetup
-      ? evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr })
-      : evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, fourHourOpposes });
+  const standardThresholdMet = strictSetup &&
+    score >= FUTURES_CONFIG.MIN_SCORE &&
+    volumeRatio >= 0.75;
+  let standardEntryPassed = false;
+  let entryFilters;
+
+  if (options.skipEntryFilters) {
+    entryFilters = { ok: true, skippedForBaseline: true };
+    standardEntryPassed = standardThresholdMet;
+  } else if (standardThresholdMet) {
+    const strictEntryFilters = evaluateFuturesEntryFilters({
+      ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr
+    });
+    if (strictEntryFilters.ok) {
+      entryFilters = strictEntryFilters;
+      standardEntryPassed = true;
+    } else {
+      // A strict candidate that misses the standard entry rules may still qualify
+      // through the independent high-risk path, for both LONG and SHORT.
+      const flexibleEntryFilters = evaluateHighRiskFuturesEntryFilters({
+        ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, fourHourOpposes
+      });
+      entryFilters = flexibleEntryFilters.ok
+        ? { ...flexibleEntryFilters, strictEntryRejected: strictEntryFilters.rejected, highRiskFallback: true }
+        : { ...flexibleEntryFilters, strictEntryRejected: strictEntryFilters.rejected };
+    }
+  } else {
+    // Do not let strictSetup alone block a candidate from the relaxed path:
+    // score/volume misses and strict-vs-flexible entry differences are fallback cases.
+    entryFilters = evaluateHighRiskFuturesEntryFilters({
+      ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, fourHourOpposes
+    });
+  }
+
   if (!entryFilters.ok) {
-    return { symbol: ticker.symbol, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
+    return {
+      symbol: ticker.symbol,
+      side,
+      score: Math.max(0, Math.min(100, Math.round(score))),
+      rejected: entryFilters.rejected,
+      entryDiagnostics: entryFilters
+    };
   }
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
@@ -1751,8 +1786,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const target2 = entry + direction * risk * 2.5;
   const target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
-  const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
-  const highRiskEligible = !strictSetup &&
+  const eligible = standardEntryPassed;
+  const highRiskEligible = !standardEntryPassed &&
     score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE &&
     volumeRatio >= FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
   if (highRiskEligible) reasons.push("این سیگنال فقط از مسیر مستقل منعطف عبور کرده و پرریسک طبقه‌بندی شده است");
