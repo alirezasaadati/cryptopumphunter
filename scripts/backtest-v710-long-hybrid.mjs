@@ -152,3 +152,5 @@ async function main(){
   console.log("FINAL_REPORT",JSON.stringify(periods.map(p=>({name:p.name,from:p.from,to:p.to,performance:p.performance,byMode:p.byMode,failures:p.failures}))));
 }
 main().catch(e=>{console.error(e);process.exit(1);});
+
+// trigger run after workflow and harness are both present
