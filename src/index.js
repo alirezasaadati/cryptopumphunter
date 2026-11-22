@@ -1253,7 +1253,7 @@ async function showStatus(env, chatId) {
     env,
     chatId,
     `🟢 وضعیت ربات\n\n` +
-    `نسخه: V${CONFIG.VERSION}\n` +
+    `نسخه ربات:\n V${CONFIG.VERSION}\n` +
     "حالت فعالیت:\n" +
     "موتور سیگنالدهی کراکن\n" +
     "اتصال KV:\n" +
