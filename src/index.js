@@ -1606,7 +1606,7 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
   const trendConditions = {
     closeBelowEma50: last.close < e50,
     ema20BelowEma50: e20 < e50,
-    rsiBelow40: rsiValue < 40,
+    rsiBelow45: rsiValue < 45,
     atLeastHalfPercentBelowEma20: distanceToE20 < -0.5
   };
   const isDowntrend = Object.values(trendConditions).every(Boolean);
