@@ -1264,10 +1264,13 @@ async function showStatus(env, chatId) {
 async function showConnectionTest(env, chatId) {
   await sendMessage(env, chatId, "🔌 در حال بررسی اتصال منابع داده...");
   const result = await testDataSources();
-  const futures = result.krakenFutures?.ok
-    ? `✅ Kraken Futures: متصل (${result.krakenFutures.symbols} قرارداد | نمونه ${result.krakenFutures.sample} | ${result.krakenFutures.candles} کندل 1H)`
-    : `❌ Kraken Futures: ${result.krakenFutures?.error || "نامشخص"}`;
-  await sendMessage(env, chatId, "🔌 نتیجه تست اتصال\n\n" + futures + "\n\n" + `نسخه ربات: V${CONFIG.VERSION}`, menuForChat(env, chatId));
+  const connectionStatus = result.krakenFutures?.ok ? "متصل" : "قطع";
+  await sendMessage(
+    env,
+    chatId,
+    `${result.krakenFutures?.ok ? "✅" : "❌"} موتور کراکن: ${connectionStatus}\nورژن: V${CONFIG.VERSION}`,
+    menuForChat(env, chatId)
+  );
 }
 async function registerWebhook(request, env) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) {
