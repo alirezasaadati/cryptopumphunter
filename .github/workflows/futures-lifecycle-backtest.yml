@@ -2,12 +2,9 @@ name: Experimental futures lifecycle backtest
 on:
   workflow_dispatch:
   push:
-    branches: [feature/leveraged-profit-close-lifecycle]
+    branches: [backtest/main-engine-tp30-90d-180d-20261122]
     paths:
-      - "scripts/backtest-futures-lifecycle.mjs"
-      - ".github/workflows/futures-lifecycle-backtest.yml"
-      - "src/futures-trade-lifecycle.js"
-      - "src/index.js"
+      - "backtest-trigger.txt"
 jobs:
   backtest:
     runs-on: ubuntu-latest
@@ -19,13 +16,13 @@ jobs:
           node-version: 22
       - name: Run lifecycle historical backtest
         env:
-          LIFECYCLE_BACKTEST_DAYS: "30"
-          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+          LIFECYCLE_BACKTEST_DAYS: "90"
+          LIFECYCLE_BACKTEST_SYMBOLS: "12"
         run: node scripts/backtest-futures-lifecycle.mjs
       - name: Upload lifecycle report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: futures-lifecycle-backtest
+          name: current-main-engine-tp30-90d
           path: artifacts/
           if-no-files-found: error
