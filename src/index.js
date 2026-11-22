@@ -1689,7 +1689,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     reasons.push(strictSetup
       ? "حداقل یک تایم‌فریم صعودی است و تایم‌فریم دیگر مخالفت نمی‌کند"
       : "ستاپ پرریسک: روند ۱ساعته صعودی؛ مخالفت ۴ساعته با تأیید ۱۵دقیقه‌ای کنترل می‌شود",
-      "قیمت بالای EMA20 قرار دارد");
+      "ساختار EMA تایم‌فریم جهت‌دهنده تأیید شده است");
     score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
   } else if (strictShort || (!strictSetup && relaxedShort)) {
     side = "SHORT";
@@ -1697,7 +1697,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     reasons.push(strictSetup
       ? "حداقل یک تایم‌فریم نزولی است و تایم‌فریم دیگر مخالفت نمی‌کند"
       : "ستاپ پرریسک: روند ۱ساعته نزولی؛ مخالفت ۴ساعته با تأیید ۱۵دقیقه‌ای کنترل می‌شود",
-      "قیمت زیر EMA20 قرار دارد");
+      "ساختار EMA تایم‌فریم جهت‌دهنده تأیید شده است");
     score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
   } else {
     const longRsiOk = rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
