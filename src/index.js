@@ -2146,12 +2146,11 @@ export class SignalDeliveryCoordinator {
             if(activeKeys.has(key)||activeTradeKeys.has(key)||seen.has(key))continue;
             const createdAt=Number(signal.createdAt)||now;
             const suppliedExpiry=Number(signal.expiresAt);
-            const expiresAt=Number.isFinite(suppliedExpiry)&&suppliedExpiry>now
+            // Preserve explicit expiry (including already-expired snapshots);
+            // only missing/invalid expiry gets the configured 60-minute TTL.
+            const expiresAt=Number.isFinite(suppliedExpiry)&&signal.expiresAt!=null&&signal.expiresAt!==""
               ? suppliedExpiry
-              : (signal.expiresAt==null||signal.expiresAt==="")
-                ? createdAt+FUTURES_CONFIG.SIGNAL_TTL_MINUTES*60000
-                : suppliedExpiry;
-            if(!Number.isFinite(expiresAt)||expiresAt<=now)continue;
+              : createdAt+FUTURES_CONFIG.SIGNAL_TTL_MINUTES*60000;
             const normalizedSignal={...signal,createdAt,expiresAt};
             seen.add(key);fresh.push(normalizedSignal);
             const trade=createTrackedFuturesTrade(normalizedSignal,"signal-evaluation");
