@@ -56,6 +56,9 @@ export function evaluateTradeCandle(trade, candle) {
     ...trade,
     status: reason,
     closeReason: reason,
+    tpHits: reason === "CLOSED_PROFIT"
+      ? [...new Set([...(Array.isArray(trade.tpHits) ? trade.tpHits : []), "TP1"])]
+      : (Array.isArray(trade.tpHits) ? trade.tpHits : []),
     exitPrice,
     closePriceChangePercent: priceChangePercent(trade.side, entry, exitPrice),
     // Retained as a null legacy field for compatibility; no leverage/margin
