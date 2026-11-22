@@ -1,14 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
-import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARGET_PERCENT } from "../src/futures-trade-lifecycle.js";
+import { evaluateTradeCandle } from "../src/futures-trade-lifecycle.js";
 
 const BASE = "https://futures.kraken.com";
 const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
 const DAYS = Math.max(7, Math.min(60, Number(process.env.LIFECYCLE_BACKTEST_DAYS || 30)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 15;
-const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
-const LEVERAGE = FUTURES_TRADE_LEVERAGE;
 
 async function getJson(url, attempt = 0) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
@@ -72,7 +70,7 @@ function lowerBound(candles, time) {
 }
 function candleAmbiguous(side, trade, candle) {
   const entry = Number(trade.entry), stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
-  const target = side === "LONG" ? entry * (1 + TARGET / LEVERAGE / 100) : entry * (1 - TARGET / LEVERAGE / 100);
+  const target = Number(trade.target1);
   const stopHit = side === "LONG" ? candle.low <= stop : candle.high >= stop;
   const profitHit = side === "LONG" ? candle.high >= target : candle.low <= target;
   const stopAtOpen = side === "LONG" ? candle.open <= stop : candle.open >= stop;
@@ -85,13 +83,13 @@ function summarize(trades) {
   const stops = closed.filter(t => t.status === "CLOSED_STOP");
   let equity = 0, peak = 0, maxDrawdown = 0;
   for (const trade of [...closed].sort((a,b)=>a.closedAtMs-b.closedAtMs)) {
-    equity += Number(trade.marginReturnPercent || 0);
+    equity += Number(trade.closePriceChangePercent || 0);
     peak = Math.max(peak, equity);
     maxDrawdown = Math.max(maxDrawdown, peak - equity);
   }
   const longs = closed.filter(t => t.side === "LONG");
   const shorts = closed.filter(t => t.side === "SHORT");
-  const sum = xs => xs.reduce((n,t)=>n+Number(t.marginReturnPercent || 0),0);
+  const sum = xs => xs.reduce((n,t)=>n+Number(t.closePriceChangePercent || 0),0);
   return {
     tradesStarted: trades.length,
     closedTrades: closed.length,
@@ -101,13 +99,13 @@ function summarize(trades) {
     longs: longs.length,
     shorts: shorts.length,
     winRatePct: closed.length ? profits.length / closed.length * 100 : 0,
-    totalMarginReturnPct: sum(closed),
-    averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
-    maxDrawdownMarginPct: maxDrawdown,
+    totalPriceChangePct: sum(closed),
+    averagePriceChangePct: closed.length ? sum(closed) / closed.length : 0,
+    maxDrawdownPriceChangePct: maxDrawdown,
     ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
     bySide: {
-      LONG: { trades: longs.length, profitCloses: longs.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: longs.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(longs) },
-      SHORT: { trades: shorts.length, profitCloses: shorts.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: shorts.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(shorts) }
+      LONG: { trades: longs.length, profitCloses: longs.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: longs.filter(t=>t.status==="CLOSED_STOP").length, priceChangePct: sum(longs) },
+      SHORT: { trades: shorts.length, profitCloses: shorts.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: shorts.filter(t=>t.status==="CLOSED_STOP").length, priceChangePct: sum(shorts) }
     }
   };
 }
@@ -156,7 +154,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const trade = {
       id: ticker.symbol + ":" + candidate.side + ":" + signalCloseTime,
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
-      entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
+      entry, target1: Number(candidate.target1), target2: Number(candidate.target2), target3: Number(candidate.target3), initialStop: Number(candidate.stop), stop: Number(candidate.stop),
       signalTime: signalBar.time, entryTime: signalCloseTime,
       score: candidate.score, ambiguousCandles: 0
     };
@@ -176,7 +174,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (!closed) {
       trade.status = "OPEN_AT_BACKTEST_END";
       trade.lastMark = fiveMinute.at(-1)?.close ?? null;
-      trade.marginReturnAtMarkPct = trade.lastMark ? (candidate.side==="LONG" ? 1 : -1) * ((trade.lastMark-entry)/entry) * 100 * LEVERAGE : null;
+      trade.priceChangeAtMarkPct = trade.lastMark ? (candidate.side==="LONG" ? 1 : -1) * ((trade.lastMark-entry)/entry) * 100 : null;
       // Preserve the same-side lock through the sample end for still-open trades.
       lockUntil.set(lockKey,toMs);
     } else {
@@ -216,10 +214,9 @@ async function main() {
   const report = {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
-    rules:{leverage:LEVERAGE,targetMarginReturnPct:TARGET,requiredFavorablePriceMovePct:TARGET/LEVERAGE,
-      exit:"close only at +30% margin return or configured stop",tp1Tp2Tp3:"ignored for closing",
+    rules:{exit:"close signal evaluation at its signal-defined TP1 or configured stop",tp1:"uses candidate.target1 from the strategy (currently 1.5R)",tp2Tp3:"informational levels; not used as signal closure triggers",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
-      fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
+      returns:"unleveraged underlying price change; leverage and margin are not modeled",fees:"excluded",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
@@ -240,20 +237,20 @@ async function main() {
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
-    "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
+    "| Profit closes (signal TP1) | "+metrics.profitCloses+" |",
     "| Stop closes | "+metrics.stopCloses+" |",
     "| Open at end | "+metrics.openAtEnd+" |",
     "| LONG / SHORT | "+metrics.longs+" / "+metrics.shorts+" |",
     "| Win rate | "+metrics.winRatePct.toFixed(2)+"% |",
-    "| Sum margin return (not compounded) | "+metrics.totalMarginReturnPct.toFixed(2)+"% |",
-    "| Average margin return / trade | "+metrics.averageMarginReturnPct.toFixed(2)+"% |",
-    "| Max drawdown (additive margin-return points) | "+metrics.maxDrawdownMarginPct.toFixed(2)+"% |",
+    "| Sum underlying price change (not compounded) | "+metrics.totalPriceChangePct.toFixed(2)+"% |",
+    "| Average underlying price change / trade | "+metrics.averagePriceChangePct.toFixed(2)+"% |",
+    "| Max drawdown (additive price-change points) | "+metrics.maxDrawdownPriceChangePct.toFixed(2)+"% |",
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
     "| Same-side lock skips | "+report.lockSkips+" |",
     "| Rejected signal opportunities | "+report.rejectedSignals+" |","",
-    "| Symbol | Signals | Closed | Profit | Stop | LONG | SHORT | Net margin % |",
+    "| Symbol | Signals | Closed | Profit | Stop | LONG | SHORT | Net price change % |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
-    ...successful.map(r=>"| "+r.symbol+" | "+r.signalsAccepted+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.longs+" | "+r.metrics.shorts+" | "+r.metrics.totalMarginReturnPct.toFixed(2)+" |"),
+    ...successful.map(r=>"| "+r.symbol+" | "+r.signalsAccepted+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.longs+" | "+r.metrics.shorts+" | "+r.metrics.totalPriceChangePct.toFixed(2)+" |"),
     "", "Limitations: 5m OHLC cannot identify intrabar path; ambiguous candles use stop-first. Stop execution is assumed at the stop or gap open. Liquidation, funding, fees, and slippage are excluded. Universe selection uses current volume, so survivorship bias applies.",
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
