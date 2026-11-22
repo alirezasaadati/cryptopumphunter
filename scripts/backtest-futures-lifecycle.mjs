@@ -201,10 +201,9 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     for (; candleIndex < fiveMinute.length && fiveMinute[candleIndex].time < toMs; candleIndex++) {
       const bar = fiveMinute[candleIndex];
       if (candleAmbiguous(candidate.side,trade,bar)) trade.ambiguousCandles++;
-      const evaluated = evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
-      if (evaluated.changed) {
-        Object.assign(trade,evaluated.trade);
-        trade.closedAtMs = bar.time + INTERVALS["5m"];
+      const evaluated = evaluateTp1Candle(trade,bar);
+      if (evaluated) {
+        Object.assign(trade,evaluated);
         closed = true;
         break;
       }
