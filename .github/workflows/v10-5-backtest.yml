@@ -5,6 +5,7 @@ on:
       - backtest-v10-5-one-year-20261122
     paths:
       - "scripts/backtest-v10-5-one-year.mjs"
+      - "scripts/backtest-v10-5-portfolio-30pct.mjs"
       - ".github/workflows/v10-5-backtest.yml"
   workflow_dispatch:
 permissions:
