@@ -5,57 +5,66 @@ import {
   SignalDeliveryCoordinator,
   isKrakenPerpetualTicker,
   calculateAtr,
+  evaluateFuturesEntryFilters,
   analyzeFuturesSymbol,
   getKrakenFuturesCandles,
   getKrakenFuturesUniverse,
   mapLimit
 } from "../src/index.js";
 
-function makeTrendShortCandles(count=120) {
-  return Array.from({length:count},(_,i)=>{
-    const close=160-i*0.12;
-    const open=i===0?close+0.1:160-(i-1)*0.12;
+function makeCandles({count=120,slope=0.015,base=100,volume=100}={}) {
+  const closes=Array.from({length:count},(_,i)=>base+i*slope+(i%2?0.12:-0.12));
+  return closes.map((close,i)=>{
+    const open=i?closes[i-1]:close-0.1;
+    const last=i===count-1;
     return {
       time:Date.now()-(count-i)*60*60*1000,
       open,
-      high:Math.max(open,close)+0.5,
-      low:Math.min(open,close)-0.5,
+      high:last?close+0.05:Math.max(open,close)+0.08,
+      low:last?open-0.05:Math.min(open,close)-0.08,
       close,
-      volume:100
+      volume:last?volume*2:volume
     };
   });
 }
 
-function makeRallyFadeCandles(count=120) {
-  const candles=Array.from({length:count},(_,i)=>{
-    const close=80+i*0.10;
-    const open=i===0?close-0.05:80+(i-1)*0.10;
-    return {
-      time:Date.now()-(count-i)*60*60*1000,
-      open,
-      high:Math.max(open,close)+0.2,
-      low:Math.min(open,close)-0.2,
-      close,
-      volume:100
-    };
-  });
-  const last=candles.at(-1);
-  const previous=candles.at(-2);
-  last.open=last.close+0.8;
-  last.high=Math.max(last.open,previous.high+0.25);
-  last.low=last.close-0.1;
-  return candles;
+function testEma(values,period) {
+  const multiplier=2/(period+1);
+  let value=values.slice(0,period).reduce((a,b)=>a+b,0)/period;
+  for(let i=period;i<values.length;i++)value=values[i]*multiplier+value*(1-multiplier);
+  return value;
 }
 
-function ticker(symbol="PF_XBTUSD",last=null) {
-  return {symbol,last:last??100,volumeQuote:20_000_000,change24h:-2,fundingRate:0};
+function makeSetup(side="LONG") {
+  const direction=side==="LONG"?1:-1;
+  const oneHour=makeCandles({slope:0.015*direction,base:100});
+  const fourHour=makeCandles({slope:0.04*direction,base:100});
+  const fifteenMinute=makeCandles({count:120,slope:0.004*direction,base:oneHour.at(-1).close-0.8*direction,volume:100});
+  const closes=fifteenMinute.map(c=>c.close);
+  const ema21=closes.slice(-21).reduce((a,b)=>a+b,0)/21;
+  for(const c of fifteenMinute.slice(-9,-1)){
+    if(direction>0)c.low=Math.min(c.low,ema21-0.1);
+    else c.high=Math.max(c.high,ema21+0.1);
+  }
+  const last15=fifteenMinute.at(-1);
+  last15.open=last15.close-0.05*direction;
+  last15.close=oneHour.at(-1).close;
+  last15.high=Math.max(last15.high,last15.close+0.05);
+  last15.low=Math.min(last15.low,last15.open-0.05);
+  return {
+    ticker:{
+      symbol:"PF_TESTUSD",last:oneHour.at(-1).close,quoteVolume:12_000_000,
+      priceChangePercent:2*direction,premium:{lastFundingRate:0.0001*direction}
+    },
+    oneHour,fourHour,fifteenMinute
+  };
 }
 
 test("admin signal listing returns recent unexpired signals from Durable Object without writes",async()=>{
   const now=Date.now();
   const stored=[
     {id:"old",symbol:"PF_OLDUSD",side:"SHORT",score:80,createdAt:now-5000,expiresAt:now+60000},
-    {id:"new",symbol:"PF_NEWUSD",side:"SHORT",score:91,createdAt:now-1000,expiresAt:now+60000},
+    {id:"new",symbol:"PF_NEWUSD",side:"LONG",score:91,createdAt:now-1000,expiresAt:now+60000},
     {id:"expired",symbol:"PF_EXPIREDUSD",side:"SHORT",score:99,createdAt:now,expiresAt:now-1}
   ];
   const writes=[];
@@ -64,7 +73,8 @@ test("admin signal listing returns recent unexpired signals from Durable Object 
     put:async(...args)=>writes.push(args),
     delete:async()=>{}
   }};
-  const coordinator=new SignalDeliveryCoordinator(ctx,{SIGNAL_DELIVERY_SECRET:"test-secret"});
+  const env={SIGNAL_DELIVERY_SECRET:"test-secret"};
+  const coordinator=new SignalDeliveryCoordinator(ctx,env);
   const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/list",{
     method:"POST",
     headers:{"content-type":"application/json","x-signal-delivery-secret":"test-secret"},
@@ -78,29 +88,37 @@ test("admin signal listing returns recent unexpired signals from Durable Object 
 });
 
 test("admin signal listing endpoint rejects requests without the Durable Object secret",async()=>{
-  const coordinator=new SignalDeliveryCoordinator({storage:{get:async()=>[]}},{SIGNAL_DELIVERY_SECRET:"test-secret"});
+  const coordinator=new SignalDeliveryCoordinator({storage:{get:async()=>[]}}, {SIGNAL_DELIVERY_SECRET:"test-secret"});
   const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/list",{
-    method:"POST",headers:{"content-type":"application/json"},body:"{}"
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body:"{}"
   }));
   assert.equal(response.status,401);
 });
 
-test("v10.6 SHORT-only configuration is active",()=>{
+test("v3.8.2 configuration is preserved",()=>{
+  assert.equal("MAX_SYMBOLS" in FUTURES_CONFIG,false);
   assert.equal(FUTURES_CONFIG.CONCURRENCY,3);
-  assert.equal(FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN,10);
-  assert.equal(FUTURES_CONFIG.MIN_CANDLES,100);
-  assert.equal(FUTURES_CONFIG.TARGET_1_R,1.5);
-  assert.equal(FUTURES_CONFIG.STOP_BUFFER_ATR,0.2);
-  assert.equal(FUTURES_CONFIG.MIN_RISK_PCT,0.5);
-  assert.equal(FUTURES_CONFIG.MAX_RISK_PCT,2.0);
-  assert.equal(FUTURES_CONFIG.MAX_ATR_PCT,2.0);
+  assert.equal(FUTURES_CONFIG.MAX_SCAN_DURATION_MS,180000);
+  assert.equal(FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS,45000);
+  assert.equal(FUTURES_CONFIG.REQUEST_TIMEOUT_MS,12000);
+  assert.equal(FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN,20);
   assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME,5_000_000);
-  assert.equal("ALLOWED_SYMBOLS" in FUTURES_CONFIG,false);
+  assert.equal(FUTURES_CONFIG.MIN_CANDLES,60);
+  assert.equal(FUTURES_CONFIG.MIN_SCORE,72);
+  assert.equal(FUTURES_CONFIG.INTERVAL,"1h");
+  assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
+  assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.35);
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,3.0);
+  assert.equal("ENTRY_INTERVAL" in FUTURES_CONFIG,false);
 });
 
-test("Kraken universe remains exchange-wide and is sorted by descending quote volume",async()=>{
+
+test("Kraken universe is not truncated by a fixed symbol count",async()=>{
   const originalFetch=globalThis.fetch;
-  const tickers=Array.from({length:30},(_,i)=>({
+  const tickers=Array.from({length: 30},(_,i)=>({
     tag:"perpetual",symbol:`PF_TEST${String(i).padStart(2,"0")}USD`,
     volumeQuote:10_000_000+i,last:100+i,suspended:false
   }));
@@ -117,7 +135,10 @@ test("Kraken universe remains exchange-wide and is sorted by descending quote vo
 
 test("mapLimit stops assigning new symbols when the safe time budget ends",async()=>{
   const processed=[];
-  const results=await mapLimit([1,2,3,4],1,async value=>{processed.push(value);return value;},()=>processed.length<2);
+  const results=await mapLimit([1,2,3,4],1,async value=>{
+    processed.push(value);
+    return value;
+  },()=>processed.length<2);
   assert.deepEqual(processed,[1,2]);
   assert.deepEqual(results.slice(0,2),[1,2]);
   assert.equal(results[2],undefined);
@@ -132,78 +153,57 @@ test("Kraken perpetual filter accepts only liquid PI/PF USD perpetuals",()=>{
 });
 
 test("ATR rejects insufficient candles and calculates positive volatility",()=>{
-  assert.equal(calculateAtr(makeTrendShortCandles(10),14),null);
-  assert.ok(calculateAtr(makeTrendShortCandles(),14)>0);
+  assert.equal(calculateAtr(makeCandles().slice(0,10),14),null);
+  assert.ok(calculateAtr(makeCandles(),14)>0);
 });
 
-test("v10.6 trend-following setup generates only TREND_SHORT with 1.5R target",()=>{
-  const candles=makeTrendShortCandles();
-  const result=analyzeFuturesSymbol(ticker("PF_XBTUSD",candles.at(-1).close),candles);
-  assert.equal(result.side,"SHORT");
-  assert.equal(result.mode,"TREND_SHORT");
-  assert.equal(result.strategyId,"v10.6-short-hybrid");
-  assert.equal(result.score,80);
+test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.side,"LONG");
   assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.ok(result.stop>result.entry);
-  assert.ok(result.target1<result.entry);
-  assert.ok(Math.abs((result.entry-result.target1)/(result.stop-result.entry)-1.5)<1e-9);
-  assert.ok(result.riskPct>=0.5&&result.riskPct<=2.0);
+  assert.ok(result.score>=72);
+  assert.ok(result.stop<result.entry);
+  assert.ok(result.target1>result.entry);
+  assert.ok(result.target2>result.target1);
+  assert.ok(result.target3>result.target2);
+  assert.equal(result.rewardRisk,1.5);
+  assert.equal(result.candleTime,oneHour.at(-1).time);
 });
 
-test("v10.6 rally-fade setup generates a higher-score RALLY_FADE SHORT",()=>{
-  const candles=makeRallyFadeCandles();
-  const result=analyzeFuturesSymbol(ticker("PF_ETHUSD",candles.at(-1).close),candles);
+test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("SHORT");
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.side,"SHORT");
-  assert.equal(result.mode,"RALLY_FADE");
-  assert.equal(result.score,90);
-  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.eligible,true);
   assert.ok(result.stop>result.entry);
   assert.ok(result.target1<result.entry);
   assert.ok(result.target2<result.target1);
   assert.ok(result.target3<result.target2);
 });
 
-test("v10.6 analyzes eligible high-volume symbols outside the former hard-coded ten",()=>{
-  const candles=makeTrendShortCandles();
-  const result=analyzeFuturesSymbol(ticker("PF_TESTUSD",candles.at(-1).close),candles);
-  assert.equal(result.symbol,"PF_TESTUSD");
-  assert.equal(result.side,"SHORT");
-  assert.equal(result.eligible,true,JSON.stringify(result));
+
+test("relaxed 1h trend with neutral 4h context is rejected with no experimental signal path",()=>{
+  const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
+  const neutralFourHour=Array.from({length:120},(_,i)=>({
+    time:Date.now()-(120-i)*4*60*60*1000,
+    open:100,high:100.1,low:99.9,close:100,volume:100
+  }));
+  const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
+  assert.equal(result.eligible,false);
+  assert.equal(result.experimentalEligible,undefined);
 });
 
-test("rejected entry setups expose per-condition diagnostics without changing eligibility",()=>{
-  const candles=Array.from({length:120},(_,i)=>{
-    const close=100+Math.sin(i/5)*0.25;
-    const previous=100+Math.sin((i-1)/5)*0.25;
-    const open=i===0?close:previous;
-    return {
-      time:Date.now()-(120-i)*60*60*1000,
-      open,
-      high:Math.max(open,close)+0.15,
-      low:Math.min(open,close)-0.15,
-      close,
-      volume:100
-    };
-  });
-  const result=analyzeFuturesSymbol(ticker("PF_DIAGUSD",candles.at(-1).close),candles);
-  assert.equal(result.eligible,undefined);
-  assert.equal(result.rejected,"شرایط سخت‌گیرانه ورود فراهم نیست.");
-  assert.ok(result.entryConditionDiagnostics);
-  assert.equal(typeof result.entryConditionDiagnostics.ema20,"number");
-  assert.equal(typeof result.entryConditionDiagnostics.ema50,"number");
-  assert.equal(typeof result.entryConditionDiagnostics.rsi14,"number");
-  assert.equal(typeof result.entryConditionDiagnostics.distanceToEma20Pct,"number");
-  assert.deepEqual(Object.keys(result.entryConditionDiagnostics.trendShort),[
-    "closeBelowEma50","ema20BelowEma50","rsiBelow45","atLeastHalfPercentBelowEma20"
-  ]);
-  assert.deepEqual(Object.keys(result.entryConditionDiagnostics.rallyFade),[
-    "closeAboveEma50","rsiAbove75","redCandle",
-    "currentHighAbovePreviousHigh","bodyExceedsHalfCandleRange","bodyToRangeRatio"
-  ]);
-});
-
-test("v10.6 rejects fewer than 100 hourly candles",()=>{
-  assert.throws(()=>analyzeFuturesSymbol(ticker("PF_XBTUSD",100),makeTrendShortCandles(99)),/کافی نیست/);
+test("risk distance outside the original 0.2%-8% band is rejected",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const altered=oneHour.map(x=>({...x}));
+  // Widen the last 14 true ranges enough to exceed the original 8% risk ceiling.
+  for(let i=altered.length-14;i<altered.length;i++) {
+    altered[i].high=altered[i].close+10;
+    altered[i].low=altered[i].close-10;
+  }
+  const result=analyzeFuturesSymbol(ticker,altered,fourHour,fifteenMinute);
+  assert.ok(result.rejected || result.eligible===false);
 });
 
 test("Kraken candle loader excludes the currently forming candle",async()=>{
@@ -221,4 +221,59 @@ test("Kraken candle loader excludes the currently forming candle",async()=>{
     const candles=await getKrakenFuturesCandles("PF_TESTUSD","1h");
     assert.deepEqual(candles.map(x=>x.close),[101,102]);
   }finally{globalThis.fetch=originalFetch;}
+});
+
+
+test("entry drift filter rejects a stale candle-close entry",()=>{
+  const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
+  const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
+  const atr=calculateAtr(oneHour,14);
+  const result=evaluateFuturesEntryFilters({
+    ticker:{...ticker,last:ticker.last*1.01},candles1h:oneHour,candles15m:fifteenMinute,
+    side:"LONG",referencePrice:oneHour.at(-1).close,ema20,atr
+  });
+  assert.equal(result.ok,false);
+  assert.match(result.rejected,/فاصله قیمت لحظه‌ای/);
+});
+
+test("late-entry filter rejects an overextended price versus hourly EMA20",()=>{
+  const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
+  const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
+  const atr=calculateAtr(oneHour,14);
+  const result=evaluateFuturesEntryFilters({
+    ticker:{...ticker,last:ema20+atr*4},candles1h:oneHour,candles15m:fifteenMinute,
+    side:"LONG",referencePrice:ema20+atr*4,ema20,atr
+  });
+  assert.equal(result.ok,false);
+  assert.match(result.rejected,/ورود دیرهنگام/);
+});
+
+test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=>{
+  const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
+  const altered=fifteenMinute.map(c=>({...c}));
+  altered[altered.length-1].open=altered.at(-1).close+0.5;
+  const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
+  const atr=calculateAtr(oneHour,14);
+  const result=evaluateFuturesEntryFilters({
+    ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
+    referencePrice:oneHour.at(-1).close,ema20,atr
+  });
+  assert.equal(result.ok,true);
+  assert.equal(result.momentumConfirmed,false);
+});
+
+test("missing 15m pullback is diagnostic and does not suppress a candidate",()=>{
+  const {ticker,oneHour}=makeSetup("LONG");
+  const altered=makeCandles({count:120,slope:0.1,base:100}).map(c=>({...c,low:c.close-0.001}));
+  const priorEma9=testEma(altered.slice(0,-1).map(c=>c.close),9);
+  altered.at(-1).close=priorEma9+0.05;
+  altered.at(-1).open=priorEma9+0.02;
+  const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
+  const atr=calculateAtr(oneHour,14);
+  const result=evaluateFuturesEntryFilters({
+    ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
+    referencePrice:oneHour.at(-1).close,ema20,atr
+  });
+  assert.equal(result.ok,true);
+  assert.equal(result.pullbackConfirmed,false);
 });
