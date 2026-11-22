@@ -1638,6 +1638,13 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     atLeastHalfPercentBelowEma20: distanceToE20 < -0.5
   };
   const isDowntrend = Object.values(trendConditions).every(Boolean);
+  const relaxedTrendConditions = {
+    closeBelowEma50: last.close < e50,
+    ema20BelowEma50: e20 < e50,
+    rsiBelow55: rsiValue < 55,
+    atLeastHalfPercentBelowEma20: distanceToE20 < -0.5
+  };
+  const isRelaxedDowntrend = !isDowntrend && Object.values(relaxedTrendConditions).every(Boolean);
 
   const rallyBaseConditions = {
     closeAboveEma50: last.close > e50,
@@ -1673,17 +1680,20 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     };
   }
 
-  if (isDowntrend) {
+  let riskLevel = "NORMAL";
+  if (isDowntrend || isRelaxedDowntrend) {
     mode = "TREND_SHORT";
+    riskLevel = isDowntrend ? "NORMAL" : "HIGH_RISK";
     const recentHighs = candles1h.slice(-7).map(c => Number(c.high));
     stopPrice = Math.max(...recentHighs) + atr * FUTURES_CONFIG.STOP_BUFFER_ATR;
-  } else if (rallyBaseConditions.closeAboveEma50 && rallyBaseConditions.rsiAbove75) {
-    if (rallyCandleConditions.redCandle &&
-        rallyCandleConditions.currentHighAbovePreviousHigh &&
-        rallyCandleConditions.bodyExceedsHalfCandleRange) {
-      mode = "RALLY_FADE";
-      stopPrice = last.high + atr * FUTURES_CONFIG.STOP_BUFFER_ATR;
-    }
+  } else if (rallyBaseConditions.closeAboveEma50 &&
+      rallyCandleConditions.redCandle &&
+      rallyCandleConditions.currentHighAbovePreviousHigh &&
+      rallyCandleConditions.bodyExceedsHalfCandleRange) {
+    // Keep RSI>75 as the normal RALLY_FADE gate; all lower-RSI variants are high-risk.
+    mode = "RALLY_FADE";
+    riskLevel = rallyBaseConditions.rsiAbove75 ? "NORMAL" : "HIGH_RISK";
+    stopPrice = last.high + atr * FUTURES_CONFIG.STOP_BUFFER_ATR;
   }
 
   if (!mode) {
@@ -1741,7 +1751,8 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     mode,
     strategyId: "v10.6-short-hybrid",
     strategyName: "Crypto Pump Hunter v10.6 SHORT Hybrid",
-    score: mode === "RALLY_FADE" ? 90 : 80,
+    score: riskLevel === "HIGH_RISK" ? 60 : (mode === "RALLY_FADE" ? 90 : 80),
+    riskLevel,
     entry,
     stop: stopPrice,
     target1,
@@ -1770,7 +1781,9 @@ function formatPrice(value) {
 
 function formatFuturesSignal(item, index = 1) {
   const sideLabel = item.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
-  const label = "🟢 سیگنال معتبر";
+  const label = item.riskLevel === "HIGH_RISK"
+    ? "⚠️ سیگنال پرریسک — شرایط منعطف"
+    : "🟢 سیگنال معتبر";
   const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol));
   return `${label}\n\n` +
     `نماد: <b>${symbol}</b>\n\n` +
