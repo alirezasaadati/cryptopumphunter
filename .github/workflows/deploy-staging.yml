@@ -2,6 +2,9 @@ name: Deploy Crypto Pump Hunter Staging
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - integration-v10-6-hybrid-engine-20261122
 
 permissions:
   contents: read
