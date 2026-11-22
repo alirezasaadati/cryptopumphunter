@@ -1385,24 +1385,52 @@ const FUTURES_CONFIG = {
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
 
 async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL) {
-  const response = await fetch(`${baseUrl}${path}`, {
-    headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(FUTURES_CONFIG.REQUEST_TIMEOUT_MS)
-  });
-  const body = await response.text();
-  let data;
-  try {
-    data = JSON.parse(body);
-  } catch {
-    throw new Error(`${label}: پاسخ JSON معتبر نیست؛ HTTP ${response.status}`);
+  const maxAttempts = 3;
+  const retryableStatuses = new Set([500, 502, 503, 504, 520, 522, 524, 526]);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let response;
+    try {
+      response = await fetch(`${baseUrl}${path}`, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(FUTURES_CONFIG.REQUEST_TIMEOUT_MS)
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts) {
+        throw new Error(`${label}: خطای اتصال پس از ${attempt} تلاش: ${String(error?.message || error).slice(0, 180)}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+      continue;
+    }
+
+    const body = await response.text();
+    if (!response.ok) {
+      // Check HTTP status before attempting JSON parsing: proxy/CDN errors (for example 526)
+      // commonly return HTML rather than a JSON payload.
+      const detail = body.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().slice(0, 180);
+      lastError = new Error(`${label}: HTTP ${response.status}${detail ? ` — ${detail}` : ""}`);
+      if (retryableStatuses.has(response.status) && attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+        continue;
+      }
+      throw lastError;
+    }
+
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      throw new Error(`${label}: پاسخ موفق HTTP ${response.status}، اما JSON معتبر نیست.`);
+    }
+    if (data?.result === "error" || (Array.isArray(data?.errors) && data.errors.length)) {
+      throw new Error(`${label}: ${(data.errors || []).join(", ") || data.error || "خطای Kraken"}`);
+    }
+    return data;
   }
-  if (!response.ok) {
-    throw new Error(`${label}: HTTP ${response.status}`);
-  }
-  if (data?.result === "error" || (Array.isArray(data?.errors) && data.errors.length)) {
-    throw new Error(`${label}: ${(data.errors || []).join(", ") || data.error || "خطای Kraken"}`);
-  }
-  return data;
+
+  throw lastError || new Error(`${label}: درخواست ناموفق بود.`);
 }
 
 function isKrakenPerpetualTicker(item) {
