@@ -207,6 +207,34 @@ test("separate high-risk SHORT path can pass with opposing 4h only when 15m mome
   assert.equal(result.entryDiagnostics.momentumConfirmed,true);
 });
 
+test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  oneHour.at(-1).volume=avg*0.6;
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.side,"LONG");
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.highRiskEligible,true);
+  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.ok(result.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE);
+  assert.ok(result.volumeRatio>=FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO);
+});
+
+test("strict SHORT setup below standard score/volume falls back to HIGH_RISK",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("SHORT");
+  const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  oneHour.at(-1).volume=avg*0.6;
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.side,"SHORT");
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.highRiskEligible,true);
+  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.ok(result.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE);
+  assert.ok(result.volumeRatio>=FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO);
+});
+
 test("risk distance outside the original 0.2%-8% band is rejected",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const altered=oneHour.map(x=>({...x}));
