@@ -111,6 +111,17 @@ function groupBy(trades,key){
   const keys=[...new Set(trades.map(t=>t[key]))].sort();
   return Object.fromEntries(keys.map(k=>[k,summarize(trades.filter(t=>t[key]===k))]));
 }
+function maxConcurrent(trades,endMs){
+  const events=[];
+  for(const t of trades){
+    events.push([t.entryTime,1]);
+    events.push([t.exitTime??endMs,-1]);
+  }
+  events.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  let active=0,max=0;
+  for(const [,delta] of events){active+=delta;max=Math.max(max,active);}
+  return max;
+}
 async function main(){
   const endMs=Date.now(),periodMs=365*86400000,startMs=endMs-periodMs,warmStart=startMs-230*86400000;
   console.log("FETCH_WINDOW",new Date(startMs).toISOString(),new Date(endMs).toISOString());
@@ -124,8 +135,11 @@ async function main(){
   const regimes=buildDailyRegimes(btc);
   const trades=[],dataQuality={};
   for(const symbol of CONFIG.SYMBOLS){
-    const candles=histories[symbol];dataQuality[symbol]={candles:candles.length,missingHours:0};
-    for(let i=CONFIG.MIN_CANDLES;i<candles.length-1;i++){
+    const candles=histories[symbol];
+    let missingHours=0;
+    for(let k=1;k<candles.length;k++) missingHours+=Math.max(0,Math.round((candles[k].time-candles[k-1].time)/CONFIG.INTERVAL_MS)-1);
+    dataQuality[symbol]={candles:candles.length,missingHours};
+    for(let i=CONFIG.MIN_CANDLES-1;i<candles.length-1;i++){
       const signalCandle=candles[i];
       if(signalCandle.time<startMs||signalCandle.time>=endMs)continue;
       const entryCandle=candles[i+1],entry=entryCandle.open;
