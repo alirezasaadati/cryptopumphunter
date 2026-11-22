@@ -235,7 +235,7 @@ test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
 });
 
 
-test("separate high-risk LONG path admits a relaxed 1h setup with neutral 4h context",()=>{
+test("standard LONG path accepts aligned 1h with neutral 4h context",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({
     time:Date.now()-(120-i)*4*60*60*1000,
@@ -243,9 +243,9 @@ test("separate high-risk LONG path admits a relaxed 1h setup with neutral 4h con
   }));
   const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
   assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.highRiskEligible,true);
-  assert.equal(result.riskLevel,"HIGH_RISK");
-  assert.ok(result.score>=58);
+  assert.equal(result.highRiskEligible,false);
+  assert.equal(result.riskLevel,"STANDARD");
+  assert.ok(result.score>=FUTURES_CONFIG.MIN_SCORE);
 });
 
 test("separate high-risk SHORT path can pass with opposing 4h only when 15m momentum confirms",()=>{
