@@ -1,0 +1,25 @@
+name: v7.1.0 LONG Hybrid historical backtest
+on:
+  push:
+    branches: [backtest/v710-long-hybrid-20261122]
+    paths:
+      - "scripts/backtest-v710-long-hybrid.mjs"
+      - ".github/workflows/backtest-v710-long-hybrid.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run v7.1.0 LONG Hybrid backtest
+        run: node scripts/backtest-v710-long-hybrid.mjs
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v710-long-hybrid-backtest
+          path: artifacts/
+          if-no-files-found: warn
