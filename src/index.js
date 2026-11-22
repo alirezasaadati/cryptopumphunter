@@ -1687,16 +1687,16 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     side = "LONG";
     score = strictSetup ? 45 : 40;
     reasons.push(strictSetup
-      ? "روند ۱ساعته و ۴ساعته صعودی است"
-      : "ستاپ آزمایشی: روند ۱ساعته صعودی و روند ۴ساعته مخالف نیست",
+      ? "حداقل یک تایم‌فریم صعودی است و تایم‌فریم دیگر مخالفت نمی‌کند"
+      : "ستاپ پرریسک: روند ۱ساعته صعودی؛ مخالفت ۴ساعته با تأیید ۱۵دقیقه‌ای کنترل می‌شود",
       "قیمت بالای EMA20 قرار دارد");
     score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
   } else if (strictShort || (!strictSetup && relaxedShort)) {
     side = "SHORT";
     score = strictSetup ? 45 : 40;
     reasons.push(strictSetup
-      ? "روند ۱ساعته و ۴ساعته نزولی است"
-      : "ستاپ آزمایشی: روند ۱ساعته نزولی و روند ۴ساعته مخالف نیست",
+      ? "حداقل یک تایم‌فریم نزولی است و تایم‌فریم دیگر مخالفت نمی‌کند"
+      : "ستاپ پرریسک: روند ۱ساعته نزولی؛ مخالفت ۴ساعته با تأیید ۱۵دقیقه‌ای کنترل می‌شود",
       "قیمت زیر EMA20 قرار دارد");
     score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
   } else {
@@ -1994,7 +1994,12 @@ async function sendAndArchiveFuturesSignalUnlocked(env,ctx,chatId,signal,message
     }
   }
   if(deliveryError){
-    await ctx.storage.put(key,{...record,status:"UNCERTAIN",retryAttempts,error:String(deliveryError?.message||deliveryError).slice(0,500),updatedAt:new Date().toISOString()});
+    const uncertain={...record,status:"UNCERTAIN",retryAttempts,error:String(deliveryError?.message||deliveryError).slice(0,500),updatedAt:new Date().toISOString()};
+    await ctx.storage.put(key,uncertain);
+    if(env.APP_KV){
+      try{await env.APP_KV.put(signalOutboxKey(chatId,signal.id),JSON.stringify(uncertain));}
+      catch(kvError){console.error("UNCERTAIN_OUTBOX_KV_PERSIST_FAILED",String(kvError?.message||kvError));}
+    }
     throw deliveryError;
   }
   record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString()};
@@ -2652,7 +2657,7 @@ async function runFuturesSignalScan(env, options = {}) {
     registeredCount: signals.length,
     delivery, deliveryError,
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
-      .sort((a, b) => b.count - a.count).slice(0, 6)
+      .sort((a, b) => b.count - a.count).slice(0, 8)
   };
   console.log("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
   const report =
