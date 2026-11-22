@@ -1421,7 +1421,7 @@ async function getKrakenFuturesUniverse() {
 }
 
 async function getKrakenFuturesCandles(symbol, interval) {
-  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}`;
+  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}?count=${FUTURES_CONFIG.KLINE_LIMIT}`;
   const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
     `Kraken ${symbol} ${interval}`, FUTURES_CONFIG.CHARTS_URL);
   if (!Array.isArray(data?.candles)) {
@@ -1582,7 +1582,7 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
   const atrPct = (atr / last.close) * 100;
   if (!Number.isFinite(atrPct)) throw new Error("محاسبه ATR درصدی نامعتبر است.");
   if (atrPct > FUTURES_CONFIG.MAX_ATR_PCT) {
-    return { symbol, rejected: `نوسان (ATR) بیش از حد بالاست (${atrPct.toFixed(2)}%).` };
+    return { symbol, rejected: `نوسان (ATR) بیش از حد بالاست (${atrPct.toFixed(2)}%).`, diagnosticStage: "ATR_FILTER", diagnosticDetails: { atrPct, maxAtrPct: FUTURES_CONFIG.MAX_ATR_PCT } };
   }
 
   let mode = null;
@@ -1629,6 +1629,7 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     return {
       symbol,
       rejected: "شرایط سخت‌گیرانه ورود فراهم نیست.",
+      diagnosticStage: "ENTRY_SETUP",
       entryConditionDiagnostics: {
         close: last.close,
         ema20: e20,
@@ -1647,27 +1648,29 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     : ticker.last;
   const entry = Number(entrySource);
   if (!Number.isFinite(entry) || entry <= 0) {
-    return { symbol, rejected: "قیمت ورود نامعتبر است." };
+    return { symbol, rejected: "قیمت ورود نامعتبر است.", diagnosticStage: "ENTRY_PRICE" };
   }
   if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
-    return { symbol, rejected: "قیمت استاپ نامعتبر است." };
+    return { symbol, rejected: "قیمت استاپ نامعتبر است.", diagnosticStage: "STOP_VALIDATION" };
   }
 
   const risk = stopPrice - entry;
   const riskPct = (risk / entry) * 100;
   if (!Number.isFinite(risk) || !Number.isFinite(riskPct) || risk <= 0) {
-    return { symbol, rejected: "استاپ در موقعیت معتبر برای معامله SHORT قرار ندارد." };
+    return { symbol, rejected: "استاپ در موقعیت معتبر برای معامله SHORT قرار ندارد.", diagnosticStage: "STOP_SIDE_VALIDATION", diagnosticDetails: { entry, stopPrice, risk, riskPct } };
   }
   if (riskPct > FUTURES_CONFIG.MAX_RISK_PCT || riskPct < FUTURES_CONFIG.MIN_RISK_PCT) {
     return {
       symbol,
-      rejected: `ریسک استاپ (${riskPct.toFixed(2)}%) خارج از محدوده مجاز است.`
+      rejected: `ریسک استاپ (${riskPct.toFixed(2)}%) خارج از محدوده مجاز است.`,
+      diagnosticStage: "RISK_FILTER",
+      diagnosticDetails: { riskPct, minRiskPct: FUTURES_CONFIG.MIN_RISK_PCT, maxRiskPct: FUTURES_CONFIG.MAX_RISK_PCT, entry, stopPrice }
     };
   }
 
   const target1 = entry - risk * FUTURES_CONFIG.TARGET_1_R;
   if (!Number.isFinite(target1) || target1 <= 0) {
-    return { symbol, rejected: "قیمت تارگت نامعتبر است." };
+    return { symbol, rejected: "قیمت تارگت نامعتبر است.", diagnosticStage: "TARGET_VALIDATION" };
   }
 
   // target2/target3 are compatibility levels for the existing display/tracker schema.
@@ -1676,7 +1679,7 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
   const target3 = entry - risk * 3.0;
   if (![target2,target3].every(v => Number.isFinite(v) && v > 0) ||
       !(target3 < target2 && target2 < target1 && target1 < entry && entry < stopPrice)) {
-    return { symbol, rejected: "سطوح قیمت سیگنال معتبر نیستند." };
+    return { symbol, rejected: "سطوح قیمت سیگنال معتبر نیستند.", diagnosticStage: "TARGET_VALIDATION", diagnosticDetails: { entry, stopPrice, target1, target2, target3 } };
   }
 
   return {
@@ -1699,7 +1702,8 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     rsi: rsiValue,
     ema20: e20,
     ema50: e50,
-    eligible: true
+    eligible: true,
+    diagnosticStage: "ELIGIBLE"
   };
 }
 
@@ -2316,10 +2320,11 @@ async function runFuturesSignalScan(env, options = {}) {
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
       const oneHour = await getKrakenFuturesCandles(ticker.symbol, "1h");
-      return analyzeFuturesSymbol(ticker, oneHour, [], [], options);
+      const analysis = analyzeFuturesSymbol(ticker, oneHour, [], [], options);
+      return { ...analysis, scanDiagnostics: { completeCandleCount: oneHour.length } };
     } catch (error) {
       analysisErrorCount++;
-      return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticType: "data_or_analysis_error" };
+      return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticStage: "DATA_OR_ANALYSIS_ERROR", diagnosticType: "data_or_analysis_error", scanDiagnostics: { error: String(error?.message || error).slice(0, 240) } };
     }
   }, () => Date.now() < analysisDeadline);
 
@@ -2336,6 +2341,15 @@ async function runFuturesSignalScan(env, options = {}) {
     }));
   }
 
+  const stageCounts = new Map();
+  const candleCountSamples = [];
+  for (const item of analyzed) {
+    const stage = item?.diagnosticStage || "UNKNOWN";
+    stageCounts.set(stage, (stageCounts.get(stage) || 0) + 1);
+    const count = Number(item?.scanDiagnostics?.completeCandleCount);
+    if (Number.isFinite(count)) candleCountSamples.push({ symbol: item.symbol, completeCandles: count });
+  }
+
   const createdAt = Date.now();
   const eligibleCandidates = analyzed
     .filter(x => x?.eligible === true && x.side === "SHORT")
@@ -2343,13 +2357,16 @@ async function runFuturesSignalScan(env, options = {}) {
 
   const generatedSignals = eligibleCandidates
     .slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
-    .map(x => ({
-      ...x,
+    .map(x => {
+      const { scanDiagnostics, diagnosticStage, diagnosticDetails, entryConditionDiagnostics, ...signal } = x;
+      return {
+      ...signal,
       id: crypto.randomUUID(),
       createdAt,
       expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000,
       status: "PENDING"
-    }));
+    };
+    });
 
   const signals = await registerPendingFuturesSignals(env, generatedSignals);
   let delivery = { newSignals: signals.length, recipients: 0, delivered: 0, failed: 0 };
@@ -2383,10 +2400,13 @@ async function runFuturesSignalScan(env, options = {}) {
     registeredCount: signals.length,
     delivery,
     deliveryError,
+    stageCounts: Object.fromEntries([...stageCounts.entries()].sort((a, b) => b[1] - a[1])),
+    candleCounts: { min: candleCountSamples.length ? Math.min(...candleCountSamples.map(x => x.completeCandles)) : null, max: candleCountSamples.length ? Math.max(...candleCountSamples.map(x => x.completeCandles)) : null, samples: candleCountSamples.slice(0, 12) },
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count).slice(0, 6)
   };
   console.log("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
+  console.log("AUTOMATIC_FUTURES_STAGE_DIAGNOSTICS", JSON.stringify({ timestamp: finishedAt, version: CONFIG.VERSION, stageCounts: diagnostics.stageCounts, candleCounts: diagnostics.candleCounts }));
   const report =
     `📈 CRYPTO PUMP HUNTER V10.6 — STRICT SHORT HYBRID\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
