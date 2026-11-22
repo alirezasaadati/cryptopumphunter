@@ -119,7 +119,7 @@ test("Durable Object supplies the 60-minute expiry when a new signal omits expir
   assert.deepEqual((await list.json()).signals.map(x=>x.id),["missing-expiry"]);
 });
 
-test("open trade older than four hours does not block a fresh signal for the same symbol and side",async()=>{
+test("open trade older than four hours still blocks a fresh signal for the same symbol and side",async()=>{
   const oldTrade={id:"old-trade",signalId:"old-signal",symbol:"PF_TESTUSD",side:"LONG",status:"OPEN",
     createdAt:new Date(Date.now()-5*60*60*1000).toISOString()};
   const state=new Map([["active-futures-pending",[]],["active-futures-trades",[oldTrade]]]);
@@ -144,8 +144,7 @@ test("open trade older than four hours does not block a fresh signal for the sam
   }));
   const result=await response.json();
   assert.equal(response.status,200);
-  assert.equal(result.signals.length,1);
-  assert.equal(result.signals[0].id,signal.id);
+  assert.equal(result.signals.length,0);
 });
 
 test("flat 1h and 4h conditions expose indicator-level rejection diagnostics",()=>{

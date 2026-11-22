@@ -2154,13 +2154,19 @@ export class SignalDeliveryCoordinator {
           const closedSignalIds=new Set(trades.filter(t=>["CLOSED_PROFIT","CLOSED_STOP"].includes(t?.status)).map(t=>String(t.signalId)));
           const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side)&&!closedSignalIds.has(String(x?.id)));
           const activeKeys=new Set(active.map(x=>String(x.symbol).trim().toUpperCase()+"|"+x.side));
+          // An OPEN tracked trade owns its symbol-side until the lifecycle monitor
+          // confirms either the stop or the 30% margin-profit close condition.
+          // Pending-alert TTL expiry must not unlock a trade that is still OPEN.
+          const openTradeKeys=new Set(trades
+            .filter(t=>t?.status==="OPEN"&&t?.symbol&&["LONG","SHORT"].includes(t?.side))
+            .map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
           const seen=new Set();
           const fresh=[];
           const newTrades=[];
           for(const signal of Array.isArray(payload.signals)?payload.signals:[]){
             if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
             const key=String(signal.symbol).trim().toUpperCase()+"|"+signal.side;
-            if(activeKeys.has(key)||seen.has(key))continue;
+            if(activeKeys.has(key)||openTradeKeys.has(key)||seen.has(key))continue;
             const suppliedCreatedAt=Number(signal.createdAt);
             const createdAt=Number.isFinite(suppliedCreatedAt)&&suppliedCreatedAt>0?suppliedCreatedAt:now;
             const suppliedExpiry=Number(signal.expiresAt);
