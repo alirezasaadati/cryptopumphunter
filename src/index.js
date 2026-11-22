@@ -1726,7 +1726,6 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
 
   // Keep the legacy volume contribution inside qualificationScore so existing
   // STANDARD/HIGH_RISK eligibility thresholds do not change.
-  const baseScore = score;
   const legacyVolumeScore = volumeRatio >= 1.5 ? 18 : volumeRatio >= 1.0 ? 12 : 4;
   score += legacyVolumeScore;
   if (volumeRatio >= 1.0) reasons.push("حجم نسبی حداقل برابر میانگین است");
