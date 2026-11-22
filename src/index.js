@@ -1738,7 +1738,6 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     : volumeRatio >= FUTURES_CONFIG.VOLUME_PRIORITY_TIER_1
       ? FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_1
       : 0;
-  const priorityScore = baseScore + volumePriorityBonus;
 
   const change = Number(ticker.priceChangePercent) || 0;
   if ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) score += 8;
@@ -1752,6 +1751,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   } else {
     reasons.push("داده فاندینگ در دسترس نبود");
   }
+  // Remove the legacy volume points from the ranking score, then apply only
+  // the new tiered bonus. Qualification score remains unchanged for compatibility.
+  const priorityBaseScore = score - legacyVolumeScore;
+  const priorityScore = priorityBaseScore + volumePriorityBonus;
 
   const fourHourOpposes = side === "LONG" ? down4h : up4h;
   const standardThresholdMet = strictSetup &&
@@ -1865,8 +1868,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     symbol: ticker.symbol,
     side,
     score,
-    baseScore: Math.max(0, Math.min(100, Math.round(baseScore + (score - Math.round(score))))),
-    priorityScore: Math.max(0, Math.min(110, Math.round(priorityScore + (score - Math.round(score))))),
+    baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
+    priorityScore: Math.max(0, Math.min(110, Math.round(priorityScore))),
     volumePriorityBonus,
     riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
     price: entry,
