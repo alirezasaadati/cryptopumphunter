@@ -897,8 +897,8 @@ async function showMenu(env, chatId, welcome = false) {
   await configureTelegramMenu(env, chatId);
   const messageText = welcome
     ? "🤖 خوش آمدید به تریدیار!"
-    : "📋 منوی اصلی تریدیار";
-  await sendMessage(env, chatId, messageText, menuForChat(env, chatId));}
+    : "📋 منوی اصلی تریدیار";  await sendMessage(env, chatId, messageText, menuForChat(env, chatId));
+}
 
 async function handleTelegramCommand(command, chatId, env, message) {
   try {
@@ -1797,8 +1797,8 @@ async function getOpenFuturesTrades(env) {
   });
   const payload = await response.json();
   if (!response.ok || !payload?.ok || !Array.isArray(payload.trades)) throw new Error(payload?.error || "Durable open-trade retrieval failed.");
-  return payload.trades;}
-
+  return payload.trades;
+}
 async function persistFuturesTradeUpdates(env, updates) {
   if (!updates.length) return { updated: 0 };
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
