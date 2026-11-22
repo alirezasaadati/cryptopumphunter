@@ -16,13 +16,13 @@ jobs:
           node-version: 22
       - name: Run lifecycle historical backtest
         env:
-          LIFECYCLE_BACKTEST_DAYS: "90"
+          LIFECYCLE_BACKTEST_DAYS: "180"
           LIFECYCLE_BACKTEST_SYMBOLS: "12"
         run: node scripts/backtest-futures-lifecycle.mjs
       - name: Upload lifecycle report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: current-main-engine-tp30-90d
+          name: current-main-engine-tp30-180d
           path: artifacts/
           if-no-files-found: error
