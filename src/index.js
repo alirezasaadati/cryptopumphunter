@@ -979,7 +979,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         await sendMessage(env, chatId, "⛔ این دستور فقط برای مالک ربات فعال است.");
         return;
       }
-      const tradeId = String(message?.text || "").trim().split(/\\s+/)[1] || "";
+      const tradeId = String(message?.text || "").trim().split(/\s+/)[1] || "";
       if (!tradeId) {
         await sendMessage(env, chatId, "شناسه معامله را وارد کن: /close_trade <ID>");
         return;
