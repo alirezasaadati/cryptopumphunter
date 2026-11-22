@@ -1589,29 +1589,58 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
   let stopPrice = null;
   const distanceToE20 = ((last.close - e20) / e20) * 100;
 
-  const isDowntrend =
-    last.close < e50 &&
-    e20 < e50 &&
-    rsiValue < 40 &&
-    distanceToE20 < -0.5;
+  // Diagnostic-only condition flags. These mirror the existing entry rules exactly.
+  const trendConditions = {
+    closeBelowEma50: last.close < e50,
+    ema20BelowEma50: e20 < e50,
+    rsiBelow40: rsiValue < 40,
+    atLeastHalfPercentBelowEma20: distanceToE20 < -0.5
+  };
+  const isDowntrend = Object.values(trendConditions).every(Boolean);
+
+  const rallyBaseConditions = {
+    closeAboveEma50: last.close > e50,
+    rsiAbove75: rsiValue > 75
+  };
+  const isRedCandle = last.close < last.open;
+  const bodySize = last.open - last.close;
+  const candleRange = last.high - last.low;
+  const bodyToRangeRatio = candleRange > 0 ? bodySize / candleRange : 0;
+  const rallyCandleConditions = {
+    redCandle: isRedCandle,
+    currentHighAbovePreviousHigh: last.high > prev.high,
+    bodyExceedsHalfCandleRange: candleRange > 0 && bodyToRangeRatio > 0.5
+  };
 
   if (isDowntrend) {
     mode = "TREND_SHORT";
     const recentHighs = candles1h.slice(-7).map(c => Number(c.high));
     stopPrice = Math.max(...recentHighs) + atr * FUTURES_CONFIG.STOP_BUFFER_ATR;
-  } else if (last.close > e50 && rsiValue > 75) {
-    const isRedCandle = last.close < last.open;
-    const bodySize = last.open - last.close;
-    const candleRange = last.high - last.low;
-    const isStrongBody = candleRange > 0 && bodySize / candleRange > 0.5;
-    const isRejection = last.high > prev.high;
-    if (isRedCandle && isRejection && isStrongBody) {
+  } else if (rallyBaseConditions.closeAboveEma50 && rallyBaseConditions.rsiAbove75) {
+    if (rallyCandleConditions.redCandle &&
+        rallyCandleConditions.currentHighAbovePreviousHigh &&
+        rallyCandleConditions.bodyExceedsHalfCandleRange) {
       mode = "RALLY_FADE";
       stopPrice = last.high + atr * FUTURES_CONFIG.STOP_BUFFER_ATR;
     }
   }
 
-  if (!mode) return { symbol, rejected: "شرایط سخت‌گیرانه ورود فراهم نیست." };
+  if (!mode) {
+    return {
+      symbol,
+      rejected: "شرایط سخت‌گیرانه ورود فراهم نیست.",
+      entryConditionDiagnostics: {
+        close: last.close,
+        ema20: e20,
+        ema50: e50,
+        rsi14: rsiValue,
+        distanceToEma20Pct: distanceToE20,
+        atrPct,
+        trendShort: trendConditions,
+        rallyFade: { ...rallyBaseConditions, ...rallyCandleConditions, bodyToRangeRatio }
+      }
+    };
+  }
 
   const entrySource = options.backtestEntryOpen !== undefined
     ? options.backtestEntryOpen
@@ -2295,6 +2324,19 @@ async function runFuturesSignalScan(env, options = {}) {
       return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticType: "data_or_analysis_error" };
     }
   }, () => Date.now() < analysisDeadline);
+
+  // Runtime-only diagnostics: console output only; deliberately no KV/DO writes or Telegram messages.
+  const entryConditionBreakdown = analyzed
+    .filter(item => item?.entryConditionDiagnostics)
+    .map(item => ({ symbol: item.symbol, ...item.entryConditionDiagnostics }));
+  if (entryConditionBreakdown.length) {
+    console.log("AUTOMATIC_FUTURES_ENTRY_CONDITION_DIAGNOSTICS", JSON.stringify({
+      timestamp: new Date().toISOString(),
+      version: CONFIG.VERSION,
+      rejectedAt: "TREND_SHORT_OR_RALLY_FADE_SETUP",
+      symbols: entryConditionBreakdown
+    }));
+  }
 
   const createdAt = Date.now();
   const eligibleCandidates = analyzed
