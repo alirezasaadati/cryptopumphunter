@@ -1399,7 +1399,11 @@ const FUTURES_CONFIG = {
   MAX_RECLAIM_EXTENSION_ATR: 4.0,
   // Separate experimental path. These values never affect the standard setup.
   HIGH_RISK_MIN_SCORE: 40,
-  HIGH_RISK_MIN_VOLUME_RATIO: 0.5,
+  HIGH_RISK_MIN_VOLUME_RATIO: 0.3,
+  VOLUME_PRIORITY_TIER_1: 0.5,
+  VOLUME_PRIORITY_TIER_2: 1.0,
+  VOLUME_PRIORITY_BONUS_TIER_1: 5,
+  VOLUME_PRIORITY_BONUS_TIER_2: 10,
   HIGH_RISK_LONG_RSI_MIN: 32,
   HIGH_RISK_LONG_RSI_MAX: 82,
   HIGH_RISK_SHORT_RSI_MIN: 18,
@@ -1720,9 +1724,21 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
         longRsiOk, shortRsiOk, longTrendOk:up1h||up4h, shortTrendOk:down1h||down4h, failedChecks:failed } };
   }
 
-  if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
-  else if (volumeRatio >= 1.0) { score += 12; reasons.push("حجم نزدیک یا بالاتر از میانگین است"); }
-  else { score += 4; reasons.push("حجم کمتر از میانگین است"); }
+  // Keep the legacy volume contribution inside qualificationScore so existing
+  // STANDARD/HIGH_RISK eligibility thresholds do not change.
+  const baseScore = score;
+  const legacyVolumeScore = volumeRatio >= 1.5 ? 18 : volumeRatio >= 1.0 ? 12 : 4;
+  score += legacyVolumeScore;
+  if (volumeRatio >= 1.0) reasons.push("حجم نسبی حداقل برابر میانگین است");
+  else if (volumeRatio >= 0.5) reasons.push("حجم نسبی متوسط است");
+  else reasons.push("حجم نسبی پایین است؛ بدون پاداش اولویت");
+
+  const volumePriorityBonus = volumeRatio >= FUTURES_CONFIG.VOLUME_PRIORITY_TIER_2
+    ? FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_2
+    : volumeRatio >= FUTURES_CONFIG.VOLUME_PRIORITY_TIER_1
+      ? FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_1
+      : 0;
+  const priorityScore = baseScore + volumePriorityBonus;
 
   const change = Number(ticker.priceChangePercent) || 0;
   if ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) score += 8;
@@ -1804,7 +1820,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
       symbol: ticker.symbol,
       side,
       score: Math.max(0, Math.min(100, Math.round(score))),
-      rejected: "نسبت حجم کندل ۱ساعته آخر به میانگین ۲۰ کندل قبلی کمتر از حداقل مسیر پرریسک (0.5x) است",
+      rejected: "نسبت حجم کندل ۱ساعته آخر به میانگین ۲۰ کندل قبلی کمتر از حداقل مسیر پرریسک (0.3x) است",
       entryDiagnostics: {
         ...entryFilters,
         volumeRatio,
@@ -1849,6 +1865,9 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     symbol: ticker.symbol,
     side,
     score,
+    baseScore: Math.max(0, Math.min(100, Math.round(baseScore + (score - Math.round(score))))),
+    priorityScore: Math.max(0, Math.min(110, Math.round(priorityScore + (score - Math.round(score))))),
+    volumePriorityBonus,
     riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
     price: entry,
     entry,
@@ -2692,7 +2711,8 @@ async function runFuturesSignalScan(env, options = {}) {
     // Preserve every standard candidate ahead of experimental high-risk candidates.
     .sort((a, b) =>
       Number(a.riskLevel === "HIGH_RISK") - Number(b.riskLevel === "HIGH_RISK") ||
-      b.score - a.score || a.symbol.localeCompare(b.symbol)
+      Number(b.priorityScore ?? b.score) - Number(a.priorityScore ?? a.score) ||
+      a.symbol.localeCompare(b.symbol)
     );
   const generatedSignals = eligibleCandidates
     .slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
