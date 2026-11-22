@@ -178,8 +178,16 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.REQUEST_TIMEOUT_MS,12000);
   assert.equal(FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN,20);
   assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME,5_000_000);
+  assert.equal(FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME,1_000_000);
   assert.equal(FUTURES_CONFIG.MIN_CANDLES,60);
   assert.equal(FUTURES_CONFIG.MIN_SCORE,65);
+  assert.equal(FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO,0.3);
+  assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_TIER_1,0.5);
+  assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_TIER_2,1.0);
+  assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_1,5);
+  assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_2,10);
+  assert.equal(FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_ONE,7);
+  assert.equal(FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_BOTH,15);
   assert.equal(FUTURES_CONFIG.INTERVAL,"1h");
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
   assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
@@ -222,12 +230,51 @@ test("Kraken perpetual filter accepts only liquid PI/PF USD perpetuals",()=>{
   assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:8_000_000,last:50_000}),true);
   assert.equal(isKrakenPerpetualTicker({tag:"month",symbol:"PF_XBTUSD",volumeQuote:8_000_000,last:50_000}),false);
   assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"BTC/USD",volumeQuote:8_000_000,last:50_000}),false);
-  assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:1_000,last:50_000}),false);
+  assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:1_000_000,last:50_000}),true);
+  assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:999_999,last:50_000}),false);
 });
 
 test("ATR rejects insufficient candles and calculates positive volatility",()=>{
   assert.equal(calculateAtr(makeCandles().slice(0,10),14),null);
   assert.ok(calculateAtr(makeCandles(),14)>0);
+});
+
+test("momentum and pullback provide 0/7/15 priority bonuses without changing qualification score",()=>{
+  const evaluate=mode=>{
+    const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+    const last=fifteenMinute.at(-1);
+    if(mode==="pullback_only") {
+      last.open=last.close+0.05;
+    } else if(mode==="momentum_only" || mode==="neither") {
+      const current=oneHour.at(-1).close;
+      const count=120, slope=0.02, base=current-slope*(count-1);
+      const rebuilt=Array.from({length:count},(_,i)=>{
+        const close=base+i*slope;
+        return {time:Date.now()-(count-i)*15*60*1000,open:close-0.005,high:close+0.02,low:close-0.02,close,volume:100};
+      });
+      fifteenMinute.splice(0,fifteenMinute.length,...rebuilt);
+      if(mode==="neither") fifteenMinute.at(-1).open=fifteenMinute.at(-1).close+0.005;
+      const closes=fifteenMinute.map(c=>c.close);
+      const ema21=testEma(closes,21);
+      const atr15=calculateAtr(fifteenMinute,14);
+      assert.ok(fifteenMinute.slice(-9,-1).every(c=>c.low>ema21+atr15*0.35),
+        JSON.stringify({ema21,atr15,recent:fifteenMinute.slice(-9,-1).map(c=>({low:c.low,close:c.close}))}));
+    }
+    return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  };
+  const both=evaluate("both"), one=evaluate("pullback_only"), none=evaluate("neither");
+  assert.equal(both.confirmationCount,2,JSON.stringify(both.entryDiagnostics));
+  assert.equal(both.confirmationPriorityBonus,15);
+  assert.equal(one.confirmationCount,1,JSON.stringify(one.entryDiagnostics));
+  assert.equal(one.confirmationPriorityBonus,7);
+  assert.equal(none.confirmationCount,0,JSON.stringify(none.entryDiagnostics));
+  assert.equal(none.confirmationPriorityBonus,0);
+  assert.equal(both.score,both.baseScore);
+  assert.equal(one.score,one.baseScore);
+  assert.equal(none.score,none.baseScore);
+  assert.equal(both.priorityScore,both.baseScore+both.volumePriorityBonus+15);
+  assert.equal(one.priorityScore,one.baseScore+one.volumePriorityBonus+7);
+  assert.equal(none.priorityScore,none.baseScore+none.volumePriorityBonus);
 });
 
 test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
@@ -269,15 +316,27 @@ test("standard LONG path accepts aligned 1h with neutral 4h context",()=>{
   assert.ok(result.score>=FUTURES_CONFIG.MIN_SCORE);
 });
 
-test("separate high-risk SHORT path can pass with opposing 4h only when 15m momentum confirms",()=>{
+test("HIGH_RISK accepts opposing 4h without 15m momentum; confirmation only affects priority",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
+  fifteenMinute.at(-1).open=fifteenMinute.at(-1).close-0.05;
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
   assert.equal(result.eligible,true,JSON.stringify(result));
   assert.equal(result.highRiskEligible,true);
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.equal(result.entryDiagnostics.fourHourOpposes,true);
-  assert.equal(result.entryDiagnostics.momentumConfirmed,true);
+  assert.equal(result.entryDiagnostics.momentumConfirmed,false);
+  assert.equal(result.confirmationPriorityBonus,7);
+});
+
+test("HIGH_RISK does not reject opposing 4h solely because 15m confirmation data is unavailable",()=>{
+  const {ticker,oneHour}=makeSetup("SHORT");
+  const opposingFourHour=makeCandles({slope:0.04,base:100});
+  const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,[]);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.highRiskEligible,true);
+  assert.equal(result.entryDiagnostics.confirmationUnavailable,true);
+  assert.equal(result.confirmationPriorityBonus,0);
 });
 
 test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=>{
@@ -285,6 +344,7 @@ test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=
   const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
   oneHour.at(-1).volume=avg*0.6;
   ticker.priceChangePercent=0;
+  ticker.quoteVolume=2_000_000;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.side,"LONG");
   assert.equal(result.eligible,true,JSON.stringify(result));
@@ -292,6 +352,95 @@ test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.ok(result.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE);
   assert.ok(result.volumeRatio>=FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO);
+  assert.equal(result.quoteVolume,2_000_000);
+});
+
+test("HIGH_RISK accepts quote volume exactly at the 1M USD floor when relative volume passes",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  ticker.quoteVolume=1_000_000;
+  const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  oneHour.at(-1).volume=avg*0.6;
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.highRiskEligible,true);
+  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.equal(result.quoteVolume,1_000_000);
+  assert.ok(result.volumeRatio>=0.5);
+});
+
+test("HIGH_RISK rejects quote volume below the 1M USD safety floor",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  ticker.quoteVolume=999_999;
+  oneHour.at(-1).volume=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,undefined);
+  assert.match(result.rejected,/کف ایمنی مسیر پرریسک/);
+  assert.equal(result.entryDiagnostics.minimumHighRiskQuoteVolume,1_000_000);
+});
+
+test("Kraken universe includes symbols above 1M USD for HIGH_RISK evaluation",async()=>{
+  const originalFetch=globalThis.fetch;
+  const tickers=[
+    {tag:"perpetual",symbol:"PF_TESTLOWUSD",volumeQuote:2_000_000,last:10,suspended:false},
+    {tag:"perpetual",symbol:"PF_TESTDEADUSD",volumeQuote:999_999,last:10,suspended:false}
+  ];
+  globalThis.fetch=async()=>new Response(JSON.stringify({tickers}),{status:200});
+  try {
+    const universe=await getKrakenFuturesUniverse();
+    assert.deepEqual(universe.map(x=>x.symbol),["PF_TESTLOWUSD"]);
+  } finally { globalThis.fetch=originalFetch; }
+});
+
+test("HIGH_RISK rejects relative volume below 0.3x",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  oneHour.at(-1).volume=avg*0.299;
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,undefined);
+  assert.match(result.rejected,/کمتر از حداقل مسیر پرریسک/);
+  assert.equal(result.entryDiagnostics.minimumHighRiskVolumeRatio,0.3);
+  assert.ok(result.entryDiagnostics.volumeRatio<0.3);
+});
+
+test("HIGH_RISK accepts relative volume exactly at the 0.3x floor without a priority bonus",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  oneHour.at(-1).volume=avg*0.3;
+  ticker.quoteVolume=2_000_000;
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.highRiskEligible,true);
+  assert.equal(result.volumePriorityBonus,0);
+});
+
+test("volume priority bonus tiers are 0, 5, and 10 without changing qualification score",()=>{
+  const evaluate=ratio=>{
+    const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+    const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+    oneHour.at(-1).volume=avg*ratio;
+    ticker.quoteVolume=2_000_000;
+    ticker.priceChangePercent=0;
+    return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  };
+  const low=evaluate(0.4), medium=evaluate(0.75), high=evaluate(1.0);
+  assert.equal(low.volumePriorityBonus,0);
+  assert.equal(medium.volumePriorityBonus,5);
+  assert.equal(high.volumePriorityBonus,10);
+  assert.equal(low.priorityScore,low.baseScore+low.confirmationPriorityBonus);
+  assert.equal(medium.priorityScore,medium.baseScore+5+medium.confirmationPriorityBonus);
+  assert.equal(high.priorityScore,high.baseScore+10+high.confirmationPriorityBonus);
+  assert.equal(low.score,medium.score);
+  assert.equal(medium.score,high.score);
+  assert.equal(low.score,low.baseScore);
+  assert.equal(medium.score,medium.baseScore);
+  assert.equal(high.score,high.baseScore);
+  assert.equal(low.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE,true);
+  assert.equal(medium.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE,true);
+  assert.equal(high.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE,true);
 });
 
 test("strict SHORT setup below standard score/volume falls back to HIGH_RISK",()=>{

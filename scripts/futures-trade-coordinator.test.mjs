@@ -130,6 +130,37 @@ test("closing a trade releases only its symbol-side lock and permits a new signa
   assert.equal(next.body.trackedTrades, 1);
 });
 
+test("trade monitor diagnostics are persisted separately without changing OPEN lock status", async () => {
+  const { post } = createCoordinator();
+  await post("/signals/register", { signals: [signal("sig-monitor-error")] });
+  const trade = (await post("/trades/list")).body.trades[0];
+  const detail = { tradeId: trade.id, symbol: trade.symbol, side: trade.side, stage: "CANDLE_FETCH", message: "temporary upstream error", at: new Date().toISOString() };
+  const saved = await post("/trades/update", { trades: [{
+    id: trade.id, lastMonitorAttemptAt: detail.at, lastMonitorError: detail,
+    monitorErrorAt: detail.at, monitorErrorHistory: [detail]
+  }] });
+  assert.equal(saved.body.updated, 1);
+  const listed = (await post("/trades/list")).body.trades[0];
+  assert.equal(listed.status, "OPEN");
+  assert.equal(listed.lastMonitorError.stage, "CANDLE_FETCH");
+  assert.equal(listed.monitorErrorHistory.length, 1);
+});
+
+test("manual tracking close releases only the internal OPEN lock", async () => {
+  const { post } = createCoordinator();
+  await post("/signals/register", { signals: [signal("sig-manual-close")] });
+  const trade = (await post("/trades/list")).body.trades[0];
+  const closed = await post("/trades/update", { trades: [{
+    id: trade.id, status: "CLOSED_MANUAL", closeReason: "OWNER_MANUAL_TRACKING_RESET",
+    exitPrice: 101, closePriceChangePercent: 1, marginReturnPercent: 10,
+    closedAt: new Date().toISOString()
+  }] });
+  assert.equal(closed.body.closed, 1);
+  assert.equal((await post("/trades/list")).body.trades.length, 0);
+  const next = await post("/signals/register", { signals: [signal("sig-after-manual-close")] });
+  assert.equal(next.body.signals.length, 1);
+});
+
 test("a different symbol remains eligible while another symbol-side trade is OPEN", async () => {
   const { post } = createCoordinator();
   await post("/signals/register", { signals: [signal("btc-open")] });
