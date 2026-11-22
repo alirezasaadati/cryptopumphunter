@@ -1252,11 +1252,14 @@ async function showStatus(env, chatId) {
   await sendMessage(
     env,
     chatId,
-    `🟢 وضعیت Crypto Pump Hunter\n\n` +
+    `🟢 وضعیت ربات\n\n` +
     `نسخه: V${CONFIG.VERSION}\n` +
-     "حالت فعالیت: فقط موتور سیگنال Kraken Futures\n" +
-    `اتصال KV: ${env.APP_KV ? "فعال" : "غیرفعال"}\n` +
-    `آخرین اسکن فیوچرز: ${lastScan}`,
+    "حالت فعالیت:\n" +
+    "موتور سیگنالدهی کراکن\n" +
+    "اتصال KV:\n" +
+    `${env.APP_KV ? "فعال" : "غیرفعال"}\n` +
+    "آخرین اسکن فیوچرز:\n" +
+    lastScan,
     menuForChat(env, chatId)
   );
 }
