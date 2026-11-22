@@ -73,12 +73,15 @@ const ticker = {
   // The analyzer uses candle volume for volumeRatio; quoteVolume is informational here.
   quoteVolume: 0,
   priceChangePercent: change24h(oneHour),
-  premium: { lastFundingRate: null }
+  premium: {}
 };
 const analysis = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute);
 result.analysis = analysis;
 result.entryVsLastClosed1hPct = oneHour.at(-1)?.close
   ? (ENTRY / oneHour.at(-1).close - 1) * 100 : null;
-result.exactEntryMatch = Number.isFinite(analysis?.entry) && Math.abs(analysis.entry - ENTRY) < 1e-8;
+result.entryMatchesInjectedReference = Number.isFinite(analysis?.entry) && Math.abs(analysis.entry - ENTRY) < 1e-8;
+result.entrySource = "Reported Telegram entry injected as ticker.last; historical ticker snapshot unavailable";
+result.historicalFundingAvailable = false;
+result.historicalQuoteVolumeAvailable = false;
 result.eligible = analysis?.eligible === true;
 console.log(JSON.stringify(result, null, 2));
