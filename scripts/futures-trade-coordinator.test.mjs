@@ -59,8 +59,8 @@ test("closing a trade releases only its symbol-side lock and permits a new signa
   const close = await post("/trades/update", {
     trades: [{
       id: trade.id, status: "CLOSED_PROFIT", closeReason: "CLOSED_PROFIT",
-      exitPrice: 103, closePriceChangePercent: 3, marginReturnPercent: 30,
-      closedAt: new Date().toISOString(), lastPrice: 103,
+      exitPrice: 107.5, closePriceChangePercent: 7.5, marginReturnPercent: null,
+      closedAt: new Date().toISOString(), lastPrice: 107.5,
       lastCheckedCandleTime: Date.now()
     }]
   });
@@ -88,7 +88,7 @@ test("closed historical trade cannot be reopened by a stale update", async () =>
   const trade = (await post("/trades/list")).body.trades[0];
   await post("/trades/update", { trades: [{
     id: trade.id, status: "CLOSED_STOP", exitPrice: 95,
-    closePriceChangePercent: -5, marginReturnPercent: -50
+    closePriceChangePercent: -5, marginReturnPercent: null
   }] });
   const stale = await post("/trades/update", { trades: [{
     id: trade.id, status: "OPEN", lastPrice: 101, lastCheckedCandleTime: Date.now() + 1000
