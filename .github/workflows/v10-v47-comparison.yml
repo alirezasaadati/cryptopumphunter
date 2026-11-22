@@ -1,0 +1,24 @@
+name: v10 vs v4.7 same-data backtest
+on:
+  push:
+    branches:
+      - backtest-v10-v47-comparison-20261122
+    paths:
+      - "scripts/backtest-v10-v47-comparison.mjs"
+      - ".github/workflows/v10-v47-comparison.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/backtest-v10-v47-comparison.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v10-v47-comparison
+          path: artifacts/
+          if-no-files-found: warn
