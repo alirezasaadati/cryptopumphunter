@@ -88,9 +88,36 @@ function candleAmbiguous(side, trade, candle) {
   const profitAtOpen = side === "LONG" ? candle.open >= target : candle.open <= target;
   return stopHit && profitHit && !stopAtOpen && !profitAtOpen;
 }
+function evaluateTp1Candle(trade, bar) {
+  const entry = Number(trade.entry);
+  const stop = Number(trade.initialStop);
+  const target = Number(trade.target1);
+  const side = trade.side;
+  const open = Number(bar.open), high = Number(bar.high), low = Number(bar.low);
+  const stopHit = side === "LONG" ? low <= stop : high >= stop;
+  const tp1Hit = side === "LONG" ? high >= target : low <= target;
+  if (!stopHit && !tp1Hit) return null;
+  const stopAtOpen = side === "LONG" ? open <= stop : open >= stop;
+  const tp1AtOpen = side === "LONG" ? open >= target : open <= target;
+  const closeAtStop = stopAtOpen || (!tp1AtOpen && stopHit);
+  const exitPrice = closeAtStop
+    ? (stopAtOpen ? open : stop)
+    : (tp1AtOpen ? open : target);
+  const movePct = (side === "LONG" ? 1 : -1) * ((exitPrice-entry)/entry) * 100;
+  return {
+    status: closeAtStop ? "CLOSED_STOP" : "CLOSED_TP1",
+    closeReason: closeAtStop ? "CLOSED_STOP" : "CLOSED_TP1",
+    exitPrice,
+    closePriceChangePercent: movePct,
+    marginReturnPercent: movePct * LEVERAGE,
+    closedAtMs: bar.time + INTERVALS["5m"],
+    ambiguousCandles: trade.ambiguousCandles || 0
+  };
+}
+
 function summarize(trades) {
-  const closed = trades.filter(t => t.status === "CLOSED_PROFIT" || t.status === "CLOSED_STOP");
-  const profits = closed.filter(t => t.status === "CLOSED_PROFIT");
+  const closed = trades.filter(t => t.status === "CLOSED_TP1" || t.status === "CLOSED_STOP");
+  const profits = closed.filter(t => t.status === "CLOSED_TP1");
   const stops = closed.filter(t => t.status === "CLOSED_STOP");
   let equity = 0, peak = 0, maxDrawdown = 0;
   for (const trade of [...closed].sort((a,b)=>a.closedAtMs-b.closedAtMs)) {
@@ -115,7 +142,7 @@ function summarize(trades) {
     maxDrawdownMarginPct: maxDrawdown,
     ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
     bySide: {
-      LONG: { trades: longs.length, profitCloses: longs.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: longs.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(longs) },
+      LONG: { trades: longs.length, profitCloses: longs.filter(t=>t.status==="CLOSED_TP1").length, stopCloses: longs.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(longs) },
       SHORT: { trades: shorts.length, profitCloses: shorts.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: shorts.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(shorts) }
     }
   };
@@ -165,7 +192,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const trade = {
       id: ticker.symbol + ":" + candidate.side + ":" + signalCloseTime,
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
-      entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
+      entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop), target1: Number(candidate.target1),
       signalTime: signalBar.time, entryTime: signalCloseTime,
       score: candidate.score, ambiguousCandles: 0
     };
@@ -226,7 +253,7 @@ async function main() {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
     rules:{leverage:LEVERAGE,targetMarginReturnPct:TARGET,requiredFavorablePriceMovePct:TARGET/LEVERAGE,
-      exit:"close only at +30% margin return or configured stop",tp1Tp2Tp3:"ignored for closing",
+      exit:"close at each signal-specific TP1 (1.5R) or configured initial stop, whichever is reached first",tp1Tp2Tp3:"TP1 is the actual signal target1; TP2 and TP3 ignored",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
@@ -242,14 +269,14 @@ async function main() {
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/futures-lifecycle-backtest.json",JSON.stringify(report,null,2));
   const rows = [
-    "# Futures lifecycle historical backtest","",
+    "# Futures TP1 historical backtest","",
     "Period: "+report.period.from+" — "+report.period.to+" ("+DAYS+" days)",
     "Symbols tested: "+report.symbolsTested+"/"+SYMBOL_LIMIT,"",
     "| Metric | Result |","|---|---:|",
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
-    "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
+    "| TP1 closes (1.5R) | "+metrics.profitCloses+" |",
     "| Stop closes | "+metrics.stopCloses+" |",
     "| Open at end | "+metrics.openAtEnd+" |",
     "| LONG / SHORT | "+metrics.longs+" / "+metrics.shorts+" |",
