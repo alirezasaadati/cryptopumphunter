@@ -14,3 +14,9 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm test
+      - name: Replay reference ZEC signal at 2026-11-19 23:30 Iran time
+        env:
+          ZEC_KRAKEN_SYMBOL: PF_ZECUSD
+          ZEC_SIGNAL_ENTRY: "902.69"
+          ZEC_SIGNAL_TIME: "2026-11-19T20:00:00Z"
+        run: node scripts/replay-zec-signal-2026-11-19.mjs

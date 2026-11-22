@@ -5,7 +5,7 @@ import { createSerialExecutor } from "./serial-executor.js";
 import { evaluateTradeCandle } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
-  VERSION: "10.6.0",
+  VERSION: "11.0.0",
   PENDING_TTL: 604800
 };
 
@@ -1365,21 +1365,24 @@ function average(values) {
 const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
+  // Scan all liquid perpetuals, stopping only when the safe execution budget is reached.
   CONCURRENCY: 3,
   MAX_SCAN_DURATION_MS: 180000,
   SCAN_FINALIZATION_RESERVE_MS: 45000,
   REQUEST_TIMEOUT_MS: 12000,
-  MAX_SIGNALS_PER_SCAN: 10,
+  MAX_SIGNALS_PER_SCAN: 20,
   MIN_QUOTE_VOLUME: 5_000_000,
   KLINE_LIMIT: 120,
-  MIN_CANDLES: 100,
-  TARGET_1_R: 1.5,
-  STOP_BUFFER_ATR: 0.2,
-  MAX_RISK_PCT: 2.0,
-  MIN_RISK_PCT: 0.5,
-  MAX_ATR_PCT: 2.0,
+  MIN_CANDLES: 60,
+  MIN_SCORE: 72,
   INTERVAL: "1h",
-  SIGNAL_TTL_MINUTES: 60
+  CONFIRM_INTERVAL: "4h",
+  ENTRY_CONFIRM_INTERVAL: "15m",
+  SIGNAL_TTL_MINUTES: 60,
+  MAX_ENTRY_DRIFT_PCT: 0.35,
+  MAX_ENTRY_EMA_DISTANCE_ATR: 3.0,
+  MAX_PULLBACK_DISTANCE_ATR: 0.35,
+  MAX_RECLAIM_EXTENSION_ATR: 3.0
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
@@ -1565,29 +1568,9 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
     momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
 }
 
-function findLatestConfirmed15mPivot(candles, side, left = 3, right = 3) {
-  if (!Array.isArray(candles) || candles.length < left + right + 1) return null;
-  const field = side === "LONG" ? "high" : "low";
-  for (let i = candles.length - right - 1; i >= left; i--) {
-    const value = Number(candles[i]?.[field]);
-    if (!Number.isFinite(value)) continue;
-    let pivot = true;
-    for (let j = i - left; j <= i + right; j++) {
-      if (j === i) continue;
-      const neighbor = Number(candles[j]?.[field]);
-      if (!Number.isFinite(neighbor) || (side === "LONG" ? neighbor >= value : neighbor <= value)) {
-        pivot = false;
-        break;
-      }
-    }
-    if (pivot) return { index: i, time: candles[i].time, price: value, type: side === "LONG" ? "swing_high" : "swing_low" };
-  }
-  return null;
-}
-
 function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
-  // Keep SHORT behavior unchanged. LONG uses the signal candle close versus
-  // the maximum High of the last three completed 1h candles, matching backtests.
+  // Retained as a pure compatibility utility for historical tests only.
+  // The restored Kraken Futures 3.8.2 analyzer does not call this LONG-only filter.
   if (side !== "LONG") return true;
   if (!Array.isArray(candles1h) || candles1h.length < 3) return false;
   const last3 = candles1h.slice(-3);
@@ -1598,180 +1581,135 @@ function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
   return Number.isFinite(distance) && distance >= threshold;
 }
 
-function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = [], options = {}) {
-  const symbol = ticker?.symbol || "UNKNOWN";
-  if (!Array.isArray(candles1h) || candles1h.length < FUTURES_CONFIG.MIN_CANDLES) {
-    throw new Error("کندل ۱ ساعته کافی نیست.");
+function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
+  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
+    throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   }
-  if (!candles1h.every(c =>
-    c && [c.time,c.open,c.high,c.low,c.close].every(v => Number.isFinite(Number(v))) &&
-    Number(c.open)>0 && Number(c.low)>0 && Number(c.close)>0 &&
-    Number(c.high)>=Math.max(Number(c.open),Number(c.close),Number(c.low)) &&
-    Number(c.low)<=Math.min(Number(c.open),Number(c.close))
-  )) {
-    throw new Error("داده کندل نامعتبر است.");
-  }
-
+  const closes1h = candles1h.map(c => c.close);
+  const closes4h = candles4h.map(c => c.close);
   const last = candles1h[candles1h.length - 1];
-  const prev = candles1h[candles1h.length - 2];
-  const closes = candles1h.map(c => Number(c.close));
-  const e20 = ema(closes, 20);
-  const e50 = ema(closes, 50);
-  const rsiValue = rsi(closes, 14);
+  const referencePrice = last.close;
+  const e20 = ema(closes1h, 20);
+  const e50 = ema(closes1h, 50);
+  const e20_4h = ema(closes4h, 20);
+  const e50_4h = ema(closes4h, 50);
+  const rsiValue = rsi(closes1h, 14);
   const atr = calculateAtr(candles1h, 14);
-  if (![e20,e50,rsiValue,atr].every(Number.isFinite) || atr <= 0) {
-    throw new Error("اندیکاتورها نامعتبرند.");
+  if ([e20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) {
+    throw new Error("محاسبه اندیکاتورها معتبر نیست.");
   }
 
-  const atrPct = (atr / last.close) * 100;
-  if (!Number.isFinite(atrPct)) throw new Error("محاسبه ATR درصدی نامعتبر است.");
+  const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume));
+  const volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
+  const up1h = e20 > e50 && referencePrice > e20;
+  const down1h = e20 < e50 && referencePrice < e20;
+  const up4h = e20_4h > e50_4h;
+  const down4h = e20_4h < e50_4h;
+  let side = null;
+  let score = 0;
+  const reasons = [];
 
-  let mode = null;
-  let stopPrice = null;
-  const distanceToE20 = ((last.close - e20) / e20) * 100;
+  const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
+  const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
+  const relaxedLong = up1h && !down4h && rsiValue >= 40 && rsiValue <= 75;
+  const relaxedShort = down1h && !up4h && rsiValue >= 25 && rsiValue <= 60;
+  const strictSetup = strictLong || strictShort;
 
-  // Diagnostic-only condition flags. These mirror the existing entry rules exactly.
-  const trendConditions = {
-    closeBelowEma50: last.close < e50,
-    ema20BelowEma50: e20 < e50,
-    rsiBelow45: rsiValue < 45,
-    atLeastHalfPercentBelowEma20: distanceToE20 < -0.5
-  };
-  const isDowntrend = Object.values(trendConditions).every(Boolean);
-  const relaxedTrendConditions = {
-    closeBelowEma50: last.close < e50,
-    ema20BelowEma50: e20 < e50,
-    rsiBelow55: rsiValue < 55,
-    atLeastHalfPercentBelowEma20: distanceToE20 < -0.5
-  };
-  const isRelaxedDowntrend = !isDowntrend && Object.values(relaxedTrendConditions).every(Boolean);
-
-  const rallyBaseConditions = {
-    closeAboveEma50: last.close > e50,
-    rsiAbove75: rsiValue > 75
-  };
-  const isRedCandle = last.close < last.open;
-  const bodySize = last.open - last.close;
-  const candleRange = last.high - last.low;
-  const bodyToRangeRatio = candleRange > 0 ? bodySize / candleRange : 0;
-  const rallyCandleConditions = {
-    redCandle: isRedCandle,
-    currentHighAbovePreviousHigh: last.high > prev.high,
-    bodyExceedsHalfCandleRange: candleRange > 0 && bodyToRangeRatio > 0.5
-  };
-  const entryConditionDiagnostics = {
-    close: last.close,
-    ema20: e20,
-    ema50: e50,
-    rsi14: rsiValue,
-    distanceToEma20Pct: distanceToE20,
-    atrPct,
-    trendShort: trendConditions,
-    rallyFade: { ...rallyBaseConditions, ...rallyCandleConditions, bodyToRangeRatio }
-  };
-
-  if (atrPct > FUTURES_CONFIG.MAX_ATR_PCT) {
-    return {
-      symbol,
-      rejected: `نوسان (ATR) بیش از حد بالاست (${atrPct.toFixed(2)}%).`,
-      diagnosticStage: "ATR_FILTER",
-      diagnosticDetails: { atrPct, maxAtrPct: FUTURES_CONFIG.MAX_ATR_PCT },
-      entryConditionDiagnostics
-    };
+  if (strictLong || (!strictSetup && relaxedLong)) {
+    side = "LONG";
+    score = strictSetup ? 45 : 40;
+    reasons.push(strictSetup
+      ? "روند ۱ساعته و ۴ساعته صعودی است"
+      : "ستاپ آزمایشی: روند ۱ساعته صعودی و روند ۴ساعته مخالف نیست",
+      "قیمت بالای EMA20 قرار دارد");
+    score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
+  } else if (strictShort || (!strictSetup && relaxedShort)) {
+    side = "SHORT";
+    score = strictSetup ? 45 : 40;
+    reasons.push(strictSetup
+      ? "روند ۱ساعته و ۴ساعته نزولی است"
+      : "ستاپ آزمایشی: روند ۱ساعته نزولی و روند ۴ساعته مخالف نیست",
+      "قیمت زیر EMA20 قرار دارد");
+    score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
+  } else {
+    return { symbol: ticker.symbol, rejected: "حتی شرایط منعطف آزمایشی روند و RSI نیز تأیید نشد" };
   }
 
-  let riskLevel = "NORMAL";
-  if (isDowntrend || isRelaxedDowntrend) {
-    mode = "TREND_SHORT";
-    riskLevel = isDowntrend ? "NORMAL" : "HIGH_RISK";
-    const recentHighs = candles1h.slice(-7).map(c => Number(c.high));
-    stopPrice = Math.max(...recentHighs) + atr * FUTURES_CONFIG.STOP_BUFFER_ATR;
-  } else if (rallyBaseConditions.closeAboveEma50 &&
-      rallyCandleConditions.redCandle &&
-      rallyCandleConditions.currentHighAbovePreviousHigh &&
-      rallyCandleConditions.bodyExceedsHalfCandleRange) {
-    // Keep RSI>75 as the normal RALLY_FADE gate; all lower-RSI variants are high-risk.
-    mode = "RALLY_FADE";
-    riskLevel = rallyBaseConditions.rsiAbove75 ? "NORMAL" : "HIGH_RISK";
-    stopPrice = last.high + atr * FUTURES_CONFIG.STOP_BUFFER_ATR;
+  if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
+  else if (volumeRatio >= 1.0) { score += 12; reasons.push("حجم نزدیک یا بالاتر از میانگین است"); }
+  else { score += 4; reasons.push("حجم کمتر از میانگین است"); }
+
+  const change = Number(ticker.priceChangePercent) || 0;
+  if ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) score += 8;
+  else score += 3;
+
+  const funding = Number(ticker.premium?.lastFundingRate);
+  if (Number.isFinite(funding)) {
+    if (side === "LONG" && funding > 0.001) { score -= 5; reasons.push("فاندینگ مثبت و نسبتاً بالا؛ ریسک ازدحام لانگ"); }
+    else if (side === "SHORT" && funding < -0.001) { score -= 5; reasons.push("فاندینگ منفی و نسبتاً پایین؛ ریسک ازدحام شورت"); }
+    else reasons.push("فاندینگ در محدوده افراطی نیست");
+  } else {
+    reasons.push("داده فاندینگ در دسترس نبود");
   }
 
-  if (!mode) {
-    return {
-      symbol,
-      rejected: "شرایط سخت‌گیرانه ورود فراهم نیست.",
-      diagnosticStage: "ENTRY_SETUP",
-      entryConditionDiagnostics
-    };
+  const entryFilters = options.skipEntryFilters
+    ? { ok: true, skippedForBaseline: true }
+    : evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr });
+  if (!entryFilters.ok) {
+    return { symbol: ticker.symbol, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
+  }
+  reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
+  reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
+  if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
+    reasons.push("مومنتوم و پولبک ۱۵دقیقه‌ای تأیید شدند");
+  } else {
+    reasons.push("تأیید ۱۵دقیقه‌ای کامل نبود؛ سیگنال به‌دلیل آن حذف نشد");
   }
 
-  const entrySource = options.backtestEntryOpen !== undefined
-    ? options.backtestEntryOpen
-    : ticker.last;
-  const entry = Number(entrySource);
-  if (!Number.isFinite(entry) || entry <= 0) {
-    return { symbol, rejected: "قیمت ورود نامعتبر است.", diagnosticStage: "ENTRY_PRICE", entryConditionDiagnostics };
-  }
-  if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
-    return { symbol, rejected: "قیمت استاپ نامعتبر است.", diagnosticStage: "STOP_VALIDATION", entryConditionDiagnostics };
-  }
-
-  const risk = stopPrice - entry;
-  const riskPct = (risk / entry) * 100;
-  if (!Number.isFinite(risk) || !Number.isFinite(riskPct) || risk <= 0) {
-    return { symbol, rejected: "استاپ در موقعیت معتبر برای معامله SHORT قرار ندارد.", diagnosticStage: "STOP_SIDE_VALIDATION", diagnosticDetails: { entry, stopPrice, risk, riskPct }, entryConditionDiagnostics };
-  }
-  if (riskPct > FUTURES_CONFIG.MAX_RISK_PCT || riskPct < FUTURES_CONFIG.MIN_RISK_PCT) {
-    return {
-      symbol,
-      rejected: `ریسک استاپ (${riskPct.toFixed(2)}%) خارج از محدوده مجاز است.`,
-      diagnosticStage: "RISK_FILTER",
-      diagnosticDetails: { riskPct, minRiskPct: FUTURES_CONFIG.MIN_RISK_PCT, maxRiskPct: FUTURES_CONFIG.MAX_RISK_PCT, entry, stopPrice },
-      entryConditionDiagnostics
-    };
+  const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
+  const swing = candles1h.slice(-8, -1);
+  const swingLow = Math.min(...swing.map(c => c.low));
+  const swingHigh = Math.max(...swing.map(c => c.high));
+  let stop = side === "LONG"
+    ? Math.min(swingLow, entry - atr * 1.5)
+    : Math.max(swingHigh, entry + atr * 1.5);
+  const risk = side === "LONG" ? entry - stop : stop - entry;
+  const riskPct = risk / entry;
+  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
+    return { symbol: ticker.symbol, rejected: "فاصله حد ضرر غیرمنطقی است؛ سیگنال صادر نشد" };
   }
 
-  const target1 = entry - risk * FUTURES_CONFIG.TARGET_1_R;
-  if (!Number.isFinite(target1) || target1 <= 0) {
-    return { symbol, rejected: "قیمت تارگت نامعتبر است.", diagnosticStage: "TARGET_VALIDATION", entryConditionDiagnostics };
-  }
-
-  // target2/target3 are compatibility levels for the existing display/tracker schema.
-  // The v10.6 signal's strategy target remains target1 = 1.5R.
-  const target2 = entry - risk * 2.2;
-  const target3 = entry - risk * 3.0;
-  if (![target2,target3].every(v => Number.isFinite(v) && v > 0) ||
-      !(target3 < target2 && target2 < target1 && target1 < entry && entry < stopPrice)) {
-    return { symbol, rejected: "سطوح قیمت سیگنال معتبر نیستند.", diagnosticStage: "TARGET_VALIDATION", diagnosticDetails: { entry, stopPrice, target1, target2, target3 }, entryConditionDiagnostics };
-  }
-
+  const direction = side === "LONG" ? 1 : -1;
+  const target1 = entry + direction * risk * 1.5;
+  const target2 = entry + direction * risk * 2.5;
+  const target3 = entry + direction * risk * 3.5;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
   return {
-    symbol,
-    side: "SHORT",
-    mode,
-    strategyId: "v10.6-short-hybrid",
-    strategyName: "Crypto Pump Hunter v10.6 SHORT Hybrid",
-    score: riskLevel === "HIGH_RISK" ? 60 : (mode === "RALLY_FADE" ? 90 : 80),
-    riskLevel,
+    symbol: ticker.symbol,
+    side,
+    score,
+    price: entry,
     entry,
-    stop: stopPrice,
+    stop,
     target1,
     target2,
     target3,
-    risk,
-    riskPct,
-    rewardRisk: FUTURES_CONFIG.TARGET_1_R,
-    candleTime: last.time,
-    atr,
+    rewardRisk: 1.5,
     rsi: rsiValue,
     ema20: e20,
     ema50: e50,
-    eligible: true,
-    diagnosticStage: "ELIGIBLE",
-    entryConditionDiagnostics: { ...entryConditionDiagnostics, selectedEngine: mode }
+    atr,
+    volumeRatio,
+    funding: Number.isFinite(funding) ? funding : null,
+    quoteVolume: Number(ticker.quoteVolume) || 0,
+    change24h: change,
+    candleTime: last.time,
+    reasons,
+    entryDiagnostics: entryFilters,
+    eligible
   };
 }
-
 
 function formatPrice(value) {
   const price = Number(value);
@@ -1790,8 +1728,8 @@ function formatFuturesSignal(item, index = 1) {
     `جهت معامله: ${sideLabel}\n\n` +
     `قیمت ورود: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
     `🎯 تارگت اول (1.5R): <b>${formatSignalPrice(item.target1)}</b>\n\n` +
-    `🎯 تارگت دوم (2.2R): <b>${formatSignalPrice(item.target2)}</b>\n\n` +
-    `🎯 تارگت سوم (3R): <b>${formatSignalPrice(item.target3)}</b>\n\n` +
+    `🎯 تارگت دوم (2.5R): <b>${formatSignalPrice(item.target2)}</b>\n\n` +
+    `🎯 تارگت سوم (3.5R): <b>${formatSignalPrice(item.target3)}</b>\n\n` +
     `⛔ حد ضرر: <b>${formatSignalPrice(item.stop)}</b>`;
 }
 
@@ -2176,7 +2114,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
         (i+1)+") "+formatFuturesSymbol(s.symbol)+" | "+side,
         "امتیاز: "+fmt(s.score)+" از 100",
         "ورود: "+fmt(s.entry)+" | حد ضرر: "+fmt(s.stop),
-        "تارگت اول (1.5R): "+fmt(s.target1)+" | تارگت دوم (2.2R): "+fmt(s.target2)+" | تارگت سوم (3R): "+fmt(s.target3),
+        "تارگت اول (1.5R): "+fmt(s.target1)+" | تارگت دوم (2.5R): "+fmt(s.target2)+" | تارگت سوم (3.5R): "+fmt(s.target3),
         "RSI: "+fmt(s.rsi)+" | نسبت حجم: "+fmt(s.volumeRatio)+" | تغییر ۲۴ساعته: "+fmt(s.change24h)+"٪",
         "حجم مظنه: "+fmt(s.quoteVolume)+" USD | فاندینگ: "+fmt(s.funding),
         "زمان ایجاد: "+createdText
@@ -2364,62 +2302,35 @@ async function runFuturesEntryDiagnostics() {
     FUTURES_CONFIG.CONCURRENCY,
     async ticker => {
       try {
-        const candles = await getKrakenFuturesCandles(ticker.symbol, "1h");
-        const result = analyzeFuturesSymbol(ticker, candles, [], []);
+        const [oneHour, fourHour, fifteenMinute] = await Promise.all([
+          getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.INTERVAL),
+          getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL),
+          getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL).catch(() => [])
+        ]);
+        const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute);
         return {
           symbol: ticker.symbol,
-          stage: result.diagnosticStage || (result.eligible ? "ELIGIBLE" : "UNKNOWN"),
+          stage: result.eligible ? "ELIGIBLE" : result.rejected ? "REJECTED" : "UNKNOWN",
           reason: result.rejected || null,
-          candleCount: candles.length,
-          lastCandleTime: candles.length ? new Date(candles[candles.length - 1].time).toISOString() : null,
-          metrics: result.entryConditionDiagnostics ? {
-            close: result.entryConditionDiagnostics.close,
-            ema20: result.entryConditionDiagnostics.ema20,
-            ema50: result.entryConditionDiagnostics.ema50,
-            rsi14: result.entryConditionDiagnostics.rsi14,
-            distanceToEma20Pct: result.entryConditionDiagnostics.distanceToEma20Pct,
-            atrPct: result.entryConditionDiagnostics.atrPct,
-            bodyToRangeRatio: result.entryConditionDiagnostics.rallyFade?.bodyToRangeRatio ?? null
-          } : null,
-          conditions: result.entryConditionDiagnostics || null,
-          details: result.diagnosticDetails || null
+          score: result.score ?? null,
+          side: result.side ?? null,
+          candleCounts: { "1h": oneHour.length, "4h": fourHour.length, "15m": fifteenMinute.length },
+          entry: result.entry ?? null, stop: result.stop ?? null,
+          targets: result.eligible ? [result.target1, result.target2, result.target3] : null,
+          metrics: result.entryDiagnostics || null
         };
       } catch (error) {
-        return {
-          symbol: ticker.symbol,
-          stage: "DATA_OR_ANALYSIS_ERROR",
-          reason: String(error?.message || error).slice(0, 220),
-          candleCount: null,
-          lastCandleTime: null,
-          metrics: null,
-          conditions: null
-        };
+        return { symbol: ticker.symbol, stage: "DATA_OR_ANALYSIS_ERROR",
+          reason: String(error?.message || error).slice(0, 220), score: null, side: null,
+          candleCounts: null, entry: null, stop: null, targets: null, metrics: null };
       }
     }
   );
   const stageCounts = {};
-  const conditions = { trendShort: {}, rallyFade: {} };
-  for (const item of analyzed) {
-    stageCounts[item.stage] = (stageCounts[item.stage] || 0) + 1;
-    for (const [engine, flags] of [
-      ["trendShort", item.conditions?.trendShort],
-      ["rallyFade", item.conditions?.rallyFade]
-    ]) {
-      for (const [name, passed] of Object.entries(flags || {})) {
-        if (typeof passed !== "boolean") continue;
-        const counts = conditions[engine][name] || (conditions[engine][name] = { passed: 0, failed: 0 });
-        counts[passed ? "passed" : "failed"]++;
-      }
-    }
-  }
+  for (const item of analyzed) stageCounts[item.stage] = (stageCounts[item.stage] || 0) + 1;
   return {
-    startedAt,
-    finishedAt: new Date().toISOString(),
-    universeCount: universe.length,
-    sampledCount: analyzed.length,
-    stageCounts,
-    conditions,
-    samples: analyzed
+    startedAt, finishedAt: new Date().toISOString(), universeCount: universe.length,
+    sampledCount: analyzed.length, stageCounts, samples: analyzed
   };
 }
 
@@ -2430,27 +2341,18 @@ function formatFuturesEntryDiagnostics(d) {
     "نمادهای واجد حجم در بازار: " + d.universeCount,
     "نمادهای نمونه‌گیری و تحلیل‌شده: " + d.sampledCount,
     "",
-    "مراحل رد/قبولی:"
+    "نتیجه تحلیل موتور Kraken Futures 3.8.2:"
   ];
   for (const [stage, count] of Object.entries(d.stageCounts || {})) lines.push("• " + stage + ": " + count);
-  for (const [engine, flags] of Object.entries(d.conditions || {})) {
-    lines.push("", engine === "trendShort" ? "شروط TREND_SHORT (قبول/رد):" : "شروط RALLY_FADE (قبول/رد):");
-    for (const [name, counts] of Object.entries(flags || {})) lines.push("• " + name + ": " + counts.passed + "/" + counts.failed);
-  }
-  lines.push("", "جزئیات عددی نمادها:");
+  lines.push("", "جزئیات نمادها:");
   for (const item of (d.samples || []).slice(0, 15)) {
-    const m = item.metrics;
-    lines.push("• " + item.symbol + " | " + item.stage + " | کندل: " + (item.candleCount ?? "—"));
-    if (m) {
-      lines.push("  RSI14: " + Number(m.rsi14).toFixed(2) +
-        " | فاصله EMA20: " + Number(m.distanceToEma20Pct).toFixed(3) + "%" +
-        " | ATR: " + Number(m.atrPct).toFixed(3) + "%");
-      lines.push("  Close: " + formatPrice(m.close) +
-        " | EMA20: " + formatPrice(m.ema20) +
-        " | EMA50: " + formatPrice(m.ema50) +
-        " | بدنه/دامنه: " + (Number.isFinite(Number(m.bodyToRangeRatio)) ? (Number(m.bodyToRangeRatio) * 100).toFixed(1) + "%" : "—"));
-    }
-    if (item.lastCandleTime) lines.push("  آخرین کندل بسته‌شده: " + item.lastCandleTime);
+    lines.push("• " + item.symbol + " | " + item.stage +
+      " | امتیاز: " + (item.score ?? "—") + " | جهت: " + (item.side || "—"));
+    if (item.candleCounts) lines.push("  کندل‌ها: 1h=" + item.candleCounts["1h"] +
+      "، 4h=" + item.candleCounts["4h"] + "، 15m=" + item.candleCounts["15m"]);
+    if (item.entry != null) lines.push("  ورود: " + formatPrice(item.entry) +
+      " | استاپ: " + formatPrice(item.stop) +
+      " | اهداف: " + (item.targets || []).map(formatPrice).join(" / "));
     if (item.reason) lines.push("  علت: " + item.reason);
   }
   lines.push("", "⛔ این گزارش فقط‌خواندنی است؛ هیچ سیگنالی ثبت، ارسال یا معامله‌ای اجرا نشده است.");
@@ -2463,17 +2365,9 @@ async function runFuturesSignalScan(env, options = {}) {
   if (!universe.length) {
     const finishedAt = new Date().toISOString();
     const diagnostics = {
-      startedAt: new Date(started).toISOString(),
-      finishedAt,
-      durationMs: Date.now() - started,
-      universeCount: 0,
-      analyzedCount: 0,
-      notAnalyzedCount: 0,
-      analysisErrorCount: 0,
-      rejectedCount: 0,
-      eligibleCount: 0,
-      signalCount: 0,
-      registeredCount: 0,
+      startedAt: new Date(started).toISOString(), finishedAt, durationMs: Date.now() - started,
+      universeCount: 0, analyzedCount: 0, notAnalyzedCount: 0, analysisErrorCount: 0,
+      rejectedCount: 0, eligibleCount: 0, signalCount: 0, registeredCount: 0,
       delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
       deliveryError: null,
       universeError: "Kraken returned no active PI/PF USD perpetuals above the configured 24h quote-volume threshold.",
@@ -2483,46 +2377,41 @@ async function runFuturesSignalScan(env, options = {}) {
     return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [], diagnostics };
   }
 
-  // Universe is already filtered to active PI/PF USD perpetuals with the minimum 24h quote volume and sorted by descending volume.
-  // Scan the live exchange-wide liquid universe; no hard-coded symbol allowlist.
   const filteredUniverse = universe;
-
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   let analysisErrorCount = 0;
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
-      const oneHour = await getKrakenFuturesCandles(ticker.symbol, "1h");
-      return analyzeFuturesSymbol(ticker, oneHour, [], [], options);
+      const [oneHour, fourHour, fifteenMinute] = await Promise.all([
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.INTERVAL),
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL),
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL).catch(() => [])
+      ]);
+      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, options);
     } catch (error) {
       analysisErrorCount++;
       return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticType: "data_or_analysis_error" };
     }
   }, () => Date.now() < analysisDeadline);
 
-  // Runtime-only diagnostics: console output only; deliberately no KV/DO writes or Telegram messages.
-  const entryConditionBreakdown = analyzed
-    .filter(item => item?.entryConditionDiagnostics)
-    .map(item => ({ symbol: item.symbol, ...item.entryConditionDiagnostics }));
-  if (entryConditionBreakdown.length) {
-    console.log("AUTOMATIC_FUTURES_ENTRY_CONDITION_DIAGNOSTICS", JSON.stringify({
-      timestamp: new Date().toISOString(),
-      version: CONFIG.VERSION,
-      rejectedAt: "TREND_SHORT_OR_RALLY_FADE_SETUP",
-      symbols: entryConditionBreakdown
+  const entryDiagnostics = analyzed
+    .filter(item => item?.entryDiagnostics)
+    .map(item => ({ symbol: item.symbol, ...item.entryDiagnostics }));
+  if (entryDiagnostics.length) {
+    console.log("AUTOMATIC_FUTURES_ENTRY_DIAGNOSTICS", JSON.stringify({
+      timestamp: new Date().toISOString(), version: CONFIG.VERSION, engine: "Kraken Futures 3.8.2",
+      symbols: entryDiagnostics
     }));
   }
 
   const createdAt = Date.now();
   const eligibleCandidates = analyzed
-    .filter(x => x?.eligible === true && x.side === "SHORT")
-    .sort((a,b) => b.score - a.score || a.symbol.localeCompare(b.symbol));
-
+    .filter(item => item?.eligible === true)
+    .sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol));
   const generatedSignals = eligibleCandidates
     .slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
-    .map(x => ({
-      ...x,
-      id: crypto.randomUUID(),
-      createdAt,
+    .map(item => ({
+      ...item, id: crypto.randomUUID(), createdAt,
       expiresAt: createdAt + FUTURES_CONFIG.SIGNAL_TTL_MINUTES * 60000,
       status: "PENDING"
     }));
@@ -2546,39 +2435,30 @@ async function runFuturesSignalScan(env, options = {}) {
   }
   const finishedAt = new Date().toISOString();
   const diagnostics = {
-    startedAt: new Date(started).toISOString(),
-    finishedAt,
-    durationMs: Date.now() - started,
-    universeCount: filteredUniverse.length,
-    analyzedCount,
+    startedAt: new Date(started).toISOString(), finishedAt, durationMs: Date.now() - started,
+    universeCount: filteredUniverse.length, analyzedCount,
     notAnalyzedCount: Math.max(0, filteredUniverse.length - analyzedCount),
-    analysisErrorCount,
-    rejectedCount: analyzed.filter(x => x && x.eligible !== true).length,
-    eligibleCount: eligibleCandidates.length,
-    signalCount: signals.length,
-    registeredCount: signals.length,
-    delivery,
-    deliveryError,
+    analysisErrorCount, rejectedCount: analyzed.filter(item => item && item.eligible !== true).length,
+    eligibleCount: eligibleCandidates.length, signalCount: signals.length, registeredCount: signals.length,
+    delivery, deliveryError,
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count).slice(0, 6)
   };
   console.log("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
   const report =
-    `📈 CRYPTO PUMP HUNTER V10.6 — STRICT SHORT HYBRID\n` +
+    "📈 CRYPTO PUMP HUNTER — KRAKEN FUTURES 3.8.2\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
     "🏦 بازار: Kraken Derivatives Perpetual\n" +
-    "⏱ تایم‌فریم: 1h\n" +
+    "⏱ تایم‌فریم: 1h با تأیید روند 4h و فیلتر ورود 15m\n" +
     `📥 نمادهای بررسی‌شده: ${analyzedCount} از ${filteredUniverse.length} نماد واجد حداقل حجم ۲۴ساعته\n` +
-    `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n` +
-    `🧭 TREND_SHORT / RALLY_FADE\n\n` +
+    `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n\n` +
     (signals.length
-      ? signals.map((item,i) => formatFuturesSignal(item,i+1)).join("\n━━━━━━━━━━━━━━━━━━\n\n")
-      : "⚠️ در این بررسی سیگنال واجد شرایطی پیدا نشد.") +
-    `\n\n🕒 زمان گزارش: ${new Date().toISOString()}\n` +
-    `⏱ مدت بررسی: ${Math.round((Date.now()-started)/1000)} ثانیه\n` +
+      ? signals.map((item, index) => formatFuturesSignal(item, index + 1)).join("\n━━━━━━━━━━━━━━━━━━\n\n")
+      : "⚠️ در این بررسی سیگنالی به حداقل امتیاز و شرایط ورود نرسید.\n\n") +
+    `🕒 زمان گزارش: ${new Date().toISOString()}\n` +
+    `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} ثانیه\n` +
     "📡 منبع داده: Kraken Derivatives Futures\n" +
     "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست.";
-
   return { report, signals, experimentalSent: 0, analyzed, diagnostics };
 }
 
@@ -2694,4 +2574,4 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, passesLongDistanceThreshold, findLatestConfirmed15mPivot, mapLimit, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
+export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
