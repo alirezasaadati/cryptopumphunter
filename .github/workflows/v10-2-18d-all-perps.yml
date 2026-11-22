@@ -1,0 +1,26 @@
+name: v10.2 all perpetuals 18-day backtest
+on:
+  push:
+    branches: [backtest-v10-2-18d-all-perps-20261122]
+    paths:
+      - "scripts/backtest-v10-2-18d-all-perps.mjs"
+      - ".github/workflows/v10-2-18d-all-perps.yml"
+  workflow_dispatch:
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run v10.2 historical backtest
+        run: node scripts/backtest-v10-2-18d-all-perps.mjs
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-2-18d-all-perps
+          path: artifacts/
+          if-no-files-found: warn
