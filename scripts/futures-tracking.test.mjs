@@ -24,10 +24,10 @@ test("TP/SL predicates respect trade direction", () => {
   assert.equal(stopReached("SHORT", 105, 100), true);
 });
 
-test("single TP1 closes the full position; no second or third target is used", () => {
-  const trade = {side:"SHORT",actualEntry:100,target1:97,tpHits:["TP1"]};
-  assert.equal(Number(tradeOutcomePercent(trade,105).toFixed(8)),30);
-  assert.equal(Number(tradeResultR({side:"SHORT",actualEntry:100,initialRisk:5,currentStop:105,target1:97,tpHits:["TP1"]},true).toFixed(8)),0.6);
+test("TP1 outcome reporting uses unleveraged price return and signal R", () => {
+  const trade = {side:"SHORT",actualEntry:100,target1:92.5,status:"CLOSED_PROFIT"};
+  assert.equal(Number(tradeOutcomePercent(trade,92.5).toFixed(8)),7.5);
+  assert.equal(Number(tradeResultR({side:"SHORT",actualEntry:100,initialRisk:5,currentStop:105,target1:92.5,tpHits:["TP1"]},true).toFixed(8)),1.5);
 });
 
 test("signal tracking accepts three correctly ordered LONG or SHORT targets", () => {
@@ -68,12 +68,12 @@ test("tracking does not fall back to an old candle when no new candle exists", (
 });
 
 
-test("single-target R accounting uses the full position at 0.6R", () => {
-  const base = {side:"LONG",actualEntry:100,initialRisk:5,currentStop:95,target1:103,tpHits:[]};
+test("TP1 R accounting matches the signal's 1.5R target", () => {
+  const base = {side:"LONG",actualEntry:100,initialRisk:5,currentStop:95,target1:107.5,tpHits:[]};
   assert.equal(tradeResultR(base,true),-1);
-  assert.ok(Math.abs(tradeResultR({...base,tpHits:["TP1"]},true)-0.6)<1e-9);
-  const short = {side:"SHORT",actualEntry:100,initialRisk:5,currentStop:105,target1:97,tpHits:["TP1"]};
-  assert.ok(Math.abs(tradeResultR(short,true)-0.6)<1e-9);
+  assert.ok(Math.abs(tradeResultR({...base,tpHits:["TP1"]},true)-1.5)<1e-9);
+  const short = {side:"SHORT",actualEntry:100,initialRisk:5,currentStop:105,target1:92.5,tpHits:["TP1"]};
+  assert.ok(Math.abs(tradeResultR(short,true)-1.5)<1e-9);
 });
 
 test("a candle spanning both stop and target is identifiable as ambiguous", () => {
