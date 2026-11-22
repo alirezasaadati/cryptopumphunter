@@ -956,12 +956,24 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/start - معرفی و شروع\n" +
         "/menu - نمایش منوی اصلی\n" +
         "/futures - دریافت سیگنال‌های فیوچرز\n" +
+        "/diagfutures - گزارش تشخیصی فقط‌خواندنی (مالک)\n" +
         "/scan - اسکن دستی بازار اسپات\n" +
         "/status - وضعیت ربات\n" +
         "/help - راهنما\n\n" +
         "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
         menuForChat(env, chatId)
       );
+      return;
+    }
+
+    if (command === "/diagfutures") {
+      if (!isOwner(chatId, env)) {
+        await sendMessage(env, chatId, "⛔ این دستور فقط برای مالک ربات فعال است.");
+        return;
+      }
+      await sendMessage(env, chatId, "🧪 بررسی تشخیصی فقط‌خواندنی شروع شد؛ هیچ سیگنالی ثبت یا ارسال نمی‌شود.");
+      const diagnostic = await runFuturesEntryDiagnostics();
+      await sendLongMessage(env, chatId, formatFuturesEntryDiagnostics(diagnostic));
       return;
     }
 
@@ -2298,6 +2310,86 @@ async function runAutomaticFuturesAlertScanInternal(env) {
     const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
     if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
   }
+}
+
+// Owner-only, read-only diagnostics. This path reads public Kraken market data only;
+// it never registers signals, writes KV/DO state, or delivers trading alerts.
+async function runFuturesEntryDiagnostics() {
+  const startedAt = new Date().toISOString();
+  const universe = await getKrakenFuturesUniverse();
+  const analyzed = await mapLimit(
+    universe.slice(0, 30),
+    FUTURES_CONFIG.CONCURRENCY,
+    async ticker => {
+      try {
+        const candles = await getKrakenFuturesCandles(ticker.symbol, "1h");
+        const result = analyzeFuturesSymbol(ticker, candles, [], []);
+        return {
+          symbol: ticker.symbol,
+          stage: result.diagnosticStage || (result.eligible ? "ELIGIBLE" : "UNKNOWN"),
+          reason: result.rejected || null,
+          candleCount: candles.length,
+          conditions: result.entryConditionDiagnostics || null,
+          details: result.diagnosticDetails || null
+        };
+      } catch (error) {
+        return {
+          symbol: ticker.symbol,
+          stage: "DATA_OR_ANALYSIS_ERROR",
+          reason: String(error?.message || error).slice(0, 220),
+          candleCount: null,
+          conditions: null
+        };
+      }
+    }
+  );
+  const stageCounts = {};
+  const conditions = { trendShort: {}, rallyFade: {} };
+  for (const item of analyzed) {
+    stageCounts[item.stage] = (stageCounts[item.stage] || 0) + 1;
+    for (const [engine, flags] of [
+      ["trendShort", item.conditions?.trendShort],
+      ["rallyFade", item.conditions?.rallyFade]
+    ]) {
+      for (const [name, passed] of Object.entries(flags || {})) {
+        if (typeof passed !== "boolean") continue;
+        const counts = conditions[engine][name] || (conditions[engine][name] = { passed: 0, failed: 0 });
+        counts[passed ? "passed" : "failed"]++;
+      }
+    }
+  }
+  return {
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    universeCount: universe.length,
+    sampledCount: analyzed.length,
+    stageCounts,
+    conditions,
+    samples: analyzed
+  };
+}
+
+function formatFuturesEntryDiagnostics(d) {
+  const lines = [
+    "🧪 گزارش تشخیصی فقط‌خواندنی فیوچرز",
+    "━━━━━━━━━━━━━━━━━━",
+    "نمادهای واجد حجم در بازار: " + d.universeCount,
+    "نمادهای نمونه‌گیری و تحلیل‌شده: " + d.sampledCount,
+    "",
+    "مراحل رد/قبولی:"
+  ];
+  for (const [stage, count] of Object.entries(d.stageCounts || {})) lines.push("• " + stage + ": " + count);
+  for (const [engine, flags] of Object.entries(d.conditions || {})) {
+    lines.push("", engine === "trendShort" ? "شروط TREND_SHORT (قبول/رد):" : "شروط RALLY_FADE (قبول/رد):");
+    for (const [name, counts] of Object.entries(flags || {})) lines.push("• " + name + ": " + counts.passed + "/" + counts.failed);
+  }
+  lines.push("", "نمونه نمادها:");
+  for (const item of (d.samples || []).slice(0, 15)) {
+    lines.push("• " + item.symbol + " | " + item.stage + " | کندل: " + (item.candleCount ?? "—") +
+      (item.reason ? " | " + item.reason : ""));
+  }
+  lines.push("", "⛔ این گزارش فقط‌خواندنی است؛ هیچ سیگنالی ثبت، ارسال یا معامله‌ای اجرا نشده است.");
+  return lines.join("\n");
 }
 
 async function runFuturesSignalScan(env, options = {}) {
