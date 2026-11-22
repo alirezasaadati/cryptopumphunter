@@ -1,1 +1,1 @@
-Run 90-day isolated lifecycle backtest
+Run 180-day isolated lifecycle backtest
