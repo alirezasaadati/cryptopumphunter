@@ -299,6 +299,20 @@ test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=
   assert.equal(result.quoteVolume,2_000_000);
 });
 
+test("HIGH_RISK accepts quote volume exactly at the 1M USD floor when relative volume passes",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  ticker.quoteVolume=1_000_000;
+  const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  oneHour.at(-1).volume=avg*0.6;
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.highRiskEligible,true);
+  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.equal(result.quoteVolume,1_000_000);
+  assert.ok(result.volumeRatio>=0.5);
+});
+
 test("HIGH_RISK rejects quote volume below the 1M USD safety floor",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   ticker.quoteVolume=999_999;
