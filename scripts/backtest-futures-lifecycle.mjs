@@ -224,9 +224,10 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const swingLow = Math.min(...swing.map(c=>c.low));
     const swingHigh = Math.max(...swing.map(c=>c.high));
     const atr = Number(candidate.atr);
+    const atrMultiplier = candidate.side === "LONG" ? 2.0 : 1.5;
     const stop = candidate.side === "LONG"
-      ? Math.min(swingLow,fill.price-atr*1.5)
-      : Math.max(swingHigh,fill.price+atr*1.5);
+      ? Math.min(swingLow,fill.price-atr*atrMultiplier)
+      : Math.max(swingHigh,fill.price+atr*atrMultiplier);
     const risk = candidate.side === "LONG" ? fill.price-stop : stop-fill.price;
     const riskPct = risk/fill.price;
     if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
@@ -238,7 +239,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       id:ticker.symbol+":"+candidate.side+":"+signalCloseTime,
       symbol:ticker.symbol, side:candidate.side, status:"OPEN",
       entry:fill.price, limitPrice, selectedEntrySource, referencePrice, wickEntry, fillType:fill.fillType, fillTime:fill.time,
-      initialStop:stop, stop, target1:fill.price+direction*risk*1.5,
+      initialStop:stop, stop, atrMultiplier, tp1R: candidate.side === "LONG" ? 1.3 : 1.5,
+      target1:fill.price+direction*risk*(candidate.side === "LONG" ? 1.3 : 1.5),
       signalTime:signalBar.time, signalCloseTime, entryTime:fill.time,
       score:candidate.score, ema20:Number(candidate.ema20), ambiguousCandles:0
     };
@@ -289,18 +291,48 @@ async function main() {
   const successful = results.filter(r=>!r.error);
   const allTrades = successful.flatMap(r=>r.trades).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
   const metrics = summarize(allTrades);
+  const STARTING_CAPITAL = 100;
+  const MARGIN_PER_TRADE = 10;
+  const events = allTrades.flatMap(t => [
+    { time: t.entryTime, type: "ENTRY", trade: t },
+    ...(t.closedAtMs ? [{ time: t.closedAtMs, type: "EXIT", trade: t }] : [])
+  ]).sort((a,b) => a.time-b.time || (a.type === "EXIT" ? -1 : 1));
+  let freeMargin = STARTING_CAPITAL, realizedPnl = 0, peakOpenPositions = 0;
+  const acceptedIds = new Set(), active = new Map();
+  for (const event of events) {
+    const t = event.trade;
+    if (event.type === "EXIT") {
+      if (active.has(t.id)) {
+        realizedPnl += Number(t.marginReturnPercent || 0) / 100 * MARGIN_PER_TRADE;
+        freeMargin += MARGIN_PER_TRADE;
+        active.delete(t.id);
+      }
+    } else if (freeMargin >= MARGIN_PER_TRADE) {
+      freeMargin -= MARGIN_PER_TRADE;
+      active.set(t.id, t);
+      acceptedIds.add(t.id);
+      peakOpenPositions = Math.max(peakOpenPositions, active.size);
+    }
+  }
+  const accountTrades = allTrades.filter(t => acceptedIds.has(t.id));
+  const excludedForCapital = allTrades.length - accountTrades.length;
+  const accountMetrics = summarize(accountTrades);
+  const openUnrealizedPnl = [...active.values()].reduce((sum,t) => sum + Number(t.marginReturnAtMarkPct || 0) / 100 * MARGIN_PER_TRADE, 0);
+  const lockedMargin = active.size * MARGIN_PER_TRADE;
+  const finalEquity = freeMargin + lockedMargin + realizedPnl + openUnrealizedPnl;
   const report = {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
-    rules:{leverage:LEVERAGE,targetMarginReturnPct:TARGET,requiredFavorablePriceMovePct:TARGET/LEVERAGE,
-      exit:"close at each signal-specific TP1 (1.5R) or configured initial stop, whichever is reached first",tp1Tp2Tp3:"TP1 is the actual signal target1; TP2 and TP3 ignored",
+    rules:{leverage:LEVERAGE,startingCapitalUsd:STARTING_CAPITAL,marginPerTradeUsd:MARGIN_PER_TRADE,maxConcurrentPositions:STARTING_CAPITAL/MARGIN_PER_TRADE,
+      atrMultiplierLong:2.0,atrMultiplierShort:1.5,tp1RLong:1.3,tp1RShort:1.5,
+      exit:"LONG closes at TP1=1.3R or initial stop; SHORT closes at TP1=1.5R or initial stop",tp1Tp2Tp3:"TP1 only; TP2 and TP3 ignored",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
-      execution:"signal generated from closed 1h/4h/15m candles; choose the closer of 1h EMA20 and the just-closed 1h candle low (LONG) or high (SHORT), measured from signal candle close; submit limit after signal close; order valid for one hour; marketable limits fill at next 5m open, otherwise at selected level touch; stop recalculated from the same 7 closed 1h candles and 1.5x ATR around actual fill; TP1 recalculated at 1.5R; exits evaluated on 5m OHLC",
+      execution:"signal generated from closed 1h/4h/15m candles; choose the closer of 1h EMA20 and the just-closed 1h candle low (LONG) or high (SHORT), measured from signal candle close; submit limit after signal close; order valid for one hour; marketable limits fill at next 5m open, otherwise at selected level touch; stop recalculated from the same 7 closed 1h candles and ATR around actual fill (LONG 2.0x, SHORT 1.5x); TP1 recalculated (LONG 1.3R, SHORT 1.5R); exits evaluated on 5m OHLC",
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top 10 current Kraken perpetuals by current quote volume; historical 24h quote-volume filter reconstructed from prior 24 closed 1h candles; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
-    metrics,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
+    metrics,accountMetrics,account:{startingCapitalUsd:STARTING_CAPITAL,marginPerTradeUsd:MARGIN_PER_TRADE,maxConcurrentPositions:STARTING_CAPITAL/MARGIN_PER_TRADE,peakConcurrentPositions:peakOpenPositions,excludedForInsufficientFreeMargin:excludedForCapital,realizedPnlUsd:realizedPnl,openUnrealizedPnlUsd:openUnrealizedPnl,lockedMarginUsd:lockedMargin,finalEquityUsd:finalEquity},eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
     limitOrdersFilled:successful.reduce((n,r)=>n+r.limitOrdersFilled,0),
     limitOrdersExpired:successful.reduce((n,r)=>n+r.limitOrdersExpired,0),
     averageSignalsPerDay:successful.reduce((n,r)=>n+r.signalsAccepted,0)/DAYS,
@@ -321,11 +353,15 @@ async function main() {
     "| Selected-level limit fills / expired | "+report.limitOrdersFilled+" / "+report.limitOrdersExpired+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
-    "| TP1 closes (1.5R) | "+metrics.profitCloses+" |",
-    "| Stop closes | "+metrics.stopCloses+" |",
-    "| Open at end | "+metrics.openAtEnd+" |",
-    "| LONG / SHORT | "+metrics.longs+" / "+metrics.shorts+" |",
-    "| Win rate | "+metrics.winRatePct.toFixed(2)+"% |",
+    "| TP1 closes (LONG 1.3R / SHORT 1.5R) | "+accountMetrics.profitCloses+" |",
+    "| Stop closes | "+accountMetrics.stopCloses+" |",
+    "| Open at end | "+accountMetrics.openAtEnd+" |",
+    "| LONG / SHORT (capital-constrained) | "+accountMetrics.longs+" / "+accountMetrics.shorts+" |",
+    "| Win rate | "+accountMetrics.winRatePct.toFixed(2)+"% |",
+    "| Starting capital / margin per trade | $"+STARTING_CAPITAL+" / $"+MARGIN_PER_TRADE+" |",
+    "| Realized PnL / open unrealized PnL | $"+realizedPnl.toFixed(2)+" / $"+openUnrealizedPnl.toFixed(2)+" |",
+    "| Final equity (incl. open mark-to-market) | $"+finalEquity.toFixed(2)+" |",
+    "| Trades excluded by available margin | "+excludedForCapital+" |",
     "| Sum margin return (not compounded) | "+metrics.totalMarginReturnPct.toFixed(2)+"% |",
     "| Average margin return / trade | "+metrics.averageMarginReturnPct.toFixed(2)+"% |",
     "| Max drawdown (additive margin-return points) | "+metrics.maxDrawdownMarginPct.toFixed(2)+"% |",
@@ -339,7 +375,7 @@ async function main() {
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
   await writeFile("artifacts/futures-lifecycle-backtest.md",rows.join("\n"));
-  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals},null,2));
+  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,accountMetrics,account:report.account,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals},null,2));
   if (!successful.length) process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
