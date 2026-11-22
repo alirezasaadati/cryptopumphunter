@@ -1,10 +1,8 @@
 // Experimental futures trade lifecycle. This module evaluates signal-level candles only;
 // it does not place orders or claim exchange execution.
-export const FUTURES_TRADE_LEVERAGE = 10;
-export const FUTURES_MARGIN_PROFIT_TARGET_PERCENT = 30;
-export const FUTURES_PRICE_MOVE_TARGET_PERCENT =
-  FUTURES_MARGIN_PROFIT_TARGET_PERCENT / FUTURES_TRADE_LEVERAGE;
-
+//
+// A signal is considered profitable at its own TP1 level. TP2/TP3 remain
+// informational levels; the bot never places or closes exchange orders.
 export function tradeDir(side) {
   return side === "LONG" ? 1 : side === "SHORT" ? -1 : 0;
 }
@@ -17,31 +15,14 @@ export function priceChangePercent(side, entry, exit) {
   return direction * ((x - e) / e) * 100;
 }
 
-export function marginReturnPercent(side, entry, exit, leverage = FUTURES_TRADE_LEVERAGE) {
-  const move = priceChangePercent(side, entry, exit);
-  const multiplier = Number(leverage);
-  if (move === null || !Number.isFinite(multiplier) || multiplier <= 0) return null;
-  return move * multiplier;
-}
-
-export function profitTargetPrice(side, entry, leverage = FUTURES_TRADE_LEVERAGE, targetMarginPercent = FUTURES_MARGIN_PROFIT_TARGET_PERCENT) {
-  const direction = tradeDir(side);
-  const e = Number(entry);
-  const lev = Number(leverage);
-  const target = Number(targetMarginPercent);
-  if (!direction || !Number.isFinite(e) || e <= 0 || !Number.isFinite(lev) || lev <= 0 || !Number.isFinite(target) || target <= 0) return null;
-  const move = target / lev / 100;
-  return e * (1 + direction * move);
-}
-
 function validCandle(candle) {
   return candle && [candle.open, candle.high, candle.low].every(value => Number.isFinite(Number(value))) &&
     Number(candle.high) >= Number(candle.low);
 }
 
-// Stop is deliberately evaluated before profit. If one candle spans both levels,
-// candle OHLC data cannot prove which was touched first, so the result is conservative.
-export function evaluateTradeCandle(trade, candle, options = {}) {
+// Stop is deliberately evaluated before TP1. If one candle spans both levels,
+// OHLC data cannot prove which was touched first, so the result is conservative.
+export function evaluateTradeCandle(trade, candle) {
   if (!trade || trade.status !== "OPEN" || !["LONG", "SHORT"].includes(trade.side)) {
     return { changed: false, trade };
   }
@@ -49,13 +30,9 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
 
   const entry = Number(trade.actualEntry ?? trade.entry);
   const stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
-  const target = profitTargetPrice(
-    trade.side,
-    entry,
-    options.leverage ?? FUTURES_TRADE_LEVERAGE,
-    options.targetMarginPercent ?? FUTURES_MARGIN_PROFIT_TARGET_PERCENT
-  );
-  if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0 || target === null) {
+  const target1 = Number(trade.target1);
+  if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0 ||
+      !Number.isFinite(target1) || target1 <= 0) {
     return { changed: false, trade, error: "INVALID_TRADE_LEVELS" };
   }
 
@@ -63,31 +40,27 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
   const high = Number(candle.high);
   const low = Number(candle.low);
   const stopHit = trade.side === "LONG" ? low <= stop : high >= stop;
-  const profitHit = trade.side === "LONG" ? high >= target : low <= target;
+  const tp1Hit = trade.side === "LONG" ? high >= target1 : low <= target1;
+  if (!stopHit && !tp1Hit) return { changed: false, trade };
 
-  if (!stopHit && !profitHit) return { changed: false, trade };
-
-  const stopExit = trade.side === "LONG"
-    ? (open <= stop ? open : stop)
-    : (open >= stop ? open : stop);
-  const profitExit = trade.side === "LONG"
-    ? (open >= target ? open : target)
-    : (open <= target ? open : target);
   const stopAtOpen = trade.side === "LONG" ? open <= stop : open >= stop;
-  const profitAtOpen = trade.side === "LONG" ? open >= target : open <= target;
-  // A gap through one level at the candle open establishes that level first.
-  // If both are touched later within the candle, stop remains the conservative choice.
-  const closeAtStop = stopAtOpen || (!profitAtOpen && stopHit);
+  const tp1AtOpen = trade.side === "LONG" ? open >= target1 : open <= target1;
+  const closeAtStop = stopAtOpen || (!tp1AtOpen && stopHit);
   const reason = closeAtStop ? "CLOSED_STOP" : "CLOSED_PROFIT";
-  const exitPrice = closeAtStop ? stopExit : profitExit;
+  const exitPrice = closeAtStop
+    ? (stopAtOpen ? open : stop)
+    : (tp1AtOpen ? open : target1);
   const closedAt = candle.time ?? new Date().toISOString();
+
   const updatedTrade = {
     ...trade,
     status: reason,
     closeReason: reason,
     exitPrice,
     closePriceChangePercent: priceChangePercent(trade.side, entry, exitPrice),
-    marginReturnPercent: marginReturnPercent(trade.side, entry, exitPrice, options.leverage ?? FUTURES_TRADE_LEVERAGE),
+    // Retained as a null legacy field for compatibility; no leverage/margin
+    // assumptions are used by signal evaluation or closure.
+    marginReturnPercent: null,
     closedAt,
     lockReleaseEligible: true
   };
