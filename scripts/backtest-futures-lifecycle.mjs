@@ -163,6 +163,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   const lockUntil = new Map();
   let fourIndex = 0, fifteenIndex = 0;
   let acceptedSignals = 0, skippedByLock = 0, rejectedSignals = 0;
+  let limitOrdersFilled = 0, limitOrdersExpired = 0;
   const testStart = toMs - DAYS * 86400000;
 
   for (let i = 60; i < oneHour.length - 1; i++) {
@@ -184,35 +185,67 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     try { candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m); }
     catch { rejectedSignals++; continue; }
     if (!candidate || candidate.eligible !== true || !["LONG","SHORT"].includes(candidate.side)) { rejectedSignals++; continue; }
-    acceptedSignals++;
+
     const lockKey = ticker.symbol + "|" + candidate.side;
     if ((lockUntil.get(lockKey) || 0) > signalCloseTime) { skippedByLock++; continue; }
+    acceptedSignals++;
 
-    const entry = Number(candidate.entry);
-    const trade = {
-      id: ticker.symbol + ":" + candidate.side + ":" + signalCloseTime,
-      symbol: ticker.symbol, side: candidate.side, status: "OPEN",
-      entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop), target1: Number(candidate.target1),
-      signalTime: signalBar.time, entryTime: signalCloseTime,
-      score: candidate.score, ambiguousCandles: 0
-    };
-    let candleIndex = lowerBound(fiveMinute,signalCloseTime);
-    let closed = false;
-    for (; candleIndex < fiveMinute.length && fiveMinute[candleIndex].time < toMs; candleIndex++) {
-      const bar = fiveMinute[candleIndex];
-      if (candleAmbiguous(candidate.side,trade,bar)) trade.ambiguousCandles++;
-      const evaluated = evaluateTp1Candle(trade,bar);
-      if (evaluated) {
-        Object.assign(trade,evaluated);
-        closed = true;
-        break;
+    // Submit a 1h EMA20 limit order after the signal candle closes.
+    // A marketable limit fills at the next 5m open; otherwise it fills at EMA20 on touch.
+    const limitPrice = Number(candidate.ema20);
+    if (!Number.isFinite(limitPrice) || limitPrice <= 0) { rejectedSignals++; continue; }
+    const orderExpiry = signalCloseTime + INTERVALS["1h"];
+    const firstOrderBar = lowerBound(fiveMinute,signalCloseTime);
+    let fill = null;
+    for (let j = firstOrderBar; j < fiveMinute.length && fiveMinute[j].time < orderExpiry && fiveMinute[j].time < toMs; j++) {
+      const bar = fiveMinute[j];
+      if (candidate.side === "LONG") {
+        if (bar.open <= limitPrice) fill = { price: bar.open, time: bar.time, barIndex: j, fillType: "MARKETABLE_LIMIT_AT_OPEN" };
+        else if (bar.low <= limitPrice) fill = { price: limitPrice, time: bar.time, barIndex: j, fillType: "LIMIT_TOUCH" };
+      } else {
+        if (bar.open >= limitPrice) fill = { price: bar.open, time: bar.time, barIndex: j, fillType: "MARKETABLE_LIMIT_AT_OPEN" };
+        else if (bar.high >= limitPrice) fill = { price: limitPrice, time: bar.time, barIndex: j, fillType: "LIMIT_TOUCH" };
       }
+      if (fill) break;
+    }
+    if (!fill) { limitOrdersExpired++; continue; }
+
+    // Recalculate the existing structural/ATR stop around the actual EMA20 fill.
+    // The same 1.5R / 2.5R / 3.5R target multipliers are retained.
+    const swing = oneHour.slice(Math.max(0,i-6),i+1);
+    const swingLow = Math.min(...swing.map(c=>c.low));
+    const swingHigh = Math.max(...swing.map(c=>c.high));
+    const atr = Number(candidate.atr);
+    const stop = candidate.side === "LONG"
+      ? Math.min(swingLow,fill.price-atr*1.5)
+      : Math.max(swingHigh,fill.price+atr*1.5);
+    const risk = candidate.side === "LONG" ? fill.price-stop : stop-fill.price;
+    const riskPct = risk/fill.price;
+    if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
+      rejectedSignals++;
+      continue;
+    }
+    const direction = candidate.side === "LONG" ? 1 : -1;
+    const trade = {
+      id:ticker.symbol+":"+candidate.side+":"+signalCloseTime,
+      symbol:ticker.symbol, side:candidate.side, status:"OPEN",
+      entry:fill.price, limitPrice, fillType:fill.fillType, fillTime:fill.time,
+      initialStop:stop, stop, target1:fill.price+direction*risk*1.5,
+      signalTime:signalBar.time, signalCloseTime, entryTime:fill.time,
+      score:candidate.score, ema20:Number(candidate.ema20), ambiguousCandles:0
+    };
+    limitOrdersFilled++;
+    let closed = false;
+    for (let j=fill.barIndex; j<fiveMinute.length && fiveMinute[j].time<toMs; j++) {
+      const bar=fiveMinute[j];
+      if (candleAmbiguous(candidate.side,trade,bar)) trade.ambiguousCandles++;
+      const evaluated=evaluateTp1Candle(trade,bar);
+      if (evaluated) { Object.assign(trade,evaluated); closed=true; break; }
     }
     if (!closed) {
-      trade.status = "OPEN_AT_BACKTEST_END";
-      trade.lastMark = fiveMinute.at(-1)?.close ?? null;
-      trade.marginReturnAtMarkPct = trade.lastMark ? (candidate.side==="LONG" ? 1 : -1) * ((trade.lastMark-entry)/entry) * 100 * LEVERAGE : null;
-      // Preserve the same-side lock through the sample end for still-open trades.
+      trade.status="OPEN_AT_BACKTEST_END";
+      trade.lastMark=fiveMinute.at(-1)?.close ?? null;
+      trade.marginReturnAtMarkPct=trade.lastMark ? direction*((trade.lastMark-fill.price)/fill.price)*100*LEVERAGE : null;
       lockUntil.set(lockKey,toMs);
     } else {
       lockUntil.set(lockKey,trade.closedAtMs);
@@ -223,11 +256,11 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   return {
     symbol:ticker.symbol,
     candles:{ "1h":oneHour.length, "4h":fourHour.length, "15m":fifteenMinute.length, "5m":fiveMinute.length },
-    signalsAccepted:acceptedSignals, skippedBySameSideLock:skippedByLock, rejectedSignals,
+    signalsAccepted:acceptedSignals, limitOrdersFilled, limitOrdersExpired,
+    skippedBySameSideLock:skippedByLock, rejectedSignals,
     metrics:summarize(trades), trades
   };
 }
-
 async function main() {
   const endMs = Date.now();
   const startMs = endMs - DAYS*86400000;
@@ -255,11 +288,14 @@ async function main() {
       exit:"close at each signal-specific TP1 (1.5R) or configured initial stop, whichever is reached first",tp1Tp2Tp3:"TP1 is the actual signal target1; TP2 and TP3 ignored",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
-      execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
+      execution:"signal generated from closed 1h/4h/15m candles; submit 1h EMA20 limit after signal close; order valid for one hour; marketable limits fill at next 5m open, otherwise at EMA20 touch; stop recalculated from the same 7 closed 1h candles and 1.5x ATR around actual fill; TP1 recalculated at 1.5R; exits evaluated on 5m OHLC",
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top 10 current Kraken perpetuals by current quote volume; historical 24h quote-volume filter reconstructed from prior 24 closed 1h candles; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
     metrics,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
+    limitOrdersFilled:successful.reduce((n,r)=>n+r.limitOrdersFilled,0),
+    limitOrdersExpired:successful.reduce((n,r)=>n+r.limitOrdersExpired,0),
+    averageSignalsPerDay:successful.reduce((n,r)=>n+r.signalsAccepted,0)/DAYS,
     bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
@@ -273,6 +309,8 @@ async function main() {
     "Symbols tested: "+report.symbolsTested+"/"+SYMBOL_LIMIT,"",
     "| Metric | Result |","|---|---:|",
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
+    "| Average eligible signals / day | "+report.averageSignalsPerDay.toFixed(2)+" |",
+    "| EMA20 limit fills / expired | "+report.limitOrdersFilled+" / "+report.limitOrdersExpired+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
     "| TP1 closes (1.5R) | "+metrics.profitCloses+" |",
