@@ -1,0 +1,28 @@
+name: v9.1.0 LONG 15m three-regime backtest
+on:
+  push:
+    branches:
+      - backtest-v910-long-15m-3-regimes-20261122
+    paths:
+      - "scripts/backtest-v910-long-15m.mjs"
+      - ".github/workflows/v910-three-regime-backtest.yml"
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run v9.1.0 historical backtest
+        run: node scripts/backtest-v910-long-15m.mjs
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v910-three-regime-backtest
+          path: artifacts/
+          if-no-files-found: warn
