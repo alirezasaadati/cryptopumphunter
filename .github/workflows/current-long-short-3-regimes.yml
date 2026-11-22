@@ -1,0 +1,30 @@
+name: Current production LONG SHORT three regime backtest
+on:
+  push:
+    branches:
+      - backtest-current-long-short-3-regimes-20261122
+    paths:
+      - "scripts/backtest-current-long-short-3-regimes.mjs"
+      - ".github/workflows/current-long-short-3-regimes.yml"
+      - "src/index.js"
+      - "src/futures-trade-lifecycle.js"
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run current production engine backtest
+        run: node scripts/backtest-current-long-short-3-regimes.mjs
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-long-short-3-regimes
+          path: artifacts/
+          if-no-files-found: warn
