@@ -94,13 +94,11 @@ test("v10.6 SHORT-only configuration is active",()=>{
   assert.equal(FUTURES_CONFIG.MIN_RISK_PCT,0.5);
   assert.equal(FUTURES_CONFIG.MAX_RISK_PCT,2.0);
   assert.equal(FUTURES_CONFIG.MAX_ATR_PCT,2.0);
-  assert.deepEqual(FUTURES_CONFIG.ALLOWED_SYMBOLS,[
-    "PF_XBTUSD","PF_ETHUSD","PF_SOLUSD","PF_XRPUSD","PF_DOGEUSD",
-    "PF_ADAUSD","PF_LINKUSD","PF_LTCUSD","PF_BCHUSD","PF_AVAXUSD"
-  ]);
+  assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME,5_000_000);
+  assert.equal("ALLOWED_SYMBOLS" in FUTURES_CONFIG,false);
 });
 
-test("Kraken universe remains exchange-wide and is filtered to v10.6 symbols by the scanner",async()=>{
+test("Kraken universe remains exchange-wide and is sorted by descending quote volume",async()=>{
   const originalFetch=globalThis.fetch;
   const tickers=Array.from({length:30},(_,i)=>({
     tag:"perpetual",symbol:`PF_TEST${String(i).padStart(2,"0")}USD`,
@@ -165,10 +163,12 @@ test("v10.6 rally-fade setup generates a higher-score RALLY_FADE SHORT",()=>{
   assert.ok(result.target3<result.target2);
 });
 
-test("v10.6 rejects symbols outside the ten-symbol allowlist",()=>{
-  const result=analyzeFuturesSymbol(ticker("PF_TESTUSD",100),makeTrendShortCandles());
-  assert.equal(result.eligible,undefined);
-  assert.match(result.rejected,/۱۰ نماد مجاز/);
+test("v10.6 analyzes eligible high-volume symbols outside the former hard-coded ten",()=>{
+  const candles=makeTrendShortCandles();
+  const result=analyzeFuturesSymbol(ticker("PF_TESTUSD",candles.at(-1).close),candles);
+  assert.equal(result.symbol,"PF_TESTUSD");
+  assert.equal(result.side,"SHORT");
+  assert.equal(result.eligible,true,JSON.stringify(result));
 });
 
 test("v10.6 rejects fewer than 100 hourly candles",()=>{
