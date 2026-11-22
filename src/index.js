@@ -2137,11 +2137,18 @@ export class SignalDeliveryCoordinator {
           const trades=await this.ctx.storage.get("active-futures-trades")||[];
           const closedSignalIds=new Set(trades.filter(t=>["CLOSED_PROFIT","CLOSED_STOP"].includes(t?.status)).map(t=>String(t.signalId)));
           const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side)&&!closedSignalIds.has(String(x?.id)));
+          // Only a recent, parseable OPEN trade may apply the 4h same-side cooldown.
+          // Missing/corrupt timestamps must never create a permanent signal lock.
           const activeTradeKeys=new Set(trades.filter(t=>{
-      if(t?.status!=="OPEN")return false;
-      const openedAt=Date.parse(t.createdAt||t.lastCheckedAt||"");
-      return !Number.isFinite(openedAt) || (now-openedAt)<4*60*60*1000;
-    }).map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
+            if(t?.status!=="OPEN"||!t?.symbol||!["LONG","SHORT"].includes(t?.side))return false;
+            const openedAtCandidates=[t.createdAt,t.lastCheckedAt]
+              .map(value=>Date.parse(value||""))
+              .filter(Number.isFinite);
+            if(!openedAtCandidates.length)return false;
+            const openedAt=Math.min(...openedAtCandidates);
+            const ageMs=now-openedAt;
+            return ageMs>=0&&ageMs<4*60*60*1000;
+          }).map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
           const activeKeys=new Set(active.map(x=>String(x.symbol).trim().toUpperCase()+"|"+x.side));
           const seen=new Set();
           const fresh=[];
@@ -2464,6 +2471,7 @@ async function runAutomaticFuturesAlertScanInternal(env) {
       "ثبت‌شده: " + (diagnostics.registeredCount ?? "—"),
       "کاندیداهای ثبت‌نشده: " + (diagnostics.unregisteredCandidateCount ?? 0),
       "رکوردهای ارسال نامشخص: " + (diagnostics.uncertainOutboxCount ?? "—"),
+      (Number(diagnostics.uncertainOutboxCount)>=3 ? "⚠️ هشدار: حداقل ۳ ارسال نامشخص ثبت شده؛ برای جلوگیری از ارسال تکراری، موارد را از منوی بررسی ارسال‌های نامشخص تعیین تکلیف کن." : ""),
       "ارسال موفق: " + (diagnostics.delivery?.delivered ?? "—"),
       "ارسال ناموفق: " + (diagnostics.delivery?.failed ?? "—"),
       "مدت اسکن: " + (diagnostics.durationMs != null ? Math.round(diagnostics.durationMs / 1000) + " ثانیه" : "—"),
@@ -2476,7 +2484,7 @@ async function runAutomaticFuturesAlertScanInternal(env) {
       diagnostics.signalCount ? "سیگنال صادر شد؛ این پیام گزارش خطا/وضعیت نیست." :
         "در این نوبت سیگنالی واجد شرایط پیدا نشد."
     ].filter(Boolean).join("\n");
-    if (diagnostics.analysisErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError) {
+    if (diagnostics.analysisErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError || Number(diagnostics.uncertainOutboxCount)>=3) {
       await notifyOwnerScanDiagnostics(env, noSignalMessage,
         "futures:scan-diagnostic:issue", 15 * 60);
     } else if ((diagnostics.signalCount || 0) === 0) {
