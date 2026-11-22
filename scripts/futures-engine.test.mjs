@@ -245,25 +245,21 @@ test("momentum and pullback provide 0/7/15 priority bonuses without changing qua
     const last=fifteenMinute.at(-1);
     if(mode==="pullback_only") {
       last.open=last.close+0.05;
-    } else if(mode==="momentum_only") {
+    } else if(mode==="momentum_only" || mode==="neither") {
+      const current=oneHour.at(-1).close;
+      const rebuilt=makeCandles({count:120,slope:0.01,base:current-1.19,volume:100});
+      for(const c of rebuilt.slice(-9,-1)) {
+        c.low=c.close;
+        c.high=c.close+0.01;
+        c.open=c.close-0.005;
+      }
+      fifteenMinute.splice(0,fifteenMinute.length,...rebuilt);
+      if(mode==="neither") last.open=last.close+0.005;
       const closes=fifteenMinute.map(c=>c.close);
       const ema21=testEma(closes,21);
       const atr15=calculateAtr(fifteenMinute,14);
-      for(const c of fifteenMinute.slice(-9,-1)) {
-        c.low=c.close-0.001;
-        c.high=Math.max(c.high,c.low+0.01);
-      }
-      assert.ok(fifteenMinute.slice(-9,-1).every(c=>c.low>ema21+atr15*0.35));
-    } else if(mode==="neither") {
-      last.open=last.close+0.05;
-      const closes=fifteenMinute.map(c=>c.close);
-      const ema21=testEma(closes,21);
-      const atr15=calculateAtr(fifteenMinute,14);
-      for(const c of fifteenMinute.slice(-9,-1)) {
-        c.low=c.close-0.001;
-        c.high=Math.max(c.high,c.low+0.01);
-      }
-      assert.ok(fifteenMinute.slice(-9,-1).every(c=>c.low>ema21+atr15*0.35));
+      assert.ok(fifteenMinute.slice(-9,-1).every(c=>c.low>ema21+atr15*0.35),
+        JSON.stringify({ema21,atr15,recent:fifteenMinute.slice(-9,-1).map(c=>({low:c.low,close:c.close}))}));
     }
     return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   };
@@ -435,9 +431,9 @@ test("volume priority bonus tiers are 0, 5, and 10 without changing qualificatio
   assert.equal(low.volumePriorityBonus,0);
   assert.equal(medium.volumePriorityBonus,5);
   assert.equal(high.volumePriorityBonus,10);
-  assert.equal(low.priorityScore,low.baseScore);
-  assert.equal(medium.priorityScore,medium.baseScore+5);
-  assert.equal(high.priorityScore,high.baseScore+10);
+  assert.equal(low.priorityScore,low.baseScore+low.confirmationPriorityBonus);
+  assert.equal(medium.priorityScore,medium.baseScore+5+medium.confirmationPriorityBonus);
+  assert.equal(high.priorityScore,high.baseScore+10+high.confirmationPriorityBonus);
   assert.equal(low.score,medium.score);
   assert.equal(medium.score,high.score);
   assert.equal(low.score,low.baseScore);
