@@ -69,18 +69,16 @@ test("expired candidates are ignored and do not create orphaned tracking trades"
   assert.equal(next.body.trackedTrades, 1);
 });
 
-test("same symbol and side can signal again while a prior tracked trade remains OPEN", async () => {
+test("OPEN trade suppresses same symbol-side after pending alert TTL expires", async () => {
   const { post, data } = createCoordinator();
   const first = await post("/signals/register", { signals: [signal("sig-first")] });
   assert.equal(first.body.signals.length, 1);
-  // Simulate the first pending alert reaching its TTL; the tracked OPEN
-  // evaluation record must not continue suppressing this symbol-side forever.
   const pending = data.get("active-futures-pending") || [];
   data.set("active-futures-pending", pending.map(item => ({ ...item, expiresAt: Date.now() - 1 })));
   const second = await post("/signals/register", { signals: [signal("sig-second")] });
-  assert.equal(second.body.signals.length, 1);
-  assert.equal(second.body.trackedTrades, 1);
-  assert.equal((await post("/trades/list")).body.trades.length, 2);
+  assert.equal(second.body.signals.length, 0);
+  assert.equal(second.body.trackedTrades, 0);
+  assert.equal((await post("/trades/list")).body.trades.length, 1);
 });
 
 test("unexpired pending signals still suppress duplicate symbol-side registrations", async () => {
@@ -92,16 +90,16 @@ test("unexpired pending signals still suppress duplicate symbol-side registratio
   assert.equal((await post("/trades/list")).body.trades.length, 1);
 });
 
-test("legacy OPEN trade records, including invalid timestamps, do not block new signals", async () => {
+test("legacy OPEN trade records block duplicates regardless of timestamp validity", async () => {
   const { post, data } = createCoordinator();
   data.set("active-futures-trades", [{
     id: "legacy-open", signalId: "old-signal", symbol: "PF_XBTUSD",
     side: "LONG", status: "OPEN", createdAt: "not-a-date"
   }]);
   const registered = await post("/signals/register", { signals: [signal("sig-new")] });
-  assert.equal(registered.body.signals.length, 1);
-  assert.equal(registered.body.trackedTrades, 1);
-  assert.equal((await post("/trades/list")).body.trades.length, 2);
+  assert.equal(registered.body.signals.length, 0);
+  assert.equal(registered.body.trackedTrades, 0);
+  assert.equal((await post("/trades/list")).body.trades.length, 1);
 });
 
 test("signal and trade registration rolls back atomically when either write fails", async () => {
@@ -130,6 +128,17 @@ test("closing a trade releases only its symbol-side lock and permits a new signa
   const next = await post("/signals/register", { signals: [signal("sig-2")] });
   assert.equal(next.body.signals.length, 1);
   assert.equal(next.body.trackedTrades, 1);
+});
+
+test("a different symbol remains eligible while another symbol-side trade is OPEN", async () => {
+  const { post } = createCoordinator();
+  await post("/signals/register", { signals: [signal("btc-open")] });
+  const other = signal("eth-new", {
+    symbol: "PF_ETHUSD", entry: 100, stop: 95, target1: 107.5, target2: 111, target3: 115
+  });
+  const registered = await post("/signals/register", { signals: [other] });
+  assert.equal(registered.body.signals.length, 1);
+  assert.equal((await post("/trades/list")).body.trades.length, 2);
 });
 
 test("same symbol in opposite direction has an independent lock", async () => {
