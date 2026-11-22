@@ -1353,11 +1353,7 @@ function average(values) {
 const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
-  ALLOWED_SYMBOLS: [
-    "PF_XBTUSD", "PF_ETHUSD", "PF_SOLUSD", "PF_XRPUSD", "PF_DOGEUSD",
-    "PF_ADAUSD", "PF_LINKUSD", "PF_LTCUSD", "PF_BCHUSD", "PF_AVAXUSD"
-  ],
-  CONCURRENCY: 3,
+CONCURRENCY: 3,
   MAX_SCAN_DURATION_MS: 180000,
   SCAN_FINALIZATION_RESERVE_MS: 45000,
   REQUEST_TIMEOUT_MS: 12000,
@@ -1560,9 +1556,6 @@ function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
 
 function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = [], options = {}) {
   const symbol = ticker?.symbol || "UNKNOWN";
-  if (!FUTURES_CONFIG.ALLOWED_SYMBOLS.includes(symbol)) {
-    return { symbol, rejected: "فقط ۱۰ نماد مجاز v10.6 بررسی می‌شوند." };
-  }
   if (!Array.isArray(candles1h) || candles1h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("کندل ۱ ساعته کافی نیست.");
   }
@@ -2196,14 +2189,9 @@ async function runFuturesSignalScan(env, options = {}) {
     return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [] };
   }
 
-  const allowed = new Set(FUTURES_CONFIG.ALLOWED_SYMBOLS);
-  const filteredUniverse = universe
-    .filter(ticker => allowed.has(ticker.symbol))
-    .sort((a,b) => FUTURES_CONFIG.ALLOWED_SYMBOLS.indexOf(a.symbol) - FUTURES_CONFIG.ALLOWED_SYMBOLS.indexOf(b.symbol));
-
-  if (!filteredUniverse.length) {
-    return { report: "⚠️ هیچ‌یک از ۱۰ نماد مجاز v10.6 در یونیورس Kraken یافت نشد.", signals: [] };
-  }
+  // Universe is already filtered to active PI/PF USD perpetuals with the minimum 24h quote volume and sorted by descending volume.
+  // Scan the live exchange-wide liquid universe; no hard-coded symbol allowlist.
+  const filteredUniverse = universe;
 
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
@@ -2243,7 +2231,7 @@ async function runFuturesSignalScan(env, options = {}) {
     "━━━━━━━━━━━━━━━━━━\n" +
     "🏦 بازار: Kraken Derivatives Perpetual\n" +
     "⏱ تایم‌فریم: 1h\n" +
-    `📥 نمادهای بررسی‌شده: ${analyzedCount} از ${filteredUniverse.length}\n` +
+    `📥 نمادهای بررسی‌شده: ${analyzedCount} از ${filteredUniverse.length} نماد واجد حداقل حجم ۲۴ساعته\n` +
     `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n` +
     `🧭 TREND_SHORT / RALLY_FADE\n\n` +
     (signals.length
