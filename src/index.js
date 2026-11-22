@@ -1404,6 +1404,8 @@ const FUTURES_CONFIG = {
   VOLUME_PRIORITY_TIER_2: 1.0,
   VOLUME_PRIORITY_BONUS_TIER_1: 5,
   VOLUME_PRIORITY_BONUS_TIER_2: 10,
+  CONFIRMATION_PRIORITY_BONUS_ONE: 7,
+  CONFIRMATION_PRIORITY_BONUS_BOTH: 15,
   HIGH_RISK_LONG_RSI_MIN: 32,
   HIGH_RISK_LONG_RSI_MAX: 82,
   HIGH_RISK_SHORT_RSI_MIN: 18,
@@ -1626,10 +1628,7 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
 
   const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
   if (!has15mData) {
-    if (fourHourOpposes) {
-      return { ok: false, rejected: "روند ۴ساعته مخالف است و داده ۱۵دقیقه‌ای برای تأیید مسیر پرریسک موجود نیست", driftPct, emaDistanceAtr };
-    }
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes };
   }
 
   const closes15m = candles15m.map(c => c.close);
@@ -1638,25 +1637,23 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
   const atr15m = calculateAtr(candles15m, 14);
   const last15m = candles15m[candles15m.length - 1];
   if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0) {
-    if (fourHourOpposes) {
-      return { ok: false, rejected: "روند ۴ساعته مخالف است و اندیکاتورهای ۱۵دقیقه‌ای معتبر نیستند", driftPct, emaDistanceAtr };
-    }
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes };
   }
 
   const momentumConfirmed = side === "LONG"
     ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open
     : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open;
+  const recentPullback = candles15m.slice(-9, -1);
+  const touchedPullbackZone = side === "LONG"
+    ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR)
+    : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
   const reclaimExtensionAtr = side === "LONG"
     ? (last15m.close - ema9_15m) / atr15m
     : (ema9_15m - last15m.close) / atr15m;
-  // High-risk path does not repeat the reclaim-extension gate; drift and EMA/ATR remain hard safety limits.
-  if (fourHourOpposes && !momentumConfirmed) {
-    return { ok: false, rejected: "روند ۴ساعته مخالف است و مومنتوم ۱۵دقیقه‌ای هم‌جهت تأیید نشد", driftPct, emaDistanceAtr, reclaimExtensionAtr, momentumConfirmed };
-  }
-
+  // Momentum and pullback are confirmations for ranking, never hard eligibility gates.
+  // Drift and EMA/ATR distance remain hard safety limits.
   return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
-    momentumConfirmed, pullbackConfirmed: false, fourHourOpposes };
+    momentumConfirmed, pullbackConfirmed: touchedPullbackZone, fourHourOpposes };
 }
 
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
@@ -1750,7 +1747,6 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   }
   // Qualification uses the base score only; volume bonus affects ranking only.
   const priorityBaseScore = score;
-  const priorityScore = priorityBaseScore + volumePriorityBonus;
 
   const fourHourOpposes = side === "LONG" ? down4h : up4h;
   const standardThresholdMet = strictSetup &&
@@ -1829,12 +1825,23 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   }
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
-  if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
-    reasons.push("مومنتوم و پولبک ۱۵دقیقه‌ای تأیید شدند");
-  } else if (!strictSetup && fourHourOpposes && entryFilters.momentumConfirmed) {
-    reasons.push("با وجود مخالفت روند ۴ساعته، مومنتوم ۱۵دقیقه‌ای هم‌جهت تأیید شد");
+  const momentumConfirmed = entryFilters.momentumConfirmed === true;
+  const pullbackConfirmed = entryFilters.pullbackConfirmed === true;
+  const confirmationCount = Number(momentumConfirmed) + Number(pullbackConfirmed);
+  const confirmationPriorityBonus = confirmationCount === 2
+    ? FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_BOTH
+    : confirmationCount === 1
+      ? FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_ONE
+      : 0;
+  const priorityScore = Math.min(125, priorityBaseScore + volumePriorityBonus + confirmationPriorityBonus);
+  if (confirmationCount === 2) {
+    reasons.push("مومنتوم و پولبک ۱۵دقیقه‌ای تأیید شدند؛ پاداش اولویت کامل");
+  } else if (confirmationCount === 1) {
+    reasons.push("یکی از دو تأیید مومنتوم/پولبک ۱۵دقیقه‌ای برقرار است؛ پاداش اولویت جزئی");
   } else {
-    reasons.push("تأیید ۱۵دقیقه‌ای کامل نبود؛ مسیر پرریسک با محدودیت‌های مستقل ارزیابی شد");
+    reasons.push(entryFilters.confirmationUnavailable
+      ? "داده تأیید ۱۵دقیقه‌ای در دسترس نبود؛ بدون پاداش اولویت"
+      : "مومنتوم و پولبک ۱۵دقیقه‌ای تأیید نشدند؛ بدون پاداش اولویت");
   }
 
   const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
@@ -1865,8 +1872,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     side,
     score,
     baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
-    priorityScore: Math.max(0, Math.min(110, Math.round(priorityScore))),
+    priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))),
     volumePriorityBonus,
+    confirmationPriorityBonus,
+    confirmationCount,
     riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
     price: entry,
     entry,
