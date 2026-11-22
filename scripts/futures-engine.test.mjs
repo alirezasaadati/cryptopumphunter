@@ -171,6 +171,37 @@ test("v10.6 analyzes eligible high-volume symbols outside the former hard-coded 
   assert.equal(result.eligible,true,JSON.stringify(result));
 });
 
+test("rejected entry setups expose per-condition diagnostics without changing eligibility",()=>{
+  const candles=Array.from({length:120},(_,i)=>{
+    const close=100+Math.sin(i/5)*0.25;
+    const previous=100+Math.sin((i-1)/5)*0.25;
+    const open=i===0?close:previous;
+    return {
+      time:Date.now()-(120-i)*60*60*1000,
+      open,
+      high:Math.max(open,close)+0.15,
+      low:Math.min(open,close)-0.15,
+      close,
+      volume:100
+    };
+  });
+  const result=analyzeFuturesSymbol(ticker("PF_DIAGUSD",candles.at(-1).close),candles);
+  assert.equal(result.eligible,undefined);
+  assert.equal(result.rejected,"شرایط سخت‌گیرانه ورود فراهم نیست.");
+  assert.ok(result.entryConditionDiagnostics);
+  assert.equal(typeof result.entryConditionDiagnostics.ema20,"number");
+  assert.equal(typeof result.entryConditionDiagnostics.ema50,"number");
+  assert.equal(typeof result.entryConditionDiagnostics.rsi14,"number");
+  assert.equal(typeof result.entryConditionDiagnostics.distanceToEma20Pct,"number");
+  assert.deepEqual(Object.keys(result.entryConditionDiagnostics.trendShort),[
+    "closeBelowEma50","ema20BelowEma50","rsiBelow40","atLeastHalfPercentBelowEma20"
+  ]);
+  assert.deepEqual(Object.keys(result.entryConditionDiagnostics.rallyFade),[
+    "closeAboveEma50","rsiAbove75","redCandle",
+    "currentHighAbovePreviousHigh","bodyExceedsHalfCandleRange","bodyToRangeRatio"
+  ]);
+});
+
 test("v10.6 rejects fewer than 100 hourly candles",()=>{
   assert.throws(()=>analyzeFuturesSymbol(ticker("PF_XBTUSD",100),makeTrendShortCandles(99)),/کافی نیست/);
 });
