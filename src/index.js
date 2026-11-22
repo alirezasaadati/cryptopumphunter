@@ -897,8 +897,7 @@ async function showMenu(env, chatId, welcome = false) {
   await configureTelegramMenu(env, chatId);
   const messageText = welcome
     ? "🤖 خوش آمدید به تریدیار!"
-    : "📋 منوی اصلی تریدیار";
-  await sendMessage(env, chatId, messageText, menuForChat(env, chatId));
+    : "📋 منوی اصلی تریدیار";  await sendMessage(env, chatId, messageText, menuForChat(env, chatId));
 }
 
 async function handleTelegramCommand(command, chatId, env, message) {
@@ -1605,7 +1604,16 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     rsiBelow40: rsiValue < 40,
     atLeastHalfPercentBelowEma20: distanceToE20 < -0.5
   };
+  // Demo-only relaxed path: keep trend structure and EMA distance intact;
+  // relax RSI to <55 and mark the resulting signal HIGH_RISK.
+  const relaxedTrendConditions = {
+    closeBelowEma50: last.close < e50,
+    ema20BelowEma50: e20 < e50,
+    rsiBelow55: rsiValue < 55,
+    atLeastHalfPercentBelowEma20: distanceToE20 < -0.5
+  };
   const isDowntrend = Object.values(trendConditions).every(Boolean);
+  const isRelaxedDowntrend = !isDowntrend && Object.values(relaxedTrendConditions).every(Boolean);
 
   const rallyBaseConditions = {
     closeAboveEma50: last.close > e50,
@@ -1628,6 +1636,7 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     distanceToEma20Pct: distanceToE20,
     atrPct,
     trendShort: trendConditions,
+    relaxedTrendShort: relaxedTrendConditions,
     rallyFade: { ...rallyBaseConditions, ...rallyCandleConditions, bodyToRangeRatio }
   };
 
@@ -1641,17 +1650,21 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     };
   }
 
-  if (isDowntrend) {
+  let riskLevel = "NORMAL";
+  if (isDowntrend || isRelaxedDowntrend) {
     mode = "TREND_SHORT";
+    riskLevel = isDowntrend ? "NORMAL" : "HIGH_RISK";
     const recentHighs = candles1h.slice(-7).map(c => Number(c.high));
     stopPrice = Math.max(...recentHighs) + atr * FUTURES_CONFIG.STOP_BUFFER_ATR;
-  } else if (rallyBaseConditions.closeAboveEma50 && rallyBaseConditions.rsiAbove75) {
-    if (rallyCandleConditions.redCandle &&
-        rallyCandleConditions.currentHighAbovePreviousHigh &&
-        rallyCandleConditions.bodyExceedsHalfCandleRange) {
-      mode = "RALLY_FADE";
-      stopPrice = last.high + atr * FUTURES_CONFIG.STOP_BUFFER_ATR;
-    }
+  } else if (rallyBaseConditions.closeAboveEma50 &&
+      rallyCandleConditions.redCandle &&
+      rallyCandleConditions.currentHighAbovePreviousHigh &&
+      rallyCandleConditions.bodyExceedsHalfCandleRange) {
+    // RSI>75 is retained for normal classification; without it this is a
+    // relaxed HIGH_RISK RALLY_FADE candidate. All candle-structure gates remain.
+    mode = "RALLY_FADE";
+    riskLevel = rallyBaseConditions.rsiAbove75 ? "NORMAL" : "HIGH_RISK";
+    stopPrice = last.high + atr * FUTURES_CONFIG.STOP_BUFFER_ATR;
   }
 
   if (!mode) {
@@ -1709,7 +1722,8 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     mode,
     strategyId: "v10.6-short-hybrid",
     strategyName: "Crypto Pump Hunter v10.6 SHORT Hybrid",
-    score: mode === "RALLY_FADE" ? 90 : 80,
+    score: riskLevel === "HIGH_RISK" ? 60 : (mode === "RALLY_FADE" ? 90 : 80),
+    riskLevel,
     entry,
     stop: stopPrice,
     target1,
@@ -1738,7 +1752,9 @@ function formatPrice(value) {
 
 function formatFuturesSignal(item, index = 1) {
   const sideLabel = item.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
-  const label = "🟢 سیگنال معتبر";
+  const label = item.riskLevel === "HIGH_RISK"
+    ? "⚠️ سیگنال پرریسک — شرایط منعطف"
+    : "🟢 سیگنال معتبر";
   const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol));
   return `${label}\n\n` +
     `نماد: <b>${symbol}</b>\n\n` +
@@ -1797,8 +1813,7 @@ async function persistFuturesTradeUpdates(env, updates) {
 }
 
 async function monitorOpenFuturesTrades(env) {
-  const trades = await getOpenFuturesTrades(env);
-  if (!trades.length) return { checked: 0, closed: 0, errors: 0 };
+  const trades = await getOpenFuturesTrades(env);  if (!trades.length) return { checked: 0, closed: 0, errors: 0 };
   const symbols = [...new Set(trades.map(t => t.symbol).filter(Boolean))];
   const updates = [];
   let checked = 0, closed = 0, errors = 0;
