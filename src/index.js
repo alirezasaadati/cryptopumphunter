@@ -2318,13 +2318,14 @@ async function runFuturesSignalScan(env, options = {}) {
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   let analysisErrorCount = 0;
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
+    let oneHour = [];
     try {
-      const oneHour = await getKrakenFuturesCandles(ticker.symbol, "1h");
+      oneHour = await getKrakenFuturesCandles(ticker.symbol, "1h");
       const analysis = analyzeFuturesSymbol(ticker, oneHour, [], [], options);
       return { ...analysis, scanDiagnostics: { completeCandleCount: oneHour.length } };
     } catch (error) {
       analysisErrorCount++;
-      return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticStage: "DATA_OR_ANALYSIS_ERROR", diagnosticType: "data_or_analysis_error", scanDiagnostics: { error: String(error?.message || error).slice(0, 240) } };
+      return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticStage: "DATA_OR_ANALYSIS_ERROR", diagnosticType: "data_or_analysis_error", scanDiagnostics: { completeCandleCount: oneHour.length, error: String(error?.message || error).slice(0, 240) } };
     }
   }, () => Date.now() < analysisDeadline);
 
@@ -2402,7 +2403,7 @@ async function runFuturesSignalScan(env, options = {}) {
     deliveryError,
     stageCounts: Object.fromEntries([...stageCounts.entries()].sort((a, b) => b[1] - a[1])),
     candleCounts: { min: candleCountSamples.length ? Math.min(...candleCountSamples.map(x => x.completeCandles)) : null, max: candleCountSamples.length ? Math.max(...candleCountSamples.map(x => x.completeCandles)) : null, samples: candleCountSamples.slice(0, 12) },
-    rejectionSamples: analyzed.filter(x => x && x.eligible !== true).slice(0, 20).map(x => ({ symbol: x.symbol, stage: x.diagnosticStage || "UNKNOWN", reason: x.rejected || null, details: x.diagnosticDetails || null, completeCandles: x.scanDiagnostics?.completeCandleCount ?? null })),
+    rejectionSamples: analyzed.filter(x => x && x.eligible !== true).slice(0, 20).map(x => ({ symbol: x.symbol, stage: x.diagnosticStage || "UNKNOWN", reason: x.rejected || null, details: x.diagnosticDetails || x.entryConditionDiagnostics || null, completeCandles: x.scanDiagnostics?.completeCandleCount ?? null })),
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count).slice(0, 6)
   };
