@@ -247,7 +247,7 @@ test("momentum and pullback provide 0/7/15 priority bonuses without changing qua
       last.open=last.close+0.05;
     } else if(mode==="momentum_only" || mode==="neither") {
       const current=oneHour.at(-1).close;
-      const count=120, slope=0.01, base=current-slope*(count-1);
+      const count=120, slope=0.02, base=current-slope*(count-1);
       const rebuilt=Array.from({length:count},(_,i)=>{
         const close=base+i*slope;
         return {time:Date.now()-(count-i)*15*60*1000,open:close-0.005,high:close+0.02,low:close-0.02,close,volume:100};
