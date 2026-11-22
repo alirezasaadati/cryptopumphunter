@@ -186,6 +186,8 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_TIER_2,1.0);
   assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_1,5);
   assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_2,10);
+  assert.equal(FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_ONE,7);
+  assert.equal(FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_BOTH,15);
   assert.equal(FUTURES_CONFIG.INTERVAL,"1h");
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
   assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
@@ -237,6 +239,49 @@ test("ATR rejects insufficient candles and calculates positive volatility",()=>{
   assert.ok(calculateAtr(makeCandles(),14)>0);
 });
 
+test("momentum and pullback provide 0/7/15 priority bonuses without changing qualification score",()=>{
+  const evaluate=mode=>{
+    const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+    const last=fifteenMinute.at(-1);
+    if(mode==="pullback_only") {
+      last.open=last.close+0.05;
+    } else if(mode==="momentum_only") {
+      const closes=fifteenMinute.map(c=>c.close);
+      const ema21=testEma(closes,21);
+      const atr15=calculateAtr(fifteenMinute,14);
+      for(const c of fifteenMinute.slice(-9,-1)) {
+        c.low=c.close-0.001;
+        c.high=Math.max(c.high,c.low+0.01);
+      }
+      assert.ok(fifteenMinute.slice(-9,-1).every(c=>c.low>ema21+atr15*0.35));
+    } else if(mode==="neither") {
+      last.open=last.close+0.05;
+      const closes=fifteenMinute.map(c=>c.close);
+      const ema21=testEma(closes,21);
+      const atr15=calculateAtr(fifteenMinute,14);
+      for(const c of fifteenMinute.slice(-9,-1)) {
+        c.low=c.close-0.001;
+        c.high=Math.max(c.high,c.low+0.01);
+      }
+      assert.ok(fifteenMinute.slice(-9,-1).every(c=>c.low>ema21+atr15*0.35));
+    }
+    return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  };
+  const both=evaluate("both"), one=evaluate("pullback_only"), none=evaluate("neither");
+  assert.equal(both.confirmationCount,2,JSON.stringify(both.entryDiagnostics));
+  assert.equal(both.confirmationPriorityBonus,15);
+  assert.equal(one.confirmationCount,1,JSON.stringify(one.entryDiagnostics));
+  assert.equal(one.confirmationPriorityBonus,7);
+  assert.equal(none.confirmationCount,0,JSON.stringify(none.entryDiagnostics));
+  assert.equal(none.confirmationPriorityBonus,0);
+  assert.equal(both.score,both.baseScore);
+  assert.equal(one.score,one.baseScore);
+  assert.equal(none.score,none.baseScore);
+  assert.equal(both.priorityScore,both.baseScore+both.volumePriorityBonus+15);
+  assert.equal(one.priorityScore,one.baseScore+one.volumePriorityBonus+7);
+  assert.equal(none.priorityScore,none.baseScore+none.volumePriorityBonus);
+});
+
 test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
@@ -276,15 +321,27 @@ test("standard LONG path accepts aligned 1h with neutral 4h context",()=>{
   assert.ok(result.score>=FUTURES_CONFIG.MIN_SCORE);
 });
 
-test("separate high-risk SHORT path can pass with opposing 4h only when 15m momentum confirms",()=>{
+test("HIGH_RISK accepts opposing 4h without 15m momentum; confirmation only affects priority",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
+  fifteenMinute.at(-1).open=fifteenMinute.at(-1).close-0.05;
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
   assert.equal(result.eligible,true,JSON.stringify(result));
   assert.equal(result.highRiskEligible,true);
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.equal(result.entryDiagnostics.fourHourOpposes,true);
-  assert.equal(result.entryDiagnostics.momentumConfirmed,true);
+  assert.equal(result.entryDiagnostics.momentumConfirmed,false);
+  assert.equal(result.confirmationPriorityBonus,7);
+});
+
+test("HIGH_RISK does not reject opposing 4h solely because 15m confirmation data is unavailable",()=>{
+  const {ticker,oneHour}=makeSetup("SHORT");
+  const opposingFourHour=makeCandles({slope:0.04,base:100});
+  const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,[]);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.highRiskEligible,true);
+  assert.equal(result.entryDiagnostics.confirmationUnavailable,true);
+  assert.equal(result.confirmationPriorityBonus,0);
 });
 
 test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=>{
