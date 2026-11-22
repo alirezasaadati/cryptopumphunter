@@ -254,7 +254,7 @@ test("momentum and pullback provide 0/7/15 priority bonuses without changing qua
         c.open=c.close-0.005;
       }
       fifteenMinute.splice(0,fifteenMinute.length,...rebuilt);
-      if(mode==="neither") last.open=last.close+0.005;
+      if(mode==="neither") fifteenMinute.at(-1).open=fifteenMinute.at(-1).close+0.005;
       const closes=fifteenMinute.map(c=>c.close);
       const ema21=testEma(closes,21);
       const atr15=calculateAtr(fifteenMinute,14);
