@@ -18,6 +18,7 @@ test("LONG remains open before signal TP1 and closes at TP1", () => {
   const result = evaluateTradeCandle(longTrade, {open:107, high:108, low:106, time:2});
   assert.equal(result.reason, "CLOSED_PROFIT");
   assert.equal(result.trade.exitPrice, 107.5);
+  assert.deepEqual(result.trade.tpHits, ["TP1"]);
   assert.equal(result.trade.marginReturnPercent, null);
   assert.equal(result.trade.lockReleaseEligible, true);
 });
@@ -29,7 +30,7 @@ test("SHORT closes at its signal TP1", () => {
   assert.equal(result.trade.marginReturnPercent, null);
 });
 
-test("stop closes the signal even if TP1 was previously recorded as reached", () => {
+test("stop closes the signal when stop is reached before TP1", () => {
   const result = evaluateTradeCandle(longTrade, {open:97, high:99, low:94, time:4});
   assert.equal(result.reason, "CLOSED_STOP");
   assert.equal(result.trade.exitPrice, 95);
