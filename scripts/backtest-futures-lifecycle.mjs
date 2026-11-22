@@ -190,10 +190,18 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if ((lockUntil.get(lockKey) || 0) > signalCloseTime) { skippedByLock++; continue; }
     acceptedSignals++;
 
-    // Submit a 1h EMA20 limit order after the signal candle closes.
-    // A marketable limit fills at the next 5m open; otherwise it fills at EMA20 on touch.
-    const limitPrice = Number(candidate.ema20);
-    if (!Number.isFinite(limitPrice) || limitPrice <= 0) { rejectedSignals++; continue; }
+    // Select the closer of 1h EMA20 and the just-closed signal candle wick:
+    // LONG: EMA20 or previous candle low; SHORT: EMA20 or previous candle high.
+    // "Closer" is measured from the signal candle close (the observable price
+    // when the signal is issued), not from any future candle.
+    const emaEntry = Number(candidate.ema20);
+    const wickEntry = candidate.side === "LONG" ? Number(signalBar.low) : Number(signalBar.high);
+    const referencePrice = Number(signalBar.close);
+    if (![emaEntry,wickEntry,referencePrice].every(Number.isFinite) || emaEntry <= 0 || wickEntry <= 0 || referencePrice <= 0) {
+      rejectedSignals++; continue;
+    }
+    const limitPrice = Math.abs(emaEntry-referencePrice) <= Math.abs(wickEntry-referencePrice) ? emaEntry : wickEntry;
+    const selectedEntrySource = limitPrice === emaEntry ? "EMA20_1H" : (candidate.side === "LONG" ? "PREVIOUS_CANDLE_LOW" : "PREVIOUS_CANDLE_HIGH");
     const orderExpiry = signalCloseTime + INTERVALS["1h"];
     const firstOrderBar = lowerBound(fiveMinute,signalCloseTime);
     let fill = null;
@@ -229,7 +237,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const trade = {
       id:ticker.symbol+":"+candidate.side+":"+signalCloseTime,
       symbol:ticker.symbol, side:candidate.side, status:"OPEN",
-      entry:fill.price, limitPrice, fillType:fill.fillType, fillTime:fill.time,
+      entry:fill.price, limitPrice, selectedEntrySource, referencePrice, wickEntry, fillType:fill.fillType, fillTime:fill.time,
       initialStop:stop, stop, target1:fill.price+direction*risk*1.5,
       signalTime:signalBar.time, signalCloseTime, entryTime:fill.time,
       score:candidate.score, ema20:Number(candidate.ema20), ambiguousCandles:0
@@ -288,7 +296,7 @@ async function main() {
       exit:"close at each signal-specific TP1 (1.5R) or configured initial stop, whichever is reached first",tp1Tp2Tp3:"TP1 is the actual signal target1; TP2 and TP3 ignored",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
-      execution:"signal generated from closed 1h/4h/15m candles; submit 1h EMA20 limit after signal close; order valid for one hour; marketable limits fill at next 5m open, otherwise at EMA20 touch; stop recalculated from the same 7 closed 1h candles and 1.5x ATR around actual fill; TP1 recalculated at 1.5R; exits evaluated on 5m OHLC",
+      execution:"signal generated from closed 1h/4h/15m candles; choose the closer of 1h EMA20 and the just-closed 1h candle low (LONG) or high (SHORT), measured from signal candle close; submit limit after signal close; order valid for one hour; marketable limits fill at next 5m open, otherwise at selected level touch; stop recalculated from the same 7 closed 1h candles and 1.5x ATR around actual fill; TP1 recalculated at 1.5R; exits evaluated on 5m OHLC",
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top 10 current Kraken perpetuals by current quote volume; historical 24h quote-volume filter reconstructed from prior 24 closed 1h candles; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
@@ -310,7 +318,7 @@ async function main() {
     "| Metric | Result |","|---|---:|",
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
     "| Average eligible signals / day | "+report.averageSignalsPerDay.toFixed(2)+" |",
-    "| EMA20 limit fills / expired | "+report.limitOrdersFilled+" / "+report.limitOrdersExpired+" |",
+    "| Selected-level limit fills / expired | "+report.limitOrdersFilled+" / "+report.limitOrdersExpired+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
     "| TP1 closes (1.5R) | "+metrics.profitCloses+" |",
