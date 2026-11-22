@@ -1385,6 +1385,7 @@ const FUTURES_CONFIG = {
   REQUEST_TIMEOUT_MS: 12000,
   MAX_SIGNALS_PER_SCAN: 20,
   MIN_QUOTE_VOLUME: 5_000_000,
+  HIGH_RISK_MIN_QUOTE_VOLUME: 1_000_000,
   KLINE_LIMIT: 120,
   MIN_CANDLES: 60,
   MIN_SCORE: 65,
@@ -1466,7 +1467,7 @@ function isKrakenPerpetualTicker(item) {
   if (!/^(PI|PF)_[A-Z0-9]+USD$/.test(symbol)) return false;
   const quoteVolume = Number(item.volumeQuote);
   const last = Number(item.last);
-  return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
+  return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME &&
     Number.isFinite(last) && last > 0;
 }
 
@@ -1738,6 +1739,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
 
   const fourHourOpposes = side === "LONG" ? down4h : up4h;
   const standardThresholdMet = strictSetup &&
+    Number(ticker.quoteVolume) >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
     score >= FUTURES_CONFIG.MIN_SCORE &&
     volumeRatio >= 0.75;
   let standardEntryPassed = false;
@@ -1780,8 +1782,23 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
       entryDiagnostics: entryFilters
     };
   }
-  // Standard entries retain their existing 0.75x volume gate. Only candidates
-  // that need the HIGH_RISK fallback use this separate relative-volume floor.
+  // HIGH_RISK uses a lower absolute quote-volume safety floor, while STANDARD
+  // retains the existing 5M USD universe threshold and 0.75x relative-volume gate.
+  const quoteVolume = Number(ticker.quoteVolume) || 0;
+  if (!standardEntryPassed && quoteVolume < FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME) {
+    return {
+      symbol: ticker.symbol,
+      side,
+      score: Math.max(0, Math.min(100, Math.round(score))),
+      rejected: "حجم معاملات ۲۴ساعته کمتر از کف ایمنی مسیر پرریسک (۱ میلیون دلار) است",
+      entryDiagnostics: {
+        ...entryFilters,
+        quoteVolume,
+        minimumHighRiskQuoteVolume: FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME
+      }
+    };
+  }
+  // Relative volume is an additional independent HIGH_RISK gate.
   if (!standardEntryPassed && volumeRatio < FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO) {
     return {
       symbol: ticker.symbol,
@@ -1825,6 +1842,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = standardEntryPassed;
   const highRiskEligible = !standardEntryPassed && score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE &&
+    quoteVolume >= FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME &&
     volumeRatio >= FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
   if (highRiskEligible) reasons.push("این سیگنال فقط از مسیر مستقل منعطف عبور کرده و پرریسک طبقه‌بندی شده است");
   return {
