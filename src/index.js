@@ -1433,7 +1433,7 @@ async function getKrakenFuturesUniverse() {
 }
 
 async function getKrakenFuturesCandles(symbol, interval) {
-  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}`;
+  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}?count=${FUTURES_CONFIG.KLINE_LIMIT}`;
   const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
     `Kraken ${symbol} ${interval}`, FUTURES_CONFIG.CHARTS_URL);
   if (!Array.isArray(data?.candles)) {
@@ -1456,7 +1456,11 @@ async function getKrakenFuturesCandles(symbol, interval) {
   const intervalMsMap={"1m":60000,"5m":300000,"15m":900000,"30m":1800000,"1h":3600000,"4h":14400000,"12h":43200000,"1d":86400000,"1w":604800000};
   const intervalMs=intervalMsMap[interval]||3600000;
   const now = Date.now();
-  return candles.filter(c => c.time + intervalMs <= now);
+  // Exclude the currently forming candle, then enforce the configured local cap
+  // even if the upstream API returns more candles than requested.
+  return candles
+    .filter(c => c.time + intervalMs <= now)
+    .slice(-FUTURES_CONFIG.KLINE_LIMIT);
 }
 
 
