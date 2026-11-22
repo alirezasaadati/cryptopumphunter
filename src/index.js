@@ -1409,7 +1409,7 @@ async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL)
     if (!response.ok) {
       // Check HTTP status before attempting JSON parsing: proxy/CDN errors (for example 526)
       // commonly return HTML rather than a JSON payload.
-      const detail = body.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().slice(0, 180);
+      const detail = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 180);
       lastError = new Error(`${label}: HTTP ${response.status}${detail ? ` — ${detail}` : ""}`);
       if (retryableStatuses.has(response.status) && attempt < maxAttempts) {
         await new Promise(resolve => setTimeout(resolve, 250 * attempt));
