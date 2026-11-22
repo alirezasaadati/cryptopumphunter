@@ -1353,7 +1353,7 @@ function average(values) {
 const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
-CONCURRENCY: 3,
+  CONCURRENCY: 3,
   MAX_SCAN_DURATION_MS: 180000,
   SCAN_FINALIZATION_RESERVE_MS: 45000,
   REQUEST_TIMEOUT_MS: 12000,
