@@ -130,14 +130,7 @@ const BACK_MENU = {
 export default {
   async scheduled(event, env, ctx) {
     env = withQuotaAwareKV(env);
-    ctx.waitUntil(runAutomaticFuturesAlertScan(env).catch(async error => {
-      const diagnostic = String(error?.stack || error?.message || error).slice(0, 1400);
-      console.error("AUTOMATIC_FUTURES_SCAN_FATAL", JSON.stringify({
-        timestamp: new Date().toISOString(), version: CONFIG.VERSION, error: diagnostic
-      }));
-      await notifyOwnerScanDiagnostics(env, "🚨 خطای اجرای اسکن زمان‌بندی‌شده فیوچرز\n\n" + diagnostic,
-        "futures:scan-diagnostic:fatal", 15 * 60);
-    }));
+    ctx.waitUntil(runAutomaticFuturesAlertScan(env));
   },
 
   async fetch(request, env, ctx) {
@@ -2188,6 +2181,20 @@ async function notifyOwnerScanDiagnostics(env, message, throttleKey, ttlSeconds)
 }
 
 async function runAutomaticFuturesAlertScan(env) {
+  try {
+    return await runAutomaticFuturesAlertScanInternal(env);
+  } catch (error) {
+    const diagnostic = String(error?.stack || error?.message || error).slice(0, 1400);
+    console.error("AUTOMATIC_FUTURES_SCAN_FATAL", JSON.stringify({
+      timestamp: new Date().toISOString(), version: CONFIG.VERSION, error: diagnostic
+    }));
+    await notifyOwnerScanDiagnostics(env, "🚨 خطای اجرای اسکن زمان‌بندی‌شده فیوچرز\n\n" + diagnostic,
+      "futures:scan-diagnostic:fatal", 15 * 60);
+    return { scanned: false, error: diagnostic };
+  }
+}
+
+async function runAutomaticFuturesAlertScanInternal(env) {
   if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) {
     throw new Error("SIGNAL_DELIVERY and SIGNAL_DELIVERY_SECRET are required for scan coordination.");
   }
