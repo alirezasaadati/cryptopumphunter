@@ -198,7 +198,7 @@ async function main() {
   const report={
     generatedAt:new Date().toISOString(),strategy:"CRYPTO PUMP HUNTER v9.1.0 LONG Fast Scalp",
     rules:{timeframe:"15m",symbols:SYMBOLS,minCandles:MIN_CANDLES,entry:"next 15m candle open after signal candle closes",ema:"close > EMA20 * 0.998",rsi:"RSI(14) <= 60",priceAction:"green signal candle and signal close > previous candle open",stop:"min(previous low, prior-previous low) - 0.1 * ATR(14)",maxRiskPct:MAX_RISK_PCT,target:"1.5R full exit",positionConcurrency:"one active trade per symbol"},
-    execution:{feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,sameCandleRule:"stop first",funding:"excluded",openAtEnd:"marked to market for netR but excluded from closed win rate",pnlUnit:"R; no position sizing or leverage was specified"},
+    execution:{feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,sameCandleRule:"stop first",funding:"excluded",openAtEnd:"marked to market in individual trade rows; excluded from aggregate closed performance metrics",pnlUnit:"R; no position sizing or leverage was specified"},
     results
   };
   await mkdir("artifacts",{recursive:true});
@@ -216,7 +216,7 @@ async function main() {
     "- 0.05% fee and 0.03% adverse slippage per side; funding excluded.",
     "- If stop and target are both touched in one candle, stop is counted first.",
     "- One active trade per symbol; other symbols may have concurrent positions.",
-    "- Open positions at the period boundary are marked to market and excluded from closed win rate.",
+    "- Open positions at the period boundary are marked to market in trade details but excluded from aggregate closed performance metrics.",
     "- Results are reported in R because no position size or leverage was specified.",
     "",
     "## Per-symbol details",
