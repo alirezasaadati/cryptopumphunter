@@ -183,15 +183,28 @@ test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
 });
 
 
-test("relaxed 1h trend with neutral 4h context is rejected with no experimental signal path",()=>{
+test("separate high-risk LONG path admits a relaxed 1h setup with neutral 4h context",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({
     time:Date.now()-(120-i)*4*60*60*1000,
     open:100,high:100.1,low:99.9,close:100,volume:100
   }));
   const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
-  assert.equal(result.eligible,false);
-  assert.equal(result.experimentalEligible,undefined);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.highRiskEligible,true);
+  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.ok(result.score>=58);
+});
+
+test("separate high-risk SHORT path can pass with opposing 4h only when 15m momentum confirms",()=>{
+  const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
+  const opposingFourHour=makeCandles({slope:0.04,base:100});
+  const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.highRiskEligible,true);
+  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.equal(result.entryDiagnostics.fourHourOpposes,true);
+  assert.equal(result.entryDiagnostics.momentumConfirmed,true);
 });
 
 test("risk distance outside the original 0.2%-8% band is rejected",()=>{
