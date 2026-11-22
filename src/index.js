@@ -2137,18 +2137,8 @@ export class SignalDeliveryCoordinator {
           const trades=await this.ctx.storage.get("active-futures-trades")||[];
           const closedSignalIds=new Set(trades.filter(t=>["CLOSED_PROFIT","CLOSED_STOP"].includes(t?.status)).map(t=>String(t.signalId)));
           const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side)&&!closedSignalIds.has(String(x?.id)));
-          // Only a recent, parseable OPEN trade may apply the 4h same-side cooldown.
-          // Missing/corrupt timestamps must never create a permanent signal lock.
-          const activeTradeKeys=new Set(trades.filter(t=>{
-            if(t?.status!=="OPEN"||!t?.symbol||!["LONG","SHORT"].includes(t?.side))return false;
-            const openedAtCandidates=[t.createdAt,t.lastCheckedAt]
-              .map(value=>Date.parse(value||""))
-              .filter(Number.isFinite);
-            if(!openedAtCandidates.length)return false;
-            const openedAt=Math.min(...openedAtCandidates);
-            const ageMs=now-openedAt;
-            return ageMs>=0&&ageMs<4*60*60*1000;
-          }).map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
+          // OPEN trade tracking is deliberately decoupled from signal eligibility.
+          // Only unexpired pending signals suppress same-symbol/same-side duplicates.
           const activeKeys=new Set(active.map(x=>String(x.symbol).trim().toUpperCase()+"|"+x.side));
           const seen=new Set();
           const fresh=[];
@@ -2156,7 +2146,7 @@ export class SignalDeliveryCoordinator {
           for(const signal of Array.isArray(payload.signals)?payload.signals:[]){
             if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
             const key=String(signal.symbol).trim().toUpperCase()+"|"+signal.side;
-            if(activeKeys.has(key)||activeTradeKeys.has(key)||seen.has(key))continue;
+            if(activeKeys.has(key)||seen.has(key))continue;
             const createdAt=Number(signal.createdAt)||now;
             const suppliedExpiry=Number(signal.expiresAt);
             // Preserve explicit expiry (including already-expired snapshots);
