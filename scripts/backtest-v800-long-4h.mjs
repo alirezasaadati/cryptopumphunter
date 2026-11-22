@@ -166,3 +166,4 @@ async function main(){
   console.log(JSON.stringify(reports.map(p=>({name:p.name,btcReturnPct:p.btcReturnPct,metrics:p.metrics,symbols:p.symbols})),null,2));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
+
