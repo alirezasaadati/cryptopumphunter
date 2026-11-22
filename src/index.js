@@ -2251,7 +2251,26 @@ async function runFuturesSignalScan(env, options = {}) {
   const started = Date.now();
   const universe = await getKrakenFuturesUniverse();
   if (!universe.length) {
-    return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [] };
+    const finishedAt = new Date().toISOString();
+    const diagnostics = {
+      startedAt: new Date(started).toISOString(),
+      finishedAt,
+      durationMs: Date.now() - started,
+      universeCount: 0,
+      analyzedCount: 0,
+      notAnalyzedCount: 0,
+      analysisErrorCount: 0,
+      rejectedCount: 0,
+      eligibleCount: 0,
+      signalCount: 0,
+      registeredCount: 0,
+      delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
+      deliveryError: null,
+      universeError: "Kraken returned no active PI/PF USD perpetuals above the configured 24h quote-volume threshold.",
+      topRejections: [{ reason: "هیچ نماد واجد حداقل حجم ۲۴ساعته پیدا نشد.", count: 1 }]
+    };
+    console.error("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
+    return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [], diagnostics };
   }
 
   // Universe is already filtered to active PI/PF USD perpetuals with the minimum 24h quote volume and sorted by descending volume.
