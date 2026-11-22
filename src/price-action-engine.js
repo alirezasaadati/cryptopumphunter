@@ -1,3 +1,6 @@
+// STATUS: INACTIVE / RESEARCH-ONLY.
+// This module is not imported by src/index.js and is not part of the live Worker futures scan or signal-delivery path.
+// Do not activate or merge it into the production scan without explicit architecture approval and regression testing.
 // Pure Price Action engine. No indicators are used for signal decisions.
 export const PA_CONFIG = Object.freeze({
   MIN_CANDLES_4H: 30,
