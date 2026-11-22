@@ -1382,7 +1382,17 @@ const FUTURES_CONFIG = {
   MAX_ENTRY_DRIFT_PCT: 0.35,
   MAX_ENTRY_EMA_DISTANCE_ATR: 3.0,
   MAX_PULLBACK_DISTANCE_ATR: 0.35,
-  MAX_RECLAIM_EXTENSION_ATR: 3.0
+  MAX_RECLAIM_EXTENSION_ATR: 3.0,
+  // Separate experimental path. These values never affect the standard setup.
+  HIGH_RISK_MIN_SCORE: 58,
+  HIGH_RISK_MIN_VOLUME_RATIO: 0.5,
+  HIGH_RISK_LONG_RSI_MIN: 35,
+  HIGH_RISK_LONG_RSI_MAX: 78,
+  HIGH_RISK_SHORT_RSI_MIN: 22,
+  HIGH_RISK_SHORT_RSI_MAX: 65,
+  HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.75,
+  HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 4.0,
+  HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 4.0
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
@@ -1581,6 +1591,58 @@ function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
   return Number.isFinite(distance) && distance >= threshold;
 }
 
+function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr, fourHourOpposes }) {
+  const marketPrice = Number(ticker?.last);
+  if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
+    return { ok: false, rejected: "قیمت لحظه‌ای بازار معتبر نیست" };
+  }
+  const driftPct = Math.abs(marketPrice - referencePrice) / referencePrice * 100;
+  if (driftPct > FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT) {
+    return { ok: false, rejected: "فاصله قیمت لحظه‌ای برای مسیر پرریسک نیز بیش از حد مجاز است", driftPct };
+  }
+
+  const emaDistanceAtr = Math.abs(marketPrice - ema20) / atr;
+  if (emaDistanceAtr > FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR) {
+    return { ok: false, rejected: "قیمت برای ورود پرریسک نیز بیش از حد از EMA20 فاصله دارد", driftPct, emaDistanceAtr };
+  }
+
+  const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
+  if (!has15mData) {
+    if (fourHourOpposes) {
+      return { ok: false, rejected: "روند ۴ساعته مخالف است و داده ۱۵دقیقه‌ای برای تأیید مسیر پرریسک موجود نیست", driftPct, emaDistanceAtr };
+    }
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+  }
+
+  const closes15m = candles15m.map(c => c.close);
+  const ema9_15m = ema(closes15m, 9);
+  const ema21_15m = ema(closes15m, 21);
+  const atr15m = calculateAtr(candles15m, 14);
+  const last15m = candles15m[candles15m.length - 1];
+  if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0) {
+    if (fourHourOpposes) {
+      return { ok: false, rejected: "روند ۴ساعته مخالف است و اندیکاتورهای ۱۵دقیقه‌ای معتبر نیستند", driftPct, emaDistanceAtr };
+    }
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+  }
+
+  const momentumConfirmed = side === "LONG"
+    ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open
+    : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open;
+  const reclaimExtensionAtr = side === "LONG"
+    ? (last15m.close - ema9_15m) / atr15m
+    : (ema9_15m - last15m.close) / atr15m;
+  if (reclaimExtensionAtr > FUTURES_CONFIG.HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR) {
+    return { ok: false, rejected: "قیمت پس از حرکت ۱۵دقیقه‌ای بیش از حد از محدوده ورود فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
+  }
+  if (fourHourOpposes && !momentumConfirmed) {
+    return { ok: false, rejected: "روند ۴ساعته مخالف است و مومنتوم ۱۵دقیقه‌ای هم‌جهت تأیید نشد", driftPct, emaDistanceAtr, reclaimExtensionAtr, momentumConfirmed };
+  }
+
+  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
+    momentumConfirmed, pullbackConfirmed: false, fourHourOpposes };
+}
+
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
@@ -1611,8 +1673,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
 
   const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
   const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
-  const relaxedLong = up1h && !down4h && rsiValue >= 40 && rsiValue <= 75;
-  const relaxedShort = down1h && !up4h && rsiValue >= 25 && rsiValue <= 60;
+  const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
+  const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
 
   if (strictLong || (!strictSetup && relaxedLong)) {
@@ -1652,9 +1714,12 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     reasons.push("داده فاندینگ در دسترس نبود");
   }
 
+  const fourHourOpposes = side === "LONG" ? down4h : up4h;
   const entryFilters = options.skipEntryFilters
     ? { ok: true, skippedForBaseline: true }
-    : evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr });
+    : strictSetup
+      ? evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr })
+      : evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, fourHourOpposes });
   if (!entryFilters.ok) {
     return { symbol: ticker.symbol, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
   }
@@ -1662,8 +1727,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
   if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
     reasons.push("مومنتوم و پولبک ۱۵دقیقه‌ای تأیید شدند");
+  } else if (!strictSetup && fourHourOpposes && entryFilters.momentumConfirmed) {
+    reasons.push("با وجود مخالفت روند ۴ساعته، مومنتوم ۱۵دقیقه‌ای هم‌جهت تأیید شد");
   } else {
-    reasons.push("تأیید ۱۵دقیقه‌ای کامل نبود؛ سیگنال به‌دلیل آن حذف نشد");
+    reasons.push("تأیید ۱۵دقیقه‌ای کامل نبود؛ مسیر پرریسک با محدودیت‌های مستقل ارزیابی شد");
   }
 
   const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
@@ -1685,10 +1752,15 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = strictSetup && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.75;
+  const highRiskEligible = !strictSetup &&
+    score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE &&
+    volumeRatio >= FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
+  if (highRiskEligible) reasons.push("این سیگنال فقط از مسیر مستقل منعطف عبور کرده و پرریسک طبقه‌بندی شده است");
   return {
     symbol: ticker.symbol,
     side,
     score,
+    riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
     price: entry,
     entry,
     stop,
@@ -1707,7 +1779,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     candleTime: last.time,
     reasons,
     entryDiagnostics: entryFilters,
-    eligible
+    eligible: eligible || highRiskEligible,
+    highRiskEligible
   };
 }
 
@@ -1720,7 +1793,7 @@ function formatPrice(value) {
 function formatFuturesSignal(item, index = 1) {
   const sideLabel = item.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
   const label = item.riskLevel === "HIGH_RISK"
-    ? "⚠️ سیگنال پرریسک — شرایط منعطف"
+    ? "⚠️ سیگنال پر ریسک"
     : "🟢 سیگنال معتبر";
   const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol));
   return `${label}\n\n` +
@@ -2407,7 +2480,11 @@ async function runFuturesSignalScan(env, options = {}) {
   const createdAt = Date.now();
   const eligibleCandidates = analyzed
     .filter(item => item?.eligible === true)
-    .sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol));
+    // Preserve every standard candidate ahead of experimental high-risk candidates.
+    .sort((a, b) =>
+      Number(a.riskLevel === "HIGH_RISK") - Number(b.riskLevel === "HIGH_RISK") ||
+      b.score - a.score || a.symbol.localeCompare(b.symbol)
+    );
   const generatedSignals = eligibleCandidates
     .slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
     .map(item => ({
@@ -2439,7 +2516,13 @@ async function runFuturesSignalScan(env, options = {}) {
     universeCount: filteredUniverse.length, analyzedCount,
     notAnalyzedCount: Math.max(0, filteredUniverse.length - analyzedCount),
     analysisErrorCount, rejectedCount: analyzed.filter(item => item && item.eligible !== true).length,
-    eligibleCount: eligibleCandidates.length, signalCount: signals.length, registeredCount: signals.length,
+    eligibleCount: eligibleCandidates.length,
+    standardEligibleCount: eligibleCandidates.filter(item => item.riskLevel !== "HIGH_RISK").length,
+    highRiskEligibleCount: eligibleCandidates.filter(item => item.riskLevel === "HIGH_RISK").length,
+    signalCount: signals.length,
+    standardSignalCount: signals.filter(item => item.riskLevel !== "HIGH_RISK").length,
+    highRiskSignalCount: signals.filter(item => item.riskLevel === "HIGH_RISK").length,
+    registeredCount: signals.length,
     delivery, deliveryError,
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count).slice(0, 6)
@@ -2451,7 +2534,8 @@ async function runFuturesSignalScan(env, options = {}) {
     "🏦 بازار: Kraken Derivatives Perpetual\n" +
     "⏱ تایم‌فریم: 1h با تأیید روند 4h و فیلتر ورود 15m\n" +
     `📥 نمادهای بررسی‌شده: ${analyzedCount} از ${filteredUniverse.length} نماد واجد حداقل حجم ۲۴ساعته\n` +
-    `⭐ سیگنال‌های واجد شرایط: ${signals.length}\n\n` +
+    `🟢 سیگنال‌های عادی: ${signals.filter(item => item.riskLevel !== "HIGH_RISK").length}\n` +
+    `⚠️ سیگنال‌های پر ریسک: ${signals.filter(item => item.riskLevel === "HIGH_RISK").length}\n\n` +
     (signals.length
       ? signals.map((item, index) => formatFuturesSignal(item, index + 1)).join("\n━━━━━━━━━━━━━━━━━━\n\n")
       : "⚠️ در این بررسی سیگنالی به حداقل امتیاز و شرایط ورود نرسید.\n\n") +
