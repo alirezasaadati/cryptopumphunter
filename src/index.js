@@ -1568,6 +1568,19 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
     momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
 }
 
+function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
+  // Retained as a pure compatibility utility for historical tests only.
+  // The restored Kraken Futures 3.8.2 analyzer does not call this LONG-only filter.
+  if (side !== "LONG") return true;
+  if (!Array.isArray(candles1h) || candles1h.length < 3) return false;
+  const last3 = candles1h.slice(-3);
+  const referencePrice = Number(last3[2]?.close);
+  const maxHigh = Math.max(...last3.map(c => Number(c?.high)));
+  if (!Number.isFinite(referencePrice) || !Number.isFinite(maxHigh) || maxHigh <= 0) return false;
+  const distance = Math.abs(referencePrice - maxHigh) / maxHigh;
+  return Number.isFinite(distance) && distance >= threshold;
+}
+
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
@@ -2561,4 +2574,4 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, mapLimit, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
+export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
