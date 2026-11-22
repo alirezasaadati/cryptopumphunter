@@ -1,4 +1,4 @@
-name: v10.5 one-year backtest
+name: v10.5 portfolio 30pct backtest
 on:
   push:
     branches:
@@ -21,11 +21,11 @@ jobs:
         with:
           node-version: "20"
       - name: Run v10.5 historical backtest
-        run: set -o pipefail; node scripts/backtest-v10-5-one-year.mjs | tee backtest.log
+        run: set -o pipefail; node scripts/backtest-v10-5-portfolio-30pct.mjs | tee backtest.log
       - name: Upload report and trade ledger
         uses: actions/upload-artifact@v4
         with:
-          name: v10-5-one-year
+          name: v10-5-portfolio-30pct-one-year
           path: |
             out/summary.json
             out/trades.csv
