@@ -2153,11 +2153,6 @@ export class SignalDeliveryCoordinator {
           const trades=await this.ctx.storage.get("active-futures-trades")||[];
           const closedSignalIds=new Set(trades.filter(t=>["CLOSED_PROFIT","CLOSED_STOP"].includes(t?.status)).map(t=>String(t.signalId)));
           const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side)&&!closedSignalIds.has(String(x?.id)));
-          const activeTradeKeys=new Set(trades.filter(t=>{
-      if(t?.status!=="OPEN")return false;
-      const openedAt=Date.parse(t.createdAt||t.lastCheckedAt||"");
-      return !Number.isFinite(openedAt) || (now-openedAt)<4*60*60*1000;
-    }).map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
           const activeKeys=new Set(active.map(x=>String(x.symbol).trim().toUpperCase()+"|"+x.side));
           const seen=new Set();
           const fresh=[];
@@ -2165,7 +2160,7 @@ export class SignalDeliveryCoordinator {
           for(const signal of Array.isArray(payload.signals)?payload.signals:[]){
             if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
             const key=String(signal.symbol).trim().toUpperCase()+"|"+signal.side;
-            if(activeKeys.has(key)||activeTradeKeys.has(key)||seen.has(key))continue;
+            if(activeKeys.has(key)||seen.has(key))continue;
             const suppliedCreatedAt=Number(signal.createdAt);
             const createdAt=Number.isFinite(suppliedCreatedAt)&&suppliedCreatedAt>0?suppliedCreatedAt:now;
             const suppliedExpiry=Number(signal.expiresAt);
