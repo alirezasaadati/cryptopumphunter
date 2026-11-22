@@ -143,7 +143,7 @@ function summarize(trades) {
     ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
     bySide: {
       LONG: { trades: longs.length, profitCloses: longs.filter(t=>t.status==="CLOSED_TP1").length, stopCloses: longs.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(longs) },
-      SHORT: { trades: shorts.length, profitCloses: shorts.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: shorts.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(shorts) }
+      SHORT: { trades: shorts.length, profitCloses: shorts.filter(t=>t.status==="CLOSED_TP1").length, stopCloses: shorts.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(shorts) }
     }
   };
 }
