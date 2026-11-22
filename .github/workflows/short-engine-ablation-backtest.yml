@@ -1,0 +1,26 @@
+name: SHORT engine 90d and 180d ablation backtest
+on:
+  push:
+    branches: [backtest-short-ablation-20261122]
+    paths:
+      - "scripts/backtest-short-ablation.mjs"
+      - ".github/workflows/short-engine-ablation-backtest.yml"
+  workflow_dispatch:
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 90d and 180d SHORT engine ablation
+        run: node scripts/backtest-short-ablation.mjs
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: short-engine-ablation-90-180d
+          path: artifacts/
+          if-no-files-found: warn
