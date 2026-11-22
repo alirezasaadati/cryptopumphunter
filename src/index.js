@@ -1703,7 +1703,18 @@ function analyzeFuturesSymbol(ticker, candles1h, _candles4h = [], _candles15m = 
     ema20: e20,
     ema50: e50,
     eligible: true,
-    diagnosticStage: "ELIGIBLE"
+    diagnosticStage: "ELIGIBLE",
+    entryConditionDiagnostics: {
+      close: last.close,
+      ema20: e20,
+      ema50: e50,
+      rsi14: rsiValue,
+      distanceToEma20Pct: distanceToE20,
+      atrPct,
+      trendShort: trendConditions,
+      rallyFade: { ...rallyBaseConditions, ...rallyCandleConditions, bodyToRangeRatio },
+      selectedEngine: mode
+    }
   };
 }
 
@@ -2333,11 +2344,27 @@ async function runFuturesSignalScan(env, options = {}) {
   const entryConditionBreakdown = analyzed
     .filter(item => item?.entryConditionDiagnostics)
     .map(item => ({ symbol: item.symbol, ...item.entryConditionDiagnostics }));
+  const conditionTotals = { trendShort: {}, rallyFade: {} };
+  for (const item of entryConditionBreakdown) {
+    for (const [engine, conditions] of [["trendShort", item.trendShort], ["rallyFade", item.rallyFade]]) {
+      for (const [condition, passed] of Object.entries(conditions || {})) {
+        if (typeof passed !== "boolean") continue;
+        const bucket = conditionTotals[engine][condition] || (conditionTotals[engine][condition] = { passed: 0, failed: 0 });
+        bucket[passed ? "passed" : "failed"]++;
+      }
+    }
+  }
+  const entryConditionSummary = {
+    symbolsWithConditionData: entryConditionBreakdown.length,
+    trendShort: conditionTotals.trendShort,
+    rallyFade: conditionTotals.rallyFade
+  };
   if (entryConditionBreakdown.length) {
     console.log("AUTOMATIC_FUTURES_ENTRY_CONDITION_DIAGNOSTICS", JSON.stringify({
       timestamp: new Date().toISOString(),
       version: CONFIG.VERSION,
       rejectedAt: "TREND_SHORT_OR_RALLY_FADE_SETUP",
+      summary: entryConditionSummary,
       symbols: entryConditionBreakdown
     }));
   }
@@ -2402,13 +2429,14 @@ async function runFuturesSignalScan(env, options = {}) {
     delivery,
     deliveryError,
     stageCounts: Object.fromEntries([...stageCounts.entries()].sort((a, b) => b[1] - a[1])),
+    entryConditionSummary,
     candleCounts: { min: candleCountSamples.length ? Math.min(...candleCountSamples.map(x => x.completeCandles)) : null, max: candleCountSamples.length ? Math.max(...candleCountSamples.map(x => x.completeCandles)) : null, samples: candleCountSamples.slice(0, 12) },
     rejectionSamples: analyzed.filter(x => x && x.eligible !== true).slice(0, 20).map(x => ({ symbol: x.symbol, stage: x.diagnosticStage || "UNKNOWN", reason: x.rejected || null, details: x.diagnosticDetails || x.entryConditionDiagnostics || null, completeCandles: x.scanDiagnostics?.completeCandleCount ?? null })),
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count).slice(0, 6)
   };
   console.log("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
-  console.log("AUTOMATIC_FUTURES_STAGE_DIAGNOSTICS", JSON.stringify({ timestamp: finishedAt, version: CONFIG.VERSION, stageCounts: diagnostics.stageCounts, candleCounts: diagnostics.candleCounts, rejectionSamples: diagnostics.rejectionSamples }));
+  console.log("AUTOMATIC_FUTURES_STAGE_DIAGNOSTICS", JSON.stringify({ timestamp: finishedAt, version: CONFIG.VERSION, stageCounts: diagnostics.stageCounts, entryConditionSummary: diagnostics.entryConditionSummary, candleCounts: diagnostics.candleCounts, rejectionSamples: diagnostics.rejectionSamples }));
   const report =
     `📈 CRYPTO PUMP HUNTER V10.6 — STRICT SHORT HYBRID\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
