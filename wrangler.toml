@@ -3,11 +3,6 @@ main = "src/index.js"
 compatibility_date = "2026-11-16"
 
 [vars]
-APP_MODE = "manual"
-MIN_SIGNAL_SCORE = "72"
-SIGNAL_TTL_MINUTES = "60"
-MAX_ENTRY_DRIFT_PCT = "0.35"
-MAX_SCAN_SYMBOLS = "8"
 SIGNAL_ARCHIVE_CHANNEL_ID = "-1004299421807"
 
 [[kv_namespaces]]
