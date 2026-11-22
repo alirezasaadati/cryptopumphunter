@@ -5,7 +5,7 @@ import { createSerialExecutor } from "./serial-executor.js";
 import { evaluateTradeCandle } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
-  VERSION: "11.1.0",
+  VERSION: "11.2.0",
   PENDING_TTL: 604800
 };
 
@@ -2124,11 +2124,13 @@ export class SignalDeliveryCoordinator {
           const all=[...byId.values()];
           const open=all.filter(t=>t.status==="OPEN");
           const history=all.filter(t=>t.status!=="OPEN").slice(-500);
-          await this.ctx.storage.put("active-futures-trades",[...open,...history]);
-          if(closed){
-            const pending=await this.ctx.storage.get("active-futures-pending")||[];
-            await this.ctx.storage.put("active-futures-pending",pending.filter(s=>!releasedSignalIds.has(String(s.id))));
-          }
+          await this.ctx.storage.transaction(async transaction => {
+            await transaction.put("active-futures-trades",[...open,...history]);
+            if(closed){
+              const pending=await transaction.get("active-futures-pending")||[];
+              await transaction.put("active-futures-pending",pending.filter(s=>!releasedSignalIds.has(String(s.id))));
+            }
+          });
           return Response.json({ok:true,updated,closed,open:open.length});
         }
         if(url.pathname==="/signals/register"){
@@ -2150,35 +2152,46 @@ export class SignalDeliveryCoordinator {
             if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
             const key=String(signal.symbol).trim().toUpperCase()+"|"+signal.side;
             if(activeKeys.has(key)||activeTradeKeys.has(key)||seen.has(key))continue;
-            const createdAt=Number(signal.createdAt)||now;
+            const suppliedCreatedAt=Number(signal.createdAt);
+            const createdAt=Number.isFinite(suppliedCreatedAt)&&suppliedCreatedAt>0?suppliedCreatedAt:now;
             const suppliedExpiry=Number(signal.expiresAt);
-            // Preserve explicit expiry (including already-expired snapshots);
-            // only missing/invalid expiry gets the configured 60-minute TTL.
+            // Preserve a valid explicit expiry, but never register an already-expired
+            // candidate or create an OPEN tracking record for a signal that cannot be sent.
             const expiresAt=Number.isFinite(suppliedExpiry)&&signal.expiresAt!=null&&signal.expiresAt!==""
               ? suppliedExpiry
               : createdAt+FUTURES_CONFIG.SIGNAL_TTL_MINUTES*60000;
+            if(!Number.isFinite(expiresAt)||expiresAt<=now)continue;
             const normalizedSignal={...signal,createdAt,expiresAt};
             seen.add(key);fresh.push(normalizedSignal);
             const trade=createTrackedFuturesTrade(normalizedSignal,"signal-evaluation");
             if(trade)newTrades.push(trade);
           }
           const merged=[...active,...fresh].slice(-150);
-          if(newTrades.length){
-            const open=trades.filter(t=>t?.status==="OPEN");
-            const history=trades.filter(t=>t?.status!=="OPEN").slice(-500);
-            await this.ctx.storage.put("active-futures-trades",[...open,...history,...newTrades]);
-          }
-          await this.ctx.storage.put("active-futures-pending",merged);
+          const open=trades.filter(t=>t?.status==="OPEN");
+          const history=trades.filter(t=>t?.status!=="OPEN").slice(-500);
+          // Keep the pending signal and its tracking record in one Durable Object
+          // transaction so a failed second write cannot leave an orphaned OPEN trade.
+          await this.ctx.storage.transaction(async transaction => {
+            if(newTrades.length) {
+              await transaction.put("active-futures-trades",[...open,...history,...newTrades]);
+            }
+            await transaction.put("active-futures-pending",merged);
+          });
           return Response.json({ok:true,signals:fresh,trackedTrades:newTrades.length});
         }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
           const now=Date.now();
+          const token=String(payload.token||"");
+          if(!token)throw new Error("Scan lock token is required.");
           if(current&&Number(current.expiresAt)>now)return Response.json({ok:true,acquired:false});
-          await this.ctx.storage.put("automatic-futures-scan-lock",{acquiredAt:now,expiresAt:now+240000});
-          return Response.json({ok:true,acquired:true});
+          await this.ctx.storage.put("automatic-futures-scan-lock",{token,acquiredAt:now,expiresAt:now+600000});
+          return Response.json({ok:true,acquired:true,expiresAt:now+600000});
         }
         if(url.pathname==="/scan-lock/release"){
+          const current=await this.ctx.storage.get("automatic-futures-scan-lock");
+          if(!current)return Response.json({ok:true,released:false,reason:"lock not found"});
+          if(!payload.token||payload.token!==current.token)return Response.json({ok:true,released:false,reason:"lock token mismatch"});
           await this.ctx.storage.delete("automatic-futures-scan-lock");
           return Response.json({ok:true,released:true});
         }
@@ -2433,7 +2446,10 @@ async function runAutomaticFuturesAlertScanInternal(env) {
   }
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:automatic-futures-scan-lock"));
   const headers = { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET };
-  const acquireResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/acquire", { method: "POST", headers, body: "{}" });
+  const scanLockToken = crypto.randomUUID();
+  const acquireResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/acquire", {
+    method: "POST", headers, body: JSON.stringify({ token: scanLockToken })
+  });
   const acquire = await acquireResponse.json();
   if (!acquireResponse.ok || !acquire.ok) throw new Error(acquire.error || "Could not acquire automatic scan lock.");
   if (!acquire.acquired) return { skipped: true, reason: "scan already running" };
@@ -2459,6 +2475,7 @@ async function runAutomaticFuturesAlertScanInternal(env) {
       "نمادهای تحلیل‌شده: " + (diagnostics.analyzedCount ?? "—"),
       "نمادهای بررسی‌نشده به‌علت محدودیت زمان: " + (diagnostics.notAnalyzedCount ?? "—"),
       "خطاهای دریافت/تحلیل: " + (diagnostics.analysisErrorCount ?? "—"),
+      "خطاهای دریافت کندل ۱۵دقیقه‌ای: " + (diagnostics.fifteenMinuteDataErrorCount ?? 0),
       "ردشده‌ها: " + (diagnostics.rejectedCount ?? "—"),
       "سیگنال واجد شرایط: " + (diagnostics.eligibleCount ?? "—"),
       "ثبت‌شده: " + (diagnostics.registeredCount ?? "—"),
@@ -2476,7 +2493,7 @@ async function runAutomaticFuturesAlertScanInternal(env) {
       diagnostics.signalCount ? "سیگنال صادر شد؛ این پیام گزارش خطا/وضعیت نیست." :
         "در این نوبت سیگنالی واجد شرایط پیدا نشد."
     ].filter(Boolean).join("\n");
-    if (diagnostics.analysisErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError) {
+    if (diagnostics.analysisErrorCount > 0 || diagnostics.fifteenMinuteDataErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError) {
       await notifyOwnerScanDiagnostics(env, noSignalMessage,
         "futures:scan-diagnostic:issue", 15 * 60);
     } else if ((diagnostics.signalCount || 0) === 0) {
@@ -2485,7 +2502,9 @@ async function runAutomaticFuturesAlertScanInternal(env) {
     }
     return { scanned: true, signals: (result.signals || []).length, experimentalSignals: 0, tracking, diagnostics };
   } finally {
-    const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", { method: "POST", headers, body: "{}" });
+    const releaseResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/release", {
+      method: "POST", headers, body: JSON.stringify({ token: scanLockToken })
+    });
     if (!releaseResponse.ok) console.error("Could not release automatic scan lock:", releaseResponse.status);
   }
 }
@@ -2578,12 +2597,17 @@ async function runFuturesSignalScan(env, options = {}) {
   const filteredUniverse = universe;
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   let analysisErrorCount = 0;
+  let fifteenMinuteDataErrorCount = 0;
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
       const [oneHour, fourHour, fifteenMinute] = await Promise.all([
         getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.INTERVAL),
         getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL),
-        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL).catch(() => [])
+        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL).catch(error => {
+          fifteenMinuteDataErrorCount++;
+          console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol, String(error?.message||error));
+          return [];
+        })
       ]);
       return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, options);
     } catch (error) {
@@ -2651,7 +2675,8 @@ async function runFuturesSignalScan(env, options = {}) {
     startedAt: new Date(started).toISOString(), finishedAt, durationMs: Date.now() - started,
     universeCount: filteredUniverse.length, analyzedCount,
     notAnalyzedCount: Math.max(0, filteredUniverse.length - analyzedCount),
-    analysisErrorCount, rejectedCount: analyzed.filter(item => item && item.eligible !== true).length,
+    analysisErrorCount, fifteenMinuteDataErrorCount,
+    rejectedCount: analyzed.filter(item => item && item.eligible !== true).length,
     eligibleCount: eligibleCandidates.length,
     standardEligibleCount: eligibleCandidates.filter(item => item.riskLevel !== "HIGH_RISK").length,
     highRiskEligibleCount: eligibleCandidates.filter(item => item.riskLevel === "HIGH_RISK").length,
