@@ -5,7 +5,7 @@ import { createSerialExecutor } from "./serial-executor.js";
 import { evaluateTradeCandle } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
-  VERSION: "11.0.0",
+  VERSION: "11.1.0",
   PENDING_TTL: 604800
 };
 
@@ -40,7 +40,10 @@ async function kvWriteGate(env, action, error = null) {
 }
 export function withQuotaAwareKV(env) {
   if (!env.APP_KV) return env;
-  if (!env.SIGNAL_DELIVERY) throw new Error("SIGNAL_DELIVERY is required for safe KV quota enforcement.");
+  if (!env.SIGNAL_DELIVERY) {
+    console.error("KV_QUOTA_GUARD_BYPASSED: SIGNAL_DELIVERY binding is unavailable; continuing without quota gate.");
+    return env;
+  }
   const raw = env.APP_KV;
   const guarded = new Proxy(raw, {
     get(target, property) {
@@ -292,7 +295,10 @@ async function telegram(method, env, body) {
   const data = await response.json();
 
   if (!response.ok || !data.ok) {
-    throw new Error(data.description || `Telegram HTTP ${response.status}`);
+    const error = new Error(data.description || `Telegram HTTP ${response.status}`);
+    error.telegramStatus = response.status;
+    error.telegramRetryAfter = Number(data?.parameters?.retry_after) || 0;
+    throw error;
   }
 
   return data;
@@ -1366,7 +1372,7 @@ const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
   // Scan all liquid perpetuals, stopping only when the safe execution budget is reached.
-  CONCURRENCY: 3,
+  CONCURRENCY: 5,
   MAX_SCAN_DURATION_MS: 180000,
   SCAN_FINALIZATION_RESERVE_MS: 45000,
   REQUEST_TIMEOUT_MS: 12000,
@@ -1374,25 +1380,25 @@ const FUTURES_CONFIG = {
   MIN_QUOTE_VOLUME: 5_000_000,
   KLINE_LIMIT: 120,
   MIN_CANDLES: 60,
-  MIN_SCORE: 72,
+  MIN_SCORE: 65,
   INTERVAL: "1h",
   CONFIRM_INTERVAL: "4h",
   ENTRY_CONFIRM_INTERVAL: "15m",
   SIGNAL_TTL_MINUTES: 60,
-  MAX_ENTRY_DRIFT_PCT: 0.35,
-  MAX_ENTRY_EMA_DISTANCE_ATR: 3.0,
+  MAX_ENTRY_DRIFT_PCT: 0.7,
+  MAX_ENTRY_EMA_DISTANCE_ATR: 4.0,
   MAX_PULLBACK_DISTANCE_ATR: 0.35,
-  MAX_RECLAIM_EXTENSION_ATR: 3.0,
+  MAX_RECLAIM_EXTENSION_ATR: 4.0,
   // Separate experimental path. These values never affect the standard setup.
-  HIGH_RISK_MIN_SCORE: 55,
-  HIGH_RISK_MIN_VOLUME_RATIO: 0.5,
-  HIGH_RISK_LONG_RSI_MIN: 35,
-  HIGH_RISK_LONG_RSI_MAX: 78,
-  HIGH_RISK_SHORT_RSI_MIN: 22,
-  HIGH_RISK_SHORT_RSI_MAX: 65,
-  HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.75,
-  HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 4.0,
-  HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 4.0
+  HIGH_RISK_MIN_SCORE: 40,
+  HIGH_RISK_MIN_VOLUME_RATIO: 0,
+  HIGH_RISK_LONG_RSI_MIN: 32,
+  HIGH_RISK_LONG_RSI_MAX: 82,
+  HIGH_RISK_SHORT_RSI_MIN: 18,
+  HIGH_RISK_SHORT_RSI_MAX: 70,
+  HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 1.0,
+  HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 5.0,
+  HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 5.0
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
@@ -1632,9 +1638,7 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
   const reclaimExtensionAtr = side === "LONG"
     ? (last15m.close - ema9_15m) / atr15m
     : (ema9_15m - last15m.close) / atr15m;
-  if (reclaimExtensionAtr > FUTURES_CONFIG.HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR) {
-    return { ok: false, rejected: "قیمت پس از حرکت ۱۵دقیقه‌ای بیش از حد از محدوده ورود فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
-  }
+  // High-risk path does not repeat the reclaim-extension gate; drift and EMA/ATR remain hard safety limits.
   if (fourHourOpposes && !momentumConfirmed) {
     return { ok: false, rejected: "روند ۴ساعته مخالف است و مومنتوم ۱۵دقیقه‌ای هم‌جهت تأیید نشد", driftPct, emaDistanceAtr, reclaimExtensionAtr, momentumConfirmed };
   }
@@ -1671,8 +1675,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   let score = 0;
   const reasons = [];
 
-  const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
-  const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
+  // Standard setup: at least one timeframe supports the direction and neither explicitly opposes it.
+  const strictLong = (up1h || up4h) && !down1h && !down4h && rsiValue >= 45 && rsiValue <= 72;
+  const strictShort = (down1h || down4h) && !up1h && !up4h && rsiValue >= 28 && rsiValue <= 55;
+  // High-risk fallback retains a clear 1h direction but uses wider RSI bounds.
   const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
   const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
@@ -1681,20 +1687,29 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     side = "LONG";
     score = strictSetup ? 45 : 40;
     reasons.push(strictSetup
-      ? "روند ۱ساعته و ۴ساعته صعودی است"
-      : "ستاپ آزمایشی: روند ۱ساعته صعودی و روند ۴ساعته مخالف نیست",
-      "قیمت بالای EMA20 قرار دارد");
+      ? "حداقل یک تایم‌فریم صعودی است و تایم‌فریم دیگر مخالفت نمی‌کند"
+      : "ستاپ پرریسک: روند ۱ساعته صعودی؛ مخالفت ۴ساعته با تأیید ۱۵دقیقه‌ای کنترل می‌شود",
+      "ساختار EMA تایم‌فریم جهت‌دهنده تأیید شده است");
     score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
   } else if (strictShort || (!strictSetup && relaxedShort)) {
     side = "SHORT";
     score = strictSetup ? 45 : 40;
     reasons.push(strictSetup
-      ? "روند ۱ساعته و ۴ساعته نزولی است"
-      : "ستاپ آزمایشی: روند ۱ساعته نزولی و روند ۴ساعته مخالف نیست",
-      "قیمت زیر EMA20 قرار دارد");
+      ? "حداقل یک تایم‌فریم نزولی است و تایم‌فریم دیگر مخالفت نمی‌کند"
+      : "ستاپ پرریسک: روند ۱ساعته نزولی؛ مخالفت ۴ساعته با تأیید ۱۵دقیقه‌ای کنترل می‌شود",
+      "ساختار EMA تایم‌فریم جهت‌دهنده تأیید شده است");
     score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
   } else {
-    return { symbol: ticker.symbol, rejected: "حتی شرایط منعطف آزمایشی روند و RSI نیز تأیید نشد" };
+    const longRsiOk = rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
+    const shortRsiOk = rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
+    const failed = [];
+    if (!up1h && !down1h) failed.push("روند ۱ساعته جهت مشخص ندارد");
+    if (!longRsiOk && !shortRsiOk) failed.push("RSI خارج از پنجره مجاز لانگ و شورت است");
+    if (!up4h && !down4h) failed.push("روند ۴ساعته خنثی است");
+    return { symbol: ticker.symbol, rejected: failed.join("؛ ") || "جهت و RSI مجاز هم‌زمان تأیید نشد",
+      entryDiagnostics: { stage:"trend_rsi", rsi:rsiValue, up1h, down1h, up4h, down4h,
+        ema20_1h:e20, ema50_1h:e50, ema20_4h:e20_4h, ema50_4h:e50_4h, referencePrice,
+        longRsiOk, shortRsiOk, longTrendOk:up1h||up4h, shortTrendOk:down1h||down4h, failedChecks:failed } };
   }
 
   if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
@@ -1787,9 +1802,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = standardEntryPassed;
-  const highRiskEligible = !standardEntryPassed &&
-    score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE &&
-    volumeRatio >= FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
+  const highRiskEligible = !standardEntryPassed && score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE;
   if (highRiskEligible) reasons.push("این سیگنال فقط از مسیر مستقل منعطف عبور کرده و پرریسک طبقه‌بندی شده است");
   return {
     symbol: ticker.symbol,
@@ -1962,11 +1975,32 @@ async function sendAndArchiveFuturesSignalUnlocked(env,ctx,chatId,signal,message
   record={version:2,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,signal,messageText,replyMarkup,parseMode,status:"SENDING",createdAt:record?.createdAt||new Date().toISOString(),attemptedAt:new Date().toISOString()};
   await ctx.storage.put(key,record);
   let response;
-  try {
-    response=await sendMessage(env,chatId,messageText,replyMarkup,parseMode);
-  } catch(error) {
-    await ctx.storage.put(key,{...record,status:"UNCERTAIN",error:String(error?.message||error).slice(0,500),updatedAt:new Date().toISOString()});
-    throw error;
+  let deliveryError=null;
+  let retryAttempts=0;
+  for(let attempt=1;attempt<=3;attempt++){
+    try{
+      response=await sendMessage(env,chatId,messageText,replyMarkup,parseMode);
+      deliveryError=null;
+      break;
+    }catch(error){
+      deliveryError=error;
+      const status=Number(error?.telegramStatus);
+      const retryAfter=Number(error?.telegramRetryAfter)||0;
+      // Telegram 429 is an explicit rejection. Network/5xx failures stay
+      // UNCERTAIN because retrying them could create duplicate notifications.
+      if(status!==429||attempt>=3||retryAfter>5)break;
+      retryAttempts++;
+      await new Promise(resolve=>setTimeout(resolve,Math.max(1000,retryAfter*1000)));
+    }
+  }
+  if(deliveryError){
+    const uncertain={...record,status:"UNCERTAIN",retryAttempts,error:String(deliveryError?.message||deliveryError).slice(0,500),updatedAt:new Date().toISOString()};
+    await ctx.storage.put(key,uncertain);
+    if(env.APP_KV){
+      try{await env.APP_KV.put(signalOutboxKey(chatId,signal.id),JSON.stringify(uncertain));}
+      catch(kvError){console.error("UNCERTAIN_OUTBOX_KV_PERSIST_FAILED",String(kvError?.message||kvError));}
+    }
+    throw deliveryError;
   }
   record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString()};
   await ctx.storage.put(key,record);
@@ -2097,7 +2131,11 @@ export class SignalDeliveryCoordinator {
           const trades=await this.ctx.storage.get("active-futures-trades")||[];
           const closedSignalIds=new Set(trades.filter(t=>["CLOSED_PROFIT","CLOSED_STOP"].includes(t?.status)).map(t=>String(t.signalId)));
           const active=current.filter(x=>Number(x?.expiresAt)>now&&x?.symbol&&["LONG","SHORT"].includes(x?.side)&&!closedSignalIds.has(String(x?.id)));
-          const activeTradeKeys=new Set(trades.filter(t=>t?.status==="OPEN").map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
+          const activeTradeKeys=new Set(trades.filter(t=>{
+      if(t?.status!=="OPEN")return false;
+      const openedAt=Date.parse(t.createdAt||t.lastCheckedAt||"");
+      return !Number.isFinite(openedAt) || (now-openedAt)<4*60*60*1000;
+    }).map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
           const activeKeys=new Set(active.map(x=>String(x.symbol).trim().toUpperCase()+"|"+x.side));
           const seen=new Set();
           const fresh=[];
@@ -2106,8 +2144,16 @@ export class SignalDeliveryCoordinator {
             if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
             const key=String(signal.symbol).trim().toUpperCase()+"|"+signal.side;
             if(activeKeys.has(key)||activeTradeKeys.has(key)||seen.has(key))continue;
-            seen.add(key);fresh.push(signal);
-            const trade=createTrackedFuturesTrade(signal,"signal-evaluation");
+            const createdAt=Number(signal.createdAt)||now;
+            const suppliedExpiry=Number(signal.expiresAt);
+            // Preserve explicit expiry (including already-expired snapshots);
+            // only missing/invalid expiry gets the configured 60-minute TTL.
+            const expiresAt=Number.isFinite(suppliedExpiry)&&signal.expiresAt!=null&&signal.expiresAt!==""
+              ? suppliedExpiry
+              : createdAt+FUTURES_CONFIG.SIGNAL_TTL_MINUTES*60000;
+            const normalizedSignal={...signal,createdAt,expiresAt};
+            seen.add(key);fresh.push(normalizedSignal);
+            const trade=createTrackedFuturesTrade(normalizedSignal,"signal-evaluation");
             if(trade)newTrades.push(trade);
           }
           const merged=[...active,...fresh].slice(-150);
@@ -2164,6 +2210,7 @@ export class SignalDeliveryCoordinator {
           await this.env.APP_KV.put(key,JSON.stringify({...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
           await this.ctx.storage.put("signal-outbox:"+key,{...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString()});
           const result=await sendAndArchiveFuturesSignalUnlocked(this.env,this.ctx,chatId,record.signal,record.messageText,record.replyMarkup??null,record.parseMode??"HTML");
+          await this.env.APP_KV.put(key,JSON.stringify({...record,status:"ARCHIVED",archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
           return Response.json({ok:true,result});
         }
         throw new Error("Unknown reconciliation action.");
@@ -2303,6 +2350,25 @@ async function reconcileSignalOutbox(env,ownerId,token,action){
   await showUncertainSignalOutbox(env,ownerId);
 }
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت و پیگیری نتایج معاملات در این نسخه غیرفعال است.")}
+async function countUncertainSignalOutbox(env) {
+  if(!env.APP_KV)return null;
+  try{
+    let cursor, count=0;
+    do{
+      const page=await env.APP_KV.list({prefix:"futures:signal-outbox:v1:",limit:1000,...(cursor?{cursor}:{})});
+      for(const item of page.keys||[]){
+        const record=await env.APP_KV.get(item.name,"json");
+        if(record?.status==="UNCERTAIN")count++;
+      }
+      cursor=page.list_complete===false?page.cursor:null;
+    }while(cursor);
+    return count;
+  }catch(error){
+    console.error("UNCERTAIN_OUTBOX_COUNT_FAILED",String(error?.message||error));
+    return null;
+  }
+}
+
 async function notifyOwnerScanDiagnostics(env, message, throttleKey, ttlSeconds) {
   const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
   if (!ownerId) {
@@ -2314,7 +2380,7 @@ async function notifyOwnerScanDiagnostics(env, message, throttleKey, ttlSeconds)
       if (await env.APP_KV.get(throttleKey)) return false;
       await env.APP_KV.put(throttleKey, new Date().toISOString(), { expirationTtl: ttlSeconds });
     } catch (error) {
-      console.error("SCAN_DIAGNOSTIC_THROTTLE_FAILED", String(error?.message || error));
+      console.error("SCAN_DIAGNOSTIC_THROTTLE_FAILED; sending without throttle", String(error?.message || error));
     }
   }
   try {
@@ -2342,7 +2408,22 @@ async function runAutomaticFuturesAlertScan(env) {
 
 async function runAutomaticFuturesAlertScanInternal(env) {
   if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) {
-    throw new Error("SIGNAL_DELIVERY and SIGNAL_DELIVERY_SECRET are required for scan coordination.");
+    const result=await runFuturesSignalScan(env,{analysisOnly:true});
+    const d=result.diagnostics||{};
+    const message=[
+      "⚠️ اسکن فیوچرز در حالت تحلیل بدون ثبت اجرا شد",
+      "علت: binding یا secret مربوط به Durable Object موجود نیست.",
+      "نمادهای تحلیل‌شده: "+(d.analyzedCount??0),
+      "نمادهای بررسی‌نشده: "+(d.notAnalyzedCount??0),
+      "کاندیداهای واجد شرایط اما ثبت‌نشده: "+(d.unregisteredCandidateCount??0),
+      "ردشده‌ها: "+(d.rejectedCount??0),
+      "",
+      ...(d.topRejections||[]).map(x=>"• "+x.reason+": "+x.count),
+      "",
+      "هیچ سیگنالی ارسال یا به‌عنوان فعال ثبت نشد؛ اتصال Durable Object را بررسی کن."
+    ].join("\n");
+    await notifyOwnerScanDiagnostics(env,message,null,0);
+    return {scanned:true,analysisOnly:true,signals:0,diagnostics:d};
   }
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:automatic-futures-scan-lock"));
   const headers = { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET };
@@ -2362,6 +2443,7 @@ async function runAutomaticFuturesAlertScanInternal(env) {
     const result = await runFuturesSignalScan(env);
     if (result.diagnostics) result.diagnostics.trackingError = trackingError;
     const diagnostics = result.diagnostics || {};
+    diagnostics.uncertainOutboxCount = await countUncertainSignalOutbox(env);
     const noSignalMessage = [
       "🧪 گزارش تشخیصی اسکن خودکار فیوچرز",
       "━━━━━━━━━━━━━━━━━━",
@@ -2374,6 +2456,8 @@ async function runAutomaticFuturesAlertScanInternal(env) {
       "ردشده‌ها: " + (diagnostics.rejectedCount ?? "—"),
       "سیگنال واجد شرایط: " + (diagnostics.eligibleCount ?? "—"),
       "ثبت‌شده: " + (diagnostics.registeredCount ?? "—"),
+      "کاندیداهای ثبت‌نشده: " + (diagnostics.unregisteredCandidateCount ?? 0),
+      "رکوردهای ارسال نامشخص: " + (diagnostics.uncertainOutboxCount ?? "—"),
       "ارسال موفق: " + (diagnostics.delivery?.delivered ?? "—"),
       "ارسال ناموفق: " + (diagnostics.delivery?.failed ?? "—"),
       "مدت اسکن: " + (diagnostics.durationMs != null ? Math.round(diagnostics.durationMs / 1000) + " ثانیه" : "—"),
@@ -2474,7 +2558,7 @@ async function runFuturesSignalScan(env, options = {}) {
     const finishedAt = new Date().toISOString();
     const diagnostics = {
       startedAt: new Date(started).toISOString(), finishedAt, durationMs: Date.now() - started,
-      universeCount: 0, analyzedCount: 0, notAnalyzedCount: 0, analysisErrorCount: 0,
+      universeCount: 0, analyzedCount: 0, notAnalyzedCount: 0, analysisErrorCount: 0, unregisteredCandidateCount: 0, uncertainOutboxCount: null,
       rejectedCount: 0, eligibleCount: 0, signalCount: 0, registeredCount: 0,
       delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
       deliveryError: null,
@@ -2528,14 +2612,25 @@ async function runFuturesSignalScan(env, options = {}) {
       status: "PENDING"
     }));
 
-  const signals = await registerPendingFuturesSignals(env, generatedSignals);
+  let signals = [];
+  let registrationError = null;
+  if (!options.analysisOnly && generatedSignals.length) {
+    try {
+      signals = await registerPendingFuturesSignals(env, generatedSignals);
+    } catch (error) {
+      registrationError = String(error?.message || error).slice(0, 700);
+      console.error("Pending futures signal registration failed:", String(error?.stack || error?.message || error));
+    }
+  }
   let delivery = { newSignals: signals.length, recipients: 0, delivered: 0, failed: 0 };
-  let deliveryError = null;
-  try {
-    delivery = await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
-  } catch (error) {
-    deliveryError = String(error?.message || error).slice(0, 700);
-    console.error("Immediate futures alert dispatch failed:", String(error?.stack || error?.message || error));
+  let deliveryError = registrationError;
+  if (signals.length) {
+    try {
+      delivery = await deliverFuturesSignalAlerts(env, signals, options.excludeChatId ?? null);
+    } catch (error) {
+      deliveryError = String(error?.message || error).slice(0, 700);
+      console.error("Immediate futures alert dispatch failed:", String(error?.stack || error?.message || error));
+    }
   }
 
   const analyzedCount = analyzed.filter(Boolean).length;
@@ -2555,12 +2650,14 @@ async function runFuturesSignalScan(env, options = {}) {
     standardEligibleCount: eligibleCandidates.filter(item => item.riskLevel !== "HIGH_RISK").length,
     highRiskEligibleCount: eligibleCandidates.filter(item => item.riskLevel === "HIGH_RISK").length,
     signalCount: signals.length,
+    unregisteredCandidateCount: options.analysisOnly || registrationError ? generatedSignals.length : 0,
+    uncertainOutboxCount: null,
     standardSignalCount: signals.filter(item => item.riskLevel !== "HIGH_RISK").length,
     highRiskSignalCount: signals.filter(item => item.riskLevel === "HIGH_RISK").length,
     registeredCount: signals.length,
     delivery, deliveryError,
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
-      .sort((a, b) => b.count - a.count).slice(0, 6)
+      .sort((a, b) => b.count - a.count).slice(0, 8)
   };
   console.log("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
   const report =

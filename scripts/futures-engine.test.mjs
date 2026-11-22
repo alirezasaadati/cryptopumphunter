@@ -87,6 +87,58 @@ test("admin signal listing returns recent unexpired signals from Durable Object 
   assert.equal(writes.length,0);
 });
 
+test("Durable Object supplies the 60-minute expiry when a new signal omits expiresAt",async()=>{
+  const state=new Map([["active-futures-pending",[]],["active-futures-trades",[]]]);
+  const ctx={storage:{get:async key=>state.get(key),put:async(key,value)=>state.set(key,value),delete:async key=>state.delete(key)}};
+  const coordinator=new SignalDeliveryCoordinator(ctx,{SIGNAL_DELIVERY_SECRET:"test-secret"});
+  const now=Date.now();
+  const signal={id:"missing-expiry",symbol:"PF_TESTUSD",side:"LONG",entry:100,stop:98,target1:103,target2:105,target3:107,score:68,createdAt:now};
+  const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/register",{
+    method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":"test-secret"},
+    body:JSON.stringify({signals:[signal]})
+  }));
+  const result=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(result.signals.length,1);
+  assert.ok(result.signals[0].expiresAt>now);
+  assert.ok(result.signals[0].expiresAt<=now+61*60*1000);
+  const list=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/list",{
+    method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":"test-secret"},body:"{}"
+  }));
+  assert.deepEqual((await list.json()).signals.map(x=>x.id),["missing-expiry"]);
+});
+
+test("open trade older than four hours does not block a fresh signal for the same symbol and side",async()=>{
+  const oldTrade={id:"old-trade",signalId:"old-signal",symbol:"PF_TESTUSD",side:"LONG",status:"OPEN",
+    createdAt:new Date(Date.now()-5*60*60*1000).toISOString()};
+  const state=new Map([["active-futures-pending",[]],["active-futures-trades",[oldTrade]]]);
+  const ctx={storage:{get:async key=>state.get(key),put:async(key,value)=>state.set(key,value),delete:async key=>state.delete(key)}};
+  const coordinator=new SignalDeliveryCoordinator(ctx,{SIGNAL_DELIVERY_SECRET:"test-secret"});
+  const now=Date.now();
+  const signal={id:"fresh-after-old-trade",symbol:"PF_TESTUSD",side:"LONG",entry:100,stop:98,target1:103,target2:105,target3:107,score:68,createdAt:now,expiresAt:now+3600000};
+  const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/register",{
+    method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":"test-secret"},
+    body:JSON.stringify({signals:[signal]})
+  }));
+  const result=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(result.signals.length,1);
+  assert.equal(result.signals[0].id,signal.id);
+});
+
+test("flat 1h and 4h conditions expose indicator-level rejection diagnostics",()=>{
+  const {ticker,oneHour}=makeSetup("LONG");
+  const flat=Array.from({length:120},(_,i)=>({
+    time:Date.now()-(120-i)*60*60*1000,open:100,high:100.1,low:99.9,close:100,volume:100
+  }));
+  const result=analyzeFuturesSymbol({...ticker,last:100},flat,flat,[]);
+  assert.equal(result.eligible,undefined);
+  assert.equal(result.entryDiagnostics.stage,"trend_rsi");
+  assert.equal(result.entryDiagnostics.up1h,false);
+  assert.equal(result.entryDiagnostics.up4h,false);
+  assert.match(result.rejected,/روند/);
+});
+
 test("admin signal listing endpoint rejects requests without the Durable Object secret",async()=>{
   const coordinator=new SignalDeliveryCoordinator({storage:{get:async()=>[]}}, {SIGNAL_DELIVERY_SECRET:"test-secret"});
   const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/list",{
@@ -99,19 +151,19 @@ test("admin signal listing endpoint rejects requests without the Durable Object 
 
 test("v3.8.2 configuration is preserved",()=>{
   assert.equal("MAX_SYMBOLS" in FUTURES_CONFIG,false);
-  assert.equal(FUTURES_CONFIG.CONCURRENCY,3);
+  assert.equal(FUTURES_CONFIG.CONCURRENCY,5);
   assert.equal(FUTURES_CONFIG.MAX_SCAN_DURATION_MS,180000);
   assert.equal(FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS,45000);
   assert.equal(FUTURES_CONFIG.REQUEST_TIMEOUT_MS,12000);
   assert.equal(FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN,20);
   assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME,5_000_000);
   assert.equal(FUTURES_CONFIG.MIN_CANDLES,60);
-  assert.equal(FUTURES_CONFIG.MIN_SCORE,72);
+  assert.equal(FUTURES_CONFIG.MIN_SCORE,65);
   assert.equal(FUTURES_CONFIG.INTERVAL,"1h");
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
   assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
-  assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.35);
-  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,3.0);
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.7);
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,4.0);
   assert.equal("ENTRY_INTERVAL" in FUTURES_CONFIG,false);
 });
 
@@ -162,7 +214,7 @@ test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.side,"LONG");
   assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.ok(result.score>=72);
+  assert.ok(result.score>=65);
   assert.ok(result.stop<result.entry);
   assert.ok(result.target1>result.entry);
   assert.ok(result.target2>result.target1);
@@ -183,7 +235,7 @@ test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
 });
 
 
-test("separate high-risk LONG path admits a relaxed 1h setup with neutral 4h context",()=>{
+test("standard LONG path accepts aligned 1h with neutral 4h context",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({
     time:Date.now()-(120-i)*4*60*60*1000,
@@ -191,9 +243,9 @@ test("separate high-risk LONG path admits a relaxed 1h setup with neutral 4h con
   }));
   const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
   assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.highRiskEligible,true);
-  assert.equal(result.riskLevel,"HIGH_RISK");
-  assert.ok(result.score>=58);
+  assert.equal(result.highRiskEligible,false);
+  assert.equal(result.riskLevel,"STANDARD");
+  assert.ok(result.score>=FUTURES_CONFIG.MIN_SCORE);
 });
 
 test("separate high-risk SHORT path can pass with opposing 4h only when 15m momentum confirms",()=>{
@@ -282,7 +334,7 @@ test("late-entry filter rejects an overextended price versus hourly EMA20",()=>{
   const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
   const atr=calculateAtr(oneHour,14);
   const result=evaluateFuturesEntryFilters({
-    ticker:{...ticker,last:ema20+atr*4},candles1h:oneHour,candles15m:fifteenMinute,
+    ticker:{...ticker,last:ema20+atr*4.5},candles1h:oneHour,candles15m:fifteenMinute,
     side:"LONG",referencePrice:ema20+atr*4,ema20,atr
   });
   assert.equal(result.ok,false);
