@@ -1041,6 +1041,7 @@ async function handleCallback(query, env) {
       else if(action.startsWith("outbox:detail:")) await showOutboxSignalDetail(env,chatId,action.slice(14));
       else if(action.startsWith("outbox:confirm:")) await reconcileSignalOutbox(env,chatId,action.slice(15),"confirm_delivered");
       else if(action.startsWith("outbox:retry:")) await reconcileSignalOutbox(env,chatId,action.slice(13),"retry");
+      else if(action.startsWith("outbox:archive:")) await reconcileSignalOutbox(env,chatId,action.slice(14),"retry_archive");
     }
     return;
   }
@@ -1971,12 +1972,24 @@ function getNewClosedFuturesCandles(candles,lastCheckedCandleTime=0){return(Arra
 function ensureTradeTrackingCheckpoint(trade,now=Date.now()){if(!Number.isFinite(Number(trade?.lastCheckedCandleTime))||Number(trade.lastCheckedCandleTime)<=0){trade.lastCheckedCandleTime=Math.floor(now/60000)*60000;trade.trackingMode=trade.trackingMode||"LEGACY_CONTINUED";return true}return false}
 function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),targets=[Number(signal?.target1),Number(signal?.target2),Number(signal?.target3)];if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,...targets].every(Number.isFinite)||![entry,stop,...targets].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<targets[0]&&targets[0]<targets[1]&&targets[1]<targets[2]:stop>entry&&entry>targets[0]&&targets[0]>targets[1]&&targets[1]>targets[2]}
 function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
+async function persistSignalOutboxMirror(env,chatId,signalId,record,label){
+  if(!env.APP_KV)return false;
+  try{
+    await env.APP_KV.put(signalOutboxKey(chatId,signalId),JSON.stringify(record));
+    return true;
+  }catch(error){
+    console.error(label,String(error?.message||error));
+    return false;
+  }
+}
+
 async function sendAndArchiveFuturesSignalUnlocked(env,ctx,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
   if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
   if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
   const key="signal-outbox:"+signalOutboxKey(chatId,signal.id);
   let record=await ctx.storage.get(key);
-  if(record?.status==="SENT"||record?.status==="ARCHIVED")return{delivered:true,duplicate:true};
+  if(record?.status==="SENT"||record?.status==="ARCHIVE_PENDING")return{delivered:true,duplicate:true,archivePending:true};
+  if(record?.status==="ARCHIVED")return{delivered:true,duplicate:true,archivePending:false};
   if(record?.status==="SENDING"||record?.status==="UNCERTAIN")throw new Error("Signal delivery is uncertain and requires manual reconciliation; automatic resend is blocked.");
   record={version:2,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,signal,messageText,replyMarkup,parseMode,status:"SENDING",createdAt:record?.createdAt||new Date().toISOString(),attemptedAt:new Date().toISOString()};
   await ctx.storage.put(key,record);
@@ -2008,18 +2021,19 @@ async function sendAndArchiveFuturesSignalUnlocked(env,ctx,chatId,signal,message
     }
     throw deliveryError;
   }
-  record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString()};
+  record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
   await ctx.storage.put(key,record);
+  await persistSignalOutboxMirror(env,chatId,signal.id,record,"SIGNAL_OUTBOX_SENT_MIRROR_FAILED");
   try {
     const archiveResult=await publishSignalToArchive(env,signal,messageText,parseMode);
-    record={...record,archivePublished:archiveResult?.published!==false,archiveMessageId:archiveResult?.messageId??null};
+    record={...record,status:"ARCHIVED",archivePublished:archiveResult?.published!==false,archiveMessageId:archiveResult?.messageId??null,archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
   } catch(error) {
-    record={...record,archivePublished:false,archivePublishError:String(error?.message||error).slice(0,500)};
-    console.error("Archive failed; private signal delivery remains successful:",signal.symbol,String(error?.message||error));
+    record={...record,status:"ARCHIVE_PENDING",archivePublished:false,archivePublishError:String(error?.message||error).slice(0,500),updatedAt:new Date().toISOString()};
+    console.error("Archive failed; private signal delivery remains successful and archive retry is available:",signal.symbol,String(error?.message||error));
   }
-  record={...record,status:"ARCHIVED",archivedAt:new Date().toISOString()};
   await ctx.storage.put(key,record);
-  return{delivered:true,duplicate:false};
+  await persistSignalOutboxMirror(env,chatId,signal.id,record,"SIGNAL_OUTBOX_FINAL_MIRROR_FAILED");
+  return{delivered:true,duplicate:false,archivePending:record.status==="ARCHIVE_PENDING"};
 }
 
 async function publishSignalToArchive(env,signal,messageText,parseMode="HTML") {
@@ -2223,6 +2237,15 @@ export class SignalDeliveryCoordinator {
           await this.env.APP_KV.put(key,JSON.stringify(confirmed));
           return Response.json({ok:true,result:{confirmed:true}});
         }
+              if(payload.action==="retry_archive"){
+          if(!["SENT","ARCHIVE_PENDING"].includes(record.status))throw new Error("Only privately delivered signals awaiting archive can be retried.");
+          if(!record.signal||typeof record.messageText!=="string")throw new Error("This outbox record has no archive payload.");
+          const archiveResult=await publishSignalToArchive(this.env,record.signal,record.messageText,record.parseMode??"HTML");
+          const archived={...record,status:"ARCHIVED",archivePublished:archiveResult?.published!==false,archiveMessageId:archiveResult?.messageId??null,archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),archiveRetryAt:new Date().toISOString()};
+          await this.ctx.storage.put("signal-outbox:"+key,archived);
+          await this.env.APP_KV.put(key,JSON.stringify(archived));
+          return Response.json({ok:true,result:{archived:true,archiveResult}});
+        }
         if(payload.action==="retry"){
           if(!["SENDING","UNCERTAIN"].includes(record.status))throw new Error("Only SENDING or UNCERTAIN records can be retried.");
           if(!record.signal||typeof record.messageText!=="string")throw new Error("This older outbox record has no retry payload.");
@@ -2326,7 +2349,7 @@ async function showUncertainSignalOutbox(env,ownerId){
   if(!isOwner(ownerId,env)||!env.APP_KV)return;
   const page=await env.APP_KV.list({prefix:"futures:signal-outbox:v1:",limit:1000});
   const records=[];
-  for(const item of page.keys||[]){const record=await env.APP_KV.get(item.name,"json");if(record&&["SENDING","UNCERTAIN","SENT"].includes(record.status))records.push(record);}
+  for(const item of page.keys||[]){const record=await env.APP_KV.get(item.name,"json");if(record&&["SENDING","UNCERTAIN","SENT","ARCHIVE_PENDING"].includes(record.status))records.push(record);}
   records.sort((a,b)=>String(b.updatedAt||b.createdAt||"").localeCompare(String(a.updatedAt||a.createdAt||"")));
   const keyboard=[];
   for(const record of records.slice(0,15)){
@@ -2347,8 +2370,9 @@ async function showOutboxSignalDetail(env,ownerId,token){
   if(!record){await sendMessage(env,ownerId,"رکورد ارسال پیدا نشد.");return;}
   const hasPayload=Boolean(record.signal&&typeof record.messageText==="string");
   const keyboard=[];
-  if(["SENDING","UNCERTAIN","SENT"].includes(record.status))keyboard.push([{text:"✅ پیام را در تلگرام دیدم؛ ثبت‌شده محسوب شود",callback_data:"outbox:confirm:"+token}]);
+  if(["SENDING","UNCERTAIN"].includes(record.status))keyboard.push([{text:"✅ پیام را در تلگرام دیدم؛ ثبت‌شده محسوب شود",callback_data:"outbox:confirm:"+token}]);
   if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ پیام را ندیدم؛ تلاش مجدد (احتمال تکرار)",callback_data:"outbox:retry:"+token}]);
+  if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 تلاش مجدد انتشار در آرشیو (پس از بررسی کانال)",callback_data:"outbox:archive:"+token}]);
   keyboard.push([{text:"⬅️ بازگشت",callback_data:"outbox:review"}]);
   const body=["🔍 جزئیات ارسال","━━━━━━━━━━━━━━━━━━","نماد: "+(record.symbol||"—"),"شناسه گفتگو: "+record.chatId,"شناسه سیگنال: "+record.signalId,"وضعیت: "+record.status,"آخرین به‌روزرسانی: "+(record.updatedAt||"—"),"","اگر پیام در تلگرام دیده می‌شود، گزینه ثبت ارسال‌شده را بزن.","تلاش مجدد فقط وقتی مناسب است که پیام را بررسی کرده باشی؛ در وضعیت نامشخص احتمال ارسال تکراری وجود دارد."];
   if(!hasPayload)body.push("⚠️ این رکورد قدیمی است و اطلاعات کافی برای بازیابی خودکار ندارد.");
@@ -2365,7 +2389,7 @@ async function reconcileSignalOutbox(env,ownerId,token,action){
    const response=await stub.fetch("https://signal-delivery.internal/reconcile",{method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},body:JSON.stringify({...selection,action})});
   let payload={};try{payload=await response.json()}catch{}
   if(!response.ok||!payload.ok){await sendMessage(env,ownerId,"❌ تعیین تکلیف انجام نشد: "+String(payload.error||"خطای نامشخص"));return;}
-  await sendMessage(env,ownerId,action==="confirm_delivered"?"✅ سیگنال به‌عنوان ارسال‌شده در آرشیو ثبت شد.":"🔁 تلاش مجدد انجام شد و نتیجه در آرشیو ثبت شد.");
+  await sendMessage(env,ownerId,action==="confirm_delivered"?"✅ سیگنال به‌عنوان ارسال‌شده ثبت شد.":action==="retry_archive"?"📚 انتشار سیگنال در آرشیو دوباره انجام شد.":"🔁 تلاش مجدد ارسال انجام شد.");
   await showUncertainSignalOutbox(env,ownerId);
 }
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت و پیگیری نتایج معاملات در این نسخه غیرفعال است.")}
