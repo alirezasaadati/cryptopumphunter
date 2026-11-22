@@ -70,7 +70,7 @@ test("expired candidates are ignored and do not create orphaned tracking trades"
 });
 
 test("same symbol and side can signal again while a prior tracked trade remains OPEN", async () => {
-  const { post } = createCoordinator();
+  const { post, data } = createCoordinator();
   const first = await post("/signals/register", { signals: [signal("sig-first")] });
   assert.equal(first.body.signals.length, 1);
   // Simulate the first pending alert reaching its TTL; the tracked OPEN
