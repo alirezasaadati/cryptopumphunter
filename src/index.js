@@ -2326,6 +2326,16 @@ async function runFuturesEntryDiagnostics() {
           stage: result.diagnosticStage || (result.eligible ? "ELIGIBLE" : "UNKNOWN"),
           reason: result.rejected || null,
           candleCount: candles.length,
+          lastCandleTime: candles.length ? new Date(candles[candles.length - 1].time).toISOString() : null,
+          metrics: result.entryConditionDiagnostics ? {
+            close: result.entryConditionDiagnostics.close,
+            ema20: result.entryConditionDiagnostics.ema20,
+            ema50: result.entryConditionDiagnostics.ema50,
+            rsi14: result.entryConditionDiagnostics.rsi14,
+            distanceToEma20Pct: result.entryConditionDiagnostics.distanceToEma20Pct,
+            atrPct: result.entryConditionDiagnostics.atrPct,
+            bodyToRangeRatio: result.entryConditionDiagnostics.rallyFade?.bodyToRangeRatio ?? null
+          } : null,
           conditions: result.entryConditionDiagnostics || null,
           details: result.diagnosticDetails || null
         };
@@ -2335,6 +2345,8 @@ async function runFuturesEntryDiagnostics() {
           stage: "DATA_OR_ANALYSIS_ERROR",
           reason: String(error?.message || error).slice(0, 220),
           candleCount: null,
+          lastCandleTime: null,
+          metrics: null,
           conditions: null
         };
       }
@@ -2380,10 +2392,21 @@ function formatFuturesEntryDiagnostics(d) {
     lines.push("", engine === "trendShort" ? "شروط TREND_SHORT (قبول/رد):" : "شروط RALLY_FADE (قبول/رد):");
     for (const [name, counts] of Object.entries(flags || {})) lines.push("• " + name + ": " + counts.passed + "/" + counts.failed);
   }
-  lines.push("", "نمونه نمادها:");
+  lines.push("", "جزئیات عددی نمادها:");
   for (const item of (d.samples || []).slice(0, 15)) {
-    lines.push("• " + item.symbol + " | " + item.stage + " | کندل: " + (item.candleCount ?? "—") +
-      (item.reason ? " | " + item.reason : ""));
+    const m = item.metrics;
+    lines.push("• " + item.symbol + " | " + item.stage + " | کندل: " + (item.candleCount ?? "—"));
+    if (m) {
+      lines.push("  RSI14: " + Number(m.rsi14).toFixed(2) +
+        " | فاصله EMA20: " + Number(m.distanceToEma20Pct).toFixed(3) + "%" +
+        " | ATR: " + Number(m.atrPct).toFixed(3) + "%");
+      lines.push("  Close: " + formatPrice(m.close) +
+        " | EMA20: " + formatPrice(m.ema20) +
+        " | EMA50: " + formatPrice(m.ema50) +
+        " | بدنه/دامنه: " + (Number.isFinite(Number(m.bodyToRangeRatio)) ? (Number(m.bodyToRangeRatio) * 100).toFixed(1) + "%" : "—"));
+    }
+    if (item.lastCandleTime) lines.push("  آخرین کندل بسته‌شده: " + item.lastCandleTime);
+    if (item.reason) lines.push("  علت: " + item.reason);
   }
   lines.push("", "⛔ این گزارش فقط‌خواندنی است؛ هیچ سیگنالی ثبت، ارسال یا معامله‌ای اجرا نشده است.");
   return lines.join("\n");
