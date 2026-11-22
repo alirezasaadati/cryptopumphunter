@@ -2233,7 +2233,7 @@ async function runAutomaticFuturesAlertScan(env) {
       diagnostics.signalCount ? "سیگنال صادر شد؛ این پیام گزارش خطا/وضعیت نیست." :
         "در این نوبت سیگنالی واجد شرایط پیدا نشد."
     ].filter(Boolean).join("\n");
-    if (diagnostics.analysisErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError) {
+    if (diagnostics.analysisErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError) {
       await notifyOwnerScanDiagnostics(env, noSignalMessage,
         "futures:scan-diagnostic:issue", 15 * 60);
     } else if ((diagnostics.signalCount || 0) === 0) {
