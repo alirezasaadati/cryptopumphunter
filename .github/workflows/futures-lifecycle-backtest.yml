@@ -2,7 +2,7 @@ name: Experimental futures lifecycle backtest
 on:
   workflow_dispatch:
   push:
-    branches: [feature/leveraged-profit-close-lifecycle, experiment/ema20-limit-entry-backtest]
+    branches: [feature/leveraged-profit-close-lifecycle, experiment/ema20-limit-entry-backtest, experiment/long-atr2-tp13-margin100]
     paths:
       - "scripts/backtest-futures-lifecycle.mjs"
       - ".github/workflows/futures-lifecycle-backtest.yml"
