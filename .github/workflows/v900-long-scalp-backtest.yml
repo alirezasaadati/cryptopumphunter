@@ -1,0 +1,25 @@
+name: v9.0.0 LONG 15m scalp historical backtest
+on:
+  push:
+    branches: [backtest-v900-long-scalp-20261122]
+    paths:
+      - "scripts/backtest-v900-long-scalp.mjs"
+      - ".github/workflows/v900-long-scalp-backtest.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run historical backtests
+        run: node scripts/backtest-v900-long-scalp.mjs
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v900-long-scalp-backtest
+          path: artifacts/
+          if-no-files-found: warn
