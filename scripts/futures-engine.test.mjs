@@ -194,7 +194,7 @@ test("rejected entry setups expose per-condition diagnostics without changing el
   assert.equal(typeof result.entryConditionDiagnostics.rsi14,"number");
   assert.equal(typeof result.entryConditionDiagnostics.distanceToEma20Pct,"number");
   assert.deepEqual(Object.keys(result.entryConditionDiagnostics.trendShort),[
-    "closeBelowEma50","ema20BelowEma50","rsiBelow40","atLeastHalfPercentBelowEma20"
+    "closeBelowEma50","ema20BelowEma50","rsiBelow45","atLeastHalfPercentBelowEma20"
   ]);
   assert.deepEqual(Object.keys(result.entryConditionDiagnostics.rallyFade),[
     "closeAboveEma50","rsiAbove75","redCandle",
