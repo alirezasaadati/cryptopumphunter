@@ -61,6 +61,15 @@ async function fetchHistoricalCandles(symbol, resolution, fromMs, toMs) {
   return [...byTime.values()].sort((a,b)=>a.time-b.time);
 }
 
+function historicalQuoteVolume(candles, index) {
+  const start = Math.max(0, index - 23);
+  let quoteVolume = 0;
+  for (let i = start; i <= index; i++) {
+    quoteVolume += Number(candles[i].volume) * Number(candles[i].close);
+  }
+  return quoteVolume;
+}
+
 function historicalChange(candles, index) {
   const old = candles[index - 24], now = candles[index];
   return !old || old.close <= 0 ? 0 : ((now.close / old.close) - 1) * 100;
@@ -141,7 +150,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
 
     const nextBar = oneHour[i+1];
     const tickerAtSignal = {
-      symbol: ticker.symbol, last: nextBar.open, quoteVolume: Number(ticker.volumeQuote)||0,
+      symbol: ticker.symbol, last: nextBar.open, quoteVolume: historicalQuoteVolume(oneHour,i),
       priceChangePercent: historicalChange(oneHour,i), premium: { lastFundingRate: null }
     };
     let candidate;
@@ -222,7 +231,7 @@ async function main() {
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
       lock:"independent symbol+side lock until close; opposite side may overlap",
-      universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
+      universe:"top 10 current Kraken perpetuals by current quote volume; historical 24h quote-volume filter reconstructed from prior 24 closed 1h candles; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
     metrics,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
     bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
