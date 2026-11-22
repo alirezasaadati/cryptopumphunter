@@ -1342,7 +1342,6 @@ function rsi(values, period = 14) {
   const result = 100 - 100 / (1 + avgGain / avgLoss);
   return Number.isFinite(result) ? result : null;
 }
-}
 
 function average(values) {
   if (!values.length) return 0;
@@ -1373,7 +1372,6 @@ const FUTURES_CONFIG = {
   MAX_ATR_PCT: 2.0,
   INTERVAL: "1h",
   SIGNAL_TTL_MINUTES: 60
-};
 };
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
