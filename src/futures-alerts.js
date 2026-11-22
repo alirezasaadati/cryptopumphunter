@@ -32,7 +32,7 @@ export function formatFuturesSignalAlert(signal, index = 1) {
   const side = signal?.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
   const label = signal?.riskLevel === "HIGH_RISK"
     ? "⚠️ سیگنال پر ریسک"
-    : "🟢 سیگنال معتبر";
+    : "⚪ سیگنال معتبر";
   const score = Number(signal?.score);
   const scoreLine = Number.isFinite(score) ? `⭐ امتیاز سیگنال: <b>${Math.round(score)}/100</b>\n\n` : "";
   return `${label}\n\n${scoreLine}` +

@@ -56,7 +56,7 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   const signal = {...base, symbol:"PF_BTCUSD", entry: 65000, stop: 66000, target1: 63500, target2: 62800, target3: 62000};
   const short = formatFuturesSignalAlert(signal, 1);
   const long = formatFuturesSignalAlert({...signal, symbol:"PF_ETHUSD", side:"LONG"}, 2);
-  assert.match(short, /^🟢 سیگنال معتبر\n\n/);
+  assert.match(short, /^⚪ سیگنال معتبر\n\n/);
   assert.match(short, /نماد: <b>BTC<\/b>/);
   assert.match(short, /جهت معامله: 🔴 شورت \/ Short/);
   assert.match(short, /جهت معامله: 🔴 شورت \/ Short\n\nقیمت ورود:/);
@@ -64,11 +64,11 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   assert.ok(short.includes("🎯 تارگت اول (1.5R): <b>63,500.00</b>\n\n🎯 تارگت دوم (2.2R): <b>62,800.00</b>\n\n🎯 تارگت سوم (3R): <b>62,000.00</b>\n\n⛔ حد ضرر: <b>66,000.00</b>"));
   assert.match(short, /تارگت دوم \(2\.2R\)/);
   assert.match(short, /تارگت سوم \(3R\)/);
-  assert.match(long, /^🟢 سیگنال معتبر/);
+  assert.match(long, /^⚪ سیگنال معتبر/);
   assert.match(long, /نماد: <b>ETH<\/b>/);
   assert.match(long, /جهت معامله: 🟢 لانگ \/ Long/);
   const formerlyRisky = formatFuturesSignalAlert({...signal, tier:"EXPERIMENTAL"}, 3);
-  assert.match(formerlyRisky, /^🟢 سیگنال معتبر/);
+  assert.match(formerlyRisky, /^⚪ سیگنال معتبر/);
   assert.match(formerlyRisky, /⛔ حد ضرر:/);
   assert.doesNotMatch(short, /PF_|BTCUSD/);
   const krakenXbt = formatFuturesSignalAlert({...signal, symbol:"PF_XBTUSD"}, 4);
