@@ -73,6 +73,10 @@ test("same symbol and side can signal again while a prior tracked trade remains 
   const { post } = createCoordinator();
   const first = await post("/signals/register", { signals: [signal("sig-first")] });
   assert.equal(first.body.signals.length, 1);
+  // Simulate the first pending alert reaching its TTL; the tracked OPEN
+  // evaluation record must not continue suppressing this symbol-side forever.
+  const pending = data.get("active-futures-pending") || [];
+  data.set("active-futures-pending", pending.map(item => ({ ...item, expiresAt: Date.now() - 1 })));
   const second = await post("/signals/register", { signals: [signal("sig-second")] });
   assert.equal(second.body.signals.length, 1);
   assert.equal(second.body.trackedTrades, 1);
@@ -103,7 +107,8 @@ test("legacy OPEN trade records, including invalid timestamps, do not block new 
 test("signal and trade registration rolls back atomically when either write fails", async () => {
   const { post, data } = createCoordinator({ failTransactionOnPutKey: "active-futures-pending" });
   const result = await post("/signals/register", { signals: [signal("sig-atomic")] });
-  assert.equal(result.status, 500);
+  assert.equal(result.status, 409);
+  assert.match(result.body.error, /simulated transaction write failure/);
   assert.equal(data.has("active-futures-trades"), false);
   assert.equal(data.has("active-futures-pending"), false);
 });
