@@ -1398,7 +1398,7 @@ const FUTURES_CONFIG = {
   MAX_RECLAIM_EXTENSION_ATR: 4.0,
   // Separate experimental path. These values never affect the standard setup.
   HIGH_RISK_MIN_SCORE: 40,
-  HIGH_RISK_MIN_VOLUME_RATIO: 0,
+  HIGH_RISK_MIN_VOLUME_RATIO: 0.5,
   HIGH_RISK_LONG_RSI_MIN: 32,
   HIGH_RISK_LONG_RSI_MAX: 82,
   HIGH_RISK_SHORT_RSI_MIN: 18,
@@ -1780,6 +1780,21 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
       entryDiagnostics: entryFilters
     };
   }
+  // Standard entries retain their existing 0.75x volume gate. Only candidates
+  // that need the HIGH_RISK fallback use this separate relative-volume floor.
+  if (!standardEntryPassed && volumeRatio < FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO) {
+    return {
+      symbol: ticker.symbol,
+      side,
+      score: Math.max(0, Math.min(100, Math.round(score))),
+      rejected: "نسبت حجم کندل ۱ساعته آخر به میانگین ۲۰ کندل قبلی کمتر از حداقل مسیر پرریسک (0.5x) است",
+      entryDiagnostics: {
+        ...entryFilters,
+        volumeRatio,
+        minimumHighRiskVolumeRatio: FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO
+      }
+    };
+  }
   reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
   reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
   if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
@@ -1809,7 +1824,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = standardEntryPassed;
-  const highRiskEligible = !standardEntryPassed && score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE;
+  const highRiskEligible = !standardEntryPassed && score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE &&
+    volumeRatio >= FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
   if (highRiskEligible) reasons.push("این سیگنال فقط از مسیر مستقل منعطف عبور کرده و پرریسک طبقه‌بندی شده است");
   return {
     symbol: ticker.symbol,
