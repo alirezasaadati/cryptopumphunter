@@ -1,0 +1,36 @@
+name: Short timeframe confirmation historical backtest
+on:
+  push:
+    branches: [short-tf-confirmation-engine]
+    paths:
+      - "scripts/short-tf-confirmation-backtest.mjs"
+      - "src/short-tf-confirmation.js"
+      - ".github/workflows/short-tf-confirmation-backtest.yml"
+  workflow_dispatch:
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check backtest syntax
+        run: node --check scripts/short-tf-confirmation-backtest.mjs
+      - name: Run Kraken historical comparison
+        env:
+          BACKTEST_START: "2026-09-20T00:00:00Z"
+          BACKTEST_END: "2026-10-20T00:00:00Z"
+          BACKTEST_SYMBOLS: "6"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+        run: node scripts/short-tf-confirmation-backtest.mjs
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: short-tf-confirmation-backtest
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
