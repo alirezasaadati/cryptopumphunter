@@ -69,6 +69,25 @@ test("expired candidates are ignored and do not create orphaned tracking trades"
   assert.equal(next.body.trackedTrades, 1);
 });
 
+test("same symbol and side can signal again while a prior tracked trade remains OPEN", async () => {
+  const { post } = createCoordinator();
+  const first = await post("/signals/register", { signals: [signal("sig-first")] });
+  assert.equal(first.body.signals.length, 1);
+  const second = await post("/signals/register", { signals: [signal("sig-second")] });
+  assert.equal(second.body.signals.length, 1);
+  assert.equal(second.body.trackedTrades, 1);
+  assert.equal((await post("/trades/list")).body.trades.length, 2);
+});
+
+test("unexpired pending signals still suppress duplicate symbol-side registrations", async () => {
+  const { post } = createCoordinator();
+  await post("/signals/register", { signals: [signal("sig-pending")] });
+  const duplicate = await post("/signals/register", { signals: [signal("sig-duplicate")] });
+  assert.equal(duplicate.body.signals.length, 0);
+  assert.equal(duplicate.body.trackedTrades, 0);
+  assert.equal((await post("/trades/list")).body.trades.length, 1);
+});
+
 test("legacy OPEN trade records, including invalid timestamps, do not block new signals", async () => {
   const { post, data } = createCoordinator();
   data.set("active-futures-trades", [{
