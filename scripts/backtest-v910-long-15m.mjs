@@ -141,9 +141,9 @@ function stats(trades) {
     signals:trades.length,closed:closed.length,targets:closed.filter(t=>t.outcome==="TARGET_1_5R").length,
     stops:closed.filter(t=>t.outcome==="STOP").length,openAtEnd:trades.filter(t=>t.outcome==="OPEN_AT_PERIOD_END").length,
     wins:wins.length,losses:losses.length,winRatePct:closed.length?wins.length/closed.length*100:0,
-    netR:trades.reduce((s,t)=>s+(t.netR||0),0),closedNetR:closed.reduce((s,t)=>s+t.netR,0),
+    netR:closed.reduce((s,t)=>s+t.netR,0),closedNetR:closed.reduce((s,t)=>s+t.netR,0),
     expectancyR:closed.length?closed.reduce((s,t)=>s+t.netR,0)/closed.length:0,
-    profitFactor:gl?gp/gl:(gp>0?null:0),maxDrawdownR:maxDrawdownR(trades)
+    profitFactor:gl?gp/gl:(gp>0?null:0),maxDrawdownR:maxDrawdownR([...closed].sort((a,b)=>a.exitTime-b.exitTime))
   };
 }
 
@@ -181,10 +181,10 @@ async function testRegime(regime) {
   }
   const all=reports.flatMap(r=>r.trades);
   const closed=all.filter(t=>t.outcome==="STOP"||t.outcome==="TARGET_1_5R");
-  const btc=reports.find(r=>r.symbol==="PF_XBTUSD");
-  const btcFirst=btc?.trades[0];
-  const btcLast=btc?.trades.at(-1);
-  const btcChange=btcFirst&&btcLast?((btcLast.entry/btcFirst.entry)-1)*100:null;
+  const btcCandles = await fetchCandles("PF_XBTUSD", warm, to);
+  const btcStart = btcCandles.find(c=>c.time>=from);
+  const btcEnd = btcCandles.filter(c=>c.time<to).at(-1);
+  const btcChange = btcStart&&btcEnd ? ((btcEnd.close/btcStart.open)-1)*100 : null;
   return {
     regime:regime.name,label:regime.label,period:{from:regime.from,to:regime.to},
     btcPriceChangePct:btcChange,requestedSymbols:SYMBOLS.length,testedSymbols:reports.length,failures,
