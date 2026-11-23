@@ -145,16 +145,20 @@ async function main(){
     }catch(error){loaded.push({ticker,error:String(error.message||error)});}
   }
   const windows={};
-  for(const days of [90,180]){
-    const results=loaded.map(d=>d.error?{symbol:d.ticker.symbol,error:d.error}:runSymbol(d,days,endMs));
-    const trades=results.flatMap(x=>x.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
-    const group=(key)=>Object.fromEntries([...new Set(trades.map(t=>t[key]))].map(v=>[v,metrics(trades.filter(t=>t[key]===v))]));
-    windows[days+"d"]={period:{from:new Date(endMs-days*DAY).toISOString(),to:new Date(endMs).toISOString(),days},
-      symbolsRequested:SYMBOL_LIMIT,symbolsLoaded:loaded.filter(d=>!d.error).length,
-      symbols:results.map(({trades,...rest})=>rest),overall:metrics(trades),
-      bySide:group("side"),bySetup:group("setup"),byChannelType:group("channelType"),trades};
+  for(const mode of ["BASELINE","A","B"]){
+    windows[mode]={};
+    for(const days of [90,180]){
+      const results=loaded.map(d=>d.error?{symbol:d.ticker.symbol,error:d.error}:runSymbol(d,days,endMs,mode));
+      const trades=results.flatMap(x=>x.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
+      const group=(key)=>Object.fromEntries([...new Set(trades.map(t=>t[key]))].map(v=>[v,metrics(trades.filter(t=>t[key]===v))]));
+      windows[mode][days+"d"]={period:{from:new Date(endMs-days*DAY).toISOString(),to:new Date(endMs).toISOString(),days},
+        symbolsRequested:SYMBOL_LIMIT,symbolsLoaded:loaded.filter(d=>!d.error).length,
+        symbols:results.map(({trades,...rest})=>rest),overall:metrics(trades),
+        bySide:group("side"),bySetup:group("setup"),byChannelType:group("channelType"),
+        byDailyContext:group("dailyContext"),byPositionMultiplier:group("positionMultiplier"),trades};
+    }
   }
-  const output={strategy:"Channel Structure Engine v0.3",generatedAt:new Date().toISOString(),
+  const output={strategy:"Channel Structure Engine MTF experiment: BASELINE vs A vs B",generatedAt:new Date().toISOString(),
     dataSource:"Kraken Futures historical OHLC",execution:"signal at closed 1h; aligned completed 5m candle => next-open market; counter-direction/doji => limit at signal-candle low (LONG) or high (SHORT), valid 12 subsequent 5m bars; breakout stop 0.15 ATR, 50% partial take-profit at 1.5R then 1R trailing stop on remainder; reversal target 1.5R with break-even stop after +1R; stop-first OHLC exit",
     assumptions:{feePerSide:FEE,slippagePerSide:SLIPPAGE,leverageContext:"10x illustrative margin; fixed $10 risk budget per filled trade; position quantity is reduced as stop-distance percentage increases, including above 8%; no 8% rejection gate",riskBudgetUsdPerTrade:10,maxHoldHours:MAX_HOLD_HOURS,
       warmupDays:20,universe:"top current-volume eligible Kraken perpetuals; survivorship bias possible",
