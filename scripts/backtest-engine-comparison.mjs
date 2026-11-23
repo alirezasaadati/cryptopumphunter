@@ -5,7 +5,7 @@ import { evaluateTradeCandle } from "../src/futures-trade-lifecycle.js";
 
 const BASE = "https://futures.kraken.com";
 const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
-const DAYS = 60, WARMUP_DAYS = 15, SYMBOL_LIMIT = 10, MARGIN_USD = 10, LEVERAGE = 10, TARGET_MARGIN_PERCENT = 15;
+const DAYS = Number(process.env.LIFECYCLE_BACKTEST_DAYS || 60), WARMUP_DAYS = 15, SYMBOL_LIMIT = 10, MARGIN_USD = 10, LEVERAGE = 10, TARGET_MARGIN_PERCENT = 15;\nconst TAKER_FEE_RATE = Number(process.env.BACKTEST_TAKER_FEE_RATE || 0.0005);\nconst SLIPPAGE_RATE = Number(process.env.BACKTEST_SLIPPAGE_RATE || 0.0002);\nconst ROUND_TRIP_COST_USD = MARGIN_USD * LEVERAGE * 2 * (TAKER_FEE_RATE + SLIPPAGE_RATE);
 
 async function getJson(url, attempt = 0) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
@@ -75,8 +75,8 @@ function blankStats() {
 function summarize(trades, counters) {
   const closed=trades.filter(t=>t.status==="CLOSED_PROFIT"||t.status==="CLOSED_STOP");
   const wins=closed.filter(t=>t.status==="CLOSED_PROFIT"), stops=closed.filter(t=>t.status==="CLOSED_STOP");
-  const pnl=t=>MARGIN_USD*Number(t.marginReturnPercent||0)/100;
-  const grossWins=wins.reduce((s,t)=>s+pnl(t),0), grossLoss=Math.abs(stops.reduce((s,t)=>s+pnl(t),0));
+  const grossPnl=t=>MARGIN_USD*Number(t.marginReturnPercent||0)/100;\n  const pnl=t=>grossPnl(t)-ROUND_TRIP_COST_USD;
+  const netTradePnls=closed.map(pnl);\n  const grossWins=netTradePnls.filter(x=>x>0).reduce((s,x)=>s+x,0), grossLoss=Math.abs(netTradePnls.filter(x=>x<0).reduce((s,x)=>s+x,0));
   let equity=0, peak=0, maxDD=0;
   for(const t of [...closed].sort((a,b)=>(a.closedAtMs||0)-(b.closedAtMs||0))){equity+=pnl(t);peak=Math.max(peak,equity);maxDD=Math.max(maxDD,peak-equity);}
   const sideStats=side=>{
@@ -141,7 +141,7 @@ async function runEngine(engine, ticker, data, btc4h, testStart, endMs) {
 }
 
 async function main(){
-  const endMs=Date.now(),testStart=endMs-DAYS*86400000,fromMs=testStart-WARMUP_DAYS*86400000;
+  const configuredEnd=process.env.LIFECYCLE_BACKTEST_END ? Date.parse(process.env.LIFECYCLE_BACKTEST_END) : Date.now();\n  if(!Number.isFinite(configuredEnd)) throw new Error("Invalid LIFECYCLE_BACKTEST_END");\n  const endMs=configuredEnd,testStart=endMs-DAYS*86400000,fromMs=testStart-WARMUP_DAYS*86400000;
   const tickers=(await getJson(BASE+"/derivatives/api/v3/tickers")).tickers;
   if(!Array.isArray(tickers))throw new Error("Kraken tickers response invalid");
   const excluded=new Set(["XAU","NVDAX","EUR","GBP","JPY","AUD","CAD","CHF","SPX","NDX","US500","US100"]);
@@ -171,7 +171,7 @@ async function main(){
   const current=summarize(currentTrades,currentCounters),v48=summarize(v48Trades,v48Counters);
   const report={generatedAt:new Date().toISOString(),period:{from:new Date(testStart).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
     rules:{marginUsd:MARGIN_USD,leverage:LEVERAGE,targetMarginPercent:TARGET_MARGIN_PERCENT,fullCloseAtTarget:true,priceMoveTargetPercent:1.5,
-      fees:"excluded",funding:"not included (historical funding series not supplied)",slippage:"excluded",
+      fees:"estimated taker fee 0.05% per side on 10x notional; round-trip cost deducted from each closed trade",funding:"not included (historical funding series not supplied)",slippage:"estimated 0.02% per side on 10x notional; round-trip cost deducted from each closed trade",takerFeeRate:TAKER_FEE_RATE,slippageRate:SLIPPAGE_RATE,roundTripCostUsd:ROUND_TRIP_COST_USD,
       entry:"signal on closed 1h/4h/15m; enter at next 1h open; exit on subsequent 5m OHLC; stop-first when same candle hits both",
       universe:"top 10 current-volume crypto Kraken USD perpetuals; non-crypto/index/FX symbols excluded; current-volume survivorship bias remains",
       historicalQuoteVolume:"approximated from preceding 24 hourly candles as sum(volume*close), avoiding current ticker-volume lookahead",
@@ -192,7 +192,7 @@ async function main(){
     "| LONG opened | "+current.longs+" | "+v48.longs+" |",
     "| SHORT opened | "+current.shorts+" | "+v48.shorts+" |",
     "| Win rate | "+f(current.winRatePct)+"% | "+f(v48.winRatePct)+"% |",
-    "| Net PnL USD | $"+f(current.netPnlUsd)+" | $"+f(v48.netPnlUsd)+" |",
+    "| Net PnL USD (after estimated fees/slippage) | $"+f(current.netPnlUsd)+" | $"+f(v48.netPnlUsd)+" |",
     "| Profit factor | "+f(current.profitFactor)+" | "+f(v48.profitFactor)+" |",
     "| Max drawdown USD | $"+f(current.maxDrawdownUsd)+" | $"+f(v48.maxDrawdownUsd)+" |",
     "| Avg margin return | "+f(current.avgMarginReturnPct)+"% | "+f(v48.avgMarginReturnPct)+"% |","",
@@ -203,7 +203,7 @@ async function main(){
     "| Symbol | Current trades | Current PnL | V4.8 trades | V4.8 PnL |",
     "|---|---:|---:|---:|---:|",
     ...perSymbol.map(x=>"| "+x.symbol+" | "+x.current.opened+" | $"+f(x.current.netPnlUsd)+" | "+x.v48.opened+" | $"+f(x.v48.netPnlUsd)+" |"),
-    "","Limitations: fees, funding, slippage, liquidation and cross-position margin competition are excluded. 5m OHLC cannot determine intrabar order; same-candle stop/target is conservative stop-first. Top-volume universe uses current rankings, so survivorship bias remains. Historical 24h quote volume is approximated from 1h candles."];
+    "","Limitations: fees/slippage are modeled estimates (taker 0.05% each side + slippage 0.02% each side on 10x notional); funding, liquidation and cross-position margin competition are excluded. 5m OHLC cannot determine intrabar order; same-candle stop/target is conservative stop-first. Top-volume universe uses current rankings, so survivorship bias remains. Historical 24h quote volume is approximated from 1h candles."];
   await writeFile("artifacts/engine-comparison-15pct.md",lines.join("\n"));
   console.log(JSON.stringify(report,null,2));
   if(!perSymbol.length)process.exitCode=1;
