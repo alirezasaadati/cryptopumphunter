@@ -6,6 +6,8 @@ on:
       - "scripts/backtest-short-market-regime.mjs"
       - ".github/workflows/short-market-regime-backtest.yml"
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 jobs:
   backtest:
     runs-on: ubuntu-latest
