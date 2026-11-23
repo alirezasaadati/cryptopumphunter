@@ -151,7 +151,7 @@ async function main(){
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if(!universe.length)throw new Error("No eligible crypto perpetuals");
   const btc4h=await fetchCandles(V48_CONFIG.BTC_SYMBOL,"4h",fromMs,endMs);
-  const currentTrades=[],v48Trades=[],perSymbol=[],errors=[];
+  const currentTrades=[],v48Trades=[],perSymbol=[],errors=[];\n  const currentCounters={eligible:0,rejected:0,lockSkips:0},v48Counters={eligible:0,rejected:0,lockSkips:0};
   for(const ticker of universe){
     try{
       const [oneHour,fourHour,fifteenMinute,fiveMinute]=await Promise.all([
