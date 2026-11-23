@@ -11,6 +11,12 @@ export const CHANNEL_CONFIG = Object.freeze({
   boundaryZoneWidth: 0.2,
   breakoutBufferAtr: 0.15,
   stopBufferAtr: 0.35,
+  reversalStopBufferAtr: 0.15,
+  reversalTargetR: 1.5,
+  breakoutTargetR: 2.5,
+  volumeMultiplier: 1.5,
+  volumeLookback: 20,
+  rsiPeriod: 14,
   targetR: 1.5
 });
 
@@ -108,6 +114,51 @@ export function detectPriceChannel(candles, options = {}) {
   };
 }
 
+
+function calculateRsiSeries(candles, period = 14) {
+  if (!Array.isArray(candles) || candles.length < period + 2) return [];
+  const out = Array(candles.length).fill(null);
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = Number(candles[i].close) - Number(candles[i - 1].close);
+    gains += Math.max(0, change); losses += Math.max(0, -change);
+  }
+  let avgGain = gains / period, avgLoss = losses / period;
+  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = period + 1; i < candles.length; i++) {
+    const change = Number(candles[i].close) - Number(candles[i - 1].close);
+    avgGain = (avgGain * (period - 1) + Math.max(0, change)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(0, -change)) / period;
+    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return out;
+}
+
+function hasRsiDivergence(candles, side, period = 14) {
+  if (!Array.isArray(candles) || candles.length < 2 * (period + 4)) return false;
+  const start = Math.max(0, candles.length - 50);
+  const window = candles.slice(start);
+  const rsi = calculateRsiSeries(window, period);
+  const kind = side === "SHORT" ? "high" : "low";
+  const points = pivots(window, kind, 2, 2).filter(p => Number.isFinite(rsi[p.index]));
+  if (points.length < 2) return false;
+  const a = points.at(-2), b = points.at(-1);
+  const priceA = Number(window[a.index][kind]), priceB = Number(window[b.index][kind]);
+  const rsiA = rsi[a.index], rsiB = rsi[b.index];
+  return side === "SHORT"
+    ? priceB > priceA && rsiB < rsiA
+    : priceB < priceA && rsiB > rsiA;
+}
+
+function hasVolumeConfirmation(candles, multiplier = 1.5, lookback = 20) {
+  if (!Array.isArray(candles) || candles.length < lookback + 1) return false;
+  const current = Number(candles.at(-1)?.volume);
+  const prior = candles.slice(-(lookback + 1), -1).map(c => Number(c.volume));
+  if (!Number.isFinite(current) || prior.some(v => !Number.isFinite(v) || v < 0)) return false;
+  const average = prior.reduce((sum, v) => sum + v, 0) / prior.length;
+  return average > 0 && current >= average * multiplier;
+}
+
 export function generateChannelSignal({ candles4h, candles1h, candles15m, options = {} }) {
   const cfg = { ...CHANNEL_CONFIG, ...options };
   if (!Array.isArray(candles1h) || candles1h.length < 2 || !Array.isArray(candles15m) || candles15m.length < 2) {
@@ -148,13 +199,15 @@ export function generateChannelSignal({ candles4h, candles1h, candles15m, option
   if (!side) return null;
 
   const entryReference = close;
-  const stop = side === "LONG"
-    ? (setup.endsWith("REVERSAL") ? channel.lower - channel.atr * cfg.stopBufferAtr : channel.upper - channel.atr * cfg.stopBufferAtr)
-    : (setup.endsWith("REVERSAL") ? channel.upper + channel.atr * cfg.stopBufferAtr : channel.lower + channel.atr * cfg.stopBufferAtr);
-  const risk = side === "LONG" ? entryReference - stop : stop - entryReference;
-  if (!(risk > 0) || risk / entryReference > 0.08) return null;
-  const target = side === "LONG" ? entryReference + risk * cfg.targetR : entryReference - risk * cfg.targetR;
   const isReversal = setup.endsWith("REVERSAL");
+  const stopBuffer = channel.atr * (isReversal ? cfg.reversalStopBufferAtr : cfg.stopBufferAtr);
+  const stop = side === "LONG"
+    ? (isReversal ? channel.lower - stopBuffer : channel.upper - stopBuffer)
+    : (isReversal ? channel.upper + stopBuffer : channel.lower + stopBuffer);
+  const risk = side === "LONG" ? entryReference - stop : stop - entryReference;
+  if (!(risk > 0)) return null;
+  const desiredTargetR = isReversal ? cfg.reversalTargetR : cfg.breakoutTargetR;
+  const target = side === "LONG" ? entryReference + risk * desiredTargetR : entryReference - risk * desiredTargetR;
   const target1 = isReversal
     ? (side === "LONG" ? Math.min(target, channel.upper) : Math.max(target, channel.lower))
     : target;
@@ -162,6 +215,9 @@ export function generateChannelSignal({ candles4h, candles1h, candles15m, option
   return {
     side, setup, trigger, channelType: channel.type, channel,
     referenceEntry: entryReference, stop, target1, risk, targetR,
+    volumeConfirmed: hasVolumeConfirmation(candles1h, cfg.volumeMultiplier, cfg.volumeLookback),
+    rsiDivergence: isReversal && hasRsiDivergence(candles1h, side, cfg.rsiPeriod),
+    riskPct: risk / entryReference,
     signalTime: h.time ?? null
   };
 }
@@ -177,5 +233,7 @@ export function scoreChannelSignal(signal) {
   score += signal.setup.includes("BREAKOUT") ? 12 : 15;
   score += Math.min(15, Math.max(0, (signal.targetR / 1.5) * 15));
   score += Math.min(15, c.widthAtr >= 2 && c.widthAtr <= 8 ? 15 : 8);
+  if (signal.volumeConfirmed) score += 15;
+  if (signal.rsiDivergence) score += 10;
   return Math.max(0, Math.min(100, score));
 }
