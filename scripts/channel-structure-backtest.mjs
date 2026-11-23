@@ -1,5 +1,6 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { generateChannelSignal, scoreChannelSignal } from "../src/channel-structure-engine.js";
+import { getDailyChannelContext, getFourHourConfirmation, getMtfAlignment } from "../src/channel-structure-mtf.js";
 import { simulateChannelExit } from "../src/channel-structure-exits.js";
 
 const BASE = "https://futures.kraken.com";
@@ -56,70 +57,69 @@ function metrics(trades) {
   return {trades:trades.length,wins:wins.length,losses:losses.length,winRatePct:trades.length?wins.length/trades.length*100:0,
     netR:trades.reduce((s,t)=>s+t.netR,0),expectancyR:trades.length?trades.reduce((s,t)=>s+t.netR,0)/trades.length:0,
     profitFactor:gl?gw/gl:gw?null:0,maxDrawdownR:maxDD,
+    netRiskUsd:trades.reduce((sum,t)=>sum+(Number(t.netR)||0)*(Number(t.riskBudgetUsd)||10),0),
     averageHoldHours:trades.length?trades.reduce((s,t)=>s+t.holdHours,0)/trades.length:0};
 }
-function runSymbol(data, days, endMs) {
-  const start=endMs-days*DAY, {ticker,h1,h4,m15,m5}=data;
+function runSymbol(data, days, endMs, mode) {
+  const start=endMs-days*DAY, {ticker,h1,h4,m15,m5,d1}=data;
   let h4Index=0,m15Index=0,lockedUntil=0;
-  const trades=[], counts={opportunities:0,opportunitiesBySide:{LONG:0,SHORT:0},lockSkips:0,filled:0,marketFills:0,limitFills:0,limitExpired:0,invalidFillRisk:0,bySetup:{}};
+  const trades=[], counts={opportunities:0,opportunitiesBySide:{LONG:0,SHORT:0},lockSkips:0,filled:0,marketFills:0,limitFills:0,limitExpired:0,invalidFillRisk:0,bySetup:{},fourHourConfirmed:0,fourHourRejected:0};
   const first=lowerBound(h1,start-20*DAY);
   for(let i=Math.max(40,first);i<h1.length-1;i++){
     const h=h1[i], signalTime=h.time+HOUR;
     if(signalTime<start||signalTime>endMs)continue;
     while(h4Index<h4.length&&h4[h4Index].time+FOUR_HOURS<=signalTime)h4Index++;
     while(m15Index<m15.length&&m15[m15Index].time+FIFTEEN<=signalTime)m15Index++;
-    const closed4h=h4.slice(Math.max(0,h4Index-120),h4Index);
-    const closed15=m15.slice(Math.max(0,m15Index-4),m15Index);
+    const closed4h=h4.slice(Math.max(0,h4Index-120),h4Index), closed15=m15.slice(Math.max(0,m15Index-4),m15Index);
     if(closed4h.length<40||closed15.length<2)continue;
-    const signal=generateChannelSignal({candles4h:closed4h,candles1h:h1.slice(0,i+1),candles15m:closed15});
+    const signal=generateChannelSignal({candles4h:closed4h,candles1h:h1.slice(0,i+1),candles15m:closed15,
+      options:mode==="A"?{allowBreakoutContinuation:true}:{}});
     if(!signal)continue;
-    counts.opportunities++;
-    counts.opportunitiesBySide[signal.side]++;
+    const fourHour=getFourHourConfirmation(closed4h,signal,signalTime);
+    if(mode==="A"&&signal.setup.includes("BREAKOUT")){
+      if(!(fourHour.closedAtSignal&&fourHour.directional&&fourHour.outsideBoundary)){counts.fourHourRejected++;continue;}
+      counts.fourHourConfirmed++;
+    }
+    counts.opportunities++; counts.opportunitiesBySide[signal.side]++;
     counts.bySetup[signal.setup]=(counts.bySetup[signal.setup]||0)+1;
-    const signalBarIndex=lowerBound(m5,signalTime)-1;
-    const nextIndex=signalBarIndex+1;
+    const daily=getDailyChannelContext(d1,signalTime,signal.side,signal.referenceEntry);
+    const alignment=getMtfAlignment({signal,candles1h:h1.slice(Math.max(0,i-79),i+1),candles15m:closed15,fourHour});
+    const priorityBonus=mode==="B"?((fourHour.directional?20:0)+(alignment.allAligned?25:0)):0;
+    const signalBarIndex=lowerBound(m5,signalTime)-1, nextIndex=signalBarIndex+1;
     if(signalBarIndex<0||nextIndex>=m5.length)continue;
     if(nextIndex<lockedUntil){counts.lockSkips++;continue;}
-    const signalBar=m5[signalBarIndex];
-    const aligned=signal.side==="LONG"?signalBar.close>signalBar.open:signalBar.close<signalBar.open;
-    let entryIndex=nextIndex, rawEntry=null, orderType="MARKET";
-    if(aligned){
-      rawEntry=Number(m5[entryIndex].open);
-    }else{
-      orderType="LIMIT";
-      const limitPrice=signal.side==="LONG"?Number(signalBar.low):Number(signalBar.high);
-      const expiryIndex=Math.min(m5.length-1,nextIndex+11);
-      entryIndex=-1;
+    const signalBar=m5[signalBarIndex], aligned=signal.side==="LONG"?signalBar.close>signalBar.open:signalBar.close<signalBar.open;
+    let entryIndex=nextIndex,rawEntry=null,orderType="MARKET";
+    if(aligned)rawEntry=Number(m5[entryIndex].open);
+    else{
+      orderType="LIMIT"; const limitPrice=signal.side==="LONG"?Number(signalBar.low):Number(signalBar.high);
+      const expiryIndex=Math.min(m5.length-1,nextIndex+11); entryIndex=-1;
       for(let j=nextIndex;j<=expiryIndex;j++){
-        const candle=m5[j], open=Number(candle.open);
+        const candle=m5[j],open=Number(candle.open);
         const touched=signal.side==="LONG"?Number(candle.low)<=limitPrice:Number(candle.high)>=limitPrice;
         const marketable=signal.side==="LONG"?open<=limitPrice:open>=limitPrice;
         if(marketable||touched){entryIndex=j;rawEntry=marketable?open:limitPrice;break;}
       }
-      if(entryIndex<0){counts.limitExpired=(counts.limitExpired||0)+1;continue;}
+      if(entryIndex<0){counts.limitExpired++;continue;}
     }
     const entry=signal.side==="LONG"?rawEntry*(1+SLIPPAGE):rawEntry*(1-SLIPPAGE);
     const adjustedRisk=signal.side==="LONG"?entry-signal.stop:signal.stop-entry;
-    if(!(adjustedRisk>0)){counts.invalidFillRisk=(counts.invalidFillRisk||0)+1;continue;}
+    if(!(adjustedRisk>0)){counts.invalidFillRisk++;continue;}
     const isBreakout=signal.setup.includes("BREAKOUT");
-    const desiredR=1.5; // Breakouts realize 50% at 1.5R; remainder is managed by trailing stop.
-    let target=signal.side==="LONG"?entry+adjustedRisk*desiredR:entry-adjustedRisk*desiredR;
-    if(!isBreakout){
-      target=signal.side==="LONG"?Math.min(target,signal.channel.upper):Math.max(target,signal.channel.lower);
-    }
+    let target=signal.side==="LONG"?entry+adjustedRisk*1.5:entry-adjustedRisk*1.5;
+    if(!isBreakout)target=signal.side==="LONG"?Math.min(target,signal.channel.upper):Math.max(target,signal.channel.lower);
     const actualTargetR=Math.abs(target-entry)/adjustedRisk;
     if(!(actualTargetR>0)){counts.invalidTarget=(counts.invalidTarget||0)+1;continue;}
-    const riskBudgetUsd=10, quantity=riskBudgetUsd/adjustedRisk, notionalUsd=quantity*entry, leverage=10;
+    const riskBudgetUsd=10*daily.multiplier,quantity=riskBudgetUsd/adjustedRisk,notionalUsd=quantity*entry,leverage=10;
     const result=simulateChannelExit({side:signal.side,setup:signal.setup,entry,stop:signal.stop,target,bars:m5,startIndex:entryIndex,maxHoldHours:MAX_HOLD_HOURS});
-    const trade={symbol:ticker.symbol,side:signal.side,setup:signal.setup,channelType:signal.channelType,
-      score:scoreChannelSignal(signal),orderType,entry,stop:signal.stop,target,targetR:actualTargetR,
-      riskPct:adjustedRisk/entry,quantity,notionalUsd,estimatedMarginUsd:notionalUsd/leverage,
-      fixedRiskBudgetUsd:riskBudgetUsd,volumeConfirmed:signal.volumeConfirmed,rsiDivergence:signal.rsiDivergence,
-      partialTaken:result.partialTaken,breakEvenActivated:result.breakEvenActivated,
-      entryTime:m5[entryIndex].time,...result};
-    trades.push(trade);
-    counts.filled=(counts.filled||0)+1;
-    counts[orderType==="MARKET"?"marketFills":"limitFills"]=(counts[orderType==="MARKET"?"marketFills":"limitFills"]||0)+1;
+    trades.push({symbol:ticker.symbol,side:signal.side,setup:signal.setup,channelType:signal.channelType,
+      score:scoreChannelSignal(signal),priorityScore:scoreChannelSignal(signal)+priorityBonus,priorityBonus,
+      fourHourConfirmed:fourHour.directional,fourHourClosedAtSignal:fourHour.closedAtSignal,mtfAlignment:alignment,
+      dailyChannelState:daily.state,sizeMultiplier:daily.multiplier,orderType,entry,stop:signal.stop,target,targetR:actualTargetR,
+      riskPct:adjustedRisk/entry,quantity,notionalUsd,estimatedMarginUsd:notionalUsd/leverage,riskBudgetUsd,
+      volumeConfirmed:signal.volumeConfirmed,rsiDivergence:signal.rsiDivergence,partialTaken:result.partialTaken,
+      breakEvenActivated:result.breakEvenActivated,entryTime:m5[entryIndex].time,...result});
+    counts.filled++; counts[orderType==="MARKET"?"marketFills":"limitFills"]++;
     lockedUntil=lowerBound(m5,result.exitTime)+1;
   }
   return {symbol:ticker.symbol,counts,metrics:metrics(trades),trades};
@@ -133,27 +133,29 @@ async function main(){
   const loaded=[];
   for(const ticker of universe){
     try{
-      const [h1,h4,m15,m5]=await Promise.all([
+      const [h1,h4,m15,m5,d1]=await Promise.all([
         fetchCandles(ticker.symbol,"1h",from,endMs,HOUR),fetchCandles(ticker.symbol,"4h",from,endMs,FOUR_HOURS),
-        fetchCandles(ticker.symbol,"15m",from,endMs,FIFTEEN),fetchCandles(ticker.symbol,"5m",from,endMs,FIVE)
+        fetchCandles(ticker.symbol,"15m",from,endMs,FIFTEEN),fetchCandles(ticker.symbol,"5m",from,endMs,FIVE),fetchCandles(ticker.symbol,"1d",from,endMs,DAY)
       ]);
-      if(h1.length<100||h4.length<80||m15.length<100||m5.length<1000)throw new Error("Insufficient history");
-      loaded.push({ticker,h1,h4,m15,m5});
+      if(h1.length<100||h4.length<80||m15.length<100||m5.length<1000||d1.length<35)throw new Error("Insufficient history");
+      loaded.push({ticker,h1,h4,m15,m5,d1});
     }catch(error){loaded.push({ticker,error:String(error.message||error)});}
   }
   const windows={};
   for(const days of [90,180]){
-    const results=loaded.map(d=>d.error?{symbol:d.ticker.symbol,error:d.error}:runSymbol(d,days,endMs));
-    const trades=results.flatMap(x=>x.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
-    const group=(key)=>Object.fromEntries([...new Set(trades.map(t=>t[key]))].map(v=>[v,metrics(trades.filter(t=>t[key]===v))]));
-    windows[days+"d"]={period:{from:new Date(endMs-days*DAY).toISOString(),to:new Date(endMs).toISOString(),days},
-      symbolsRequested:SYMBOL_LIMIT,symbolsLoaded:loaded.filter(d=>!d.error).length,
-      symbols:results.map(({trades,...rest})=>rest),overall:metrics(trades),
-      bySide:group("side"),bySetup:group("setup"),byChannelType:group("channelType"),trades};
+    for(const mode of ["BASELINE_V03","A_BREAKOUT_4H_REQUIRED","B_4H_PRIORITY_DAILY_SIZE"]){
+      const results=loaded.map(d=>d.error?{symbol:d.ticker.symbol,error:d.error}:runSymbol(d,days,endMs,mode));
+      const trades=results.flatMap(x=>x.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
+      const group=key=>Object.fromEntries([...new Set(trades.map(t=>t[key]))].map(v=>[v,metrics(trades.filter(t=>t[key]===v))]));
+      windows[days+"d"]??={};
+      windows[days+"d"][mode]={symbolsLoaded:loaded.filter(d=>!d.error).length,symbols:results.map(({trades,...rest})=>rest),
+        overall:metrics(trades),bySide:group("side"),bySetup:group("setup"),byChannelType:group("channelType"),
+        byDailyContext:group("dailyChannelState"),byPriorityBonus:group("priorityBonus"),trades};
+    }
   }
-  const output={strategy:"Channel Structure Engine v0.3",generatedAt:new Date().toISOString(),
-    dataSource:"Kraken Futures historical OHLC",execution:"signal at closed 1h; aligned completed 5m candle => next-open market; counter-direction/doji => limit at signal-candle low (LONG) or high (SHORT), valid 12 subsequent 5m bars; breakout stop 0.15 ATR, 50% partial take-profit at 1.5R then 1R trailing stop on remainder; reversal target 1.5R with break-even stop after +1R; stop-first OHLC exit",
-    assumptions:{feePerSide:FEE,slippagePerSide:SLIPPAGE,leverageContext:"10x illustrative margin; fixed $10 risk budget per filled trade; position quantity is reduced as stop-distance percentage increases, including above 8%; no 8% rejection gate",riskBudgetUsdPerTrade:10,maxHoldHours:MAX_HOLD_HOURS,
+  const output={strategy:"Channel Structure Engine v0.3 multi-timeframe comparison",generatedAt:new Date().toISOString(),
+    dataSource:"Kraken Futures historical OHLC",execution:"A requires a 4h candle closing at the signal hour, directionally beyond the channel for breakouts; B adds +20 for directional 4h candle and +25 when 4h channel direction, 1h EMA20 and 15m candle align. Daily channel position size multiplier: 1.5 aligned, 0.5 near opposing boundary, 1.0 otherwise. 5m execution retained. Signal at closed 1h; aligned completed 5m candle => next-open market; counter-direction/doji => limit at signal-candle low (LONG) or high (SHORT), valid 12 subsequent 5m bars; breakout stop 0.15 ATR, 50% partial take-profit at 1.5R then 1R trailing stop on remainder; reversal target 1.5R with break-even stop after +1R; stop-first OHLC exit",
+    assumptions:{feePerSide:FEE,slippagePerSide:SLIPPAGE,leverageContext:"10x illustrative margin; fixed $10 risk budget per filled trade; position quantity is reduced as stop-distance percentage increases, including above 8%; no 8% rejection gate",riskBudgetUsdPerTrade:10,maxHoldHours:MAX_HOLD_HOURS,dailyPositionSizing:{aligned:1.5,nearOpposingBoundary:0.5,neutral:1},priorityBonuses:{fourHourDirectional:20,allTimeframesAligned:25},
       warmupDays:20,universe:"top current-volume eligible Kraken perpetuals; survivorship bias possible",
       limitations:["Historical OHLC cannot reveal intrabar path; stop-first is conservative when stop and target occur in same 5m candle.",
         "Funding, liquidation, market impact and portfolio-level concurrency/capital constraints are not modeled.", "Breakout: 50% exits at +1.5R; remaining 50% trails by 1R, initially locking +0.5R after TP1. Reversal: break-even stop activates after +1R and applies from the next 5m candle. These conservative updates avoid same-candle lookahead.",
