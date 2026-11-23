@@ -245,7 +245,9 @@ async function main() {
   }
   const successful = results.filter(r=>!r.error);
   const allTrades = successful.flatMap(r=>r.trades).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
-  const metrics = summarize(allTrades);\n  const scenarios = ["NORMAL_SHORT","NORMAL_LONG","INVERTED_LONG"];\n  const metricsByScenario = Object.fromEntries(scenarios.map(name => [name, summarize(allTrades.filter(t => t.scenario === name))]));
+  const metrics = summarize(allTrades);
+  const scenarios = ["NORMAL_SHORT","NORMAL_LONG","INVERTED_LONG"];
+  const metricsByScenario = Object.fromEntries(scenarios.map(name => [name, summarize(allTrades.filter(t => t.scenario === name))]));
   const report = {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
