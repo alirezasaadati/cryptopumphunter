@@ -64,8 +64,10 @@ function simulateFixedMarginExit({side,entry,stop,bars,startIndex,quantity,maxHo
   const maxIndex=Math.min(bars.length-1,startIndex+maxHoldHours*12);
   const marginUsd=10, targetProfitUsd=3;
   const entryFee=FEE*quantity*entry;
-  // Solve for the raw market price whose slipped fill yields exactly +$3 net after both fees.
-  const effectiveTarget=(((targetProfitUsd+entryFee)/quantity)+(1+FEE)*entry)/(1-FEE);
+  // Solve separately for each side so the slipped exit fill nets exactly +$3 after both fees.
+  const effectiveTarget=side==="LONG"
+    ? (quantity*entry+entryFee+targetProfitUsd)/(quantity*(1-FEE))
+    : (quantity*entry-entryFee-targetProfitUsd)/(quantity*(1+FEE));
   const rawTarget=side==="LONG"?effectiveTarget/(1-SLIPPAGE):effectiveTarget/(1+SLIPPAGE);
   let reason="TIME",exitTime=bars[maxIndex]?.time,rawExit=Number(bars[maxIndex]?.close);
   for(let i=startIndex;i<=maxIndex;i++){
