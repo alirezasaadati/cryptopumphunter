@@ -1453,7 +1453,7 @@ const FUTURES_CONFIG = {
   MAX_PULLBACK_DISTANCE_ATR: 0.35,
   MAX_RECLAIM_EXTENSION_ATR: 4.0,
   // Separate experimental path. These values never affect the standard setup.
-  HIGH_RISK_MIN_SCORE: 40,
+  HIGH_RISK_MIN_SCORE: 50,
   HIGH_RISK_MIN_VOLUME_RATIO: 0.3,
   VOLUME_PRIORITY_TIER_1: 0.5,
   VOLUME_PRIORITY_TIER_2: 1.0,
