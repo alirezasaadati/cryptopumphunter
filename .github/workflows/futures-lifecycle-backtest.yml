@@ -19,8 +19,8 @@ jobs:
           node-version: 22
       - name: Run lifecycle historical backtest
         env:
-          LIFECYCLE_BACKTEST_DAYS: "30"
-          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+          LIFECYCLE_BACKTEST_DAYS: "60"
+          LIFECYCLE_BACKTEST_SYMBOLS: "12"
         run: node scripts/backtest-futures-lifecycle.mjs
       - name: Upload lifecycle report
         if: always()
