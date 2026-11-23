@@ -5,7 +5,7 @@ export function sizePosition(entry, stop, {riskBudgetUsd=10,maxNotionalUsd=100}=
   const qty=Math.min(riskBudgetUsd/risk,maxNotionalUsd/e);
   const notionalUsd=qty*e, plannedRiskUsd=qty*risk;
   if(!(qty>0)||!Number.isFinite(qty)||!Number.isFinite(notionalUsd)) return null;
-  return {qty,notionalUsd,marginAt10xUsd:notionalUsd/10,plannedRiskUsd,capApplied:qty*e<=(maxNotionalUsd+1e-8)&&plannedRiskUsd<riskBudgetUsd-1e-8};
+  return {qty,notionalUsd,marginAt10xUsd:notionalUsd/10,plannedRiskUsd,capApplied:notionalUsd>=maxNotionalUsd-1e-8&&plannedRiskUsd<riskBudgetUsd-1e-8};
 }
 export function selectPortfolioTrades(trades,{maxConcurrent=5}={}) {
   const accepted=[],rejected=[],active=[];let peakConcurrent=0;
