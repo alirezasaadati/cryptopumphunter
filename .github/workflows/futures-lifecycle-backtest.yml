@@ -23,18 +23,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run same-data engine comparison
+      - name: Run V4.8 SHORT-only 30% target backtests
         env:
           LIFECYCLE_BACKTEST_DAYS: "60"
           LIFECYCLE_BACKTEST_END: "2026-09-24T10:37:00Z"
           BACKTEST_TAKER_FEE_RATE: "0.0005"
           BACKTEST_SLIPPAGE_RATE: "0.0002"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
-        run: node scripts/backtest-engine-comparison.mjs
+        run: node scripts/backtest-v48-short-30pct.mjs
       - name: Upload lifecycle report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: current-vs-v48-engine-comparison
+          name: v48-short-30pct-90d-180d
           path: artifacts/
           if-no-files-found: error
