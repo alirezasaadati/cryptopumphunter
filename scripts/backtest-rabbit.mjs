@@ -4,8 +4,8 @@ import { computeBtcRegime, FUTURES_CONFIG } from "../src/index.js";
 
 const BASE="https://futures.kraken.com",DAY=86400000;
 const INTERVAL={"5m":300000,"15m":900000,"1h":3600000,"4h":14400000};
-const END=process.env.RABBIT_BACKTEST_END?Date.parse(process.env.RABBIT_BACKTEST_END):Date.now();
-const WINDOWS=[90,180,365],WARMUP_DAYS=25,SYMBOL_LIMIT=8,MAX_HOLD_HOURS=6,MARGIN=10,LEVERAGE=10;
+const END=process.env.RABBIT_BACKTEST_END?Date.parse(process.env.RABBIT_BACKTEST_END):Date.parse("2025-02-01T00:00:00Z");
+const WINDOWS=[123],WARMUP_DAYS=25,SYMBOL_LIMIT=8,MAX_HOLD_HOURS=6,MARGIN=10,LEVERAGE=10;
 if(!Number.isFinite(END))throw new Error("Invalid RABBIT_BACKTEST_END");
 
 async function getJson(url,attempt=0){
@@ -125,6 +125,7 @@ async function main(){
   outputs[days]={period:{from:new Date(start).toISOString(),to:new Date(END).toISOString(),days},metrics:metrics(trades,eligible,rejected,lockSkips,lockSkipsBySymbol,lockSkipDetails),rejectionReasons,bySymbol,trades};
  }
  const report={generatedAt:new Date().toISOString(),engine:"Rabbit experimental counter-trend SHORT",source:"Kraken Futures historical OHLC",
+  marketRegimeValidation:{benchmark:"BTC/XBT",windowStart:new Date(END-123*DAY).toISOString(),windowEnd:new Date(END).toISOString(),btcStartClose:btc.find(c=>c.time+INTERVAL["4h"]>END-123*DAY)?.open??null,btcEndClose:btc.at(-1)?.close??null,btcReturnPct:(()=>{const a=btc.find(c=>c.time+INTERVAL["4h"]>END-123*DAY)?.open,b=btc.at(-1)?.close;return a>0&&b>0?(b/a-1)*100:null;})(),classification:"historically selected broad bullish rally window; verify actual Kraken BTC return in report"},
   rules:{bullRegime:"BTC 4h computeBtcRegime bullish; traded symbol 1h and 4h EMA20>EMA50 and close>EMA20",
    impulse:"8 closed 15m candles ending at the impulse peak; surge >=1.5%, >=1.8 ATR, and peak >=1.2 ATR above EMA20 calculated strictly before the impulse; RSI14 at peak >=65",
    confirmation:"closed bearish 15m candle closes below EMA9 and (by default) below the prior two candle lows; RSI at peak >=65; confirmation volume >=0.7x prior 20-bar average",
@@ -134,9 +135,9 @@ async function main(){
    costs:"fees, slippage, funding and liquidation excluded",universe:"top 8 current-volume eligible Kraken crypto USD perpetuals; survivorship bias applies"},
   symbolsRequested:SYMBOL_LIMIT,symbolsTested:datasets.length,errors,results:outputs};
  await mkdir("artifacts",{recursive:true});await writeFile("artifacts/rabbit-backtest.json",JSON.stringify(report,null,2));
- const fmt=n=>Number(n||0).toFixed(2),lines=["# Rabbit — bullish rally correction SHORT backtest","","Full close at 1R; $10 margin, 10x leverage; 90d, 180d and 365d; 5m OHLC; stop-first same-candle rule. Open positions are marked to market at every completed 5m close.","",
+ const fmt=n=>Number(n||0).toFixed(2),lines=["# Rabbit — fixed bullish rally-window correction SHORT backtest","","Fixed historical bullish window ending 2025-02-01 (123 days); full close at 1R; $10 margin, 10x leverage; 5m OHLC; stop-first same-candle rule. Open positions are marked to market at every completed 5m close.","",
  "| Period | Eligible signals | Trades | Wins | Stops | Open | Win rate | Realized PnL | MTM PnL | PF | MTM DD |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"];
- for(const days of WINDOWS){const m=outputs[days].metrics;lines.push("| "+days+"d | "+m.eligibleSignals+" | "+m.tradesOpened+" | "+m.wins+" | "+m.stops+" | "+m.openAtEnd+" | "+fmt(m.winRatePct)+"% | $"+fmt(m.grossPnlUsd)+" | "+fmt(m.profitFactor)+" | $"+fmt(m.maxDrawdownUsd)+" |");}
+ for(const days of WINDOWS){const m=outputs[days].metrics;lines.push("| "+days+"d | "+m.eligibleSignals+" | "+m.tradesOpened+" | "+m.wins+" | "+m.stops+" | "+m.openAtEnd+" | "+fmt(m.winRatePct)+"% | $"+fmt(m.grossPnlUsd)+" | $"+fmt(m.totalPnlWithOpenMtmUsd)+" | "+fmt(m.profitFactor)+" | $"+fmt(m.maxDrawdownMtmUsd)+" |");}
  lines.push("","## Per-symbol results","","| Symbol | Trades 90d | Wins 90d | Stops 90d | Trades 180d | Wins 180d | Stops 180d |","|---|---:|---:|---:|---:|---:|---:|");
  for(const d of datasets){const a=outputs[90].bySymbol[d.symbol],b=outputs[180].bySymbol[d.symbol];lines.push("| "+d.symbol+" | "+a.tradesOpened+" | "+a.wins+" | "+a.stops+" | "+b.tradesOpened+" | "+b.wins+" | "+b.stops+" |");}
  lines.push("","Lock skips are Rabbit-only per-symbol lock collisions; detailed counts and samples are in JSON. MTM uses every completed 5m candle close. Fees, slippage, funding, liquidation and portfolio margin simulation are excluded; current-volume symbol selection has survivorship bias.");
