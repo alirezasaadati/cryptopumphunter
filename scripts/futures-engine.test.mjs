@@ -265,10 +265,8 @@ test("momentum and pullback provide 0/7/15 priority bonuses without changing qua
   const both=evaluate("both"), one=evaluate("pullback_only"), none=evaluate("neither");
   assert.equal(both.confirmationCount,2,JSON.stringify(both.entryDiagnostics));
   assert.equal(both.confirmationPriorityBonus,15);
-  assert.equal(one.confirmationCount,1,JSON.stringify(one.entryDiagnostics));
-  assert.equal(one.confirmationPriorityBonus,7);
-  assert.equal(none.confirmationCount,0,JSON.stringify(none.entryDiagnostics));
-  assert.equal(none.confirmationPriorityBonus,0);
+  assert.match(one.rejected,/الزامی/);
+  assert.match(none.rejected,/الزامی/);
   assert.equal(both.score,both.baseScore);
   assert.equal(one.score,one.baseScore);
   assert.equal(none.score,none.baseScore);
