@@ -64,7 +64,7 @@ function simulate(symbol,entry,stop,bars,start,signalTime){
 }
 async function main(){
  const tickers=(await getJson(BASE+"/derivatives/api/v3/tickers")).tickers;
- const symbols=["PF_XBTUSD","PF_XAUUSD"];
+ const symbols=["PF_XBTUSD","PF_XAUTUSD"];
  const universe=symbols.map(symbol=>tickers.find(t=>String(t?.symbol)===symbol&&t?.suspended!==true)||{symbol});
  const from=END-(WINDOWS[0]+WARMUP_DAYS)*DAY;
  const btc=await fetchCandles("PF_XBTUSD","4h",from,END),datasets=[],errors=[];
@@ -123,22 +123,22 @@ async function main(){
   outputs[days]={period:{from:new Date(start).toISOString(),to:new Date(END).toISOString(),days},metrics:metrics(trades,eligible,rejected,lockSkips,lockSkipsBySymbol,lockSkipDetails),rejectionReasons,bySymbol,trades};
  }
  const report={generatedAt:new Date().toISOString(),engine:"Rabbit experimental counter-trend SHORT",source:"Kraken Futures historical OHLC",
-  marketRegimeValidation:{benchmark:"BTC/XBT",windowStart:new Date(END-WINDOWS[0]*DAY).toISOString(),windowEnd:new Date(END).toISOString(),btcStartClose:btc.find(c=>c.time+INTERVAL["4h"]>END-WINDOWS[0]*DAY)?.open??null,btcEndClose:btc.at(-1)?.close??null,btcReturnPct:(()=>{const a=btc.find(c=>c.time+INTERVAL["4h"]>END-WINDOWS[0]*DAY)?.open,b=btc.at(-1)?.close;return a>0&&b>0?(b/a-1)*100:null;})(),classification:"matched BTC-vs-Gold comparison window; BTC 4h regime is the shared market filter"},
+  marketRegimeValidation:{benchmark:"BTC/XBT",windowStart:new Date(END-WINDOWS[0]*DAY).toISOString(),windowEnd:new Date(END).toISOString(),btcStartClose:btc.find(c=>c.time+INTERVAL["4h"]>END-WINDOWS[0]*DAY)?.open??null,btcEndClose:btc.at(-1)?.close??null,btcReturnPct:(()=>{const a=btc.find(c=>c.time+INTERVAL["4h"]>END-WINDOWS[0]*DAY)?.open,b=btc.at(-1)?.close;return a>0&&b>0?(b/a-1)*100:null;})(),classification:"matched BTC-vs-XAUT comparison window; BTC 4h regime is the shared market filter"},
   rules:{bullRegime:"BTC 4h computeBtcRegime bullish; traded symbol 1h and 4h EMA20>EMA50 and close>EMA20",
    impulse:"8 closed 15m candles ending at the impulse peak; surge >=1.5%, >=1.8 ATR, and peak >=1.2 ATR above EMA20 calculated strictly before the impulse; RSI14 at peak >=65",
    confirmation:"closed bearish 15m candle closes below EMA9 and (by default) below the prior two candle lows; RSI at peak >=65; confirmation volume >=0.7x prior 20-bar average",
    state:"per-symbol state persisted on every candle, keyed by absolute peak timestamp; newer independent impulses replace older setups even when their absolute high is lower",
    entry:"next 5m candle open after the 15m confirmation closes",stop:"impulse swing high + 0.2 ATR",target:"full close at 1R",
    marginUsd:MARGIN,leverage:LEVERAGE,maxHoldHours:MAX_HOLD_HOURS,sameCandle:"stop-first unless open gaps through a level",
-   costs:"fees, slippage, funding and liquidation excluded",universe:"Two matched Kraken USD perpetuals: PF_XBTUSD (Bitcoin) and PF_XAUUSD (Gold Pyth index); independent per-symbol position locks"},
+   costs:"fees, slippage, funding and liquidation excluded",universe:"Two matched Kraken USD perpetuals: PF_XBTUSD (Bitcoin) and PF_XAUTUSD (Tether XAUT); independent per-symbol position locks"},
   symbolsRequested:2,symbolsTested:datasets.length,errors,results:outputs};
  await mkdir("artifacts",{recursive:true});await writeFile("artifacts/rabbit-backtest.json",JSON.stringify(report,null,2));
- const fmt=n=>Number(n||0).toFixed(2),lines=["# Rabbit — matched BTC vs Gold 90d correction SHORT backtest","","Matched BTC vs Gold historical window ending 2026-11-15 (90 days; 2026-08-17 through 2026-11-15); PF_XBTUSD and PF_XAUUSD; same Rabbit engine/settings; full close at 1R; $10 margin, 10x leverage; 5m OHLC; stop-first same-candle rule. Open positions are marked to market at every completed 5m close.","",
+ const fmt=n=>Number(n||0).toFixed(2),lines=["# Rabbit — matched BTC vs XAUT 90d correction SHORT backtest","","Matched BTC vs XAUT historical window ending 2026-11-15 (90 days; 2026-08-17 through 2026-11-15); PF_XBTUSD and PF_XAUTUSD; same Rabbit engine/settings; full close at 1R; $10 margin, 10x leverage; 5m OHLC; stop-first same-candle rule. Open positions are marked to market at every completed 5m close.","",
  "| Period | Eligible signals | Trades | Wins | Stops | Open | Win rate | Realized PnL | MTM PnL | PF | MTM DD |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"];
  for(const days of WINDOWS){const m=outputs[days].metrics;lines.push("| "+days+"d | "+m.eligibleSignals+" | "+m.tradesOpened+" | "+m.wins+" | "+m.stops+" | "+m.openAtEnd+" | "+fmt(m.winRatePct)+"% | $"+fmt(m.grossPnlUsd)+" | $"+fmt(m.totalPnlWithOpenMtmUsd)+" | "+fmt(m.profitFactor)+" | $"+fmt(m.maxDrawdownMtmUsd)+" |");}
  lines.push("","## Per-symbol results","","| Symbol | Trades | Closed | Wins | Stops | Open at end | Realized PnL |","|---|---:|---:|---:|---:|---:|---:|");
  for(const d of datasets){const a=outputs[WINDOWS[0]].bySymbol[d.symbol];lines.push("| "+d.symbol+" | "+a.tradesOpened+" | "+a.closed+" | "+a.wins+" | "+a.stops+" | "+a.openAtEnd+" | $"+fmt(a.grossPnlUsd)+" |");}
- lines.push("","Lock skips are Rabbit-only per-symbol lock collisions; detailed counts and samples are in JSON. MTM uses every completed 5m candle close. Fees, slippage, funding, liquidation and portfolio margin simulation are excluded. Matched two-instrument comparison; BTC 4h regime is the shared market filter; trade setups and locks are evaluated independently for BTC and Gold. Gold contract began trading 2026-08-05, so this test window starts after listing.");
+ lines.push("","Lock skips are Rabbit-only per-symbol lock collisions; detailed counts and samples are in JSON. MTM uses every completed 5m candle close. Fees, slippage, funding, liquidation and portfolio margin simulation are excluded. Matched two-instrument comparison; BTC 4h regime is the shared market filter; trade setups and locks are evaluated independently for BTC and XAUT. XAUT contract began trading 2026-08-05, so this test window starts after listing.");
  await writeFile("artifacts/rabbit-backtest.md",lines.join("\n"));console.log(JSON.stringify(report,null,2));if(!datasets.length)process.exitCode=1;
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
