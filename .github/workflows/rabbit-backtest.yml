@@ -2,7 +2,7 @@ name: Rabbit strategy backtest
 on:
   workflow_dispatch:
   push:
-    branches: [experiment/compare-current-v48-15pct-20261123, experiment/rabbit-diagnostics-365d-mtm-20261123]
+    branches: [experiment/compare-current-v48-15pct-20261123, experiment/rabbit-diagnostics-365d-mtm-20261123, experiment/rabbit-btc-only-123d-20261123]
     paths:
       - "src/rabbit-engine.js"
       - "scripts/rabbit-engine.test.mjs"
