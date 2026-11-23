@@ -111,12 +111,12 @@ function runSymbol(data, days, endMs, mode) {
     }
     const actualTargetR=Math.abs(target-entry)/adjustedRisk;
     if(!(actualTargetR>0)){counts.invalidTarget=(counts.invalidTarget||0)+1;continue;}
-    const riskBudgetUsd=10, quantity=riskBudgetUsd/adjustedRisk, notionalUsd=quantity*entry, leverage=10;
+    const baseRiskBudgetUsd=10, positionMultiplier=signal.dailyPositionMultiplier||1, riskBudgetUsd=baseRiskBudgetUsd*positionMultiplier, quantity=riskBudgetUsd/adjustedRisk, notionalUsd=quantity*entry, leverage=10;
     const result=simulateChannelExit({side:signal.side,setup:signal.setup,entry,stop:signal.stop,target,bars:m5,startIndex:entryIndex,maxHoldHours:MAX_HOLD_HOURS});
     const trade={symbol:ticker.symbol,side:signal.side,setup:signal.setup,channelType:signal.channelType,
       score:scoreChannelSignal(signal),orderType,entry,stop:signal.stop,target,targetR:actualTargetR,
       riskPct:adjustedRisk/entry,quantity,notionalUsd,estimatedMarginUsd:notionalUsd/leverage,
-      fixedRiskBudgetUsd:riskBudgetUsd,volumeConfirmed:signal.volumeConfirmed,rsiDivergence:signal.rsiDivergence,
+      fixedRiskBudgetUsd:riskBudgetUsd,baseRiskBudgetUsd,positionMultiplier,dailyContext:signal.dailyContext,fourHourConfirmed:signal.fourHourConfirmed,multiTimeframeAligned:signal.multiTimeframeAligned,mode,volumeConfirmed:signal.volumeConfirmed,rsiDivergence:signal.rsiDivergence,
       partialTaken:result.partialTaken,breakEvenActivated:result.breakEvenActivated,
       entryTime:m5[entryIndex].time,...result};
     trades.push(trade);
