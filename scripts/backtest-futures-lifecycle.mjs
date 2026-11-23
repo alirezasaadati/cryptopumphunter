@@ -226,6 +226,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
         baselineTrades.push(baselineTrade);
       }
     }
+    if (!baselineTrade) { acceptedSignals--; rejectedSignals++; continue; }
 
     // Select the closer of 1h EMA20 and the just-closed signal candle wick:
     // LONG: EMA20 or previous candle low; SHORT: EMA20 or previous candle high.
@@ -235,7 +236,9 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const wickEntry = candidate.side === "LONG" ? Number(signalBar.low) : Number(signalBar.high);
     const referencePrice = Number(signalBar.close);
     if (![emaEntry,wickEntry,referencePrice].every(Number.isFinite) || emaEntry <= 0 || wickEntry <= 0 || referencePrice <= 0) {
-      rejectedSignals++; continue;
+      rejectedSignals++;
+      pairedLockUntil.set(lockKey, baselineTrade.status === "OPEN_AT_BACKTEST_END" ? toMs : baselineTrade.closedAtMs);
+      continue;
     }
     const limitPrice = Math.abs(emaEntry-referencePrice) <= Math.abs(wickEntry-referencePrice) ? emaEntry : wickEntry;
     const marketAtSignal = Number(tickerAtSignal.last);
