@@ -19,12 +19,12 @@ jobs:
           node-version: 22
       - name: Run Rabbit unit tests
         run: node --test scripts/rabbit-engine.test.mjs
-      - name: Run Rabbit 90d, 180d and 365d Kraken backtests with MTM diagnostics
+      - name: Run Rabbit fixed 123d bullish-rally Kraken backtest with MTM diagnostics
         run: node scripts/backtest-rabbit.mjs
       - name: Upload Rabbit reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rabbit-backtest-90d-180d-365d-mtm
+          name: rabbit-backtest-bull-rally-123d-mtm
           path: artifacts/
           if-no-files-found: warn
