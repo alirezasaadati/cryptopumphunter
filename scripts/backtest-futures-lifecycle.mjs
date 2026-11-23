@@ -160,6 +160,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   }
 
   const trades = [];
+  const baselineTrades = [];
+  const baselineLockUntil = new Map();
   const lockUntil = new Map();
   let fourIndex = 0, fifteenIndex = 0;
   let acceptedSignals = 0, skippedByLock = 0, rejectedSignals = 0;
@@ -187,6 +189,41 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (!candidate || candidate.eligible !== true || candidate.side !== "SHORT") { rejectedSignals++; continue; }
 
     const lockKey = ticker.symbol + "|" + candidate.side;
+    const firstOrderBar = lowerBound(fiveMinute,signalCloseTime);
+
+    // Paired control: unchanged current short-engine market entry, same signal,
+    // same original stop/TP1, and an independent same-side lifecycle lock.
+    if ((baselineLockUntil.get(lockKey) || 0) <= signalCloseTime && fiveMinute[firstOrderBar] && fiveMinute[firstOrderBar].time < toMs) {
+      const baselineEntry = Number(candidate.entry);
+      const baselineStop = Number(candidate.stop);
+      const baselineTarget = Number(candidate.target1);
+      if ([baselineEntry,baselineStop,baselineTarget].every(Number.isFinite) && baselineEntry > 0) {
+        const baselineTrade = {
+          id:ticker.symbol+":SHORT:BASELINE:"+signalCloseTime,
+          symbol:ticker.symbol, side:"SHORT", status:"OPEN",
+          entry:baselineEntry, initialStop:baselineStop, stop:baselineStop, target1:baselineTarget,
+          signalTime:signalBar.time, signalCloseTime, entryTime:fiveMinute[firstOrderBar].time,
+          score:candidate.score, ambiguousCandles:0
+        };
+        let baselineClosed = false;
+        for (let k=firstOrderBar; k<fiveMinute.length && fiveMinute[k].time<toMs; k++) {
+          const bar=fiveMinute[k];
+          const evaluated=evaluateTp1Candle(baselineTrade,bar);
+          if (evaluated) { Object.assign(baselineTrade,evaluated); baselineClosed=true; break; }
+        }
+        if (!baselineClosed) {
+          baselineTrade.status="OPEN_AT_BACKTEST_END";
+          baselineTrade.lastMark=fiveMinute.at(-1)?.close ?? null;
+          baselineTrade.marginReturnAtMarkPct=baselineTrade.lastMark
+            ? -((baselineTrade.lastMark-baselineEntry)/baselineEntry)*100*LEVERAGE : null;
+          baselineLockUntil.set(lockKey,toMs);
+        } else {
+          baselineLockUntil.set(lockKey,baselineTrade.closedAtMs);
+        }
+        baselineTrades.push(baselineTrade);
+      }
+    }
+
     if ((lockUntil.get(lockKey) || 0) > signalCloseTime) { skippedByLock++; continue; }
     acceptedSignals++;
 
@@ -206,7 +243,6 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const useMarketFallback = marketAtSignal < emaEntry && marketAtSignal < wickEntry && levelsGapPct > 0.5;
     const selectedEntrySource = useMarketFallback ? "MARKET_FALLBACK" : (limitPrice === emaEntry ? "EMA20_1H" : "PREVIOUS_CANDLE_HIGH");
     const orderExpiry = signalCloseTime + INTERVALS["1h"];
-    const firstOrderBar = lowerBound(fiveMinute,signalCloseTime);
     let fill = null;
     if (useMarketFallback && fiveMinute[firstOrderBar] && fiveMinute[firstOrderBar].time < toMs) {
       fill = { price: fiveMinute[firstOrderBar].open, time: fiveMinute[firstOrderBar].time, barIndex: firstOrderBar, fillType: "MARKET_FALLBACK" };
@@ -298,7 +334,9 @@ async function main() {
   }
   const successful = results.filter(r=>!r.error);
   const allTrades = successful.flatMap(r=>r.trades).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
+  const baselineAllTrades = successful.flatMap(r=>r.baselineTrades || []).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
   const metrics = summarize(allTrades);
+  const baselineMetrics = summarize(baselineAllTrades);
   const STARTING_CAPITAL = 100;
   const MARGIN_PER_TRADE = 10;
   const events = allTrades.flatMap(t => [
@@ -345,7 +383,7 @@ async function main() {
     limitOrdersFilled:successful.reduce((n,r)=>n+r.limitOrdersFilled,0),
     limitOrdersExpired:successful.reduce((n,r)=>n+r.limitOrdersExpired,0),
     averageSignalsPerDay:successful.reduce((n,r)=>n+r.signalsAccepted,0)/DAYS,
-    bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
+    bySymbol:successful.map(({trades,baselineTrades,...r})=>({...r,metrics:r.metrics,baselineMetrics:summarize(baselineTrades||[])})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
     trades:allTrades
@@ -365,7 +403,7 @@ async function main() {
     "| TP1 closes (LONG 1.3R / SHORT 1.5R) | "+accountMetrics.profitCloses+" |",
     "| Stop closes | "+accountMetrics.stopCloses+" |",
     "| Open at end | "+accountMetrics.openAtEnd+" |",
-    "| LONG / SHORT (capital-constrained) | "+accountMetrics.longs+" / "+accountMetrics.shorts+" |",
+    "| LONG / SHORT (capital-constrained) | 0 / "+accountMetrics.shorts+" |",
     "| Win rate | "+accountMetrics.winRatePct.toFixed(2)+"% |",
     "| Starting capital / margin per trade | $"+STARTING_CAPITAL+" / $"+MARGIN_PER_TRADE+" |",
     "| Realized PnL / open unrealized PnL | $"+realizedPnl.toFixed(2)+" / $"+openUnrealizedPnl.toFixed(2)+" |",
@@ -374,6 +412,10 @@ async function main() {
     "| Sum margin return (not compounded) | "+metrics.totalMarginReturnPct.toFixed(2)+"% |",
     "| Average margin return / trade | "+metrics.averageMarginReturnPct.toFixed(2)+"% |",
     "| Max drawdown (additive margin-return points) | "+metrics.maxDrawdownMarginPct.toFixed(2)+"% |",
+    "| Baseline market-entry closed / TP1 / stop | "+baselineMetrics.closedTrades+" / "+baselineMetrics.profitCloses+" / "+baselineMetrics.stopCloses+" |",
+    "| Baseline market-entry win rate | "+baselineMetrics.winRatePct.toFixed(2)+"% |",
+    "| Baseline market-entry gross PnL ($10 margin/trade) | $"+(baselineMetrics.totalMarginReturnPct/10).toFixed(2)+" |",
+    "| Experimental entry gross PnL ($10 margin/trade) | $"+(metrics.totalMarginReturnPct/10).toFixed(2)+" |",
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
     "| Same-side lock skips | "+report.lockSkips+" |",
     "| Rejected signal opportunities | "+report.rejectedSignals+" |","",
