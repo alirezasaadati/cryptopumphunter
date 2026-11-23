@@ -73,12 +73,12 @@ async function main(){
  }
  const outputs={};
  for(const days of WINDOWS){
-  const start=END-days*DAY,trades=[],locks=new Map();let eligible=0,rejected=0,lockSkips=0;
+  const start=END-days*DAY,trades=[],locks=new Map(),rejectionReasons={};let eligible=0,rejected=0,lockSkips=0;
   for(const d of datasets){
-   let i1=0,i4=0;
+   let i1=0,i4=0,rabbitState={};
    for(let i=40;i<d.fifteen.length;i++){
     const signalBar=d.fifteen[i],signalTime=signalBar.time+INTERVAL["15m"];
-    if(signalTime<start||signalTime>=END)continue;
+    if(signalTime>=END)break;
     while(i1<d.one.length&&d.one[i1].time+INTERVAL["1h"]<=signalTime)i1++;
     while(i4<d.four.length&&d.four[i4].time+INTERVAL["4h"]<=signalTime)i4++;
     const one=d.one.slice(0,i1),four=d.four.slice(0,i4),fifteen=d.fifteen.slice(0,i+1);
@@ -87,24 +87,33 @@ async function main(){
     const btcRegime=computeBtcRegime(btcClosed);
     const entryIndex=lower(d.five,signalTime);if(entryIndex>=d.five.length)continue;
     const entry=d.five[entryIndex].open;
-    const candidate=analyzeRabbitCorrection({candles1h:one,candles4h:four,candles15m:fifteen,price:entry,btcRegime});
-    if(!candidate.eligible){rejected++;continue;}
+    const candidate=analyzeRabbitCorrection({symbol:d.symbol,candles1h:one,candles4h:four,candles15m:fifteen,price:entry,btcRegime,state:rabbitState});
+    if(candidate.nextState)rabbitState=candidate.nextState;
+    // Process warm-up bars to build/expire state, but count only the requested test window.
+    if(signalTime<start)continue;
+    if(!candidate.eligible){
+     rejected++;
+     const reason=String(candidate.rejected||"Unknown rejection");
+     rejectionReasons[reason]=(rejectionReasons[reason]||0)+1;
+     continue;
+    }
     eligible++;
     if((locks.get(d.symbol)||0)>signalTime){lockSkips++;continue;}
     const risk=candidate.stop-entry;
-    if(!(risk>0)){rejected++;continue;}
+    if(!(risk>0)){rejected++;rejectionReasons["Invalid stop risk"]=(rejectionReasons["Invalid stop risk"]||0)+1;continue;}
     const trade=simulate(d.symbol,entry,candidate.stop,d.five,entryIndex,signalTime);
-    trade.score=candidate.score;trade.surgePct=candidate.surgePct;trade.rsi15m=candidate.rsi15m;
+    trade.score=candidate.score;trade.surgePct=candidate.surgePct;trade.rsiPeak15m=candidate.rsiPeak15m;
     trades.push(trade);locks.set(d.symbol,trade.exitTime||END);
    }
   }
   const bySymbol={};for(const d of datasets){const ts=trades.filter(t=>t.symbol===d.symbol);bySymbol[d.symbol]=metrics(ts,ts.length,0,0);}
-  outputs[days]={period:{from:new Date(start).toISOString(),to:new Date(END).toISOString(),days},metrics:metrics(trades,eligible,rejected,lockSkips),bySymbol,trades};
+  outputs[days]={period:{from:new Date(start).toISOString(),to:new Date(END).toISOString(),days},metrics:metrics(trades,eligible,rejected,lockSkips),rejectionReasons,bySymbol,trades};
  }
  const report={generatedAt:new Date().toISOString(),engine:"Rabbit experimental counter-trend SHORT",source:"Kraken Futures historical OHLC",
   rules:{bullRegime:"BTC 4h computeBtcRegime bullish; traded symbol 1h and 4h EMA20>EMA50 and close>EMA20",
-   impulse:"last 8 closed 15m candles >=2.2% and >=2.6 ATR; impulse high >=1.35 ATR above 15m EMA20",
-   confirmation:"closed bearish 15m candle closes below prior two candle lows and EMA9; RSI14>=68; volume>=0.75x prior 20-bar average",
+   impulse:"8 closed 15m candles ending at the impulse peak; surge >=1.5%, >=1.8 ATR, and peak >=1.2 ATR above EMA20 calculated strictly before the impulse; RSI14 at peak >=65",
+   confirmation:"closed bearish 15m candle closes below EMA9 and (by default) below the prior two candle lows; RSI at peak >=65; confirmation volume >=0.7x prior 20-bar average",
+   state:"per-symbol state persisted on every candle, keyed by absolute peak timestamp; newer independent impulses replace older setups even when their absolute high is lower",
    entry:"next 5m candle open after the 15m confirmation closes",stop:"impulse swing high + 0.2 ATR",target:"full close at 1R",
    marginUsd:MARGIN,leverage:LEVERAGE,maxHoldHours:MAX_HOLD_HOURS,sameCandle:"stop-first unless open gaps through a level",
    costs:"fees, slippage, funding and liquidation excluded",universe:"top 8 current-volume eligible Kraken crypto USD perpetuals; survivorship bias applies"},
