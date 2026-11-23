@@ -1981,6 +1981,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
     priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))),
     volumePriorityBonus,
+    fourHourScoreAdjustment,
     confirmationPriorityBonus,
     confirmationCount,
     riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
