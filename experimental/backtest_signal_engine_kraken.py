@@ -239,3 +239,5 @@ if __name__ == "__main__":
     main()
 
 # Trigger isolated workflow after workflow registration on default branch.
+
+# Workflow registration is now present on default branch; rerun with corrected setup.
