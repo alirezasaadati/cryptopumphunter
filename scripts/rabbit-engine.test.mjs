@@ -116,12 +116,17 @@ test("T9: invalid OHLCV is rejected before indicator calculations",()=>{
   assert.equal(r.eligible,false);
   assert.match(r.rejected,/OHLCV/);
 });
-test("T10: default confirmation still requires prior-low breakdown",()=>{
+test("T10: prior-low requirement can be isolated from the EMA9 breakdown",()=>{
   assert.equal(RABBIT_DEFAULTS.requirePriorLowBreakdown,true);
   const x=context();appendCorrection(x.candles15m);
   const c=x.candles15m.at(-1);
-  c.close=Math.min(c.open-0.1,(x.candles15m.at(-2).low+x.candles15m.at(-3).low)/2);
-  c.low=c.close-0.02;
-  const r=run(x,{requirePriorLowBreakdown:false});
-  assert.equal(typeof r.eligible,"boolean");
+  x.candles15m.at(-2).low=99.5;
+  x.candles15m.at(-3).low=99.5;
+  c.close=101.5;
+  c.low=101.45;
+  const strict=run(x);
+  assert.equal(strict.eligible,false);
+  assert.match(strict.rejected,/اصلاح هنوز تأیید نشده/);
+  const soft=analyzeRabbitCorrection({...x,price:c.close},{requirePriorLowBreakdown:false});
+  assert.equal(soft.eligible,true,JSON.stringify(soft));
 });
