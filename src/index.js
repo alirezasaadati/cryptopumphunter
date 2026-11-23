@@ -2,10 +2,10 @@ import { runSpotScan } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
-import { evaluateTradeCandle } from "./futures-trade-lifecycle.js";
+import { evaluateTradeCandleR } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
-  VERSION: "11.2.0",
+  VERSION: "11.3.0",
   PENDING_TTL: 604800,
   TRADE_MONITOR_STUCK_AFTER_MS: 2 * 60 * 60 * 1000
 };
@@ -1431,6 +1431,12 @@ const FUTURES_CONFIG = {
   MAX_ENTRY_EMA_DISTANCE_ATR: 4.0,
   MAX_PULLBACK_DISTANCE_ATR: 0.35,
   MAX_RECLAIM_EXTENSION_ATR: 4.0,
+  LONG_RSI_MAX: 62,
+  LONG_MAX_EMA20_DISTANCE_ATR: 1.2,
+  LONG_STOP_BUFFER_ATR: 0.25,
+  ENFORCE_15M_CONFIRM_SIDES: ["LONG"],
+  BTC_REGIME_ENABLED: true,
+  BTC_SYMBOL: "PF_XBTUSD",
   // Separate experimental path. These values never affect the standard setup.
   HIGH_RISK_MIN_SCORE: 40,
   HIGH_RISK_MIN_VOLUME_RATIO: 0.3,
@@ -1571,6 +1577,25 @@ async function getFuturesUniverse() {
 async function getFuturesCandles(exchange, symbol, interval) {
   if (exchange !== "Kraken") throw new Error(`منبع داده ناشناخته: ${exchange}`);
   return getKrakenFuturesCandles(symbol, interval);
+}
+
+function computeBtcRegime(btc4h) {
+  if (!Array.isArray(btc4h) || btc4h.length < 60) {
+    return { ok: false, longAllowed: false, reason: "داده ۴ساعته BTC برای تشخیص رژیم کافی نیست" };
+  }
+  const closes = btc4h.map(c => Number(c.close));
+  const e20 = ema(closes, 20);
+  const e50 = ema(closes, 50);
+  const e50Prev = ema(closes.slice(0, -3), 50);
+  const last = closes[closes.length - 1];
+  if (![e20, e50, e50Prev, last].every(Number.isFinite)) {
+    return { ok: false, longAllowed: false, reason: "محاسبه رژیم BTC معتبر نیست" };
+  }
+  const longAllowed = last > e50 && e20 > e50 && e50 > e50Prev;
+  return {
+    ok: true, longAllowed, last, ema20: e20, ema50: e50, ema50Prev: e50Prev,
+    reason: longAllowed ? undefined : "BTC در ۴ساعته صعودی نیست؛ لانگ مجاز نیست"
+  };
 }
 
 function calculateAtr(candles, period = 14) {
@@ -1719,7 +1744,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const reasons = [];
 
   // Standard setup: at least one timeframe supports the direction and neither explicitly opposes it.
-  const strictLong = (up1h || up4h) && !down1h && !down4h && rsiValue >= 45 && rsiValue <= 72;
+  const strictLong = (up1h || up4h) && !down1h && !down4h && rsiValue >= 45 && rsiValue <= FUTURES_CONFIG.LONG_RSI_MAX;
   const strictShort = (down1h || down4h) && !up1h && !up4h && rsiValue >= 28 && rsiValue <= 55;
   // High-risk fallback retains a clear 1h direction but uses wider RSI bounds.
   const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
@@ -1733,7 +1758,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
       ? "حداقل یک تایم‌فریم صعودی است و تایم‌فریم دیگر مخالفت نمی‌کند"
       : "ستاپ پرریسک: روند ۱ساعته صعودی؛ مخالفت ۴ساعته با تأیید ۱۵دقیقه‌ای کنترل می‌شود",
       "ساختار EMA تایم‌فریم جهت‌دهنده تأیید شده است");
-    score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
+    score += rsiValue >= 52 && rsiValue <= Math.min(65, FUTURES_CONFIG.LONG_RSI_MAX) ? 15 : 9;
   } else if (strictShort || (!strictSetup && relaxedShort)) {
     side = "SHORT";
     score = strictSetup ? 45 : 40;
@@ -1783,6 +1808,13 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const priorityBaseScore = score;
 
   const fourHourOpposes = side === "LONG" ? down4h : up4h;
+  if (side === "LONG" && FUTURES_CONFIG.BTC_REGIME_ENABLED && options.btcRegime && !options.btcRegime.longAllowed) {
+    return {
+      symbol: ticker.symbol, side, score: Math.max(0, Math.min(100, Math.round(score))),
+      rejected: options.btcRegime.reason || "رژیم BTC برای لانگ مناسب نیست",
+      btcRegime: options.btcRegime
+    };
+  }
   const standardThresholdMet = strictSetup &&
     Number(ticker.quoteVolume) >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
     score >= FUTURES_CONFIG.MIN_SCORE &&
@@ -1826,6 +1858,27 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
       rejected: entryFilters.rejected,
       entryDiagnostics: entryFilters
     };
+  }
+  if (!options.skipEntryFilters && FUTURES_CONFIG.ENFORCE_15M_CONFIRM_SIDES.includes(side)) {
+    if (entryFilters.confirmationUnavailable || !(entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed)) {
+      return {
+        symbol: ticker.symbol, side,
+        score: Math.max(0, Math.min(100, Math.round(score))),
+        rejected: "تأیید مومنتوم و پولبک ۱۵دقیقه‌ای برای این جهت الزامی است و کامل نبود",
+        entryDiagnostics: entryFilters
+      };
+    }
+  }
+  if (!options.skipEntryFilters && side === "LONG") {
+    const extensionAtr = (Number(ticker.last) - e20) / atr;
+    if (extensionAtr > FUTURES_CONFIG.LONG_MAX_EMA20_DISTANCE_ATR) {
+      return {
+        symbol: ticker.symbol, side,
+        score: Math.max(0, Math.min(100, Math.round(score))),
+        rejected: "ورود لانگ دیرهنگام است؛ قیمت از EMA20 ساعتی کشیده شده (ورود فقط روی پولبک)",
+        entryDiagnostics: { ...entryFilters, longExtensionAtr: extensionAtr }
+      };
+    }
   }
   // HIGH_RISK uses a lower absolute quote-volume safety floor, while STANDARD
   // retains the existing 5M USD universe threshold and 0.75x relative-volume gate.
@@ -1883,7 +1936,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const swingLow = Math.min(...swing.map(c => c.low));
   const swingHigh = Math.max(...swing.map(c => c.high));
   let stop = side === "LONG"
-    ? Math.min(swingLow, entry - atr * 1.5)
+    ? Math.min(swingLow - atr * FUTURES_CONFIG.LONG_STOP_BUFFER_ATR, entry - atr * 1.5)
     : Math.max(swingHigh, entry + atr * 1.5);
   const risk = side === "LONG" ? entry - stop : stop - entry;
   const riskPct = risk / entry;
@@ -1893,8 +1946,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
 
   const direction = side === "LONG" ? 1 : -1;
   const target1 = entry + direction * risk * 1.5;
-  const target2 = entry + direction * risk * 2.5;
-  const target3 = entry + direction * risk * 3.5;
+  const target2 = entry + direction * risk * 2.2;
+  const target3 = entry + direction * risk * 3.0;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = standardEntryPassed;
   const highRiskEligible = !standardEntryPassed && score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE &&
@@ -2041,21 +2094,17 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
         const freshCandles = getNewClosedFuturesCandles(candles, trade.lastCheckedCandleTime);
         if (!freshCandles.length) continue;
         for (const candle of freshCandles) {
-          const result = evaluateTradeCandle(trade, { ...candle, time: Number(candle.time) + 300000 });
+          const result = evaluateTradeCandleR(trade, { ...candle, time: Number(candle.time) + 300000 });
           trade = {
-            ...trade,
+            ...(result.trade || trade),
             lastPrice: candle.close,
             lastCheckedAt: timestamp,
             lastCheckedCandleTime: Number(candle.time),
+            lastMonitorAttemptAt: timestamp,
             lastMonitorError: null
           };
           checked++;
-          if (result.changed) {
-            trade = {
-              ...result.trade, lastPrice: candle.close, lastCheckedAt: timestamp,
-              lastCheckedCandleTime: Number(candle.time), lastMonitorAttemptAt: timestamp,
-              lastMonitorError: null
-            };
+          if (result.closed) {
             closed++;
             break;
           }
@@ -2106,12 +2155,12 @@ const FUTURES_DISPLAY_LEVERAGE=10;
 function priceChangePercent(side,entry,exit){const e=Number(entry),x=Number(exit);return Number.isFinite(e)&&e>0&&Number.isFinite(x)?tradeDir(side)*(x-e)/e*100:null}
 function leveragedPriceChangePercent(side,entry,exit){const p=priceChangePercent(side,entry,exit);return p===null?null:p*FUTURES_DISPLAY_LEVERAGE}
 function formatOutcomePercent(value){if(value===null||value===undefined||value==="")return "—";const n=Number(value);if(!Number.isFinite(n))return "—";const label=n>0?"سود":n<0?"زیان":"سر‌به‌سر";return `${Math.abs(n).toFixed(2)}٪ ${label}`}
-function tradeResultR(t,includeRemainder){const risk=Number(t.initialRisk),entry=Number(t.actualEntry),target=Number(t.target1);if(!Number.isFinite(risk)||risk<=0||!Number.isFinite(entry)||entry<=0)return null;if((t.tpHits||[]).includes("TP1")&&Number.isFinite(target))return tradeDir(t.side)*(target-entry)/risk;return includeRemainder?tradeDir(t.side)*(Number(t.currentStop)-entry)/risk:0}
-function tradeOutcomePercent(t,exitPrice){const e=Number(t.actualEntry??t.entry);if(!Number.isFinite(e)||e<=0)return null;const exit=(t.tpHits||[]).includes("TP1")?Number(t.target1):Number(exitPrice);const p=priceChangePercent(t.side,e,exit);return p===null?null:p*FUTURES_DISPLAY_LEVERAGE}
+function tradeResultR(t,includeRemainder){if(t&&t.outcomeR!==null&&t.outcomeR!==undefined&&t.outcomeR!==""&&Number.isFinite(Number(t.outcomeR)))return Number(t.outcomeR);const risk=Number(t.initialRisk),entry=Number(t.actualEntry),target=Number(t.target1);if(!Number.isFinite(risk)||risk<=0||!Number.isFinite(entry)||entry<=0)return null;if((t.tpHits||[]).includes("TP1")&&Number.isFinite(target))return tradeDir(t.side)*(target-entry)/risk;return includeRemainder?tradeDir(t.side)*(Number(t.currentStop)-entry)/risk:0}
+function tradeOutcomePercent(t,exitPrice){const e=Number(t.actualEntry??t.entry);if(!Number.isFinite(e)||e<=0)return null;if(t&&t.outcomeR!==null&&t.outcomeR!==undefined&&t.outcomeR!==""&&Number.isFinite(Number(t.outcomeR))&&Number.isFinite(Number(t.initialRisk))&&Number(t.initialRisk)>0)return Number(t.outcomeR)*Number(t.initialRisk)/e*100*FUTURES_DISPLAY_LEVERAGE;const exit=(t.tpHits||[]).includes("TP1")?Number(t.target1):Number(exitPrice);const p=priceChangePercent(t.side,e,exit);return p===null?null:p*FUTURES_DISPLAY_LEVERAGE}
 function getNewClosedFuturesCandles(candles,lastCheckedCandleTime=0){return(Array.isArray(candles)?candles:[]).filter(c=>Number(c.time)>Number(lastCheckedCandleTime||0)).sort((a,b)=>a.time-b.time)}
 function ensureTradeTrackingCheckpoint(trade,now=Date.now()){if(!Number.isFinite(Number(trade?.lastCheckedCandleTime))||Number(trade.lastCheckedCandleTime)<=0){trade.lastCheckedCandleTime=Math.floor(now/60000)*60000;trade.trackingMode=trade.trackingMode||"LEGACY_CONTINUED";return true}return false}
 function isValidFuturesSignalLevels(signal){const entry=Number(signal?.entry),stop=Number(signal?.stop),targets=[Number(signal?.target1),Number(signal?.target2),Number(signal?.target3)];if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||![entry,stop,...targets].every(Number.isFinite)||![entry,stop,...targets].every(v=>v>0))return false;return signal.side==="LONG"?stop<entry&&entry<targets[0]&&targets[0]<targets[1]&&targets[1]<targets[2]:stop>entry&&entry>targets[0]&&targets[0]>targets[1]&&targets[1]>targets[2]}
-function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
+function createTrackedFuturesTrade(signal,chatId){if(!isValidFuturesSignalLevels(signal))return null;const entry=Number(signal.entry),stop=Number(signal.stop),createdAt=Date.now();return{id:crypto.randomUUID(),signalId:signal.id,chatId:String(chatId),symbol:signal.symbol,exchange:signal.exchange||"Kraken",side:signal.side,tier:"STANDARD",strategyId:signal.strategyId||"kraken-futures-engine",strategyName:signal.strategyName||"Kraken Futures 3.8.2",reason:signal.reason||"",plannedEntry:entry,actualEntry:entry,initialStop:stop,currentStop:stop,target1:Number(signal.target1),target2:Number(signal.target2),target3:Number(signal.target3),initialRisk:tradeDir(signal.side)*(entry-stop),tpHits:[],realizedR:0,remainingFraction:1,outcomeR:0,trackingModel:"R_SCALED_40_35_25",status:"OPEN",trackingMode:"SIGNAL_EVALUATION",createdAt:new Date(createdAt).toISOString(),lastPrice:entry,lastCheckedAt:new Date(createdAt).toISOString(),lastCheckedCandleTime:Math.floor(createdAt/60000)*60000}}
 async function persistSignalOutboxMirror(env,chatId,signalId,record,label){
   if(!env.APP_KV)return false;
   try{
@@ -2267,6 +2316,9 @@ export class SignalDeliveryCoordinator {
                 ? candidate.monitorErrorHistory.slice(-5)
                 : (existing.monitorErrorHistory||[])
             };
+            for(const key of ["tpHits","currentStop","realizedR","remainingFraction","outcomeR"]){
+              if(candidate[key]!==undefined)next[key]=candidate[key];
+            }
             if(["CLOSED_PROFIT","CLOSED_STOP","CLOSED_MANUAL"].includes(candidate.status)){
               next.status=candidate.status;
               next.closeReason=candidate.closeReason||candidate.status;
@@ -2774,6 +2826,16 @@ async function runFuturesSignalScan(env, options = {}) {
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   let analysisErrorCount = 0;
   let fifteenMinuteDataErrorCount = 0;
+  let btcRegime = options.btcRegime;
+  if (!btcRegime && FUTURES_CONFIG.BTC_REGIME_ENABLED) {
+    try {
+      btcRegime = computeBtcRegime(await getKrakenFuturesCandles(FUTURES_CONFIG.BTC_SYMBOL, FUTURES_CONFIG.CONFIRM_INTERVAL));
+    } catch (error) {
+      btcRegime = { ok: false, longAllowed: false, reason: "دریافت داده BTC ناموفق بود؛ لانگ مجاز نیست" };
+      console.error("FUTURES_BTC_REGIME_FETCH_FAILED", String(error?.message || error));
+    }
+  }
+  const analysisOptions = { ...options, btcRegime };
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
       const [oneHour, fourHour, fifteenMinute] = await Promise.all([
@@ -2785,7 +2847,7 @@ async function runFuturesSignalScan(env, options = {}) {
           return [];
         })
       ]);
-      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, options);
+      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, analysisOptions);
     } catch (error) {
       analysisErrorCount++;
       return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticType: "data_or_analysis_error" };
@@ -2864,6 +2926,7 @@ async function runFuturesSignalScan(env, options = {}) {
     highRiskSignalCount: signals.filter(item => item.riskLevel === "HIGH_RISK").length,
     registeredCount: signals.length,
     delivery, deliveryError,
+    btcRegime: btcRegime || null,
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count).slice(0, 8)
   };
@@ -2873,6 +2936,7 @@ async function runFuturesSignalScan(env, options = {}) {
     "━━━━━━━━━━━━━━━━━━\n" +
     "🏦 بازار: Kraken Derivatives Perpetual\n" +
     "⏱ تایم‌فریم: 1h با تأیید روند 4h و فیلتر ورود 15m\n" +
+    `🧭 رژیم BTC (۴ساعته): ${btcRegime?.longAllowed ? "صعودی ✅ لانگ مجاز" : "غیرصعودی ⛔ فقط شورت"}\n` +
     `📥 نمادهای بررسی‌شده: ${analyzedCount} از ${filteredUniverse.length} نماد واجد حداقل حجم ۲۴ساعته\n` +
     `🟢 سیگنال‌های عادی: ${signals.filter(item => item.riskLevel !== "HIGH_RISK").length}\n` +
     `⚠️ سیگنال‌های پر ریسک: ${signals.filter(item => item.riskLevel === "HIGH_RISK").length}\n\n` +
@@ -2998,4 +3062,4 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
+export { FUTURES_CONFIG, computeBtcRegime, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
