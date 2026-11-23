@@ -2,7 +2,7 @@ name: Code checks
 
 on:
   push:
-    branches: [main, feature/permanent-signal-ledger]
+    branches: [main, feature/permanent-signal-ledger, experiment/v48-r-scaled-btc-gated-20261123]
   pull_request:
   workflow_dispatch:
 
