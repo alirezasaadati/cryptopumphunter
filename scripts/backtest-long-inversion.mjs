@@ -234,6 +234,7 @@ async function main() {
   if (!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
   const universe = tickerData.tickers.filter(t => t?.tag==="perpetual" && t.suspended!==true &&
     /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||"")) &&
+    !/(XAU|XAG|EUR|GBP|JPY|CAD|CHF|AUD|NZD)/i.test(String(t.symbol||"")) &&
     Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME && Number(t.last)>0)
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
@@ -257,9 +258,9 @@ async function main() {
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
       lock:"independent symbol+side lock until close; opposite side may overlap",
-      universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
+      universe:"top current crypto Kraken perpetuals by current quote volume; fiat and commodity contracts excluded; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
-    metrics,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
+    metrics,metricsByScenario,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
     bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
