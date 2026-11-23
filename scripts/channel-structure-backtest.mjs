@@ -107,8 +107,8 @@ function runSymbol(data, days, endMs) {
     const signal=generateChannelSignal({candles4h:closed4h,candles1h:h1.slice(0,i+1),candles15m:closed15});
     if(!signal)continue;
     counts.opportunities++;
+    counts.opportunitiesBySide[signal.side]++;
     counts.bySetup[signal.setup]=(counts.bySetup[signal.setup]||0)+1;
-    if(signal.risk/signal.referenceEntry<0.001){counts.belowMinRisk++;continue;}
     const signalBarIndex=lowerBound(m5,signalTime)-1;
     const nextIndex=signalBarIndex+1;
     if(signalBarIndex<0||nextIndex>=m5.length)continue;
