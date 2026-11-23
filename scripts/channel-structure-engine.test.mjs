@@ -43,11 +43,11 @@ test("signal generator does not emit without confirmed channel", () => {
   assert.equal(generateChannelSignal({ candles4h: candles, candles1h: candles, candles15m: candles }), null);
 });
 
-test("v0.2 uses tighter reversal stops and larger breakout targets", () => {
+test("v0.3 uses 0.15 ATR stops and 1.5R first target for both setup families", () => {
   assert.equal(CHANNEL_CONFIG.reversalStopBufferAtr, 0.15);
-  assert.equal(CHANNEL_CONFIG.stopBufferAtr, 0.35);
+  assert.equal(CHANNEL_CONFIG.stopBufferAtr, 0.15);
   assert.equal(CHANNEL_CONFIG.reversalTargetR, 1.5);
-  assert.equal(CHANNEL_CONFIG.breakoutTargetR, 2.5);
+  assert.equal(CHANNEL_CONFIG.breakoutTargetR, 1.5);
 });
 
 test("volume and reversal RSI divergence are priority bonuses only", () => {
