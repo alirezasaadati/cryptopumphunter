@@ -279,11 +279,11 @@ async function main() {
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical OHLC",
     settings:{symbolsRequested:SYMBOL_LIMIT,feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
-      maxHoldHours:MAX_HOLD_HOURS,limitValidityMinutes:LIMIT_VALID_BARS*5,
+      maxHoldHours:MAX_HOLD_HOURS,limitValidityMinutes:LIMIT_VALID_BARS*5,leverage:FUTURES_TRADE_LEVERAGE,
       fallback:"completed 5m bearish => market at next 5m open; bullish/Doji => sell limit at observed high; limit fills at open if gapped above, else at touched limit; expiry after 12 bars",
       target1:"SHORT TP1 distance=min(1.5R,2.5*1h ATR); production lifecycle closes the whole trade at TP1 or stop; TP2/TP3 remain signal information only",
       entryCohort:"eligible SHORT candidates where first completed post-signal 5m close is below both 1h EMA20 and prior 1h high, with levels >0.5% apart",
-      stopTargetSameBar:"stop first (conservative)",funding:"excluded",
+      stopTargetSameBar:"production lifecycle: an open-gap through a level wins; otherwise stop wins when both levels are touched intrabar",funding:"excluded",
       drawdownMethod:"maximum drawdown of chronological additive per-trade R; not account or portfolio equity drawdown",
       lookahead:"5m direction and high are taken only from the completed decision candle; entry starts on following 5m candles",
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
@@ -320,7 +320,7 @@ async function main() {
     );
   }
   lines.push("## Methodology","",report.settings.fallback,"",report.settings.target1,"",
-    "The test cohort is intentionally limited to the exact MARKET_FALLBACK condition. The signal is not removed when a Limit fails to fill; only the simulated execution expires. 5m OHLC cannot reveal intrabar order, so stop is evaluated before targets when both are touched. Funding is excluded. Drawdown is additive per-trade R, not portfolio-level equity drawdown. Results are research-only and do not represent live execution.","");
+    "The test cohort is intentionally limited to the exact MARKET_FALLBACK condition. The signal is not removed when a Limit fails to fill; only the simulated execution expires. Exits use the production evaluateTradeCandle lifecycle: an open-gap through a level is honored; otherwise stop wins if both stop and TP1 are touched intrabar. Funding is excluded. Drawdown is additive per-trade R, not portfolio-level equity drawdown. Results are research-only and do not represent live execution.","");
   await writeFile("artifacts/short-priority-fallback-backtest.md",lines.join("\n"));
   console.log(JSON.stringify(report,null,2));
 }
