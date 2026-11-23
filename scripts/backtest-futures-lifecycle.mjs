@@ -4,7 +4,7 @@ import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARG
 
 const BASE = "https://futures.kraken.com";
 const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
-const DAYS = Math.max(7, Math.min(60, Number(process.env.LIFECYCLE_BACKTEST_DAYS || 30)));
+const DAYS = Math.max(7, Math.min(365, Number(process.env.LIFECYCLE_BACKTEST_DAYS || 30)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 15;
 const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
@@ -339,6 +339,11 @@ async function main() {
   const metrics = summarize(allTrades);
   const baselineMetrics = summarize(baselineAllTrades);
   const fillTypeCounts = allTrades.reduce((acc,t)=>{ const key=t.fillType||"UNKNOWN"; acc[key]=(acc[key]||0)+1; return acc; },{});
+  const entrySourceMetrics = Object.fromEntries(["EMA20_1H","PREVIOUS_CANDLE_HIGH","MARKET_FALLBACK"].map(source => {
+    const group = allTrades.filter(t => t.selectedEntrySource === source);
+    return [source, { ...summarize(group), filledTrades: group.length,
+      fillTypes: group.reduce((acc,t)=>{ const key=t.fillType||"UNKNOWN"; acc[key]=(acc[key]||0)+1; return acc; },{}) }];
+  }));
   const STARTING_CAPITAL = 100;
   const MARGIN_PER_TRADE = 10;
   const events = allTrades.flatMap(t => [
@@ -401,7 +406,13 @@ async function main() {
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
     "| Average eligible signals / day | "+report.averageSignalsPerDay.toFixed(2)+" |",
     "| Entry fills (all types) / expired limits | "+report.limitOrdersFilled+" / "+report.limitOrdersExpired+" |",
-    "| Market fallback / limit touch / marketable limit | "+(report.fillTypeCounts.MARKET_FALLBACK||0)+" / "+(report.fillTypeCounts.LIMIT_TOUCH||0)+" / "+(report.fillTypeCounts.MARKETABLE_LIMIT_AT_OPEN||0)+" |",
+    "| Fill execution: fallback / limit touch / marketable-at-open | "+(report.fillTypeCounts.MARKET_FALLBACK||0)+" / "+(report.fillTypeCounts.LIMIT_TOUCH||0)+" / "+(report.fillTypeCounts.MARKETABLE_LIMIT_AT_OPEN||0)+" |",
+    "",
+    "## Entry-source breakdown",
+    "",
+    "| Selected source | Filled | TP1 | Stop | Win rate | Gross PnL ($10 margin/trade) |",
+    "|---|---:|---:|---:|---:|---:|",
+    ...Object.entries(report.entrySourceMetrics).map(([source,m])=>"| "+source+" | "+m.filledTrades+" | "+m.profitCloses+" | "+m.stopCloses+" | "+m.winRatePct.toFixed(2)+"% | $"+(m.totalMarginReturnPct/10).toFixed(2)+" |"),
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
     "| TP1 closes (SHORT 1.5R) | "+accountMetrics.profitCloses+" |",
