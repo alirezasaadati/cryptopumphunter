@@ -79,7 +79,7 @@ test("new SHORT trades explicitly marked ATR_CAPPED_SHORT close at their signal 
   const result = evaluateTradeCandle(dynamicShort, {open:100, high:100.5, low:98.1, time:7});
   assert.equal(result.reason, "CLOSED_PROFIT");
   assert.equal(result.trade.exitPrice, 98.25);
-  assert.equal(result.trade.marginReturnPercent, 17.5);
+  assert.ok(Math.abs(result.trade.marginReturnPercent - 17.5) < 1e-9);
   assert.equal(result.trade.target1Mode, "ATR_CAPPED_SHORT");
 });
 
