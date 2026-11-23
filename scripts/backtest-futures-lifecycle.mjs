@@ -1,13 +1,13 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
-import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARGET_PERCENT } from "../src/futures-trade-lifecycle.js";
+import { analyzeFuturesSymbol, computeBtcRegime, FUTURES_CONFIG } from "../src/index.js";
+import { evaluateTradeCandleR, FUTURES_TRADE_LEVERAGE } from "../src/futures-trade-lifecycle.js";
 
 const BASE = "https://futures.kraken.com";
 const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
 const DAYS = Math.max(7, Math.min(60, Number(process.env.LIFECYCLE_BACKTEST_DAYS || 30)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 15;
-const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
+const TP_R = [1.5, 2.2, 3.0];
 const LEVERAGE = FUTURES_TRADE_LEVERAGE;
 
 async function getJson(url, attempt = 0) {
@@ -72,7 +72,7 @@ function lowerBound(candles, time) {
 }
 function candleAmbiguous(side, trade, candle) {
   const entry = Number(trade.entry), stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
-  const target = side === "LONG" ? entry * (1 + TARGET / LEVERAGE / 100) : entry * (1 - TARGET / LEVERAGE / 100);
+  const target = Number(trade.target1);
   const stopHit = side === "LONG" ? candle.low <= stop : candle.high >= stop;
   const profitHit = side === "LONG" ? candle.high >= target : candle.low <= target;
   const stopAtOpen = side === "LONG" ? candle.open <= stop : candle.open >= stop;
@@ -81,17 +81,26 @@ function candleAmbiguous(side, trade, candle) {
 }
 function summarize(trades) {
   const closed = trades.filter(t => t.status === "CLOSED_PROFIT" || t.status === "CLOSED_STOP");
-  const profits = closed.filter(t => t.status === "CLOSED_PROFIT");
-  const stops = closed.filter(t => t.status === "CLOSED_STOP");
-  let equity = 0, peak = 0, maxDrawdown = 0;
-  for (const trade of [...closed].sort((a,b)=>a.closedAtMs-b.closedAtMs)) {
-    equity += Number(trade.marginReturnPercent || 0);
+  const profits = closed.filter(t => Number(t.outcomeR) > 0);
+  const stops = closed.filter(t => Number(t.outcomeR) <= 0);
+  const rOf = trade => Number.isFinite(Number(trade.outcomeR)) ? Number(trade.outcomeR) : 0;
+  const sumR = rows => rows.reduce((sum, trade) => sum + rOf(trade), 0);
+  const grossWin = profits.reduce((sum, trade) => sum + rOf(trade), 0);
+  const grossLoss = Math.abs(stops.reduce((sum, trade) => sum + rOf(trade), 0));
+  let equity = 0, peak = 0, maxDrawdownR = 0;
+  for (const trade of [...closed].sort((a,b)=>(a.closedAtMs||0)-(b.closedAtMs||0))) {
+    equity += rOf(trade);
     peak = Math.max(peak, equity);
-    maxDrawdown = Math.max(maxDrawdown, peak - equity);
+    maxDrawdownR = Math.max(maxDrawdownR, peak - equity);
   }
   const longs = closed.filter(t => t.side === "LONG");
   const shorts = closed.filter(t => t.side === "SHORT");
-  const sum = xs => xs.reduce((n,t)=>n+Number(t.marginReturnPercent || 0),0);
+  const sideStats = rows => ({
+    trades: rows.length,
+    winRatePct: rows.length ? rows.filter(t => rOf(t) > 0).length / rows.length * 100 : 0,
+    totalR: sumR(rows),
+    avgR: rows.length ? sumR(rows) / rows.length : 0
+  });
   return {
     tradesStarted: trades.length,
     closedTrades: closed.length,
@@ -101,18 +110,16 @@ function summarize(trades) {
     longs: longs.length,
     shorts: shorts.length,
     winRatePct: closed.length ? profits.length / closed.length * 100 : 0,
-    totalMarginReturnPct: sum(closed),
-    averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
-    maxDrawdownMarginPct: maxDrawdown,
+    totalR: sumR(closed),
+    averageR: closed.length ? sumR(closed) / closed.length : 0,
+    profitFactor: grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : 0),
+    maxDrawdownR,
     ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
-    bySide: {
-      LONG: { trades: longs.length, profitCloses: longs.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: longs.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(longs) },
-      SHORT: { trades: shorts.length, profitCloses: shorts.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: shorts.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(shorts) }
-    }
+    bySide: { LONG: sideStats(longs), SHORT: sideStats(shorts) }
   };
 }
 
-async function backtestSymbol(ticker, fromMs, toMs) {
+async function backtestSymbol(ticker, fromMs, toMs, btc4h = []) {
   const [oneHour,fourHour,fifteenMinute,fiveMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs),
     fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs),
@@ -125,7 +132,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
 
   const trades = [];
   const lockUntil = new Map();
-  let fourIndex = 0, fifteenIndex = 0;
+  let fourIndex = 0, fifteenIndex = 0, btcIndex = 0;
   let acceptedSignals = 0, skippedByLock = 0, rejectedSignals = 0;
   const testStart = toMs - DAYS * 86400000;
 
@@ -135,6 +142,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (signalCloseTime < testStart || signalCloseTime >= toMs) continue;
     while (fourIndex < fourHour.length && fourHour[fourIndex].time + INTERVALS["4h"] <= signalCloseTime) fourIndex++;
     while (fifteenIndex < fifteenMinute.length && fifteenMinute[fifteenIndex].time + INTERVALS["15m"] <= signalCloseTime) fifteenIndex++;
+    while (btcIndex < btc4h.length && btc4h[btcIndex].time + INTERVALS["4h"] <= signalCloseTime) btcIndex++;
+    const btcRegime = computeBtcRegime(btc4h.slice(Math.max(0,btcIndex-120),btcIndex));
     const closed4h = fourHour.slice(0,fourIndex);
     const closed15m = fifteenMinute.slice(Math.max(0,fifteenIndex-120),fifteenIndex);
     if (closed4h.length < FUTURES_CONFIG.MIN_CANDLES || closed15m.length < 40) continue;
@@ -145,7 +154,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       priceChangePercent: historicalChange(oneHour,i), premium: { lastFundingRate: null }
     };
     let candidate;
-    try { candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m); }
+    try { candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m,{ btcRegime }); }
     catch { rejectedSignals++; continue; }
     if (!candidate || candidate.eligible !== true || !["LONG","SHORT"].includes(candidate.side)) { rejectedSignals++; continue; }
     acceptedSignals++;
@@ -156,7 +165,10 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const trade = {
       id: ticker.symbol + ":" + candidate.side + ":" + signalCloseTime,
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
-      entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
+      entry, actualEntry: entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
+      currentStop: Number(candidate.stop), target1: Number(candidate.target1), target2: Number(candidate.target2),
+      target3: Number(candidate.target3), initialRisk: (candidate.side === "LONG" ? 1 : -1) * (entry - Number(candidate.stop)),
+      tpHits: [], realizedR: 0, remainingFraction: 1, outcomeR: 0,
       signalTime: signalBar.time, entryTime: signalCloseTime,
       score: candidate.score, ambiguousCandles: 0
     };
@@ -165,9 +177,9 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     for (; candleIndex < fiveMinute.length && fiveMinute[candleIndex].time < toMs; candleIndex++) {
       const bar = fiveMinute[candleIndex];
       if (candleAmbiguous(candidate.side,trade,bar)) trade.ambiguousCandles++;
-      const evaluated = evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
-      if (evaluated.changed) {
-        Object.assign(trade,evaluated.trade);
+      const evaluated = evaluateTradeCandleR(trade,{...bar,time:bar.time+INTERVALS["5m"]});
+      if (evaluated.changed) Object.assign(trade,evaluated.trade);
+      if (evaluated.closed) {
         trade.closedAtMs = bar.time + INTERVALS["5m"];
         closed = true;
         break;
@@ -205,9 +217,10 @@ async function main() {
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
 
+  const btc4h = await fetchHistoricalCandles(FUTURES_CONFIG.BTC_SYMBOL,"4h",fromMs,endMs);
   const results = [];
   for (const ticker of universe) {
-    try { results.push(await backtestSymbol(ticker,fromMs,endMs)); }
+    try { results.push(await backtestSymbol(ticker,fromMs,endMs,btc4h)); }
     catch (error) { results.push({symbol:ticker.symbol,error:String(error?.message||error)}); }
   }
   const successful = results.filter(r=>!r.error);
@@ -216,10 +229,10 @@ async function main() {
   const report = {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
-    rules:{leverage:LEVERAGE,targetMarginReturnPct:TARGET,requiredFavorablePriceMovePct:TARGET/LEVERAGE,
-      exit:"close only at +30% margin return or configured stop",tp1Tp2Tp3:"ignored for closing",
+    rules:{leverage:LEVERAGE,tpRiskMultiples:TP_R,tpWeights:[0.40,0.35,0.25],
+      exit:"40% at 1.5R, 35% at 2.2R, 25% at 3R; after TP1 remaining stop moves to breakeven",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
-      fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
+      fees:"excluded",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
@@ -240,20 +253,23 @@ async function main() {
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
-    "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
-    "| Stop closes | "+metrics.stopCloses+" |",
+    "| Profit closes | "+metrics.profitCloses+" |",
+    "| Stop / non-positive closes | "+metrics.stopCloses+" |",
     "| Open at end | "+metrics.openAtEnd+" |",
     "| LONG / SHORT | "+metrics.longs+" / "+metrics.shorts+" |",
     "| Win rate | "+metrics.winRatePct.toFixed(2)+"% |",
-    "| Sum margin return (not compounded) | "+metrics.totalMarginReturnPct.toFixed(2)+"% |",
-    "| Average margin return / trade | "+metrics.averageMarginReturnPct.toFixed(2)+"% |",
-    "| Max drawdown (additive margin-return points) | "+metrics.maxDrawdownMarginPct.toFixed(2)+"% |",
+    "| Total R | "+metrics.totalR.toFixed(2)+" |",
+    "| Average R / trade | "+metrics.averageR.toFixed(3)+" |",
+    "| Profit factor | "+(Number.isFinite(metrics.profitFactor)?metrics.profitFactor.toFixed(2):"∞")+" |",
+    "| Max drawdown | "+metrics.maxDrawdownR.toFixed(2)+"R |",
+    "| LONG win rate / total R | "+metrics.bySide.LONG.winRatePct.toFixed(1)+"% / "+metrics.bySide.LONG.totalR.toFixed(2)+"R |",
+    "| SHORT win rate / total R | "+metrics.bySide.SHORT.winRatePct.toFixed(1)+"% / "+metrics.bySide.SHORT.totalR.toFixed(2)+"R |",
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
     "| Same-side lock skips | "+report.lockSkips+" |",
     "| Rejected signal opportunities | "+report.rejectedSignals+" |","",
-    "| Symbol | Signals | Closed | Profit | Stop | LONG | SHORT | Net margin % |",
+    "| Symbol | Signals | Closed | Profit | Stop | LONG | SHORT | Total R |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
-    ...successful.map(r=>"| "+r.symbol+" | "+r.signalsAccepted+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.longs+" | "+r.metrics.shorts+" | "+r.metrics.totalMarginReturnPct.toFixed(2)+" |"),
+    ...successful.map(r=>"| "+r.symbol+" | "+r.signalsAccepted+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.longs+" | "+r.metrics.shorts+" | "+r.metrics.totalR.toFixed(2)+" |"),
     "", "Limitations: 5m OHLC cannot identify intrabar path; ambiguous candles use stop-first. Stop execution is assumed at the stop or gap open. Liquidation, funding, fees, and slippage are excluded. Universe selection uses current volume, so survivorship bias applies.",
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
