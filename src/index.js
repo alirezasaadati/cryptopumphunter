@@ -2201,7 +2201,7 @@ async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMa
   const key=signalOutboxKey(chatId,signal.id);
   const id=env.SIGNAL_DELIVERY.idFromName(key);
   const stub=env.SIGNAL_DELIVERY.get(id);
-  if(!getSignalDeliverySecret(env))throw new Error("SIGNAL_DELIVERY_SECRET is required for authenticated delivery.");
+  if(!getSignalDeliverySecret(env))throw new Error("SIGNAL_DELIVERY_AUTH_SECRET is required for authenticated delivery.");
   const response=await stub.fetch("https://signal-delivery.internal/deliver",{
     method:"POST",
     headers:{"content-type":"application/json","x-signal-delivery-secret":getSignalDeliverySecret(env)},
@@ -2222,7 +2222,7 @@ export class SignalDeliveryCoordinator {
   async fetch(request){
     const url=new URL(request.url);
     if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
-    const expectedSecret=this.getSignalDeliverySecret(env);
+    const expectedSecret=getSignalDeliverySecret(this.env);
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
     let payload;
