@@ -248,7 +248,7 @@ export function generateChannelSignal({ candles4h, candles1h, candles15m, candle
     referenceEntry: entryReference, stop, target1, risk, targetR,
     volumeConfirmed: hasVolumeConfirmation(candles1h, cfg.volumeMultiplier, cfg.volumeLookback),
     rsiDivergence: isReversal && hasRsiDivergence(candles1h, side, cfg.rsiPeriod),
-    fourHourConfirmed, multiTimeframeAligned, dailyChannel, dailyPositionMultiplier, dailyContext,
+    mode, fourHourConfirmed, multiTimeframeAligned, dailyChannel, dailyPositionMultiplier, dailyContext,
     riskPct: risk / entryReference,
     signalTime: h.time ?? null
   };
@@ -267,7 +267,7 @@ export function scoreChannelSignal(signal) {
   score += Math.min(15, c.widthAtr >= 2 && c.widthAtr <= 8 ? 15 : 8);
   if (signal.volumeConfirmed) score += 15;
   if (signal.rsiDivergence) score += 10;
-  if (signal.fourHourConfirmed) score += 20;
-  if (signal.multiTimeframeAligned) score += 25;
+  if (signal.mode === "B" && signal.fourHourConfirmed) score += 20;
+  if (signal.mode === "B" && signal.multiTimeframeAligned) score += 25;
   return Math.max(0, Math.min(150, score));
 }
