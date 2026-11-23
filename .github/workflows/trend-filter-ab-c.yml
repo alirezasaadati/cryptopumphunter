@@ -1,0 +1,32 @@
+name: Trend filter A-B-C isolated backtest
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/trend-filter-ab-c-20261123
+    paths:
+      - "scripts/trend-filter-ab-c-60d.mjs"
+      - ".github/workflows/trend-filter-ab-c.yml"
+      - "src/index.js"
+      - "src/futures-trade-lifecycle.js"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 60-day A/B/C backtest
+        env:
+          TREND_AB_DAYS: "60"
+          TREND_AB_SYMBOLS: "12"
+        run: node scripts/trend-filter-ab-c-60d.mjs
+      - name: Upload isolated report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trend-filter-ab-c-60d
+          path: artifacts/
+          if-no-files-found: warn
