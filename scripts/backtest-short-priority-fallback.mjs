@@ -1,4 +1,5 @@
 import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
+import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE } from "../src/futures-trade-lifecycle.js";
 import { resolveShortFallbackFill } from "../src/short-entry-fallback-experiment.js";
 import { mkdir, writeFile } from "node:fs/promises";
 
@@ -14,7 +15,6 @@ const FEE_PER_SIDE = Math.max(0, Number(process.env.SHORT_PRIORITY_FEE || 0.0005
 const SLIPPAGE_PER_SIDE = Math.max(0, Number(process.env.SHORT_PRIORITY_SLIPPAGE || 0.0003));
 const MAX_HOLD_HOURS = 72;
 const LIMIT_VALID_BARS = 12;
-const TARGET_WEIGHTS = [0.40, 0.35, 0.25];
 
 async function getJson(url) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
@@ -83,11 +83,13 @@ function summarize(trades) {
   for(const t of trades){equity+=t.netR;peak=Math.max(peak,equity);maxDrawdownR=Math.max(maxDrawdownR,peak-equity);}
   return {
     trades:trades.length,wins:wins.length,losses:losses.length,
+    profitCloses:trades.filter(t=>t.exitReason==="CLOSED_PROFIT").length,
+    stopCloses:trades.filter(t=>t.exitReason==="CLOSED_STOP").length,
     winRatePct:trades.length?wins.length/trades.length*100:0,
     netR:trades.reduce((s,t)=>s+t.netR,0),
     expectancyR:trades.length?trades.reduce((s,t)=>s+t.netR,0)/trades.length:0,
     profitFactor:grossLoss?grossWin/grossLoss:grossWin?null:0,
-    maxDrawdownR,targetHits:trades.reduce((s,t)=>s+t.targetHits,0)
+    maxDrawdownR
   };
 }
 
@@ -101,47 +103,31 @@ function buildShortLevels({oneHour,signalIndex,entry,atr}) {
   if(!(risk>0)||riskPct<0.002||riskPct>0.08)return null;
   const target1Distance=Math.min(risk*1.5,atr*2.5);
   return {entry,stop,risk,atr,target1:entry-target1Distance,target2:entry-risk*2.5,target3:entry-risk*3.5,
-    rewardRisk:target1Distance/risk};
+    rewardRisk:target1Distance/risk,target1Mode:"ATR_CAPPED_SHORT"};
 }
 
 function simulateShortTrade({symbol,levels,candles5m,fillIndex,fee,slippage,maxHoldHours}) {
   const entry=levels.entry, risk=levels.risk;
-  const targets=[levels.target1,levels.target2,levels.target3];
-  const remaining=[...TARGET_WEIGHTS];
-  let left=1,netR=0,targetHits=0,exitReason="TIME_EXIT",exitIndex=Math.min(candles5m.length-1,fillIndex+maxHoldHours*12);
+  const trade={symbol,side:"SHORT",status:"OPEN",entry,actualEntry:entry,stop:levels.stop,
+    initialStop:levels.stop,currentStop:levels.stop,target1:levels.target1,
+    target1Mode:levels.target1Mode||"ATR_CAPPED_SHORT"};
   const end=Math.min(candles5m.length-1,fillIndex+maxHoldHours*12);
-  for(let i=fillIndex;i<=end&&left>1e-9;i++){
-    const bar=candles5m[i];
-    const stopGap=bar.open>=levels.stop;
-    const stopTouched=bar.high>=levels.stop;
-    if(stopGap||stopTouched){
-      const raw=stopGap?bar.open:levels.stop;
-      const exit=raw*(1+slippage);
-      const gross=(entry-exit)/risk;
-      const feeR=fee*(entry+exit)/risk;
-      netR+=left*(gross-feeR);
-      left=0;exitReason="STOP";exitIndex=i;break;
-    }
-    for(let t=0;t<targets.length&&left>1e-9;t++){
-      if(bar.low>targets[t])continue;
-      if(remaining[t]<=1e-9)continue;
-      const weight=Math.min(remaining[t],left);
-      const exit=targets[t]*(1+slippage);
-      const gross=(entry-exit)/risk;
-      const feeR=fee*(entry+exit)/risk;
-      netR+=weight*(gross-feeR);
-      left-=weight;remaining[t]=0;targetHits++;
-    }
-    if(left<=1e-9){left=0;exitReason="TARGETS";exitIndex=i;break;}
-    if(i===end){
-      const exit=bar.close*(1+slippage);
-      netR+=left*((entry-exit)/risk-fee*(entry+exit)/risk);
-      left=0;exitReason="TIME_EXIT";exitIndex=i;
+  let exitPrice=null,exitReason="TIME_EXIT",exitIndex=end;
+  for(let i=fillIndex;i<=end;i++){
+    const result=evaluateTradeCandle(trade,candles5m[i],{leverage:FUTURES_TRADE_LEVERAGE});
+    if(result.changed){
+      exitPrice=Number(result.trade.exitPrice);
+      exitReason=result.reason;
+      exitIndex=i;
+      break;
     }
   }
+  if(!Number.isFinite(exitPrice)||exitPrice<=0)exitPrice=Number(candles5m[end]?.close);
+  const adjustedExit=exitPrice*(1+slippage);
+  const netR=(entry-adjustedExit)/risk-fee*(entry+adjustedExit)/risk;
   return {symbol,entry,stop:levels.stop,target1:levels.target1,target2:levels.target2,target3:levels.target3,
-    rewardRisk:levels.rewardRisk,netR,targetHits,exitReason,fillIndex,exitIndex,entryTime:candles5m[fillIndex].time,
-    exitTime:candles5m[exitIndex].time};
+    target1Mode:levels.target1Mode,rewardRisk:levels.rewardRisk,exitPrice:adjustedExit,netR,
+    exitReason,fillIndex,exitIndex,entryTime:candles5m[fillIndex].time,exitTime:candles5m[exitIndex].time};
 }
 
 function lowerBound(candles,time) {
@@ -295,7 +281,7 @@ async function main() {
     settings:{symbolsRequested:SYMBOL_LIMIT,feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
       maxHoldHours:MAX_HOLD_HOURS,limitValidityMinutes:LIMIT_VALID_BARS*5,
       fallback:"completed 5m bearish => market at next 5m open; bullish/Doji => sell limit at observed high; limit fills at open if gapped above, else at touched limit; expiry after 12 bars",
-      target1:"SHORT TP1 distance=min(1.5R,2.5*1h ATR); TP2=2.5R; TP3=3.5R; weights 40/35/25",
+      target1:"SHORT TP1 distance=min(1.5R,2.5*1h ATR); production lifecycle closes the whole trade at TP1 or stop; TP2/TP3 remain signal information only",
       entryCohort:"eligible SHORT candidates where first completed post-signal 5m close is below both 1h EMA20 and prior 1h high, with levels >0.5% apart",
       stopTargetSameBar:"stop first (conservative)",funding:"excluded",
       drawdownMethod:"maximum drawdown of chronological additive per-trade R; not account or portfolio equity drawdown",
@@ -321,6 +307,8 @@ async function main() {
       "| Matched net R delta (Exp - Base) | — | "+w.paired.matchedNetRDelta.toFixed(3)+" |",
       "| Strategy net R delta incl. expired (Exp - Base) | — | "+w.paired.strategyNetRDelta.toFixed(3)+" |",
       "| Win rate | "+w.baseline.metrics.winRatePct.toFixed(2)+"% | "+w.experimental.metrics.winRatePct.toFixed(2)+"% |",
+      "| TP1 closes | "+w.baseline.metrics.profitCloses+" | "+w.experimental.metrics.profitCloses+" |",
+      "| Stop closes | "+w.baseline.metrics.stopCloses+" | "+w.experimental.metrics.stopCloses+" |",
       "| Net R | "+w.baseline.metrics.netR.toFixed(3)+" | "+w.experimental.metrics.netR.toFixed(3)+" |",
       "| Expectancy R | "+w.baseline.metrics.expectancyR.toFixed(4)+" | "+w.experimental.metrics.expectancyR.toFixed(4)+" |",
       "| Profit factor | "+w.baseline.metrics.profitFactor+" | "+w.experimental.metrics.profitFactor+" |",
