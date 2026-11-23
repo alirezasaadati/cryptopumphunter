@@ -5,7 +5,7 @@ import { computeBtcRegime, FUTURES_CONFIG } from "../src/index.js";
 const BASE="https://futures.kraken.com",DAY=86400000;
 const INTERVAL={"5m":300000,"15m":900000,"1h":3600000,"4h":14400000};
 const END=process.env.RABBIT_BACKTEST_END?Date.parse(process.env.RABBIT_BACKTEST_END):Date.now();
-const WINDOWS=[90,180],WARMUP_DAYS=25,SYMBOL_LIMIT=8,MAX_HOLD_HOURS=6,MARGIN=10,LEVERAGE=10;
+const WINDOWS=[90,180,365],WARMUP_DAYS=25,SYMBOL_LIMIT=8,MAX_HOLD_HOURS=6,MARGIN=10,LEVERAGE=10;
 if(!Number.isFinite(END))throw new Error("Invalid RABBIT_BACKTEST_END");
 
 async function getJson(url,attempt=0){
@@ -28,16 +28,24 @@ async function fetchCandles(symbol,res,from,to){
  return [...new Map(all.map(c=>[c.time,c])).values()].sort((a,b)=>a.time-b.time);
 }
 function lower(a,t){let l=0,h=a.length;while(l<h){const m=(l+h)>>1;if(a[m].time<t)l=m+1;else h=m;}return l;}
-function metrics(trades,eligible,rejected,lockSkips){
+function portfolioMtm(trades){
+ const events=[];
+ trades.forEach((trade,index)=>(trade.markPath||[]).forEach(mark=>events.push({time:mark.time,index,pnlUsd:mark.pnlUsd})));
+ events.sort((a,b)=>a.time-b.time||a.index-b.index);
+ const marks=new Array(trades.length).fill(0);let equity=0,peak=0,maxDrawdown=0;
+ for(let i=0;i<events.length;){const time=events[i].time;while(i<events.length&&events[i].time===time){const e=events[i++];equity+=e.pnlUsd-marks[e.index];marks[e.index]=e.pnlUsd;}peak=Math.max(peak,equity);maxDrawdown=Math.max(maxDrawdown,peak-equity);}
+ return {finalEquityPnlUsd:equity,openMtmUsd:trades.filter(t=>t.status==="OPEN_AT_END").reduce((a,t)=>a+Number(t.markPath?.at(-1)?.pnlUsd||0),0),maxDrawdownMtmUsd:maxDrawdown};
+}
+function metrics(trades,eligible,rejected,lockSkips,lockSkipsBySymbol={},lockSkipDetails=[]){
  const closed=trades.filter(t=>t.status==="WIN"||t.status==="STOP"),wins=closed.filter(t=>t.status==="WIN"),stops=closed.filter(t=>t.status==="STOP");
  const pnls=closed.map(t=>t.pnlUsd),profit=pnls.filter(x=>x>0).reduce((a,b)=>a+b,0),loss=Math.abs(pnls.filter(x=>x<0).reduce((a,b)=>a+b,0));
- let eq=0,peak=0,dd=0;for(const t of [...closed].sort((a,b)=>a.exitTime-b.exitTime)){eq+=t.pnlUsd;peak=Math.max(peak,eq);dd=Math.max(dd,peak-eq);}
+ let eq=0,peak=0,dd=0;for(const t of [...closed].sort((a,b)=>a.exitTime-b.exitTime)){eq+=t.pnlUsd;peak=Math.max(peak,eq);dd=Math.max(dd,peak-eq);} const mtm=portfolioMtm(trades);
  return {eligibleSignals:eligible,tradesOpened:trades.length,closed:closed.length,wins:wins.length,stops:stops.length,openAtEnd:trades.length-closed.length,
  winRatePct:closed.length?wins.length/closed.length*100:0,stopRatePct:closed.length?stops.length/closed.length*100:0,
- grossPnlUsd:pnls.reduce((a,b)=>a+b,0),profitFactor:loss?profit/loss:(profit?Infinity:0),maxDrawdownUsd:dd,rejected,lockSkips};
+ grossPnlUsd:pnls.reduce((a,b)=>a+b,0),profitFactor:loss?profit/loss:(profit?Infinity:0),maxDrawdownUsd:dd,openMtmUsd:mtm.openMtmUsd,totalPnlWithOpenMtmUsd:pnls.reduce((a,b)=>a+b,0)+mtm.openMtmUsd,maxDrawdownMtmUsd:mtm.maxDrawdownMtmUsd,finalEquityPnlUsd:mtm.finalEquityPnlUsd,rejected,lockSkips,lockSkipsBySymbol,lockSkipDetails};
 }
 function simulate(symbol,entry,stop,bars,start,signalTime){
- const risk=stop-entry,target=entry-risk,end=Math.min(bars.length,start+MAX_HOLD_HOURS*12);
+ const risk=stop-entry,target=entry-risk,end=Math.min(bars.length,start+MAX_HOLD_HOURS*12),markPath=[];
  for(let i=start;i<end;i++){
   const b=bars[i],stopHit=b.high>=stop,targetHit=b.low<=target,stopAtOpen=b.open>=stop,targetAtOpen=b.open<=target;
   let exit=null,status=null;
@@ -45,13 +53,14 @@ function simulate(symbol,entry,stop,bars,start,signalTime){
   else if(targetAtOpen){exit=b.open;status="WIN";}
   else if(stopHit){exit=stop;status="STOP";}
   else if(targetHit){exit=target;status="WIN";}
+  const markPrice=status?exit:b.close,markPct=(entry-markPrice)/entry*100;markPath.push({time:b.time+INTERVAL["5m"],pnlUsd:MARGIN*markPct*LEVERAGE/100});
   if(status){
    const pricePct=(entry-exit)/entry*100,marginReturnPct=pricePct*LEVERAGE;
-   return {symbol,side:"SHORT",status,signalTime,entryTime:bars[start].time,exitTime:b.time+INTERVAL["5m"],entry,stop,target,exit,pricePct,marginReturnPct,pnlUsd:MARGIN*marginReturnPct/100,holdMinutes:(b.time+INTERVAL["5m"]-bars[start].time)/60000};
+   return {symbol,side:"SHORT",status,signalTime,entryTime:bars[start].time,exitTime:b.time+INTERVAL["5m"],entry,stop,target,exit,pricePct,marginReturnPct,pnlUsd:MARGIN*marginReturnPct/100,holdMinutes:(b.time+INTERVAL["5m"]-bars[start].time)/60000,markPath};
   }
  }
  const last=bars[Math.max(start,end-1)],pricePct=last?(entry-last.close)/entry*100:0,marginReturnPct=pricePct*LEVERAGE;
- return {symbol,side:"SHORT",status:"OPEN_AT_END",signalTime,entryTime:bars[start]?.time??signalTime,entry,stop,target,exit:last?.close??null,pricePct,marginReturnPct,pnlUsd:0,holdMinutes:last?(last.time+INTERVAL["5m"]-bars[start].time)/60000:0};
+ return {symbol,side:"SHORT",status:"OPEN_AT_END",signalTime,entryTime:bars[start]?.time??signalTime,entry,stop,target,exit:last?.close??null,pricePct,marginReturnPct,pnlUsd:0,holdMinutes:last?(last.time+INTERVAL["5m"]-bars[start].time)/60000:0,markPath};
 }
 async function main(){
  const tickers=(await getJson(BASE+"/derivatives/api/v3/tickers")).tickers;
@@ -59,7 +68,7 @@ async function main(){
  const universe=tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&/^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&Number(t.volumeQuote)>=FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME&&Number(t.last)>0&&!excluded.has(String(t.symbol).toUpperCase().replace(/^(PI|PF)_/,"").replace(/USD$/,"")))
   .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
  if(!universe.length)throw new Error("No eligible Kraken perpetual symbols");
- const from=END-(180+WARMUP_DAYS)*DAY,btcTicker=universe.find(t=>/XBTUSD$/.test(t.symbol))||{symbol:"PF_XBTUSD"};
+ const from=END-(365+WARMUP_DAYS)*DAY,btcTicker=universe.find(t=>/XBTUSD$/.test(t.symbol))||{symbol:"PF_XBTUSD"};
  const btc=await fetchCandles(btcTicker.symbol,"4h",from,END),datasets=[],errors=[];
  for(const t of universe){
   try{
@@ -73,7 +82,7 @@ async function main(){
  }
  const outputs={};
  for(const days of WINDOWS){
-  const start=END-days*DAY,trades=[],locks=new Map(),rejectionReasons={};let eligible=0,rejected=0,lockSkips=0;
+  const start=END-days*DAY,trades=[],locks=new Map(),rejectionReasons={},lockSkipsBySymbol={},lockSkipDetails=[];let eligible=0,rejected=0,lockSkips=0;
   for(const d of datasets){
    let i1=0,i4=0,rabbitState={};
    for(let i=40;i<d.fifteen.length;i++){
@@ -104,7 +113,7 @@ async function main(){
      continue;
     }
     eligible++;
-    if((locks.get(d.symbol)||0)>signalTime){lockSkips++;continue;}
+    if((locks.get(d.symbol)||0)>signalTime){lockSkips++;lockSkipsBySymbol[d.symbol]=(lockSkipsBySymbol[d.symbol]||0)+1;if(lockSkipDetails.length<500)lockSkipDetails.push({symbol:d.symbol,signalTime:new Date(signalTime).toISOString(),blockedUntil:new Date(locks.get(d.symbol)).toISOString()});continue;}
     const risk=candidate.stop-entry;
     if(!(risk>0)){rejected++;rejectionReasons["Invalid stop risk"]=(rejectionReasons["Invalid stop risk"]||0)+1;continue;}
     const trade=simulate(d.symbol,entry,candidate.stop,d.five,entryIndex,signalTime);
@@ -113,7 +122,7 @@ async function main(){
    }
   }
   const bySymbol={};for(const d of datasets){const ts=trades.filter(t=>t.symbol===d.symbol);bySymbol[d.symbol]=metrics(ts,ts.length,0,0);}
-  outputs[days]={period:{from:new Date(start).toISOString(),to:new Date(END).toISOString(),days},metrics:metrics(trades,eligible,rejected,lockSkips),rejectionReasons,bySymbol,trades};
+  outputs[days]={period:{from:new Date(start).toISOString(),to:new Date(END).toISOString(),days},metrics:metrics(trades,eligible,rejected,lockSkips,lockSkipsBySymbol,lockSkipDetails),rejectionReasons,bySymbol,trades};
  }
  const report={generatedAt:new Date().toISOString(),engine:"Rabbit experimental counter-trend SHORT",source:"Kraken Futures historical OHLC",
   rules:{bullRegime:"BTC 4h computeBtcRegime bullish; traded symbol 1h and 4h EMA20>EMA50 and close>EMA20",
@@ -125,12 +134,12 @@ async function main(){
    costs:"fees, slippage, funding and liquidation excluded",universe:"top 8 current-volume eligible Kraken crypto USD perpetuals; survivorship bias applies"},
   symbolsRequested:SYMBOL_LIMIT,symbolsTested:datasets.length,errors,results:outputs};
  await mkdir("artifacts",{recursive:true});await writeFile("artifacts/rabbit-backtest.json",JSON.stringify(report,null,2));
- const fmt=n=>Number(n||0).toFixed(2),lines=["# Rabbit — bullish rally correction SHORT backtest","","Full close at 1R; $10 margin, 10x leverage; 90d and 180d; 5m OHLC; stop-first same-candle rule.","",
- "| Period | Eligible signals | Trades | Wins | Stops | Open | Win rate | Gross PnL | PF | Max DD |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"];
+ const fmt=n=>Number(n||0).toFixed(2),lines=["# Rabbit — bullish rally correction SHORT backtest","","Full close at 1R; $10 margin, 10x leverage; 90d, 180d and 365d; 5m OHLC; stop-first same-candle rule. Open positions are marked to market at every completed 5m close.","",
+ "| Period | Eligible signals | Trades | Wins | Stops | Open | Win rate | Realized PnL | MTM PnL | PF | MTM DD |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"];
  for(const days of WINDOWS){const m=outputs[days].metrics;lines.push("| "+days+"d | "+m.eligibleSignals+" | "+m.tradesOpened+" | "+m.wins+" | "+m.stops+" | "+m.openAtEnd+" | "+fmt(m.winRatePct)+"% | $"+fmt(m.grossPnlUsd)+" | "+fmt(m.profitFactor)+" | $"+fmt(m.maxDrawdownUsd)+" |");}
  lines.push("","## Per-symbol results","","| Symbol | Trades 90d | Wins 90d | Stops 90d | Trades 180d | Wins 180d | Stops 180d |","|---|---:|---:|---:|---:|---:|---:|");
  for(const d of datasets){const a=outputs[90].bySymbol[d.symbol],b=outputs[180].bySymbol[d.symbol];lines.push("| "+d.symbol+" | "+a.tradesOpened+" | "+a.wins+" | "+a.stops+" | "+b.tradesOpened+" | "+b.wins+" | "+b.stops+" |");}
- lines.push("","Limitations: gross results only; no fees, slippage, funding, liquidation or portfolio margin simulation. Current-volume symbol selection introduces survivorship bias. Signals use completed candles only; open-at-end trades are not classified as wins or stops.");
+ lines.push("","Lock skips are Rabbit-only per-symbol lock collisions; detailed counts and samples are in JSON. MTM uses every completed 5m candle close. Fees, slippage, funding, liquidation and portfolio margin simulation are excluded; current-volume symbol selection has survivorship bias.");
  await writeFile("artifacts/rabbit-backtest.md",lines.join("\n"));console.log(JSON.stringify(report,null,2));if(!datasets.length)process.exitCode=1;
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
