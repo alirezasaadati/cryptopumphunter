@@ -117,7 +117,7 @@ function findRecentSurge(candles, currentIndex, cfg) {
     if (peakTime == null || startTime == null) continue;
     return {
       surgeStart, surgeHigh: peakHigh, surgePct, surgeAtr, extensionAtr,
-      rsiPeak: rsiAtPeak, atrAtPeak, peakTime, startTime,
+      rsiPeak: rsiAtPeak, atrAtPeak, preSurgeEma20, peakTime, startTime,
       peakIndex, startIndex
     };
   }
