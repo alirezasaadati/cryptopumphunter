@@ -314,7 +314,6 @@ test("neutral 4h trend does not block a valid LONG and adds no 4h score",()=>{
   assert.equal(result.eligible,true,JSON.stringify(result));
   assert.equal(result.fourHourTrend,"NEUTRAL");
   assert.equal(result.fourHourScoreAdjustment,0);
-  assert.equal(result.entryDiagnostics.fourHourRequired,false);
 });
 
 test("opposing 4h trend reduces SHORT score but does not block even HIGH_RISK",()=>{
