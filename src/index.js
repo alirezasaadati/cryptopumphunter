@@ -1033,7 +1033,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         return;
       }
       await sendMessage(env, chatId, "🧪 بررسی تشخیصی فقط‌خواندنی شروع شد؛ هیچ سیگنالی ثبت یا ارسال نمی‌شود.");
-      const diagnostic = await runFuturesEntryDiagnostics();
+      const diagnostic = await runFuturesEntryDiagnostics(env);
       await sendLongMessage(env, chatId, formatFuturesEntryDiagnostics(diagnostic));
       return;
     }
@@ -1579,6 +1579,42 @@ async function getKrakenFuturesCandles(symbol, interval) {
     .slice(-FUTURES_CONFIG.KLINE_LIMIT);
 }
 
+async function getKrakenFuturesCandlesViaCoordinator(env, symbol, intervals) {
+  if (!env?.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) {
+    throw new Error("Durable Object market-data coordinator is unavailable.");
+  }
+  const normalizedSymbol = String(symbol || "").trim().toUpperCase();
+  const requestedIntervals = [...new Set(Array.isArray(intervals) ? intervals : [])];
+  if (!/^(PI|PF)_[A-Z0-9]+USD$/.test(normalizedSymbol)) {
+    throw new Error("Invalid Kraken perpetual symbol for market-data request.");
+  }
+  if (!requestedIntervals.length || requestedIntervals.length > 3 ||
+      requestedIntervals.some(interval => !["5m", "15m", "1h", "4h"].includes(interval))) {
+    throw new Error("Invalid Kraken candle interval request.");
+  }
+  const stub = env.SIGNAL_DELIVERY.get(
+    env.SIGNAL_DELIVERY.idFromName("market-data:" + normalizedSymbol)
+  );
+  const response = await stub.fetch("https://signal-delivery.internal/market-data/candles", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-signal-delivery-secret": getSignalDeliverySecret(env)
+    },
+    body: JSON.stringify({ symbol: normalizedSymbol, intervals: requestedIntervals })
+  });
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error("Kraken market-data coordinator returned an unreadable response.");
+  }
+  if (!response.ok || !payload?.ok || !payload?.candles) {
+    throw new Error(payload?.error || "Kraken market-data coordinator failed.");
+  }
+  return payload;
+}
+
 
 function normalizeKrakenFuturesUnderlying(symbol) {
   const raw = String(symbol || "").toUpperCase().replace(/^(PI|PF)_/, "").replace(/USD$/, "");
@@ -2054,7 +2090,9 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
     const symbolTrades = openTrades.filter(t => t.symbol === symbol);
     let candles;
     try {
-      candles = await getKrakenFuturesCandles(symbol, "5m");
+      const marketData = await getKrakenFuturesCandlesViaCoordinator(env, symbol, ["5m"]);
+      if (marketData.errors?.["5m"]) throw new Error(marketData.errors["5m"]);
+      candles = marketData.candles["5m"];
     } catch (error) {
       for (const trade of symbolTrades) recordError(trade, "CANDLE_FETCH", error);
       return;
@@ -2238,7 +2276,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update","/market-data/candles"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=getSignalDeliverySecret(this.env);
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!(await verifySignalDeliverySecret(suppliedSecret,expectedSecret)))return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -2246,6 +2284,25 @@ export class SignalDeliveryCoordinator {
     try{payload=await request.json()}catch{return Response.json({ok:false,error:"Invalid JSON payload."},{status:400});}
     return this.serial(async()=>{
       try{
+        if(url.pathname==="/market-data/candles"){
+          const symbol=String(payload.symbol||"").trim().toUpperCase();
+          const intervals=[...new Set(Array.isArray(payload.intervals)?payload.intervals:[])];
+          if(!/^(PI|PF)_[A-Z0-9]+USD$/.test(symbol))throw new Error("Invalid Kraken perpetual symbol.");
+          if(!intervals.length||intervals.length>3||intervals.some(interval=>!["5m","15m","1h","4h"].includes(interval))){
+            throw new Error("Invalid candle intervals.");
+          }
+          const results=await Promise.all(intervals.map(async interval=>{
+            try{return {interval,candles:await getKrakenFuturesCandles(symbol,interval)};}
+            catch(error){return {interval,error:String(error?.message||error).slice(0,400)};}
+          }));
+          const candles={};
+          const errors={};
+          for(const result of results){
+            if(result.error)errors[result.interval]=result.error;
+            else candles[result.interval]=result.candles;
+          }
+          return Response.json({ok:true,symbol,candles,errors});
+        }
         if(url.pathname==="/kv-write/allow"){
           const today=quotaDayKey();
           const paused=await this.ctx.storage.get("kv-daily-write-pause");
@@ -2744,7 +2801,7 @@ async function runAutomaticFuturesAlertScanInternal(env) {
 
 // Owner-only, read-only diagnostics. This path reads public Kraken market data only;
 // it never registers signals, writes KV/DO state, or delivers trading alerts.
-async function runFuturesEntryDiagnostics() {
+async function runFuturesEntryDiagnostics(env) {
   const startedAt = new Date().toISOString();
   const universe = await getKrakenFuturesUniverse();
   const analyzed = await mapLimit(
@@ -2752,11 +2809,20 @@ async function runFuturesEntryDiagnostics() {
     FUTURES_CONFIG.CONCURRENCY,
     async ticker => {
       try {
-        const [oneHour, fourHour, fifteenMinute] = await Promise.all([
-          getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.INTERVAL),
-          getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL),
-          getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL).catch(() => [])
+        const marketData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
+          FUTURES_CONFIG.INTERVAL, FUTURES_CONFIG.CONFIRM_INTERVAL, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL
         ]);
+        const oneHour = marketData.candles[FUTURES_CONFIG.INTERVAL];
+        const fourHour = marketData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
+        const fifteenMinute = marketData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
+        if (marketData.errors?.[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]) {
+          console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol, marketData.errors[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]);
+        }
+        if (!Array.isArray(oneHour) || !Array.isArray(fourHour)) {
+          throw new Error(marketData.errors?.[FUTURES_CONFIG.INTERVAL] ||
+            marketData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
+            "Required Kraken candle data is missing.");
+        }
         const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute);
         return {
           symbol: ticker.symbol,
@@ -2833,15 +2899,21 @@ async function runFuturesSignalScan(env, options = {}) {
   let fifteenMinuteDataErrorCount = 0;
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
-      const [oneHour, fourHour, fifteenMinute] = await Promise.all([
-        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.INTERVAL),
-        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.CONFIRM_INTERVAL),
-        getKrakenFuturesCandles(ticker.symbol, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL).catch(error => {
-          fifteenMinuteDataErrorCount++;
-          console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol, String(error?.message||error));
-          return [];
-        })
+      const marketData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
+        FUTURES_CONFIG.INTERVAL, FUTURES_CONFIG.CONFIRM_INTERVAL, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL
       ]);
+      const oneHour = marketData.candles[FUTURES_CONFIG.INTERVAL];
+      const fourHour = marketData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
+      let fifteenMinute = marketData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
+      if (marketData.errors?.[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]) {
+        fifteenMinuteDataErrorCount++;
+        console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol, marketData.errors[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]);
+      }
+      if (!Array.isArray(oneHour) || !Array.isArray(fourHour)) {
+        throw new Error(marketData.errors?.[FUTURES_CONFIG.INTERVAL] ||
+          marketData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
+          "Required Kraken candle data is missing.");
+      }
       return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, options);
     } catch (error) {
       analysisErrorCount++;
