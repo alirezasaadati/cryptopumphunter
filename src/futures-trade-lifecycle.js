@@ -93,3 +93,98 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
   };
   return { changed: true, reason, trade: updatedTrade };
 }
+
+// V4.8 experimental R-based scaled exits: 40% at 1.5R, 35% at 2.2R, 25% at 3R.
+export const TP_WEIGHTS = Object.freeze([0.40, 0.35, 0.25]);
+
+export function evaluateTradeCandleR(trade, candle, options = {}) {
+  if (!trade || trade.status !== "OPEN" || !["LONG", "SHORT"].includes(trade.side)) {
+    return { changed: false, closed: false, trade };
+  }
+  if (!validCandle(candle)) return { changed: false, closed: false, trade, error: "INVALID_CANDLE" };
+
+  const dir = tradeDir(trade.side);
+  const entry = Number(trade.actualEntry ?? trade.entry);
+  const initialStop = Number(trade.initialStop ?? trade.stop);
+  const risk = dir * (entry - initialStop);
+  const targets = [trade.target1, trade.target2, trade.target3].map(Number);
+  const ordered = targets.every((target, index) =>
+    Number.isFinite(target) && target > 0 && dir * (target - entry) > 0 &&
+    (index === 0 || dir * (target - targets[index - 1]) > 0)
+  );
+  if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(risk) || risk <= 0 || !ordered) {
+    return { changed: false, closed: false, trade, error: "INVALID_TRADE_LEVELS" };
+  }
+
+  const weights = options.weights ?? TP_WEIGHTS;
+  if (!Array.isArray(weights) || weights.length !== 3 ||
+      weights.some(weight => !Number.isFinite(Number(weight)) || Number(weight) <= 0) ||
+      Math.abs(weights.reduce((sum, weight) => sum + Number(weight), 0) - 1) > 1e-9) {
+    return { changed: false, closed: false, trade, error: "INVALID_TP_WEIGHTS" };
+  }
+  const breakevenAfterTp1 = options.breakevenAfterTp1 ?? true;
+  const leverage = Number(options.leverage ?? FUTURES_TRADE_LEVERAGE);
+  if (!Number.isFinite(leverage) || leverage <= 0) {
+    return { changed: false, closed: false, trade, error: "INVALID_LEVERAGE" };
+  }
+
+  const open = Number(candle.open), high = Number(candle.high), low = Number(candle.low);
+  const hits = [...new Set(Array.isArray(trade.tpHits) ? trade.tpHits : [])]
+    .filter(tag => ["TP1", "TP2", "TP3"].includes(tag));
+  let stop = Number(trade.currentStop ?? initialStop);
+  let realizedR = Number.isFinite(Number(trade.realizedR)) ? Number(trade.realizedR) : 0;
+  let remaining = Number.isFinite(Number(trade.remainingFraction))
+    ? Number(trade.remainingFraction)
+    : 1 - weights.reduce((sum, weight, index) => sum + (hits.includes("TP" + (index + 1)) ? Number(weight) : 0), 0);
+  if (!Number.isFinite(stop) || stop <= 0 || !Number.isFinite(remaining) || remaining < -1e-9 || remaining > 1 + 1e-9) {
+    return { changed: false, closed: false, trade, error: "INVALID_TRADE_STATE" };
+  }
+  remaining = Math.max(0, Math.min(1, remaining));
+
+  const stopHit = dir > 0 ? low <= stop : high >= stop;
+  if (stopHit) {
+    const stopExit = dir > 0 ? (open <= stop ? open : stop) : (open >= stop ? open : stop);
+    const totalR = realizedR + remaining * dir * (stopExit - entry) / risk;
+    return finish(totalR, stopExit, hits.length ? "STOP_AFTER_TP" : "STOP");
+  }
+
+  let changed = false;
+  for (let index = 0; index < 3; index++) {
+    const tag = "TP" + (index + 1);
+    if (hits.includes(tag)) continue;
+    const reached = dir > 0 ? high >= targets[index] : low <= targets[index];
+    if (!reached) break;
+    realizedR += Number(weights[index]) * dir * (targets[index] - entry) / risk;
+    remaining = Math.max(0, remaining - Number(weights[index]));
+    hits.push(tag);
+    changed = true;
+    if (index === 0 && breakevenAfterTp1) {
+      stop = dir > 0 ? Math.max(stop, entry) : Math.min(stop, entry);
+    }
+  }
+
+  if (hits.includes("TP3") || remaining <= 1e-9) return finish(realizedR, targets[2], "TP3");
+  if (!changed) return { changed: false, closed: false, trade };
+  return {
+    changed: true,
+    closed: false,
+    reason: hits.at(-1),
+    trade: { ...trade, tpHits: hits, currentStop: stop, realizedR, remainingFraction: remaining, outcomeR: realizedR }
+  };
+
+  function finish(totalR, exitPrice, why) {
+    const status = totalR > 1e-9 ? "CLOSED_PROFIT" : "CLOSED_STOP";
+    const pricePct = totalR * risk / entry * 100;
+    return {
+      changed: true,
+      closed: true,
+      reason: status,
+      trade: {
+        ...trade, status, closeReason: why, tpHits: hits, currentStop: stop,
+        realizedR: totalR, remainingFraction: 0, outcomeR: totalR, exitPrice,
+        closePriceChangePercent: pricePct, marginReturnPercent: pricePct * leverage,
+        closedAt: candle.time ?? new Date().toISOString(), lockReleaseEligible: true
+      }
+    };
+  }
+}
