@@ -47,11 +47,17 @@ def get_universe():
     if not isinstance(tickers, list):
         raise RuntimeError("Kraken tickers response did not contain a tickers array")
     eligible = []
+    # Match only the crypto bases listed in the uploaded source file's SYMBOLS.
+    # The source's BTCUSDT maps to Kraken XBTUSD; exclude stock and metal perps.
+    source_bases = {"XBT", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "LINK", "TRX"}
     for t in tickers:
         sym = str(t.get("symbol", ""))
         if t.get("tag") != "perpetual" or t.get("suspended") is True:
             continue
-        if not re.match(r"^(PF|PI)_[A-Z0-9]+USD$", sym):
+        if not re.match(r"^PF_[A-Z0-9]+USD$", sym):
+            continue
+        base = sym[3:-3]
+        if base not in source_bases:
             continue
         vol = float(t.get("volumeQuote") or 0)
         if vol > 0 and float(t.get("last") or 0) > 0:
