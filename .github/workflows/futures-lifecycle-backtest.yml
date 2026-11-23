@@ -1,11 +1,13 @@
-name: Experimental futures lifecycle backtest
+name: Current vs V4.8 fixed-margin comparison
 on:
   workflow_dispatch:
   push:
-    branches: [feature/leveraged-profit-close-lifecycle, experiment/v48-r-scaled-btc-gated-20261123]
+    branches: [feature/leveraged-profit-close-lifecycle, experiment/v48-r-scaled-btc-gated-20261123, experiment/compare-current-v48-15pct-20261123]
     paths:
       - "scripts/backtest-futures-lifecycle.mjs"
       - "scripts/backtest-fixed-margin-target.mjs"
+      - "scripts/backtest-engine-comparison.mjs"
+      - "src/index-current.js"
       - ".github/workflows/futures-lifecycle-backtest.yml"
       - "src/futures-trade-lifecycle.js"
       - "src/index.js"
@@ -18,15 +20,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run lifecycle historical backtest
+      - name: Run same-data engine comparison
         env:
           LIFECYCLE_BACKTEST_DAYS: "60"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
-        run: node scripts/backtest-fixed-margin-target.mjs
+        run: node scripts/backtest-engine-comparison.mjs
       - name: Upload lifecycle report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: futures-lifecycle-backtest
+          name: current-vs-v48-engine-comparison
           path: artifacts/
           if-no-files-found: error
