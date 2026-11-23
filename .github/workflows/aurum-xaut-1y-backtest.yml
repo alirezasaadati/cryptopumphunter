@@ -1,4 +1,4 @@
-name: Aurum XAUT USD 1Y Kraken Backtest
+name: Aurum XAUT USD 1Y Bitfinex Backtest
 on:
   push:
     branches:
@@ -10,7 +10,7 @@ on:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,7 +25,7 @@ jobs:
         run: node experimental/aurum/aurum_fixed/aurum.test.js
       - name: Run one-year XAUT/USD historical backtest
         env:
-          AURUM_TAKER_FEE: "0.008"
+          AURUM_TAKER_FEE: "0.002"
           AURUM_SLIPPAGE: "0.0005"
         run: node scripts/backtest-aurum-xaut-1y.mjs
       - name: Upload backtest report
