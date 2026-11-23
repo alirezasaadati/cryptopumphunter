@@ -40,7 +40,8 @@ test("Doji is handled like bullish candle and places a limit at the observed hig
     followingCandles: [bar(100, 101, 99, 100), bar(100, 101.5, 99, 100)]
   });
   assert.equal(result.type, "LIMIT");
-  assert.equal(result.reason, "DOJI_5M");
+  assert.equal(result.decisionReason, "DOJI_5M");
+  assert.equal(result.reason, "LIMIT_TOUCH_FILL");
   assert.equal(result.limitPrice, 101.5);
   assert.equal(result.filled, true);
   assert.equal(result.fillPrice, 101.5);
