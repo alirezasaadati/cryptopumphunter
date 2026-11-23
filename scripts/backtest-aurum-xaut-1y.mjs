@@ -176,28 +176,44 @@ function simulate(signal, bars, entryIndex) {
 }
 
 function metrics(trades) {
-  const wins = trades.filter(t => t.netR > 0), losses = trades.filter(t => t.netR < 0);
-  const grossWin = wins.reduce((s,t)=>s+t.netR,0);
-  const grossLoss = Math.abs(losses.reduce((s,t)=>s+t.netR,0));
+  const grossWins = trades.filter(t => t.grossR > 0), grossLosses = trades.filter(t => t.grossR < 0);
+  const netWins = trades.filter(t => t.netR > 0), netLosses = trades.filter(t => t.netR < 0);
+  const grossWin = grossWins.reduce((s,t)=>s+t.grossR,0);
+  const grossLoss = Math.abs(grossLosses.reduce((s,t)=>s+t.grossR,0));
+  const netWin = netWins.reduce((s,t)=>s+t.netR,0);
+  const netLoss = Math.abs(netLosses.reduce((s,t)=>s+t.netR,0));
   let equity = 0, peak = 0, maxDD = 0;
   for (const t of trades) { equity += t.netR; peak = Math.max(peak,equity); maxDD = Math.max(maxDD,peak-equity); }
+  const bySide = Object.fromEntries(["LONG","SHORT"].map(side => {
+    const xs = trades.filter(t=>t.side===side);
+    const gw=xs.filter(t=>t.grossR>0), gl=xs.filter(t=>t.grossR<0);
+    const nw=xs.filter(t=>t.netR>0), nl=xs.filter(t=>t.netR<0);
+    const gp=gw.reduce((s,t)=>s+t.grossR,0), gLoss=Math.abs(gl.reduce((s,t)=>s+t.grossR,0));
+    return [side,{
+      trades:xs.length,grossWins:gw.length,grossWinRatePct:xs.length?gw.length/xs.length*100:0,
+      grossR:xs.reduce((s,t)=>s+t.grossR,0),grossProfitFactor:gLoss?gp/gLoss:gp?null:0,
+      netWins:nw.length,netWinRatePct:xs.length?nw.length/xs.length*100:0,
+      netR:xs.reduce((s,t)=>s+t.netR,0)
+    }];
+  }));
   return {
-    trades: trades.length, wins: wins.length, losses: losses.length,
-    breakeven: trades.length - wins.length - losses.length,
-    winRatePct: trades.length ? wins.length / trades.length * 100 : 0,
+    trades: trades.length,
+    grossWins: grossWins.length, grossLosses: grossLosses.length,
+    grossWinRatePct: trades.length ? grossWins.length / trades.length * 100 : 0,
     grossR: trades.reduce((s,t)=>s+t.grossR,0),
+    grossExpectancyR: trades.length ? trades.reduce((s,t)=>s+t.grossR,0) / trades.length : 0,
+    grossProfitFactor: grossLoss ? grossWin / grossLoss : grossWin ? null : 0,
+    averageGrossWinR: grossWins.length ? grossWin / grossWins.length : 0,
+    averageGrossLossR: grossLosses.length ? -grossLoss / grossLosses.length : 0,
+    netWins: netWins.length, netLosses: netLosses.length,
+    netWinRatePct: trades.length ? netWins.length / trades.length * 100 : 0,
     feesR: trades.reduce((s,t)=>s+t.feesR,0),
     netR: trades.reduce((s,t)=>s+t.netR,0),
-    expectancyR: trades.length ? trades.reduce((s,t)=>s+t.netR,0) / trades.length : 0,
-    profitFactor: grossLoss ? grossWin / grossLoss : grossWin ? null : 0,
+    netExpectancyR: trades.length ? trades.reduce((s,t)=>s+t.netR,0) / trades.length : 0,
+    netProfitFactor: netLoss ? netWin / netLoss : netWin ? null : 0,
     maxDrawdownR: maxDD,
     averageHoldHours: trades.length ? trades.reduce((s,t)=>s+t.holdBars,0) * 0.25 / trades.length : 0,
-    bySide: Object.fromEntries(["LONG","SHORT"].map(side => {
-      const xs = trades.filter(t=>t.side===side);
-      const w=xs.filter(t=>t.netR>0), l=xs.filter(t=>t.netR<0);
-      const gw=w.reduce((s,t)=>s+t.netR,0), gl=Math.abs(l.reduce((s,t)=>s+t.netR,0));
-      return [side,{trades:xs.length,wins:w.length,losses:l.length,winRatePct:xs.length?w.length/xs.length*100:0,netR:xs.reduce((s,t)=>s+t.netR,0),profitFactor:gl?gw/gl:gw?null:0}];
-    }))
+    bySide
   };
 }
 
@@ -263,8 +279,9 @@ async function main() {
     `Period: ${report.period.start} → ${report.period.end}`,
     `Native 15m candles: ${marketData.raw15m} | Native 1h candles: ${marketData.raw1h} | 15m bars after gap fill: ${candles15.length} | 4h bars: ${candles4h.length}`,
     `Signals: ${signals} | Executed: ${tradesOut.length} | Overlap skipped: ${skippedOverlap} | Gap skipped: ${skippedGap}`,
-    `Win rate: ${m.winRatePct.toFixed(2)}% | Net R: ${m.netR.toFixed(3)} | PF: ${m.profitFactor == null ? "∞" : m.profitFactor.toFixed(3)} | Max DD: ${m.maxDrawdownR.toFixed(3)}R`,
-    `Gross R: ${m.grossR.toFixed(3)} | Fees R: ${m.feesR.toFixed(3)} | Expectancy: ${m.expectancyR.toFixed(4)}R/trade`,
+    `Gross win rate: ${m.grossWinRatePct.toFixed(2)}% | Gross PF: ${m.grossProfitFactor == null ? "∞" : m.grossProfitFactor.toFixed(3)} | Gross R: ${m.grossR.toFixed(3)}` ,
+    `Net win rate: ${m.netWinRatePct.toFixed(2)}% | Net R: ${m.netR.toFixed(3)} | Net PF: ${m.netProfitFactor == null ? "∞" : m.netProfitFactor.toFixed(3)} | Max DD: ${m.maxDrawdownR.toFixed(3)}R`,
+    `Fees R: ${m.feesR.toFixed(3)} | Gross expectancy: ${m.grossExpectancyR.toFixed(4)}R | Net expectancy: ${m.netExpectancyR.toFixed(4)}R/trade`,
     `Fee/side (assumption): ${(FEE*100).toFixed(3)}% | Slippage/side: ${(SLIPPAGE*100).toFixed(3)}%`,
     "",
     "Execution assumptions: next 15m open entry; all-out at TP1/SL/24h time exit; stop-first for same-candle ambiguity.",
