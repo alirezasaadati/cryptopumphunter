@@ -8,7 +8,7 @@ const DAY = 86400;
 const END = Math.floor(Date.now() / 1000);
 const START = END - 365 * DAY;
 const WARMUP = START - 30 * DAY;
-const FEE = Number(process.env.AURUM_TAKER_FEE ?? 0.008); // Kraken spot Tier-1 taker assumption, per side
+const FEE = Number(process.env.AURUM_TAKER_FEE ?? 0.002); // Bitfinex base-tier taker assumption, per side
 const SLIPPAGE = Number(process.env.AURUM_SLIPPAGE ?? 0.0005); // 5 bps per side
 const MAX_HOLD_BARS = 96; // 24h on 15m candles
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -246,7 +246,7 @@ async function main() {
       exit: "all-out at TP1 (1R), stop, or 24h time exit",
       sameCandleAmbiguity: "stop checked before target",
       feePerSide: FEE, slippagePerSide: SLIPPAGE,
-      feeNote: "Default fee is Kraken Spot Crypto Tier-1 taker rate; replace AURUM_TAKER_FEE with the user's actual tier.",
+      feeNote: "Default fee is an assumed Bitfinex base-tier taker rate; actual fee depends on the account tier and must be substituted for an account-specific result.",
       management: "TP2/TP3 and BE/trailing settings are not applied because the supplied engine does not define partial-exit weights or trailing-stop mechanics."
     },
     counts: { signals, executedTrades: tradesOut.length, skippedOverlap, skippedNextOpenGap: skippedGap, skippedInvalidRisk: skippedRisk },
