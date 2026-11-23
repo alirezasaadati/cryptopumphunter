@@ -2,7 +2,7 @@ name: Experimental futures lifecycle backtest
 on:
   workflow_dispatch:
   push:
-    branches: [feature/leveraged-profit-close-lifecycle, experiment/ema20-limit-entry-backtest, experiment/long-atr2-tp13-margin100]
+    branches: [feature/leveraged-profit-close-lifecycle, experiment/ema20-limit-entry-backtest, experiment/long-atr2-tp13-margin100, experiment/short-entry-90-180-analysis]
     paths:
       - "scripts/backtest-futures-lifecycle.mjs"
       - ".github/workflows/futures-lifecycle-backtest.yml"
@@ -19,7 +19,7 @@ jobs:
           node-version: 22
       - name: Run lifecycle historical backtest
         env:
-          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_DAYS: "${{ matrix.days }}"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
           LIFECYCLE_BACKTEST_END: "2026-11-22T20:18:19.124Z"
         run: node scripts/backtest-futures-lifecycle.mjs
@@ -27,6 +27,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: futures-lifecycle-backtest
+          name: futures-short-entry-${{ matrix.days }}d-backtest
           path: artifacts/
           if-no-files-found: error
