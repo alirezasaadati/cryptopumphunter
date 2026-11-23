@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { analyzeRabbitCorrection } from "../src/rabbit-engine.js";
 import { computeBtcRegime, FUTURES_CONFIG } from "../src/index.js";
 
+// Comparison-only instrument substitution: XAUT perpetual replaces the Gold Pyth index.
 const BASE="https://futures.kraken.com",DAY=86400000;
 const INTERVAL={"5m":300000,"15m":900000,"1h":3600000,"4h":14400000};
 const END=process.env.RABBIT_BACKTEST_END?Date.parse(process.env.RABBIT_BACKTEST_END):Date.parse("2026-11-15T00:00:00Z");
