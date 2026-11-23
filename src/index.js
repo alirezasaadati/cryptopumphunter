@@ -2939,8 +2939,10 @@ async function runFuturesSignalsForChat(env, chatId) {
   activeManualFuturesScans.add(scanKey);
   try {
     await sendMessage(env, chatId,
-      "🔄 درخواست شما دریافت شد. اسکن بازار فیوچرز Kraken شروع شد.\n" +
-      "⏳ نتیجه همین‌جا ارسال می‌شود؛ لطفاً از فشردن دوباره دکمه خودداری کن.",
+      "🔍 درخواست بررسی بازار ثبت شد.\n\n" +
+      "در حال اسکن بازار و بررسی فرصت‌های معاملاتی هستیم.\n" +
+      "در صورت شناسایی فرصت معتبر، نماد مربوطه به‌صورت خودکار در ربات سیگنال خواهد شد.\n\n" +
+      "⏳ لطفاً تا پایان بررسی منتظر بمانید.",
       menuForChat(env, chatId));
 
     const result = await runFuturesSignalScan(env, { excludeChatId: chatId });
