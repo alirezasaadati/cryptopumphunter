@@ -1960,16 +1960,26 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     : 0;
   const priorityScore = Math.min(125,
     priorityBaseScore + volumePriorityBonus + confirmationPriorityBonus + rsiDivergenceBonus);
-  if (confirmationCount === 2) {
-    reasons.push("مومنتوم و پولبک ساختاری ۱۵دقیقه‌ای تأیید شدند؛ پاداش ترکیبی +۱۵");
-  } else if (side === "SHORT" && pullbackConfirmed) {
-    reasons.push("پولبک ساختاری به مقاومت سقف کندل قبلی ۱ساعته تأیید شد؛ پاداش +۱۲");
-  } else if (momentumConfirmed) {
-    reasons.push("مومنتوم ۱۵دقیقه‌ای تأیید شد؛ پاداش +۷");
+  if (side === "SHORT") {
+    if (confirmationCount === 2) {
+      reasons.push("مومنتوم و پولبک ساختاری ۱۵دقیقه‌ای تأیید شدند؛ پاداش ترکیبی +۱۵");
+    } else if (pullbackConfirmed) {
+      reasons.push("پولبک ساختاری به مقاومت سقف کندل قبلی ۱ساعته تأیید شد؛ پاداش +۱۲");
+    } else if (momentumConfirmed) {
+      reasons.push("مومنتوم ۱۵دقیقه‌ای تأیید شد؛ پاداش +۷");
+    } else {
+      reasons.push(entryFilters.confirmationUnavailable
+        ? "داده تأیید ۱۵دقیقه‌ای در دسترس نبود؛ بدون پاداش اولویت"
+        : "مومنتوم یا پولبک ساختاری تأیید نشد؛ بدون پاداش اولویت");
+    }
+  } else if (confirmationCount === 2) {
+    reasons.push("مومنتوم و پولبک ۱۵دقیقه‌ای تأیید شدند؛ پاداش اولویت کامل");
+  } else if (confirmationCount === 1) {
+    reasons.push("یکی از دو تأیید مومنتوم/پولبک ۱۵دقیقه‌ای برقرار است؛ پاداش اولویت جزئی");
   } else {
     reasons.push(entryFilters.confirmationUnavailable
       ? "داده تأیید ۱۵دقیقه‌ای در دسترس نبود؛ بدون پاداش اولویت"
-      : "تأیید مومنتوم/پولبک برقرار نشد؛ بدون پاداش اولویت");
+      : "مومنتوم و پولبک ۱۵دقیقه‌ای تأیید نشدند؛ بدون پاداش اولویت");
   }
   if (bearishRsiDivergence.confirmed) reasons.push("واگرایی نزولی معتبر RSI در ۱h؛ پاداش اولویت +۱۵");
 
