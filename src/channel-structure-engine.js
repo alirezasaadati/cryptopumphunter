@@ -10,7 +10,7 @@ export const CHANNEL_CONFIG = Object.freeze({
   touchToleranceAtr: 0.3,
   boundaryZoneWidth: 0.2,
   breakoutBufferAtr: 0.15,
-  stopBufferAtr: 0.35,
+  stopBufferAtr: 0.15,
   reversalStopBufferAtr: 0.15,
   reversalTargetR: 1.5,
   breakoutTargetR: 2.5,
