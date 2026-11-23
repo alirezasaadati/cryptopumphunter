@@ -155,7 +155,8 @@ async function main(){
       dataMap.set(symbol,await fetchCandles(symbol,"1h",warmStart,end,HOUR));
     }));
   }
-  const btcRaw=dataMap.get(btcTicker.symbol);\n  const btc=btcRaw?prepareSeries(btcRaw):null;
+  const btcRaw=dataMap.get(btcTicker.symbol);
+  const btc=btcRaw?prepareSeries(btcRaw):null;
   if(!btc||btc.length<500)throw new Error("BTC hourly history unavailable");
   const altSeries=alts.map(x=>dataMap.get(x.symbol)).filter(x=>x&&x.length>500).map(prepareSeries);
   const results=[];
