@@ -13,7 +13,7 @@ export const CHANNEL_CONFIG = Object.freeze({
   stopBufferAtr: 0.15,
   reversalStopBufferAtr: 0.15,
   reversalTargetR: 1.5,
-  breakoutTargetR: 2.5,
+  breakoutTargetR: 1.5,
   volumeMultiplier: 1.5,
   volumeLookback: 20,
   rsiPeriod: 14,
