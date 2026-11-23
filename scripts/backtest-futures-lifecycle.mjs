@@ -83,10 +83,14 @@ function summarize(trades) {
   const profits = closed.filter(t => t.status === "CLOSED_PROFIT");
   const stops = closed.filter(t => t.status === "CLOSED_STOP");
   let equity = 0, peak = 0, maxDrawdown = 0;
+  let equityR = 0, peakR = 0, maxDrawdownR = 0;
   for (const trade of [...closed].sort((a,b)=>a.closedAtMs-b.closedAtMs)) {
     equity += Number(trade.marginReturnPercent || 0);
     peak = Math.max(peak, equity);
     maxDrawdown = Math.max(maxDrawdown, peak - equity);
+    equityR += Number.isFinite(Number(trade.outcomeR)) ? Number(trade.outcomeR) : 0;
+    peakR = Math.max(peakR, equityR);
+    maxDrawdownR = Math.max(maxDrawdownR, peakR - equityR);
   }
   const longs = closed.filter(t => t.side === "LONG");
   const shorts = closed.filter(t => t.side === "SHORT");
@@ -113,6 +117,7 @@ function summarize(trades) {
     totalMarginReturnPct: sum(closed),
     averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
     maxDrawdownMarginPct: maxDrawdown,
+    maxDrawdownR,
     ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
     bySide: {
       LONG: { trades: longs.length, profitCloses: longs.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: longs.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(longs) },
@@ -266,6 +271,7 @@ async function main() {
     "| Win rate | "+metrics.winRatePct.toFixed(2)+"% |",
     "| Sum margin return (not compounded) | "+metrics.totalMarginReturnPct.toFixed(2)+"% |",
     "| Average margin return / trade | "+metrics.averageMarginReturnPct.toFixed(2)+"% |",
+    "| Max drawdown (R) | "+metrics.maxDrawdownR.toFixed(2)+"R |",
     "| Max drawdown (additive margin-return points) | "+metrics.maxDrawdownMarginPct.toFixed(2)+"% |",
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
     "| Same-side lock skips | "+report.lockSkips+" |",
