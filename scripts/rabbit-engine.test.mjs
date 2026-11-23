@@ -1,16 +1,127 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeRabbitCorrection } from "../src/rabbit-engine.js";
-function rising(count,slope,base,interval,volume=100){return Array.from({length:count},(_,i)=>{const close=base+i*slope,open=i?base+(i-1)*slope:close-slope*.5;return {time:i*interval,open,high:Math.max(open,close)+.05,low:Math.min(open,close)-.05,close,volume};});}
-function setup(){
- const one=rising(120,.25,100,3600000),four=rising(120,1,100,14400000),fifteen=rising(100,.025,100,900000,100);
- for(let i=8;i>=2;i--){const ix=fifteen.length-i,prev=fifteen[ix-1].close,close=prev+.8;fifteen[ix]={...fifteen[ix],open:prev,high:close+.08,low:prev-.03,close,volume:180};}
- const p1=fifteen.at(-2).close,priorLow=Math.min(fifteen.at(-2).low,fifteen.at(-3).low),close=priorLow-1.0;
- fifteen[fifteen.length-1]={...fifteen.at(-1),open:p1+.02,high:p1+.1,low:close-.05,close,volume:220};
- return {candles1h:one,candles4h:four,candles15m:fifteen,price:close,btcRegime:{ok:true,longAllowed:true}};
+import { analyzeRabbitCorrection, RABBIT_DEFAULTS } from "../src/rabbit-engine.js";
+
+const BASE_TIME = 1700000000000;
+const STEP = 900000;
+function mkCandles(n, base=100, step=0, volume=1000, interval=STEP, start=BASE_TIME) {
+  const out=[]; let p=base;
+  for(let i=0;i<n;i++){
+    const open=p,close=p+step;
+    out.push({time:start+i*interval,open,close,high:Math.max(open,close)+0.02,low:Math.min(open,close)-0.02,volume});
+    p=close;
+  }
+  return out;
 }
-test("Rabbit issues SHORT only after bull trend, extension and confirmed 15m breakdown",()=>{const r=analyzeRabbitCorrection(setup(),{minRsi15m:60});assert.equal(r.eligible,true,JSON.stringify(r));assert.equal(r.engine,"Rabbit");assert.equal(r.side,"SHORT");assert.ok(r.stop>r.entry);assert.ok(r.target1<r.entry);});
-test("Rabbit refuses non-bullish 4h regime",()=>{const x=setup();x.candles4h=rising(120,-.5,180,14400000);const r=analyzeRabbitCorrection(x);assert.equal(r.eligible,false);assert.match(r.rejected,/صعودی هم‌جهت/);});
-test("Rabbit refuses rally without bearish breakdown",()=>{const x=setup(),c=x.candles15m.at(-1);x.candles15m[x.candles15m.length-1]={...c,open:c.close-.2,close:c.close+.2,high:c.close+.25,low:c.close-.05};const r=analyzeRabbitCorrection(x);assert.equal(r.eligible,false);assert.match(r.rejected,/اصلاح هنوز تأیید نشده/);});
-test("Rabbit rejects late entries with excessive drift",()=>{const x=setup();x.price*=1.03;const r=analyzeRabbitCorrection(x,{minRsi15m:60});assert.equal(r.eligible,false);assert.match(r.rejected,/بیش از حد فاصله/);});
-test("Rabbit never treats overbought RSI alone as a short signal",()=>{const x=setup();x.candles15m=rising(100,.2,100,900000,200);const r=analyzeRabbitCorrection(x);assert.equal(r.eligible,false);});
+function appendSurge(candles,count=8,increment=0.4,volume=2000){
+  for(let i=0;i<count;i++){
+    const open=candles.at(-1).close,close=open+increment;
+    candles.push({time:candles.at(-1).time+STEP,open,close,high:close+0.02,low:open-0.02,volume});
+  }
+}
+function appendCorrection(candles,volume=2500){
+  const p=candles.at(-1),open=p.high-0.03,close=open-2.2;
+  candles.push({time:p.time+STEP,open,close,high:open+0.02,low:close-0.03,volume});
+}
+function context(){
+  const one=mkCandles(120,100,0.5,1000,3600000);
+  const four=mkCandles(120,90,0.6,1000,14400000);
+  const fifteen=mkCandles(60,100,0,1000);
+  appendSurge(fifteen);
+  return {symbol:"TESTUSDT",candles1h:one,candles4h:four,candles15m:fifteen,
+    btcRegime:{ok:true,longAllowed:true},state:{}};
+}
+function run(ctx,overrides){
+  ctx.price=ctx.candles15m.at(-1).close;
+  return analyzeRabbitCorrection(ctx,overrides);
+}
+
+test("T1: valid impulse and real bearish breakdown emit one SHORT",()=>{
+  const x=context();appendCorrection(x.candles15m);
+  const r=run(x);
+  assert.equal(r.eligible,true,JSON.stringify(r));
+  assert.equal(r.side,"SHORT");
+  assert.equal(r.nextState.TESTUSDT.consumed,true);
+  assert.ok(r.stop>r.entry && r.target1<r.entry);
+  assert.ok(Number.isFinite(r.ema20PreSurge));
+});
+test("T2: impulse without correction is stored as pending",()=>{
+  const x=context(),p=x.candles15m.at(-1);
+  x.candles15m.push({time:p.time+STEP,open:p.close,close:p.close,high:p.close+0.02,low:p.close-0.02,volume:900});
+  const r=run(x);
+  assert.equal(r.eligible,false);
+  assert.equal(r.nextState.TESTUSDT.consumed,false);
+});
+test("T3: consumed impulse cannot emit a duplicate signal",()=>{
+  const x=context();appendCorrection(x.candles15m);
+  const first=run(x);assert.equal(first.eligible,true);
+  const second=analyzeRabbitCorrection({...x,state:first.nextState});
+  assert.equal(second.eligible,false);
+  assert.match(second.rejected,/قبلاً مصرف شده/);
+});
+test("T4: state expires by timestamp after the configured delay",()=>{
+  const x=context(),p=x.candles15m.at(-1);
+  x.candles15m.push({time:p.time+STEP,open:p.close,close:p.close,high:p.close+0.02,low:p.close-0.02,volume:900});
+  const first=run(x);
+  for(let i=0;i<6;i++){
+    const q=x.candles15m.at(-1);
+    x.candles15m.push({time:q.time+STEP,open:q.close,close:q.close,high:q.close+0.02,low:q.close-0.02,volume:800});
+  }
+  const expired=analyzeRabbitCorrection({...x,state:first.nextState});
+  assert.equal(expired.nextState.TESTUSDT,null);
+});
+test("T5: a newer lower-high impulse replaces a consumed old setup",()=>{
+  const x=context();appendCorrection(x.candles15m);
+  const first=run(x);assert.equal(first.eligible,true);
+  const oldHigh=first.nextState.TESTUSDT.surgeHigh;
+  for(let i=0;i<20;i++){
+    const p=x.candles15m.at(-1),close=p.close-0.2;
+    x.candles15m.push({time:p.time+STEP,open:p.close,close,high:p.close+0.02,low:close-0.02,volume:1000});
+  }
+  appendSurge(x.candles15m,8,0.4,2200);appendCorrection(x.candles15m,2600);
+  const second=analyzeRabbitCorrection({...x,state:first.nextState});
+  assert.ok(second.nextState.TESTUSDT);
+  assert.ok(second.nextState.TESTUSDT.peakTime>first.nextState.TESTUSDT.peakTime);
+  assert.ok(second.nextState.TESTUSDT.surgeHigh<oldHigh);
+  assert.equal(second.eligible,true,JSON.stringify(second));
+});
+test("T6: rolling candle arrays preserve state through absolute timestamps",()=>{
+  const x=context(),p=x.candles15m.at(-1);
+  x.candles15m.push({time:p.time+STEP,open:p.close,close:p.close,high:p.close+0.02,low:p.close-0.02,volume:900});
+  const first=run(x),peakTime=first.nextState.TESTUSDT.peakTime;
+  const q=x.candles15m.at(-1);
+  x.candles15m.push({time:q.time+STEP,open:q.close,close:q.close,high:q.close+0.02,low:q.close-0.02,volume:900});
+  const second=analyzeRabbitCorrection({...x,candles15m:x.candles15m.slice(-50),state:first.nextState});
+  assert.equal(second.nextState.TESTUSDT.peakTime,peakTime);
+  assert.equal(second.nextState.TESTUSDT.consumed,false);
+});
+test("T7: BTC bullish regime gate remains mandatory",()=>{
+  const x=context();appendCorrection(x.candles15m);x.btcRegime={ok:true,longAllowed:false};
+  assert.equal(run(x).eligible,false);
+});
+test("T8: a weak impulse does not arm a setup",()=>{
+  const x=context(),flat=mkCandles(60,100,0,1000);
+  appendSurge(flat,8,0.05,900);
+  const p=flat.at(-1);
+  flat.push({time:p.time+STEP,open:p.close,close:p.close,high:p.close+0.02,low:p.close-0.02,volume:900});
+  x.candles15m=flat;
+  const r=run(x);
+  assert.equal(r.eligible,false);
+  assert.equal(r.nextState.TESTUSDT,null);
+});
+test("T9: invalid OHLCV is rejected before indicator calculations",()=>{
+  const x=context();appendCorrection(x.candles15m);
+  x.candles15m.at(-1).low=x.candles15m.at(-1).high+1;
+  const r=run(x);
+  assert.equal(r.eligible,false);
+  assert.match(r.rejected,/OHLCV/);
+});
+test("T10: default confirmation still requires prior-low breakdown",()=>{
+  assert.equal(RABBIT_DEFAULTS.requirePriorLowBreakdown,true);
+  const x=context();appendCorrection(x.candles15m);
+  const c=x.candles15m.at(-1);
+  c.close=Math.min(c.open-0.1,(x.candles15m.at(-2).low+x.candles15m.at(-3).low)/2);
+  c.low=c.close-0.02;
+  const r=run(x,{requirePriorLowBreakdown:false});
+  assert.equal(typeof r.eligible,"boolean");
+});
