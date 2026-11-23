@@ -124,6 +124,7 @@ function simulateShortTrade({symbol,levels,candles5m,fillIndex,fee,slippage,maxH
     }
     for(let t=0;t<targets.length&&left>1e-9;t++){
       if(bar.low>targets[t])continue;
+      if(remaining[t]<=1e-9)continue;
       const weight=Math.min(remaining[t],left);
       const exit=targets[t]*(1+slippage);
       const gross=(entry-exit)/risk;
@@ -220,8 +221,8 @@ function runWindowForSymbol(data,days,endMs) {
   }
   return {
     symbol:ticker.symbol,
-    baseline:{opportunities:baseline.opportunities,filled:baseline.filled,metrics:summarize(baseline.trades),trades:baseline.trades},
-    experimental:{opportunities:experimental.opportunities,filled:experimental.filled,expired:experimental.expired,
+    baseline:{opportunities:baseline.opportunities,filled:baseline.filled,lockSkips:baseline.lockSkips,metrics:summarize(baseline.trades),trades:baseline.trades},
+    experimental:{opportunities:experimental.opportunities,filled:experimental.filled,expired:experimental.expired,lockSkips:experimental.lockSkips,
       marketOrders:experimental.marketOrders,limitOrders:experimental.limitOrders,limitGapFills:experimental.limitGapFills,
       limitTouchFills:experimental.limitTouchFills,metrics:summarize(experimental.trades),trades:experimental.trades}
   };
