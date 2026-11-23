@@ -1,5 +1,6 @@
 import { writeFile, mkdir } from "node:fs/promises";
-import { detectPriceChannel, generateChannelSignal, scoreChannelSignal } from "../src/channel-structure-engine.js";
+import { generateChannelSignal, scoreChannelSignal } from "../src/channel-structure-engine.js";
+import { simulateChannelExit } from "../src/channel-structure-exits.js";
 
 const BASE = "https://futures.kraken.com";
 const HOUR = 3600000, FOUR_HOURS = 4 * HOUR, FIFTEEN = 900000, FIVE = 300000, DAY = 86400000;
@@ -46,40 +47,6 @@ function lowerBound(rows,time) {
   let lo=0,hi=rows.length;
   while(lo<hi){const mid=(lo+hi)>>1;if(rows[mid].time<time)lo=mid+1;else hi=mid;}
   return lo;
-}
-function closeTrade(side, entry, stop, target, bars, startIndex, options = {}) {
-  const initialRisk = Math.abs(entry-stop), maxIndex = Math.min(bars.length-1,startIndex+MAX_HOLD_HOURS*12);
-  let activeStop=stop, bestFavorable=entry, trailingActivated=false;
-  for(let i=startIndex;i<=maxIndex;i++){
-    const c=bars[i]; if(!c)break;
-    const stopHit=side==="LONG"?c.low<=activeStop:c.high>=activeStop;
-    const targetHit=side==="LONG"?c.high>=target:c.low<=target;
-    if(stopHit||targetHit){
-      const open=Number(c.open);
-      const stopAtOpen=side==="LONG"?open<=activeStop:open>=activeStop;
-      const targetAtOpen=side==="LONG"?open>=target:open<=target;
-      const stopFirst=stopAtOpen||(!targetAtOpen&&stopHit);
-      let raw=stopFirst?(side==="LONG"?Math.min(open,activeStop):Math.max(open,activeStop)):(side==="LONG"?Math.max(open,target):Math.min(open,target));
-      const exit=side==="LONG"?raw*(1-SLIPPAGE):raw*(1+SLIPPAGE);
-      const gross=(side==="LONG"?exit-entry:entry-exit)/initialRisk;
-      const fees=FEE*(entry+exit)/initialRisk;
-      return {exitPrice:exit,exitTime:c.time,exitReason:stopFirst?(trailingActivated?"TRAILING_STOP":"STOP"):"TARGET",
-        netR:gross-fees,holdHours:(c.time-bars[startIndex].time)/HOUR,trailingActivated};
-    }
-    if(options.trailing){
-      if(side==="LONG"){
-        bestFavorable=Math.max(bestFavorable,Number(c.high));
-        if(bestFavorable>=entry+initialRisk){trailingActivated=true;activeStop=Math.max(activeStop,bestFavorable-initialRisk);}
-      }else{
-        bestFavorable=Math.min(bestFavorable,Number(c.low));
-        if(bestFavorable<=entry-initialRisk){trailingActivated=true;activeStop=Math.min(activeStop,bestFavorable+initialRisk);}
-      }
-    }
-  }
-  const c=bars[maxIndex], raw=Number(c?.close);
-  const exit=side==="LONG"?raw*(1-SLIPPAGE):raw*(1+SLIPPAGE);
-  return {exitPrice:exit,exitTime:c?.time,exitReason:"TIME",netR:(side==="LONG"?exit-entry:entry-exit)/initialRisk-FEE*(entry+exit)/initialRisk,
-    holdHours:(c.time-bars[startIndex].time)/HOUR,trailingActivated};
 }
 function metrics(trades) {
   const wins=trades.filter(t=>t.netR>0), losses=trades.filter(t=>t.netR<0);
@@ -135,7 +102,7 @@ function runSymbol(data, days, endMs) {
     const adjustedRisk=signal.side==="LONG"?entry-signal.stop:signal.stop-entry;
     if(!(adjustedRisk>0)){counts.invalidFillRisk=(counts.invalidFillRisk||0)+1;continue;}
     const isBreakout=signal.setup.includes("BREAKOUT");
-    const desiredR=isBreakout?2.5:1.5;
+    const desiredR=1.5; // Breakouts realize 50% at 1.5R; remainder is managed by trailing stop.
     let target=signal.side==="LONG"?entry+adjustedRisk*desiredR:entry-adjustedRisk*desiredR;
     if(!isBreakout){
       target=signal.side==="LONG"?Math.min(target,signal.channel.upper):Math.max(target,signal.channel.lower);
@@ -143,11 +110,12 @@ function runSymbol(data, days, endMs) {
     const actualTargetR=Math.abs(target-entry)/adjustedRisk;
     if(!(actualTargetR>0)){counts.invalidTarget=(counts.invalidTarget||0)+1;continue;}
     const riskBudgetUsd=10, quantity=riskBudgetUsd/adjustedRisk, notionalUsd=quantity*entry, leverage=10;
-    const result=closeTrade(signal.side,entry,signal.stop,target,m5,entryIndex,{trailing:isBreakout});
+    const result=simulateChannelExit({side:signal.side,setup:signal.setup,entry,stop:signal.stop,target,bars:m5,startIndex:entryIndex,maxHoldHours:MAX_HOLD_HOURS});
     const trade={symbol:ticker.symbol,side:signal.side,setup:signal.setup,channelType:signal.channelType,
       score:scoreChannelSignal(signal),orderType,entry,stop:signal.stop,target,targetR:actualTargetR,
       riskPct:adjustedRisk/entry,quantity,notionalUsd,estimatedMarginUsd:notionalUsd/leverage,
       fixedRiskBudgetUsd:riskBudgetUsd,volumeConfirmed:signal.volumeConfirmed,rsiDivergence:signal.rsiDivergence,
+      partialTaken:result.partialTaken,breakEvenActivated:result.breakEvenActivated,
       entryTime:m5[entryIndex].time,...result};
     trades.push(trade);
     counts.filled=(counts.filled||0)+1;
