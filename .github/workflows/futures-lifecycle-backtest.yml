@@ -24,7 +24,8 @@ jobs:
           node-version: 22
       - name: Run same-data engine comparison
         env:
-          LIFECYCLE_BACKTEST_DAYS: "60"\n          LIFECYCLE_BACKTEST_END: "2026-09-24T10:37:00Z"\n          BACKTEST_TAKER_FEE_RATE: "0.0005"\n          BACKTEST_SLIPPAGE_RATE: "0.0002"
+          LIFECYCLE_BACKTEST_DAYS: "60"
+          LIFECYCLE_BACKTEST_END: "2026-09-24T10:37:00Z"\n          BACKTEST_TAKER_FEE_RATE: "0.0005"\n          BACKTEST_SLIPPAGE_RATE: "0.0002"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
         run: node scripts/backtest-engine-comparison.mjs
       - name: Upload lifecycle report
