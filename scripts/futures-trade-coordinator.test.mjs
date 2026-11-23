@@ -24,7 +24,7 @@ function createCoordinator(options = {}) {
       return result;
     }
   };
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { SIGNAL_DELIVERY_SECRET: "test-secret" });
+  const coordinator = new SignalDeliveryCoordinator({ storage }, { SIGNAL_DELIVERY_AUTH_SECRET: "test-secret" });
   async function post(path, payload = {}) {
     const response = await coordinator.fetch(new Request("https://do.test" + path, {
       method: "POST",
@@ -237,7 +237,7 @@ test("unauthorized lifecycle requests are rejected", async () => {
   const data = new Map();
   const coordinator = new SignalDeliveryCoordinator({
     storage: { async get(k) { return data.get(k); }, async put(k,v) { data.set(k,v); } }
-  }, { SIGNAL_DELIVERY_SECRET: "secret" });
+  }, { SIGNAL_DELIVERY_AUTH_SECRET: "secret" });
   const response = await coordinator.fetch(new Request("https://do.test/trades/list", {
     method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": "wrong" }, body: "{}"
   }));
