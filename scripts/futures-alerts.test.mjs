@@ -91,5 +91,5 @@ test("numeric candle timestamps in seconds and milliseconds produce the same ide
 test("SHORT alert prints the calculated dynamic TP1 R multiple", () => {
   const signal = {...base, entry:100, stop:103, target1:98.5, target2:92.5, target3:89.5, rewardRisk:0.5};
   const message = formatFuturesSignalAlert(signal);
-  assert.match(message, /تارگت اول \(0\.50R\): <b>98\.50<\/b>/);
+  assert.match(message, /تارگت اول \(0\.5R\): <b>98\.50<\/b>/);
 });
