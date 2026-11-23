@@ -214,6 +214,12 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const firstOrderBar=lowerBound(fiveMinute,signalCloseTime);
     if (!fiveMinute[firstOrderBar] || fiveMinute[firstOrderBar].time>=toMs) continue;
 
+    const ema=Number(candidate.ema20);
+    const wick=Number(signalBar.high);
+    const market=Number(tickerAtSignal.last);
+    const levelsGapPct=Math.abs(ema-wick)/market*100;
+    const fallbackApplicable=Number.isFinite(ema)&&Number.isFinite(wick)&&ema>0&&wick>0&&market>0&&market<ema&&market<wick&&levelsGapPct>0.5;
+
     const baselineEntry=Number(candidate.entry);
     const baselineStop=Number(candidate.stop);
     const baselineTarget=Number(candidate.target1);
@@ -225,15 +231,10 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       symbol:ticker.symbol,side:"SHORT",status:"OPEN",entry:baselineEntry,
       initialStop:baselineStop,stop:baselineStop,target1:baselineTarget,
       signalTime:signalBar.time,signalCloseTime,entryTime:fiveMinute[firstOrderBar].time,
-      score:candidate.score,ambiguousCandles:0,entryMethod:"MARKET_BASELINE"
+      score:candidate.score,ambiguousCandles:0,entryMethod:"MARKET_BASELINE",
+      fallbackApplicable
     },firstOrderBar);
     baselineTrades.push(baseline);
-
-    const ema=Number(candidate.ema20);
-    const wick=Number(signalBar.high);
-    const market=Number(tickerAtSignal.last);
-    const levelsGapPct=Math.abs(ema-wick)/market*100;
-    const fallbackApplicable=Number.isFinite(ema)&&Number.isFinite(wick)&&ema>0&&wick>0&&market>0&&market<ema&&market<wick&&levelsGapPct>0.5;
     const methodSpecs=[
       {name:"EMA20_1H",price:ema,kind:"LIMIT"},
       {name:"PREVIOUS_CANDLE_HIGH",price:wick,kind:"LIMIT"},
@@ -335,13 +336,24 @@ async function main() {
   const expiredByMethod=Object.fromEntries(["EMA20_1H","PREVIOUS_CANDLE_HIGH","MARKET_FALLBACK"].map(name=>[name,successful.reduce((n,r)=>n+(r.strategyExpired?.[name]||0),0)]));
   const notApplicableByMethod=Object.fromEntries(["EMA20_1H","PREVIOUS_CANDLE_HIGH","MARKET_FALLBACK"].map(name=>[name,successful.reduce((n,r)=>n+(r.strategyNotApplicable?.[name]||0),0)]));
   const invalidByMethod=Object.fromEntries(["EMA20_1H","PREVIOUS_CANDLE_HIGH","MARKET_FALLBACK"].map(name=>[name,successful.reduce((n,r)=>n+(r.strategyInvalid?.[name]||0),0)]));
+  const baselineTrades=tradesByMethod.BASELINE_MARKET;
+  const baselineComparableByMethod={
+    EMA20_1H:baselineTrades,
+    PREVIOUS_CANDLE_HIGH:baselineTrades,
+    MARKET_FALLBACK:baselineTrades.filter(t=>t.fallbackApplicable===true)
+  };
+  const baselineMetricsByMethod=Object.fromEntries(Object.entries(baselineComparableByMethod).map(([name,trades])=>[name,summarize(trades)]));
   const comparisons=Object.fromEntries(["EMA20_1H","PREVIOUS_CANDLE_HIGH","MARKET_FALLBACK"].map(name=>{
-    const m=metricsByMethod[name],base=metricsByMethod.BASELINE_MARKET;
+    const m=metricsByMethod[name],base=baselineMetricsByMethod[name];
     return [name,{
-      signalsOffered:signalOpportunities,filled:m.tradesStarted,expired:expiredByMethod[name],
+      signalsOffered:name==="MARKET_FALLBACK"?base.tradesStarted:signalOpportunities,
+      filled:m.tradesStarted,expired:expiredByMethod[name],
       notApplicable:notApplicableByMethod[name],invalid:invalidByMethod[name],
       closed:m.closedTrades,tp1:m.profitCloses,stops:m.stopCloses,openAtEnd:m.openAtEnd,
       winRatePct:m.winRatePct,grossPnlUsd:m.totalMarginReturnPct/10,
+      baselineComparableTrades:base.tradesStarted,
+      baselineComparableClosed:base.closedTrades,
+      baselineComparableWinRatePct:base.winRatePct,
       baselineGrossPnlUsd:base.totalMarginReturnPct/10,
       differenceVsBaselineUsd:(m.totalMarginReturnPct-base.totalMarginReturnPct)/10,
       fillTypes:tradesByMethod[name].reduce((a,t)=>{a[t.fillType]=(a[t.fillType]||0)+1;return a;},{})
@@ -371,7 +383,7 @@ async function main() {
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,
     symbolErrors:results.filter(r=>r.error),
     eligibleSignalOpportunities:signalOpportunities,
-    metricsByMethod,comparisons,expiredByMethod,notApplicableByMethod,invalidByMethod,
+    metricsByMethod,baselineMetricsByMethod,comparisons,expiredByMethod,notApplicableByMethod,invalidByMethod,
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
     skippedNonShortSignals:successful.reduce((n,r)=>n+r.skippedNonShortSignals,0),
@@ -407,7 +419,7 @@ async function main() {
         ""];
     }),
     "## Methodology and limitations",
-    "All arms receive the same accepted SHORT signal cohort and share one symbol+SHORT lock. The lock remains active until every filled arm from that signal has closed. EMA20 and previous-candle-high are tested as separate one-hour limit orders; MARKET_FALLBACK is a conditional arm and is not applicable when its trigger condition is false. Fixed $10 margin is used only to express gross PnL; the four methods are not combined into one account.",
+    "All arms receive the same accepted SHORT signal cohort and share one symbol+SHORT lock. The lock remains active until every filled arm from that signal has closed. EMA20 and previous-candle-high are tested as separate one-hour limit orders. MARKET_FALLBACK is conditional; its baseline comparator is restricted to the exact same fallback-triggered signal subset, not all accepted signals. Fixed $10 margin is used only to express gross PnL; the four methods are not combined into one account.",
     "Current signal analyzer is unchanged. SHORT ATR multiplier 1.5 and TP1 1.5R are retained. Actual Kraken historical OHLC is used. 5m bars cannot fully reveal intrabar path; ambiguous candles are stop-first. Fees, funding, slippage, and liquidation are excluded. Current-volume universe selection creates survivorship bias. Only successfully fetched symbols count.",
     "","Symbol errors:",...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
