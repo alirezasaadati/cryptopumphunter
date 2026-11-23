@@ -1747,7 +1747,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const strictLong = (up1h || up4h) && !down1h && !down4h && rsiValue >= 45 && rsiValue <= FUTURES_CONFIG.LONG_RSI_MAX;
   const strictShort = (down1h || down4h) && !up1h && !up4h && rsiValue >= 28 && rsiValue <= 55;
   // High-risk fallback retains a clear 1h direction but uses wider RSI bounds.
-  const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
+  const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.LONG_RSI_MAX;
   const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
 
@@ -1768,7 +1768,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
       "ساختار EMA تایم‌فریم جهت‌دهنده تأیید شده است");
     score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
   } else {
-    const longRsiOk = rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
+    const longRsiOk = rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.LONG_RSI_MAX;
     const shortRsiOk = rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
     const failed = [];
     if (!up1h && !down1h) failed.push("روند ۱ساعته جهت مشخص ندارد");
