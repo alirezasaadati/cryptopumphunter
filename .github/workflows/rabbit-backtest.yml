@@ -7,6 +7,7 @@ on:
       - "src/rabbit-engine.js"
       - "scripts/rabbit-engine.test.mjs"
       - "scripts/backtest-rabbit.mjs"
+      - "scripts/backtest-rabbit-btc-only.mjs"
       - ".github/workflows/rabbit-backtest.yml"
 jobs:
   rabbit-backtest:
@@ -19,12 +20,12 @@ jobs:
           node-version: 22
       - name: Run Rabbit unit tests
         run: node --test scripts/rabbit-engine.test.mjs
-      - name: Run Rabbit fixed 123d bullish-rally Kraken backtest with MTM diagnostics
-        run: node scripts/backtest-rabbit.mjs
+      - name: Run Rabbit BTC-only 123d bullish-rally Kraken backtest with MTM diagnostics
+        run: node scripts/backtest-rabbit-btc-only.mjs
       - name: Upload Rabbit reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rabbit-backtest-bull-rally-123d-mtm
+          name: rabbit-backtest-btc-only-bull-rally-123d-mtm
           path: artifacts/
           if-no-files-found: warn
