@@ -147,6 +147,8 @@ async function main(){
   const windows={};
   for(const mode of ["BASELINE","A","B"]){
     windows[mode]={};
+    for(const mode of ["BASELINE","A","B"]){
+    windows[mode]={};
     for(const days of [90,180]){
       const results=loaded.map(d=>d.error?{symbol:d.ticker.symbol,error:d.error}:runSymbol(d,days,endMs,mode));
       const trades=results.flatMap(x=>x.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
