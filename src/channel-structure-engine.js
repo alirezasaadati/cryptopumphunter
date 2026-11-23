@@ -159,7 +159,7 @@ function hasVolumeConfirmation(candles, multiplier = 1.5, lookback = 20) {
   return average > 0 && current >= average * multiplier;
 }
 
-export function generateChannelSignal({ candles4h, candles1h, candles15m, options = {} }) {
+export function generateChannelSignal({ candles4h, candles1h, candles15m, candles1d = [], mode = "BASELINE", options = {} }) {
   const cfg = { ...CHANNEL_CONFIG, ...options };
   if (!Array.isArray(candles1h) || candles1h.length < 2 || !Array.isArray(candles15m) || candles15m.length < 2) {
     return null;
@@ -186,6 +186,10 @@ export function generateChannelSignal({ candles4h, candles1h, candles15m, option
   const bullishConfirm = mClose > mOpen && mClose > pmClose;
   const bearishConfirm = mClose < mOpen && mClose < pmClose;
   const priorClose = Number(prevH.close);
+  const latest4hClosed = candles4h.at(-1);
+  const fourHourAligned = side => side === "LONG"
+    ? Number(latest4hClosed?.close) > Number(latest4hClosed?.open)
+    : Number(latest4hClosed?.close) < Number(latest4hClosed?.open);
 
   if (close >= channel.lower && close <= channel.lower + zone && bullishConfirm) {
     side = "LONG"; setup = "CHANNEL_FLOOR_REVERSAL"; trigger = "15M_BULLISH_REACTION"; boundary = channel.lower;
@@ -197,6 +201,9 @@ export function generateChannelSignal({ candles4h, candles1h, candles15m, option
     side = "SHORT"; setup = "LOWER_CHANNEL_BREAKOUT"; trigger = "1H_CLOSE_OUTSIDE_AND_15M_CONFIRM"; boundary = channel.lower;
   }
   if (!side) return null;
+  const isBreakoutSetup = setup.includes("BREAKOUT");
+  const fourHourConfirmed = fourHourAligned(side);
+  if (mode === "A" && isBreakoutSetup && !fourHourConfirmed) return null;
 
   const entryReference = close;
   const isReversal = setup.endsWith("REVERSAL");
@@ -212,11 +219,36 @@ export function generateChannelSignal({ candles4h, candles1h, candles15m, option
     ? (side === "LONG" ? Math.min(target, channel.upper) : Math.max(target, channel.lower))
     : target;
   const targetR = Math.abs(target1 - entryReference) / risk;
+  const dailyChannel = Array.isArray(candles1d) && candles1d.length >= 35
+    ? detectPriceChannel(candles1d, cfg) : null;
+  const oneHourTrendUp = candles1h.length >= 21 &&
+    Number(candles1h.at(-1).close) > Number(candles1h.at(-21).close);
+  const oneHourTrendDown = candles1h.length >= 21 &&
+    Number(candles1h.at(-1).close) < Number(candles1h.at(-21).close);
+  const fifteenAligned = side === "LONG" ? bullishConfirm : bearishConfirm;
+  const channelAligned = side === "LONG" ? channel.type === "ASCENDING" : channel.type === "DESCENDING";
+  const trendAligned = side === "LONG" ? oneHourTrendUp : oneHourTrendDown;
+  const multiTimeframeAligned = channelAligned && trendAligned && fifteenAligned;
+  let dailyPositionMultiplier = 1;
+  let dailyContext = "NEUTRAL";
+  if (dailyChannel) {
+    const nearDailySupport = close <= dailyChannel.lower + dailyChannel.width * 0.2;
+    const nearDailyResistance = close >= dailyChannel.upper - dailyChannel.width * 0.2;
+    const dailyTrendAligned = side === "LONG" ? dailyChannel.type === "ASCENDING" : dailyChannel.type === "DESCENDING";
+    if ((side === "SHORT" && nearDailySupport) || (side === "LONG" && nearDailyResistance)) {
+      dailyPositionMultiplier = 0.5;
+      dailyContext = side === "SHORT" ? "SHORT_NEAR_DAILY_SUPPORT" : "LONG_NEAR_DAILY_RESISTANCE";
+    } else if (dailyTrendAligned) {
+      dailyPositionMultiplier = 1.5;
+      dailyContext = "DAILY_CHANNEL_ALIGNED";
+    }
+  }
   return {
     side, setup, trigger, channelType: channel.type, channel,
     referenceEntry: entryReference, stop, target1, risk, targetR,
     volumeConfirmed: hasVolumeConfirmation(candles1h, cfg.volumeMultiplier, cfg.volumeLookback),
     rsiDivergence: isReversal && hasRsiDivergence(candles1h, side, cfg.rsiPeriod),
+    fourHourConfirmed, multiTimeframeAligned, dailyChannel, dailyPositionMultiplier, dailyContext,
     riskPct: risk / entryReference,
     signalTime: h.time ?? null
   };
@@ -235,5 +267,7 @@ export function scoreChannelSignal(signal) {
   score += Math.min(15, c.widthAtr >= 2 && c.widthAtr <= 8 ? 15 : 8);
   if (signal.volumeConfirmed) score += 15;
   if (signal.rsiDivergence) score += 10;
-  return Math.max(0, Math.min(100, score));
+  if (signal.fourHourConfirmed) score += 20;
+  if (signal.multiTimeframeAligned) score += 25;
+  return Math.max(0, Math.min(150, score));
 }
