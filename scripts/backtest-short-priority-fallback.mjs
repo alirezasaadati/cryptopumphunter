@@ -137,7 +137,7 @@ function lowerBound(candles,time) {
 }
 
 function createArm() {
-  return {trades:[],opportunities:0,filled:0,expired:0,lockSkips:0,marketOrders:0,limitOrders:0,bullishLimitOrders:0,dojiLimitOrders:0,limitGapFills:0,limitTouchFills:0};
+  return {trades:[],opportunities:0,filled:0,expired:0,invalidLevels:0,lockSkips:0,marketOrders:0,limitOrders:0,bullishLimitOrders:0,dojiLimitOrders:0,limitGapFills:0,limitTouchFills:0};
 }
 
 function runWindowForSymbol(data,days,endMs) {
@@ -176,17 +176,17 @@ function runWindowForSymbol(data,days,endMs) {
     const following=fiveMinute.slice(decisionIndex+1,decisionIndex+1+LIMIT_VALID_BARS);
     const decision=resolveShortFallbackFill({decisionCandle,followingCandles:following,validBars:LIMIT_VALID_BARS,
       marketSlippage:SLIPPAGE_PER_SIDE});
+    const marketRaw=Number(fiveMinute[decisionIndex+1]?.open);
+    if(!Number.isFinite(marketRaw)||marketRaw<=0)continue;
+    const baselineEntry=marketRaw*(1-SLIPPAGE_PER_SIDE);
+    const baselineLevels=buildShortLevels({oneHour,signalIndex:i,entry:baselineEntry,atr:candidate.atr});
+    if(!baselineLevels){baseline.invalidLevels++;experimental.invalidLevels++;continue;}
     if(decision.type==="MARKET")experimental.marketOrders++;
     else {
       experimental.limitOrders++;
       if(decision.decisionReason==="BULLISH_5M")experimental.bullishLimitOrders++;
       if(decision.decisionReason==="DOJI_5M")experimental.dojiLimitOrders++;
     }
-    const marketRaw=Number(fiveMinute[decisionIndex+1]?.open);
-    if(!Number.isFinite(marketRaw)||marketRaw<=0)continue;
-    const baselineEntry=marketRaw*(1-SLIPPAGE_PER_SIDE);
-    const baselineLevels=buildShortLevels({oneHour,signalIndex:i,entry:baselineEntry,atr:candidate.atr});
-    if(!baselineLevels)continue;
     const baselineTrade=simulateShortTrade({symbol:ticker.symbol,levels:baselineLevels,candles5m:fiveMinute,
       fillIndex:decisionIndex+1,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS});
     baseline.trades.push({...baselineTrade,entryType:"MARKET",signalTime:signalCloseTime});
@@ -204,15 +204,15 @@ function runWindowForSymbol(data,days,endMs) {
           if(decision.reason==="LIMIT_GAP_FILL")experimental.limitGapFills++;
           if(decision.reason==="LIMIT_TOUCH_FILL")experimental.limitTouchFills++;
         }
-      } else experimental.expired++;
+      } else experimental.invalidLevels++;
     } else experimental.expired++;
     const expExit=experimentalTrade?.exitIndex??(decision.type==="LIMIT"?decisionIndex+LIMIT_VALID_BARS:baselineTrade.exitIndex);
     lockUntilFiveIndex=Math.max(baselineTrade.exitIndex,expExit)+1;
   }
   return {
     symbol:ticker.symbol,
-    baseline:{opportunities:baseline.opportunities,filled:baseline.filled,lockSkips:baseline.lockSkips,metrics:summarize(baseline.trades),trades:baseline.trades},
-    experimental:{opportunities:experimental.opportunities,filled:experimental.filled,expired:experimental.expired,lockSkips:experimental.lockSkips,
+    baseline:{opportunities:baseline.opportunities,filled:baseline.filled,invalidLevels:baseline.invalidLevels,lockSkips:baseline.lockSkips,metrics:summarize(baseline.trades),trades:baseline.trades},
+    experimental:{opportunities:experimental.opportunities,filled:experimental.filled,expired:experimental.expired,invalidLevels:experimental.invalidLevels,lockSkips:experimental.lockSkips,
       marketOrders:experimental.marketOrders,limitOrders:experimental.limitOrders,limitGapFills:experimental.limitGapFills,
       limitTouchFills:experimental.limitTouchFills,metrics:summarize(experimental.trades),trades:experimental.trades}
   };
@@ -258,9 +258,9 @@ async function main() {
     windows[days+"d"]={
       period:{from:new Date(endMs-days*DAY).toISOString(),to:new Date(endMs).toISOString(),days},
       symbolsLoaded:loaded.filter(x=>!x.error).length,symbolsRequested:SYMBOL_LIMIT,
-      baseline:{opportunities:sum("baseline","opportunities"),filled:sum("baseline","filled"),lockSkips:sum("baseline","lockSkips"),metrics:summarize(baselineTrades)},
+      baseline:{opportunities:sum("baseline","opportunities"),filled:sum("baseline","filled"),invalidLevels:sum("baseline","invalidLevels"),lockSkips:sum("baseline","lockSkips"),metrics:summarize(baselineTrades)},
       experimental:{
-        opportunities:sum("experimental","opportunities"),filled:sum("experimental","filled"),expired:sum("experimental","expired"),lockSkips:sum("experimental","lockSkips"),
+        opportunities:sum("experimental","opportunities"),filled:sum("experimental","filled"),expired:sum("experimental","expired"),invalidLevels:sum("experimental","invalidLevels"),lockSkips:sum("experimental","lockSkips"),
         marketOrders:sum("experimental","marketOrders"),limitOrders:sum("experimental","limitOrders"),
         bullishLimitOrders:sum("experimental","bullishLimitOrders"),dojiLimitOrders:sum("experimental","dojiLimitOrders"),
         limitGapFills:sum("experimental","limitGapFills"),limitTouchFills:sum("experimental","limitTouchFills"),
@@ -302,6 +302,7 @@ async function main() {
       "| Opportunities | "+w.baseline.opportunities+" | "+w.experimental.opportunities+" |",
       "| Filled | "+w.baseline.filled+" | "+w.experimental.filled+" |",
       "| Expired | 0 | "+w.experimental.expired+" |",
+      "| Invalid post-fill risk levels | "+w.baseline.invalidLevels+" | "+w.experimental.invalidLevels+" |",
       "| Lock skips | "+w.baseline.lockSkips+" | "+w.experimental.lockSkips+" |",
       "| Matched fills | "+w.paired.matchedFills+" | "+w.paired.matchedFills+" |",
       "| Matched net R delta (Exp - Base) | — | "+w.paired.matchedNetRDelta.toFixed(3)+" |",
