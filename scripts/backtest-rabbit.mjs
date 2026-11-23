@@ -89,8 +89,14 @@ async function main(){
     const entry=d.five[entryIndex].open;
     const candidate=analyzeRabbitCorrection({symbol:d.symbol,candles1h:one,candles4h:four,candles15m:fifteen,price:entry,btcRegime,state:rabbitState});
     if(candidate.nextState)rabbitState=candidate.nextState;
-    // Process warm-up bars to build/expire state, but count only the requested test window.
-    if(signalTime<start)continue;
+    // Process warm-up bars to build state and carry any still-open position lock into the test window.
+    if(signalTime<start){
+     if(candidate.eligible&&candidate.stop>entry){
+      const warmTrade=simulate(d.symbol,entry,candidate.stop,d.five,entryIndex,signalTime);
+      locks.set(d.symbol,warmTrade.exitTime||END);
+     }
+     continue;
+    }
     if(!candidate.eligible){
      rejected++;
      const reason=String(candidate.rejected||"Unknown rejection");
