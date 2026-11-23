@@ -31,7 +31,7 @@ function makeEnv({ quotaOnFirstPut = false } = {}) {
   };
   const env = {
     APP_KV: kv,
-    SIGNAL_DELIVERY_SECRET: "test-secret",
+    SIGNAL_DELIVERY_AUTH_SECRET: "test-secret",
     SIGNAL_DELIVERY: {
       idFromName() { return "global-kv-write-quota"; },
       get() { return stub; }

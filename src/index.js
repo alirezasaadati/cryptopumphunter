@@ -13,6 +13,27 @@ const CONFIG = {
 
 const TELEGRAM_API = "https://api.telegram.org";
 
+function getSignalDeliverySecret(env) {
+  return env.SIGNAL_DELIVERY_AUTH_SECRET || "";
+}
+
+async function verifySignalDeliverySecret(provided, expected) {
+  if (typeof provided !== "string" || !provided || typeof expected !== "string" || !expected) return false;
+  const encoder = new TextEncoder();
+  const [providedHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(provided)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected))
+  ]);
+  if (typeof crypto.subtle.timingSafeEqual === "function") {
+    return crypto.subtle.timingSafeEqual(providedHash, expectedHash);
+  }
+  const left = new Uint8Array(providedHash);
+  const right = new Uint8Array(expectedHash);
+  let difference = 0;
+  for (let i = 0; i < left.length; i++) difference |= left[i] ^ right[i];
+  return difference === 0;
+}
+
 const seenUpdates = new Set();
 let telegramKvDedupeUnavailable = false;
 
@@ -27,7 +48,7 @@ async function kvWriteGate(env, action, error = null) {
     const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global-kv-write-quota"));
     const response = await stub.fetch("https://signal-delivery.internal/kv-write/" + action, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET || "" },
+      headers: { "content-type": "application/json", "x-signal-delivery-secret": getSignalDeliverySecret(env) || "" },
       body: JSON.stringify({ day: quotaDayKey(), message: error ? String(error?.message || error).slice(0, 300) : undefined })
     });
     if (!response.ok) throw new Error("KV quota gate returned HTTP " + response.status + "; refusing KV write.");
@@ -1982,10 +2003,10 @@ function formatFuturesSymbol(symbol) {
 
 
 async function getOpenFuturesTrades(env) {
-  if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) throw new Error("Durable signal storage is required.");
+  if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) throw new Error("Durable signal storage is required.");
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
   const response = await stub.fetch("https://signal-delivery.internal/trades/list", {
-    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET },
+    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": getSignalDeliverySecret(env) },
     body: "{}"
   });
   const payload = await response.json();
@@ -1997,7 +2018,7 @@ async function persistFuturesTradeUpdates(env, updates) {
   if (!updates.length) return { updated: 0 };
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
   const response = await stub.fetch("https://signal-delivery.internal/trades/update", {
-    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET },
+    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": getSignalDeliverySecret(env) },
     body: JSON.stringify({ trades: updates })
   });
   const payload = await response.json();
@@ -2092,10 +2113,10 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
 }
 
 async function registerPendingFuturesSignals(env, candidates) {
-  if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) throw new Error("Durable signal storage is required.");
+  if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) throw new Error("Durable signal storage is required.");
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
   const response = await stub.fetch("https://signal-delivery.internal/signals/register", {
-    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET },
+    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": getSignalDeliverySecret(env) },
     body: JSON.stringify({ signals: Array.isArray(candidates) ? candidates : [] })
   });
   const payload = await response.json();
@@ -2181,10 +2202,10 @@ async function sendAndArchiveFuturesSignalUnlocked(env,ctx,chatId,signal,message
 
 async function publishSignalToArchive(env,signal,messageText,parseMode="HTML") {
   const channelId=archiveChannelId(env);if(!channelId)return {skipped:true};
-  if(!env.SIGNAL_DELIVERY||!env.SIGNAL_DELIVERY_SECRET)throw new Error("Archive publishing requires SIGNAL_DELIVERY coordination.");
+  if(!env.SIGNAL_DELIVERY||!getSignalDeliverySecret(env))throw new Error("Archive publishing requires SIGNAL_DELIVERY coordination.");
   const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:signal-archive-publisher"));
   const response=await stub.fetch("https://signal-delivery.internal/archive-publish",{
-    method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},
+    method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":getSignalDeliverySecret(env)},
     body:JSON.stringify({channelId,signalId:String(signal.id),messageText,parseMode})
   });
   const payload=await response.json();
@@ -2197,10 +2218,10 @@ async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMa
   const key=signalOutboxKey(chatId,signal.id);
   const id=env.SIGNAL_DELIVERY.idFromName(key);
   const stub=env.SIGNAL_DELIVERY.get(id);
-  if(!env.SIGNAL_DELIVERY_SECRET)throw new Error("SIGNAL_DELIVERY_SECRET is required for authenticated delivery.");
+  if(!getSignalDeliverySecret(env))throw new Error("SIGNAL_DELIVERY_AUTH_SECRET is required for authenticated delivery.");
   const response=await stub.fetch("https://signal-delivery.internal/deliver",{
     method:"POST",
-    headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},
+    headers:{"content-type":"application/json","x-signal-delivery-secret":getSignalDeliverySecret(env)},
     body:JSON.stringify({chatId:String(chatId),signal,messageText,replyMarkup,parseMode})
   });
   let payload;
@@ -2218,9 +2239,9 @@ export class SignalDeliveryCoordinator {
   async fetch(request){
     const url=new URL(request.url);
     if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
-    const expectedSecret=this.env.SIGNAL_DELIVERY_SECRET;
+    const expectedSecret=getSignalDeliverySecret(this.env);
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
-    if(!expectedSecret||!suppliedSecret||suppliedSecret!==expectedSecret)return Response.json({ok:false,error:"Unauthorized."},{status:401});
+    if(!(await verifySignalDeliverySecret(suppliedSecret,expectedSecret)))return Response.json({ok:false,error:"Unauthorized."},{status:401});
     let payload;
     try{payload=await request.json()}catch{return Response.json({ok:false,error:"Invalid JSON payload."},{status:400});}
     return this.serial(async()=>{
@@ -2454,7 +2475,7 @@ export class SignalDeliveryCoordinator {
 
 async function showRecentFuturesSignalReport(env,ownerId){
   if(!isOwner(ownerId,env))return;
-  if(!env.SIGNAL_DELIVERY||!env.SIGNAL_DELIVERY_SECRET){
+  if(!env.SIGNAL_DELIVERY||!getSignalDeliverySecret(env)){
     await sendMessage(env,ownerId,"❌ اتصال امن حافظه سیگنال‌ها در دسترس نیست.");
     return;
   }
@@ -2462,7 +2483,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
     const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
     const response=await stub.fetch("https://signal-delivery.internal/signals/list",{
       method:"POST",
-      headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},
+      headers:{"content-type":"application/json","x-signal-delivery-secret":getSignalDeliverySecret(env)},
       body:JSON.stringify({limit:15})
     });
     let payload={};
@@ -2569,8 +2590,8 @@ async function reconcileSignalOutbox(env,ownerId,token,action){
   if(!selection){await sendMessage(env,ownerId,"این مورد منقضی شده است؛ فهرست را دوباره باز کن.");return;}
   const key=signalOutboxKey(selection.chatId,selection.signalId);
   const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
-  if(!env.SIGNAL_DELIVERY_SECRET){await sendMessage(env,ownerId,"❌ کلید امنیتی ارتباط داخلی تنظیم نشده است.");return;}
-   const response=await stub.fetch("https://signal-delivery.internal/reconcile",{method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":env.SIGNAL_DELIVERY_SECRET},body:JSON.stringify({...selection,action})});
+  if(!getSignalDeliverySecret(env)){await sendMessage(env,ownerId,"❌ کلید امنیتی ارتباط داخلی تنظیم نشده است.");return;}
+   const response=await stub.fetch("https://signal-delivery.internal/reconcile",{method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":getSignalDeliverySecret(env)},body:JSON.stringify({...selection,action})});
   let payload={};try{payload=await response.json()}catch{}
   if(!response.ok||!payload.ok){await sendMessage(env,ownerId,"❌ تعیین تکلیف انجام نشد: "+String(payload.error||"خطای نامشخص"));return;}
   await sendMessage(env,ownerId,action==="confirm_delivered"?"✅ سیگنال به‌عنوان ارسال‌شده ثبت شد.":action==="retry_archive"?"📚 انتشار سیگنال در آرشیو دوباره انجام شد.":"🔁 تلاش مجدد ارسال انجام شد.");
@@ -2634,7 +2655,7 @@ async function runAutomaticFuturesAlertScan(env) {
 }
 
 async function runAutomaticFuturesAlertScanInternal(env) {
-  if (!env.SIGNAL_DELIVERY || !env.SIGNAL_DELIVERY_SECRET) {
+  if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) {
     const result=await runFuturesSignalScan(env,{analysisOnly:true});
     const d=result.diagnostics||{};
     const message=[
@@ -2653,7 +2674,7 @@ async function runAutomaticFuturesAlertScanInternal(env) {
     return {scanned:true,analysisOnly:true,signals:0,diagnostics:d};
   }
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:automatic-futures-scan-lock"));
-  const headers = { "content-type": "application/json", "x-signal-delivery-secret": env.SIGNAL_DELIVERY_SECRET };
+  const headers = { "content-type": "application/json", "x-signal-delivery-secret": getSignalDeliverySecret(env) };
   const scanLockToken = crypto.randomUUID();
   const acquireResponse = await stub.fetch("https://signal-delivery.internal/scan-lock/acquire", {
     method: "POST", headers, body: JSON.stringify({ token: scanLockToken })
@@ -2922,22 +2943,48 @@ async function runFuturesSignalScan(env, options = {}) {
   return { report, signals, experimentalSent: 0, analyzed, diagnostics };
 }
 
-const activeManualFuturesScans = new Set();
-
 async function runFuturesSignalsForChat(env, chatId) {
   if (!(await isApproved(chatId, env))) {
     await sendMessage(env, chatId, "⛔ دسترسی شما فعال نیست.");
     return;
   }
 
-  const scanKey = String(chatId);
-  if (activeManualFuturesScans.has(scanKey)) {
-    await sendMessage(env, chatId, "⏳ اسکن فیوچرز شما در حال اجراست؛ لطفاً تا دریافت نتیجه منتظر بمان.", menuForChat(env, chatId));
-    return;
-  }
+  let lockAcquired = false;
+  let scanLockStub = null;
+  let scanLockToken = null;
+  const lockHeaders = {
+    "content-type": "application/json",
+    "x-signal-delivery-secret": getSignalDeliverySecret(env)
+  };
 
-  activeManualFuturesScans.add(scanKey);
   try {
+    if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) {
+      throw new Error("Durable signal storage is required for a globally coordinated manual scan.");
+    }
+
+    // Use the same Durable Object lease as scheduled scans. This serializes
+    // manual and automatic scans across all Worker isolates and regions.
+    scanLockStub = env.SIGNAL_DELIVERY.get(
+      env.SIGNAL_DELIVERY.idFromName("global:automatic-futures-scan-lock")
+    );
+    scanLockToken = crypto.randomUUID();
+    const acquireResponse = await scanLockStub.fetch("https://signal-delivery.internal/scan-lock/acquire", {
+      method: "POST",
+      headers: lockHeaders,
+      body: JSON.stringify({ token: scanLockToken })
+    });
+    const acquire = await acquireResponse.json();
+    if (!acquireResponse.ok || !acquire?.ok) {
+      throw new Error(acquire?.error || "Could not acquire the global Futures scan lock.");
+    }
+    if (!acquire.acquired) {
+      await sendMessage(env, chatId,
+        "⏳ در حال حاضر یک اسکن فیوچرز دیگر در حال اجراست؛ پس از پایان آن دوباره درخواست بده.",
+        menuForChat(env, chatId));
+      return;
+    }
+    lockAcquired = true;
+
     await sendMessage(env, chatId,
       "🔍 <b>درخواست بررسی ثبت شد</b>\n" +
       "━━━━━━━━━━━━━━━━━━\n\n" +
@@ -2981,7 +3028,18 @@ async function runFuturesSignalsForChat(env, chatId) {
     }
     await sendMessage(env, chatId, "⚠️ اجرای اسکن فیوچرز با خطا مواجه شد؛ درخواست ثبت شد اما نتیجه‌ای تولید نشد. لطفاً بعداً دوباره تلاش کن.", menuForChat(env, chatId));
   } finally {
-    activeManualFuturesScans.delete(scanKey);
+    if (lockAcquired && scanLockStub && scanLockToken) {
+      try {
+        const releaseResponse = await scanLockStub.fetch("https://signal-delivery.internal/scan-lock/release", {
+          method: "POST",
+          headers: lockHeaders,
+          body: JSON.stringify({ token: scanLockToken })
+        });
+        if (!releaseResponse.ok) console.error("Could not release manual Futures scan lock:", releaseResponse.status);
+      } catch (releaseError) {
+        console.error("Could not release manual Futures scan lock:", String(releaseError?.message || releaseError));
+      }
+    }
   }
 }
 

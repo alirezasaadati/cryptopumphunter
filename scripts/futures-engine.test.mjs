@@ -73,7 +73,7 @@ test("admin signal listing returns recent unexpired signals from Durable Object 
     put:async(...args)=>writes.push(args),
     delete:async()=>{}
   }};
-  const env={SIGNAL_DELIVERY_SECRET:"test-secret"};
+  const env={SIGNAL_DELIVERY_AUTH_SECRET:"test-secret"};
   const coordinator=new SignalDeliveryCoordinator(ctx,env);
   const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/list",{
     method:"POST",
@@ -101,7 +101,7 @@ test("Durable Object supplies the 60-minute expiry when a new signal omits expir
       return result;
     }
   }};
-  const coordinator=new SignalDeliveryCoordinator(ctx,{SIGNAL_DELIVERY_SECRET:"test-secret"});
+  const coordinator=new SignalDeliveryCoordinator(ctx,{SIGNAL_DELIVERY_AUTH_SECRET:"test-secret"});
   const now=Date.now();
   const signal={id:"missing-expiry",symbol:"PF_TESTUSD",side:"LONG",entry:100,stop:98,target1:103,target2:105,target3:107,score:68,createdAt:now};
   const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/register",{
@@ -135,7 +135,7 @@ test("open trade older than four hours still blocks a fresh signal for the same 
       return result;
     }
   }};
-  const coordinator=new SignalDeliveryCoordinator(ctx,{SIGNAL_DELIVERY_SECRET:"test-secret"});
+  const coordinator=new SignalDeliveryCoordinator(ctx,{SIGNAL_DELIVERY_AUTH_SECRET:"test-secret"});
   const now=Date.now();
   const signal={id:"fresh-after-old-trade",symbol:"PF_TESTUSD",side:"LONG",entry:100,stop:98,target1:103,target2:105,target3:107,score:68,createdAt:now,expiresAt:now+3600000};
   const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/register",{
@@ -161,7 +161,7 @@ test("flat 1h and 4h conditions expose indicator-level rejection diagnostics",()
 });
 
 test("admin signal listing endpoint rejects requests without the Durable Object secret",async()=>{
-  const coordinator=new SignalDeliveryCoordinator({storage:{get:async()=>[]}}, {SIGNAL_DELIVERY_SECRET:"test-secret"});
+  const coordinator=new SignalDeliveryCoordinator({storage:{get:async()=>[]}}, {SIGNAL_DELIVERY_AUTH_SECRET:"test-secret"});
   const response=await coordinator.fetch(new Request("https://signal-delivery.internal/signals/list",{
     method:"POST",
     headers:{"content-type":"application/json"},
