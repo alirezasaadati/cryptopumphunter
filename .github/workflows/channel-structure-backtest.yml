@@ -1,5 +1,12 @@
 name: Channel structure strategy backtest
 on:
+  push:
+    branches: [experiment/channel-mtf-90-180]
+    paths:
+      - "src/channel-structure-engine.js"
+      - "src/channel-structure-mtf.js"
+      - "scripts/channel-structure-backtest.mjs"
+      - ".github/workflows/channel-structure-backtest.yml"
   pull_request:
     branches: [main]
     paths:
