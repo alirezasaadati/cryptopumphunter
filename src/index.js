@@ -1402,6 +1402,53 @@ function rsi(values, period = 14) {
   return Number.isFinite(result) ? result : null;
 }
 
+function calculateRsiSeries(values, period = 14) {
+  if (!Array.isArray(values) || !Number.isInteger(period) || period <= 0 || values.length <= period ||
+      !values.every(Number.isFinite)) return [];
+  const result = new Array(values.length).fill(null);
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = values[i] - values[i - 1];
+    gains += Math.max(change, 0);
+    losses += Math.max(-change, 0);
+  }
+  let avgGain = gains / period, avgLoss = losses / period;
+  const valueAt = (gain, loss) => gain === 0 && loss === 0 ? 50
+    : loss === 0 ? 100 : gain === 0 ? 0 : 100 - 100 / (1 + gain / loss);
+  result[period] = valueAt(avgGain, avgLoss);
+  for (let i = period + 1; i < values.length; i++) {
+    const change = values[i] - values[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(change, 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(-change, 0)) / period;
+    result[i] = valueAt(avgGain, avgLoss);
+  }
+  return result;
+}
+
+function findBearishRsiDivergence(candles, period = 14) {
+  if (!Array.isArray(candles) || candles.length < period + 12) {
+    return { confirmed: false, firstPivot: null, secondPivot: null };
+  }
+  const rsiValues = calculateRsiSeries(candles.map(c => Number(c.close)), period);
+  const pivots = [];
+  for (let i = Math.max(period + 2, candles.length - 40); i <= candles.length - 3; i++) {
+    const high = Number(candles[i]?.high), pivotRsi = rsiValues[i];
+    if (!Number.isFinite(high) || !Number.isFinite(pivotRsi)) continue;
+    const left = candles.slice(i - 2, i).map(c => Number(c.high));
+    const right = candles.slice(i + 1, i + 3).map(c => Number(c.high));
+    if (left.every(v => high > v) && right.every(v => high >= v)) {
+      pivots.push({ index: i, high, rsi: pivotRsi, time: candles[i]?.time ?? null });
+    }
+  }
+  if (pivots.length < 2) return { confirmed: false, firstPivot: null, secondPivot: null };
+  const [firstPivot, secondPivot] = pivots.slice(-2);
+  const spacing = secondPivot.index - firstPivot.index;
+  const confirmed = spacing >= 4 && spacing <= 30 &&
+    secondPivot.high > firstPivot.high * 1.001 &&
+    secondPivot.rsi < firstPivot.rsi - 1.5;
+  return { confirmed, firstPivot, secondPivot };
+}
+
 function average(values) {
   if (!values.length) return 0;
   return values.reduce((a, b) => a + b, 0) / values.length;
@@ -1440,6 +1487,8 @@ const FUTURES_CONFIG = {
   VOLUME_PRIORITY_BONUS_TIER_2: 10,
   CONFIRMATION_PRIORITY_BONUS_ONE: 7,
   CONFIRMATION_PRIORITY_BONUS_BOTH: 15,
+  STRUCTURAL_PULLBACK_PRIORITY_BONUS: 12,
+  RSI_DIVERGENCE_PRIORITY_BONUS: 15,
   HIGH_RISK_LONG_RSI_MIN: 32,
   HIGH_RISK_LONG_RSI_MAX: 82,
   HIGH_RISK_SHORT_RSI_MIN: 18,
@@ -1585,6 +1634,20 @@ function calculateAtr(candles, period = 14) {
   return recent.length === period ? average(recent) : null;
 }
 
+function detectShortStructuralPullback(candles1h, candles15m, atr15m) {
+  if (!Array.isArray(candles1h) || candles1h.length < 2 ||
+      !Array.isArray(candles15m) || candles15m.length < 9 ||
+      !Number.isFinite(atr15m) || atr15m <= 0) return false;
+  const resistance = Number(candles1h[candles1h.length - 2]?.high);
+  if (!Number.isFinite(resistance) || resistance <= 0) return false;
+  const tolerance = Math.max(resistance * 0.0005, atr15m * 0.15);
+  return candles15m.slice(-9, -1).some(c => {
+    const high = Number(c?.high), low = Number(c?.low);
+    return Number.isFinite(high) && Number.isFinite(low) &&
+      high >= resistance - tolerance && low <= resistance + tolerance;
+  });
+}
+
 function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr }) {
   const marketPrice = Number(ticker?.last);
   if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
@@ -1602,7 +1665,8 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
 
   const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
   if (!has15mData) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false,
+      emaPullbackConfirmed: false, structuralPullbackConfirmed: false, confirmationUnavailable: true };
   }
   const closes15m = candles15m.map(c => c.close);
   const ema9_15m = ema(closes15m, 9);
@@ -1611,7 +1675,8 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
   const last15m = candles15m[candles15m.length - 1];
   const recentPullback = candles15m.slice(-9, -1);
   if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false,
+      emaPullbackConfirmed: false, structuralPullbackConfirmed: false, confirmationUnavailable: true };
   }
 
   const aligned = side === "LONG"
@@ -1620,6 +1685,10 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
   const touchedPullbackZone = side === "LONG"
     ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR)
     : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
+  const structuralPullbackConfirmed = side === "SHORT"
+    ? detectShortStructuralPullback(candles1h, candles15m, atr15m)
+    : false;
+  const pullbackConfirmed = side === "SHORT" ? structuralPullbackConfirmed : touchedPullbackZone;
 
   const reclaimExtensionAtr = side === "LONG"
     ? (last15m.close - ema9_15m) / atr15m
@@ -1629,7 +1698,8 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
   }
 
   return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
-    momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
+    momentumConfirmed: aligned, pullbackConfirmed, emaPullbackConfirmed: touchedPullbackZone,
+    structuralPullbackConfirmed };
 }
 
 function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
@@ -1662,7 +1732,8 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
 
   const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
   if (!has15mData) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false,
+      emaPullbackConfirmed: false, structuralPullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes };
   }
 
   const closes15m = candles15m.map(c => c.close);
@@ -1671,7 +1742,8 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
   const atr15m = calculateAtr(candles15m, 14);
   const last15m = candles15m[candles15m.length - 1];
   if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false,
+      emaPullbackConfirmed: false, structuralPullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes };
   }
 
   const momentumConfirmed = side === "LONG"
@@ -1681,13 +1753,18 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
   const touchedPullbackZone = side === "LONG"
     ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR)
     : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
+  const structuralPullbackConfirmed = side === "SHORT"
+    ? detectShortStructuralPullback(candles1h, candles15m, atr15m)
+    : false;
+  const pullbackConfirmed = side === "SHORT" ? structuralPullbackConfirmed : touchedPullbackZone;
   const reclaimExtensionAtr = side === "LONG"
     ? (last15m.close - ema9_15m) / atr15m
     : (ema9_15m - last15m.close) / atr15m;
   // Momentum and pullback are confirmations for ranking, never hard eligibility gates.
   // Drift and EMA/ATR distance remain hard safety limits.
   return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
-    momentumConfirmed, pullbackConfirmed: touchedPullbackZone, fourHourOpposes };
+    momentumConfirmed, pullbackConfirmed, emaPullbackConfirmed: touchedPullbackZone,
+    structuralPullbackConfirmed, fourHourOpposes };
 }
 
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
@@ -1862,21 +1939,39 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const momentumConfirmed = entryFilters.momentumConfirmed === true;
   const pullbackConfirmed = entryFilters.pullbackConfirmed === true;
   const confirmationCount = Number(momentumConfirmed) + Number(pullbackConfirmed);
-  const confirmationPriorityBonus = confirmationCount === 2
-    ? FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_BOTH
-    : confirmationCount === 1
-      ? FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_ONE
-      : 0;
-  const priorityScore = Math.min(125, priorityBaseScore + volumePriorityBonus + confirmationPriorityBonus);
+  const confirmationPriorityBonus = side === "SHORT"
+    ? (momentumConfirmed && pullbackConfirmed
+      ? FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_BOTH
+      : momentumConfirmed
+        ? FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_ONE
+        : pullbackConfirmed
+          ? FUTURES_CONFIG.STRUCTURAL_PULLBACK_PRIORITY_BONUS
+          : 0)
+    : (confirmationCount === 2
+      ? FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_BOTH
+      : confirmationCount === 1
+        ? FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_ONE
+        : 0);
+  const bearishRsiDivergence = side === "SHORT"
+    ? findBearishRsiDivergence(candles1h)
+    : { confirmed: false, firstPivot: null, secondPivot: null };
+  const rsiDivergenceBonus = bearishRsiDivergence.confirmed
+    ? FUTURES_CONFIG.RSI_DIVERGENCE_PRIORITY_BONUS
+    : 0;
+  const priorityScore = Math.min(125,
+    priorityBaseScore + volumePriorityBonus + confirmationPriorityBonus + rsiDivergenceBonus);
   if (confirmationCount === 2) {
-    reasons.push("مومنتوم و پولبک ۱۵دقیقه‌ای تأیید شدند؛ پاداش اولویت کامل");
-  } else if (confirmationCount === 1) {
-    reasons.push("یکی از دو تأیید مومنتوم/پولبک ۱۵دقیقه‌ای برقرار است؛ پاداش اولویت جزئی");
+    reasons.push("مومنتوم و پولبک ساختاری ۱۵دقیقه‌ای تأیید شدند؛ پاداش ترکیبی +۱۵");
+  } else if (side === "SHORT" && pullbackConfirmed) {
+    reasons.push("پولبک ساختاری به مقاومت سقف کندل قبلی ۱ساعته تأیید شد؛ پاداش +۱۲");
+  } else if (momentumConfirmed) {
+    reasons.push("مومنتوم ۱۵دقیقه‌ای تأیید شد؛ پاداش +۷");
   } else {
     reasons.push(entryFilters.confirmationUnavailable
       ? "داده تأیید ۱۵دقیقه‌ای در دسترس نبود؛ بدون پاداش اولویت"
-      : "مومنتوم و پولبک ۱۵دقیقه‌ای تأیید نشدند؛ بدون پاداش اولویت");
+      : "تأیید مومنتوم/پولبک برقرار نشد؛ بدون پاداش اولویت");
   }
+  if (bearishRsiDivergence.confirmed) reasons.push("واگرایی نزولی معتبر RSI در ۱h؛ پاداش اولویت +۱۵");
 
   const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
   const swing = candles1h.slice(-8, -1);
@@ -1892,7 +1987,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   }
 
   const direction = side === "LONG" ? 1 : -1;
-  const target1 = entry + direction * risk * 1.5;
+  const target1Distance = side === "SHORT" ? Math.min(risk * 1.5, atr * 2.5) : risk * 1.5;
+  const target1 = entry + direction * target1Distance;
   const target2 = entry + direction * risk * 2.5;
   const target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
@@ -1910,6 +2006,13 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     volumePriorityBonus,
     confirmationPriorityBonus,
     confirmationCount,
+    rsiDivergenceBonus,
+    bearishRsiDivergence: bearishRsiDivergence.confirmed,
+    bearishRsiDivergencePivots: bearishRsiDivergence.confirmed
+      ? { first: bearishRsiDivergence.firstPivot, second: bearishRsiDivergence.secondPivot }
+      : null,
+    structuralPullbackConfirmed: entryFilters.structuralPullbackConfirmed === true,
+    emaPullbackConfirmed: entryFilters.emaPullbackConfirmed === true,
     riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
     price: entry,
     entry,
@@ -1917,7 +2020,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     target1,
     target2,
     target3,
-    rewardRisk: 1.5,
+    rewardRisk: target1Distance / risk,
     rsi: rsiValue,
     ema20: e20,
     ema50: e50,
@@ -1950,7 +2053,7 @@ function formatFuturesSignal(item, index = 1) {
     `نماد: <b>${symbol}</b>\n\n` +
     `جهت معامله: ${sideLabel}\n\n` +
     `قیمت ورود: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
-    `🎯 تارگت اول (1.5R): <b>${formatSignalPrice(item.target1)}</b>\n\n` +
+    `🎯 تارگت اول (${Number(item.rewardRisk || 1.5).toFixed(2)}R): <b>${formatSignalPrice(item.target1)}</b>\n\n` +
     `🎯 تارگت دوم (2.5R): <b>${formatSignalPrice(item.target2)}</b>\n\n` +
     `🎯 تارگت سوم (3.5R): <b>${formatSignalPrice(item.target3)}</b>\n\n` +
     `⛔ حد ضرر: <b>${formatSignalPrice(item.stop)}</b>`;
@@ -2998,4 +3101,4 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
+export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, calculateRsiSeries, findBearishRsiDivergence, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
