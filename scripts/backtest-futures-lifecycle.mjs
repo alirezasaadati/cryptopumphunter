@@ -184,7 +184,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     let candidate;
     try { candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m); }
     catch { rejectedSignals++; continue; }
-    if (!candidate || candidate.eligible !== true || !["LONG","SHORT"].includes(candidate.side)) { rejectedSignals++; continue; }
+    if (!candidate || candidate.eligible !== true || candidate.side !== "SHORT") { rejectedSignals++; continue; }
 
     const lockKey = ticker.symbol + "|" + candidate.side;
     if ((lockUntil.get(lockKey) || 0) > signalCloseTime) { skippedByLock++; continue; }
@@ -201,11 +201,17 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       rejectedSignals++; continue;
     }
     const limitPrice = Math.abs(emaEntry-referencePrice) <= Math.abs(wickEntry-referencePrice) ? emaEntry : wickEntry;
-    const selectedEntrySource = limitPrice === emaEntry ? "EMA20_1H" : (candidate.side === "LONG" ? "PREVIOUS_CANDLE_LOW" : "PREVIOUS_CANDLE_HIGH");
+    const marketAtSignal = Number(tickerAtSignal.last);
+    const levelsGapPct = Math.abs(emaEntry-wickEntry) / marketAtSignal * 100;
+    const useMarketFallback = marketAtSignal < emaEntry && marketAtSignal < wickEntry && levelsGapPct > 0.5;
+    const selectedEntrySource = useMarketFallback ? "MARKET_FALLBACK" : (limitPrice === emaEntry ? "EMA20_1H" : "PREVIOUS_CANDLE_HIGH");
     const orderExpiry = signalCloseTime + INTERVALS["1h"];
     const firstOrderBar = lowerBound(fiveMinute,signalCloseTime);
     let fill = null;
-    for (let j = firstOrderBar; j < fiveMinute.length && fiveMinute[j].time < orderExpiry && fiveMinute[j].time < toMs; j++) {
+    if (useMarketFallback && fiveMinute[firstOrderBar] && fiveMinute[firstOrderBar].time < toMs) {
+      fill = { price: fiveMinute[firstOrderBar].open, time: fiveMinute[firstOrderBar].time, barIndex: firstOrderBar, fillType: "MARKET_FALLBACK" };
+    }
+    for (let j = firstOrderBar; !fill && j < fiveMinute.length && fiveMinute[j].time < orderExpiry && fiveMinute[j].time < toMs; j++) {
       const bar = fiveMinute[j];
       if (candidate.side === "LONG") {
         if (bar.open <= limitPrice) fill = { price: bar.open, time: bar.time, barIndex: j, fillType: "MARKETABLE_LIMIT_AT_OPEN" };
@@ -272,7 +278,9 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   };
 }
 async function main() {
-  const endMs = Date.now();
+  const configuredEnd = process.env.LIFECYCLE_BACKTEST_END ? Date.parse(process.env.LIFECYCLE_BACKTEST_END) : Date.now();
+  if (!Number.isFinite(configuredEnd)) throw new Error("Invalid LIFECYCLE_BACKTEST_END");
+  const endMs = configuredEnd;
   const startMs = endMs - DAYS*86400000;
   const fromMs = startMs - WARMUP_DAYS*86400000;
   const tickerData = await getJson(BASE + "/derivatives/api/v3/tickers");
@@ -324,11 +332,12 @@ async function main() {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
     rules:{leverage:LEVERAGE,startingCapitalUsd:STARTING_CAPITAL,marginPerTradeUsd:MARGIN_PER_TRADE,maxConcurrentPositions:STARTING_CAPITAL/MARGIN_PER_TRADE,
-      atrMultiplierLong:2.0,atrMultiplierShort:1.5,tp1RLong:1.3,tp1RShort:1.5,
-      exit:"LONG closes at TP1=1.3R or initial stop; SHORT closes at TP1=1.5R or initial stop",tp1Tp2Tp3:"TP1 only; TP2 and TP3 ignored",
+      sideScope:"SHORT only; LONG signals are not backtested",atrMultiplierShort:1.5,tp1RShort:1.5,
+      shortEntry:"Choose the nearer of 1h EMA20 and previous closed 1h candle high, measured from signal candle close. If market is below both levels and their separation exceeds 0.5% of market price, enter at the next 5m open using MARKET_FALLBACK; otherwise place the selected limit for one hour.",
+      exit:"SHORT closes at TP1=1.5R or initial stop; current short engine ATR multiplier 1.5 is retained",tp1Tp2Tp3:"TP1 only; TP2 and TP3 ignored",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
-      execution:"signal generated from closed 1h/4h/15m candles; choose the closer of 1h EMA20 and the just-closed 1h candle low (LONG) or high (SHORT), measured from signal candle close; submit limit after signal close; order valid for one hour; marketable limits fill at next 5m open, otherwise at selected level touch; stop recalculated from the same 7 closed 1h candles and ATR around actual fill (LONG 2.0x, SHORT 1.5x); TP1 recalculated (LONG 1.3R, SHORT 1.5R); exits evaluated on 5m OHLC",
+      execution:"SHORT-only signals from the unchanged current Kraken Futures analyzer on closed 1h/4h/15m candles; choose nearer 1h EMA20 or previous closed 1h high from signal close; if market is below both and level gap >0.5%, market fallback at next 5m open; otherwise one-hour limit; stop recalculated using current short engine ATR 1.5x and prior seven closed 1h candles; TP1 1.5R; exits on 5m OHLC",
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top 10 current Kraken perpetuals by current quote volume; historical 24h quote-volume filter reconstructed from prior 24 closed 1h candles; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
