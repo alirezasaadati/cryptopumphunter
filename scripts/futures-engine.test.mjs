@@ -321,6 +321,11 @@ test("standard LONG path accepts aligned 1h with neutral 4h context",()=>{
 test("HIGH_RISK accepts opposing 4h without 15m momentum; confirmation only affects priority",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
+  const priorHourHigh=oneHour.at(-2).high;
+  for(const candle of fifteenMinute.slice(-9,-1)) {
+    candle.high=Math.min(candle.high,priorHourHigh-0.5);
+    candle.low=Math.min(candle.low,candle.high-0.1);
+  }
   fifteenMinute.at(-1).open=fifteenMinute.at(-1).close-0.05;
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
   assert.equal(result.eligible,true,JSON.stringify(result));
