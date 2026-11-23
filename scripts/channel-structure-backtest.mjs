@@ -94,7 +94,7 @@ function metrics(trades) {
 function runSymbol(data, days, endMs) {
   const start=endMs-days*DAY, {ticker,h1,h4,m15,m5}=data;
   let h4Index=0,m15Index=0,lockedUntil=0;
-  const trades=[], counts={opportunities:0,belowMinRisk:0,lockSkips:0,bySetup:{}};
+  const trades=[], counts={opportunities:0,opportunitiesBySide:{LONG:0,SHORT:0},lockSkips:0,filled:0,marketFills:0,limitFills:0,limitExpired:0,invalidFillRisk:0,bySetup:{}};
   const first=lowerBound(h1,start-20*DAY);
   for(let i=Math.max(40,first);i<h1.length-1;i++){
     const h=h1[i], signalTime=h.time+HOUR;
