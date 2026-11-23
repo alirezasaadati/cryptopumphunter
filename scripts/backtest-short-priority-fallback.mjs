@@ -151,7 +151,7 @@ function lowerBound(candles,time) {
 }
 
 function createArm() {
-  return {trades:[],opportunities:0,filled:0,expired:0,lockSkips:0,marketOrders:0,limitOrders:0,limitGapFills:0,limitTouchFills:0};
+  return {trades:[],opportunities:0,filled:0,expired:0,lockSkips:0,marketOrders:0,limitOrders:0,bullishLimitOrders:0,dojiLimitOrders:0,limitGapFills:0,limitTouchFills:0};
 }
 
 function runWindowForSymbol(data,days,endMs) {
@@ -191,7 +191,11 @@ function runWindowForSymbol(data,days,endMs) {
     const decision=resolveShortFallbackFill({decisionCandle,followingCandles:following,validBars:LIMIT_VALID_BARS,
       marketSlippage:SLIPPAGE_PER_SIDE});
     if(decision.type==="MARKET")experimental.marketOrders++;
-    else experimental.limitOrders++;
+    else {
+      experimental.limitOrders++;
+      if(decision.decisionReason==="BULLISH_5M")experimental.bullishLimitOrders++;
+      if(decision.decisionReason==="DOJI_5M")experimental.dojiLimitOrders++;
+    }
     const marketRaw=Number(fiveMinute[decisionIndex+1]?.open);
     if(!Number.isFinite(marketRaw)||marketRaw<=0)continue;
     const baselineEntry=marketRaw*(1-SLIPPAGE_PER_SIDE);
@@ -272,6 +276,7 @@ async function main() {
       experimental:{
         opportunities:sum("experimental","opportunities"),filled:sum("experimental","filled"),expired:sum("experimental","expired"),lockSkips:sum("experimental","lockSkips"),
         marketOrders:sum("experimental","marketOrders"),limitOrders:sum("experimental","limitOrders"),
+        bullishLimitOrders:sum("experimental","bullishLimitOrders"),dojiLimitOrders:sum("experimental","dojiLimitOrders"),
         limitGapFills:sum("experimental","limitGapFills"),limitTouchFills:sum("experimental","limitTouchFills"),
         metrics:summarize(experimentalTrades)
       },
@@ -320,7 +325,9 @@ async function main() {
       "| Expectancy R | "+w.baseline.metrics.expectancyR.toFixed(4)+" | "+w.experimental.metrics.expectancyR.toFixed(4)+" |",
       "| Profit factor | "+w.baseline.metrics.profitFactor+" | "+w.experimental.metrics.profitFactor+" |",
       "| Max drawdown R | "+w.baseline.metrics.maxDrawdownR.toFixed(3)+" | "+w.experimental.metrics.maxDrawdownR.toFixed(3)+" |",
-      "| Limit orders | 0 | "+w.experimental.limitOrders+" |",
+      "| Limit orders placed | 0 | "+w.experimental.limitOrders+" |",
+      "| Bullish-candle Limits | 0 | "+w.experimental.bullishLimitOrders+" |",
+      "| Doji Limits | 0 | "+w.experimental.dojiLimitOrders+" |",
       "| Market orders | "+w.baseline.filled+" | "+w.experimental.marketOrders+" |",""
     );
   }
