@@ -192,7 +192,7 @@ test("serial executor continues processing after an earlier delivery fails", asy
 
 
 test("coordinator rejects missing or incorrect internal authentication secret", async () => {
-  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: memoryKV(), SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: memoryKV(), SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
   const response = await coordinator.fetch(new Request("https://signal-delivery.internal/deliver", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -211,7 +211,7 @@ test("owner reconciliation confirms uncertain delivery without creating a duplic
     status: "UNCERTAIN", signal: pending, messageText: "test signal",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
   }));
-  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
   const request = () => new Request("https://signal-delivery.internal/reconcile", {
     method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
     body: JSON.stringify({ action: "confirm_delivered", chatId: "909", signalId: pending.id })
@@ -234,7 +234,7 @@ test("owner reconciliation refuses to auto-archive legacy uncertain records with
   await kv.put("futures:signal-outbox:v1:910:legacy", JSON.stringify({
     chatId: "910", signalId: "legacy", symbol: "BTC-PERP", status: "UNCERTAIN"
   }));
-  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
   const response = await coordinator.fetch(new Request("https://signal-delivery.internal/reconcile", {
     method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
     body: JSON.stringify({ action: "confirm_delivered", chatId: "910", signalId: "legacy" })
@@ -247,7 +247,7 @@ test("owner reconciliation refuses to auto-archive legacy uncertain records with
 
 test("concurrent duplicate deliveries use durable storage and send one Telegram message", async () => {
   const storage = memoryStorage();
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+  const coordinator = new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
   const originalFetch = globalThis.fetch;
   let sendCalls = 0;
   globalThis.fetch = async () => {
@@ -281,7 +281,7 @@ test("legacy owner-authorized retry is transferred to durable storage before sen
     status: "UNCERTAIN", signal: pending, messageText: "retry signal",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
   }));
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { APP_KV: kv, BOT_TOKEN: "test-token", SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+  const coordinator = new SignalDeliveryCoordinator({ storage }, { APP_KV: kv, BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
   const originalFetch = globalThis.fetch;
   let sendCalls = 0;
   globalThis.fetch = async (_url, options) => {
@@ -307,7 +307,7 @@ test("legacy owner-authorized retry is transferred to durable storage before sen
 test("network timeout is persisted as UNCERTAIN in Durable Object storage and never auto-resends", async () => {
   const storage = memoryStorage();
   const pending = signal("timeout-ambiguous");
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+  const coordinator = new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
   const originalFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async () => {
@@ -322,7 +322,7 @@ test("network timeout is persisted as UNCERTAIN in Durable Object storage and ne
     const first = await coordinator.fetch(request());
     assert.equal(first.status, 409);
     assert.equal((await storage.get("signal-outbox:futures:signal-outbox:v1:913:timeout-ambiguous")).status, "UNCERTAIN");
-    const second = await new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET }).fetch(request());
+    const second = await new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET }).fetch(request());
     assert.equal(second.status, 409);
     assert.equal(calls, 1);
   } finally { globalThis.fetch = originalFetch; }
@@ -339,7 +339,7 @@ test("worker interruption leaves SENDING durable state and restart blocks duplic
     delete: (...args) => base.delete(...args)
   };
   const pending = signal("worker-interruption");
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+  const coordinator = new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
   const originalFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async () => { calls++; throw new Error("simulated interrupted request"); };
@@ -351,7 +351,7 @@ test("worker interruption leaves SENDING durable state and restart blocks duplic
     const interrupted = await coordinator.fetch(request());
     assert.equal(interrupted.status, 409);
     assert.equal((await base.get("signal-outbox:futures:signal-outbox:v1:914:worker-interruption")).status, "SENDING");
-    const restarted = new SignalDeliveryCoordinator({ storage: base }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+    const restarted = new SignalDeliveryCoordinator({ storage: base }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
     const response = await restarted.fetch(request());
     assert.equal(response.status, 409);
     assert.equal(calls, 1);
@@ -367,7 +367,7 @@ test("KV write quota exhaustion does not block validated signal delivery", async
     async delete() { throw new Error("KV daily write quota is paused"); },
     async list() { throw new Error("KV daily write quota is paused"); }
   };
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { APP_KV: kv, BOT_TOKEN: "test-token", SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+  const coordinator = new SignalDeliveryCoordinator({ storage }, { APP_KV: kv, BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
   const originalFetch = globalThis.fetch;
   let sends = 0;
   globalThis.fetch = async () => {
@@ -389,7 +389,7 @@ test("KV write quota exhaustion does not block validated signal delivery", async
 
 test("signal registration deduplicates active symbol and side in Durable Object storage", async () => {
   const storage = memoryStorage();
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { SIGNAL_DELIVERY_SECRET: TEST_DELIVERY_SECRET });
+  const coordinator = new SignalDeliveryCoordinator({ storage }, { SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
   const request = (signals) => new Request("https://signal-delivery.internal/signals/register", {
     method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
     body: JSON.stringify({ signals })
