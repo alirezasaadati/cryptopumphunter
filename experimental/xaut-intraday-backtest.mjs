@@ -47,7 +47,7 @@ const trades=[],reject={warmup:0,h1Trend:0,m15Trend:0,noPullbackReclaim:0,rsi:0,
 let nextAllowed=0,openTrade=null;
 function closeTrade(tr,price,time,reason){const dir=tr.side==="LONG"?1:-1,fill=price*(1-dir*SLIPPAGE);const r=dir*(fill-tr.entry)/tr.risk;const feeR=FEE*(tr.entry+fill)/tr.risk;tr.netR+=tr.remaining*(r-feeR);tr.remaining=0;tr.exitTime=time;tr.exitReason=reason;tr.exitPrice=fill;trades.push(tr);}
 for(let i=60;i<m15.length-2;i++){
- const bar=m15[i],prev=m15[i-1],a=a14[i],r=r14[i],vavg=sma(v15,20,i),hidx=indexAtOrBefore(h1,bar.time);
+ const bar=m15[i],prev=m15[i-1],a=a14[i],r=r14[i],vavg=sma(v15,20,i),hidx=indexAtOrBefore(h1,bar.time+M15-HOUR);
  if(!a||!r||!vavg||hidx<50){reject.warmup++;continue;}
  const hb=h1[hidx],ht=e20_1[hidx]>e50_1[hidx]&&hb.close>e20_1[hidx]?"LONG":e20_1[hidx]<e50_1[hidx]&&hb.close<e20_1[hidx]?"SHORT":null;
  if(!ht){reject.h1Trend++;continue;}
