@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # Isolated historical test: calls the unchanged build()/make_signal() from experimental/signal_engine.py.
-import json, os, re, time
+import json, os, re, time, sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import pandas as pd
