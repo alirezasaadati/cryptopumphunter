@@ -5,7 +5,7 @@ function rising(count,slope,base,interval,volume=100){return Array.from({length:
 function setup(){
  const one=rising(120,.25,100,3600000),four=rising(120,1,100,14400000),fifteen=rising(100,.025,100,900000,100);
  for(let i=8;i>=2;i--){const ix=fifteen.length-i,prev=fifteen[ix-1].close,close=prev+.55;fifteen[ix]={...fifteen[ix],open:prev,high:close+.08,low:prev-.03,close,volume:180};}
- const p1=fifteen.at(-2).close,p2=fifteen.at(-3).close,close=Math.min(p1-.35,p2-.3);
+ const p1=fifteen.at(-2).close,priorLow=Math.min(fifteen.at(-2).low,fifteen.at(-3).low),close=priorLow-.2;
  fifteen[fifteen.length-1]={...fifteen.at(-1),open:p1+.02,high:p1+.1,low:close-.05,close,volume:220};
  return {candles1h:one,candles4h:four,candles15m:fifteen,price:close,btcRegime:{ok:true,longAllowed:true}};
 }
