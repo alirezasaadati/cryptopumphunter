@@ -26,6 +26,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Test multi-timeframe confirmation helpers
+        run: node scripts/channel-structure-mtf.test.mjs
       - name: Run channel strategy 90d and 180d backtests
         run: node scripts/channel-structure-backtest.mjs
       - name: Upload channel backtest report
