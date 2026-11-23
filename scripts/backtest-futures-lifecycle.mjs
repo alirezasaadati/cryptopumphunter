@@ -264,7 +264,9 @@ async function backtestSymbol(ticker, fromMs, toMs) {
         if (!fill) { strategyExpired[spec.name]++; continue; }
       }
 
-      const swing=oneHour.slice(Math.max(0,i-6),i+1);
+      // Match the live analyzer exactly: seven fully closed 1h candles
+      // preceding the signal candle; the signal candle itself is excluded.
+      const swing=oneHour.slice(Math.max(0,i-7),i);
       const swingHigh=Math.max(...swing.map(c=>c.high));
       const atr=Number(candidate.atr);
       const stop=Math.max(swingHigh,fill.price+atr*1.5);
@@ -373,7 +375,7 @@ async function main() {
         PREVIOUS_CANDLE_HIGH:"Independent sell-limit at high of just-closed 1h signal candle; valid for one hour; if marketable at 5m open, fill at open; otherwise fill on high touch",
         MARKET_FALLBACK:"Only applicable when next market price is below both EMA20 and previous candle high and their gap exceeds 0.5%; market entry at next 5m open"
       },
-      exits:"Each arm recalculates same SHORT structural/ATR 1.5x stop around its actual fill and TP1 at 1.5R; exit evaluated on 5m OHLC",
+      exits:"Each arm recalculates SHORT structural/ATR 1.5x stop around its actual fill using the exact live-analyzer swing window (seven closed 1h candles before the signal candle; signal candle excluded) and TP1 at 1.5R; exit evaluated on 5m OHLC",
       lock:"One shared symbol+SHORT lock across baseline and all three independent entry arms; next signal accepted only after every filled arm from prior signal closes",
       capital:"Gross method comparison at fixed $10 margin per filled trade; methods are separate arms, not combined into one account",
       fees:"excluded",funding:"excluded",slippage:"excluded",
@@ -420,7 +422,7 @@ async function main() {
     }),
     "## Methodology and limitations",
     "All arms receive the same accepted SHORT signal cohort and share one symbol+SHORT lock. The lock remains active until every filled arm from that signal has closed. EMA20 and previous-candle-high are tested as separate one-hour limit orders. MARKET_FALLBACK is conditional; its baseline comparator is restricted to the exact same fallback-triggered signal subset, not all accepted signals. Fixed $10 margin is used only to express gross PnL; the four methods are not combined into one account.",
-    "Current signal analyzer is unchanged. SHORT ATR multiplier 1.5 and TP1 1.5R are retained. Actual Kraken historical OHLC is used. 5m bars cannot fully reveal intrabar path; ambiguous candles are stop-first. Fees, funding, slippage, and liquidation are excluded. Current-volume universe selection creates survivorship bias. Only successfully fetched symbols count.",
+    "Current signal analyzer is unchanged. SHORT ATR multiplier 1.5 and TP1 1.5R are retained. Structural stop uses the exact live analyzer's seven preceding closed 1h candles, excluding the signal candle. Actual Kraken historical OHLC is used. 5m bars cannot fully reveal intrabar path; ambiguous candles are stop-first. Fees, funding, slippage, and liquidation are excluded. Current-volume universe selection creates survivorship bias. Only successfully fetched symbols count.",
     "","Symbol errors:",...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
   await writeFile("artifacts/short-entry-methods-comparison.md",rows.join("\n"));
