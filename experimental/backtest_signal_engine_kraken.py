@@ -237,3 +237,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Trigger isolated workflow after workflow registration on default branch.
