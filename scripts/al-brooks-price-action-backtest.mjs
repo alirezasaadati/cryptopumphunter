@@ -59,7 +59,7 @@ function runSymbol(data,days,end){
  const first=lowerBound(m15,start-90*DAY);let lockedUntil=0,expired=0,invalid=0;
  for(let i=Math.max(60,first);i<m15.length-1;i++){
   const bar=m15[i],signalTime=bar.time+M15;if(signalTime<start||signalTime>end)continue;
-  const signal=analyzeBrooksPriceAction(m15.slice(0,i+1));if(!signal)continue;
+  const signal=analyzeBrooksPriceAction(m15.slice(Math.max(0,i-149),i+1));if(!signal)continue;
   signals.push({time:signalTime,side:signal.side,setup:signal.setup,score:signal.score});
   const next=lowerBound(m5,signalTime);if(next>=m5.length||next<lockedUntil)continue;
   const expiry=Math.min(m5.length-1,next+8);let entryIndex=-1,rawEntry=null;
