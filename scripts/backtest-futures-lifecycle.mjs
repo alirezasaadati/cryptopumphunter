@@ -1,3 +1,4 @@
+// SHORT entry source breakdown is included in the final report.
 import { mkdir, writeFile } from "node:fs/promises";
 import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
 import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARGET_PERCENT } from "../src/futures-trade-lifecycle.js";
