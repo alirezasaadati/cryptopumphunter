@@ -1,0 +1,37 @@
+name: Aurum XAUT USD 1Y Kraken Backtest
+on:
+  push:
+    branches:
+      - "experiment/aurum-xaut-1y-backtest"
+    paths:
+      - "experimental/aurum/aurum-v1.1-fixed.zip.b64"
+      - "scripts/backtest-aurum-xaut-1y.mjs"
+      - ".github/workflows/aurum-xaut-1y-backtest.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Restore isolated Aurum engine package
+        run: |
+          mkdir -p experimental/aurum
+          base64 --decode experimental/aurum/aurum-v1.1-fixed.zip.b64 > /tmp/aurum-v1.1-fixed.zip
+          unzip -o /tmp/aurum-v1.1-fixed.zip -d experimental/aurum
+      - name: Run Aurum unit tests
+        run: node experimental/aurum/aurum_fixed/aurum.test.js
+      - name: Run one-year XAUT/USD historical backtest
+        env:
+          AURUM_TAKER_FEE: "0.008"
+          AURUM_SLIPPAGE: "0.0005"
+        run: node scripts/backtest-aurum-xaut-1y.mjs
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurum-xaut-1y-backtest
+          path: artifacts/
+          if-no-files-found: warn
