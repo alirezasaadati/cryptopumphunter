@@ -1,0 +1,121 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { analyzeRabbitCorrection } from "../src/rabbit-engine.js";
+import { computeBtcRegime, FUTURES_CONFIG } from "../src/index.js";
+
+const BASE="https://futures.kraken.com",DAY=86400000;
+const INTERVAL={"5m":300000,"15m":900000,"1h":3600000,"4h":14400000};
+const END=process.env.RABBIT_BACKTEST_END?Date.parse(process.env.RABBIT_BACKTEST_END):Date.now();
+const WINDOWS=[90,180],WARMUP_DAYS=25,SYMBOL_LIMIT=8,MAX_HOLD_HOURS=6,MARGIN=10,LEVERAGE=10;
+if(!Number.isFinite(END))throw new Error("Invalid RABBIT_BACKTEST_END");
+
+async function getJson(url,attempt=0){
+ const r=await fetch(url,{headers:{accept:"application/json"},signal:AbortSignal.timeout(30000)}),body=await r.text();
+ if(!r.ok){if(attempt<3&&(r.status===429||r.status>=500)){await new Promise(x=>setTimeout(x,800*(attempt+1)));return getJson(url,attempt+1);}throw new Error("HTTP "+r.status+" "+url+" "+body.slice(0,160));}
+ const d=JSON.parse(body);if(d?.result==="error"||d?.errors?.length)throw new Error("Kraken API error "+JSON.stringify(d.errors||d.error));return d;
+}
+function normalize(rows,step){
+ const seen=new Set();return (rows||[]).map(x=>({time:Number(x.time)<1e12?Number(x.time)*1000:Number(x.time),open:Number(x.open),high:Number(x.high),low:Number(x.low),close:Number(x.close),volume:Number(x.volume)}))
+ .filter(c=>[c.time,c.open,c.high,c.low,c.close,c.volume].every(Number.isFinite)&&c.open>0&&c.low>0&&c.high>=c.low&&c.close>0&&c.time+step<=END)
+ .sort((a,b)=>a.time-b.time).filter(c=>{if(seen.has(c.time))return false;seen.add(c.time);return true;});
+}
+async function fetchCandles(symbol,res,from,to){
+ const step=INTERVAL[res],chunk=step*1700,all=[];
+ for(let start=from;start<to;start+=chunk){
+  const end=Math.min(to,start+chunk),url=new URL(BASE+"/api/charts/v1/trade/"+encodeURIComponent(symbol)+"/"+res);
+  url.searchParams.set("from",String(Math.floor(start/1000)));url.searchParams.set("to",String(Math.floor(end/1000)));url.searchParams.set("count","1800");
+  const d=await getJson(url);if(d.more_candles===true)throw new Error(symbol+" "+res+" incomplete chunk");all.push(...normalize(d.candles,step));
+ }
+ return [...new Map(all.map(c=>[c.time,c])).values()].sort((a,b)=>a.time-b.time);
+}
+function lower(a,t){let l=0,h=a.length;while(l<h){const m=(l+h)>>1;if(a[m].time<t)l=m+1;else h=m;}return l;}
+function metrics(trades,eligible,rejected,lockSkips){
+ const closed=trades.filter(t=>t.status==="WIN"||t.status==="STOP"),wins=closed.filter(t=>t.status==="WIN"),stops=closed.filter(t=>t.status==="STOP");
+ const pnls=closed.map(t=>t.pnlUsd),profit=pnls.filter(x=>x>0).reduce((a,b)=>a+b,0),loss=Math.abs(pnls.filter(x=>x<0).reduce((a,b)=>a+b,0));
+ let eq=0,peak=0,dd=0;for(const t of [...closed].sort((a,b)=>a.exitTime-b.exitTime)){eq+=t.pnlUsd;peak=Math.max(peak,eq);dd=Math.max(dd,peak-eq);}
+ return {eligibleSignals:eligible,tradesOpened:trades.length,closed:closed.length,wins:wins.length,stops:stops.length,openAtEnd:trades.length-closed.length,
+ winRatePct:closed.length?wins.length/closed.length*100:0,stopRatePct:closed.length?stops.length/closed.length*100:0,
+ grossPnlUsd:pnls.reduce((a,b)=>a+b,0),profitFactor:loss?profit/loss:(profit?Infinity:0),maxDrawdownUsd:dd,rejected,lockSkips};
+}
+function simulate(symbol,entry,stop,bars,start,signalTime){
+ const risk=stop-entry,target=entry-risk,end=Math.min(bars.length,start+MAX_HOLD_HOURS*12);
+ for(let i=start;i<end;i++){
+  const b=bars[i],stopHit=b.high>=stop,targetHit=b.low<=target,stopAtOpen=b.open>=stop,targetAtOpen=b.open<=target;
+  let exit=null,status=null;
+  if(stopAtOpen){exit=b.open;status="STOP";}
+  else if(targetAtOpen){exit=b.open;status="WIN";}
+  else if(stopHit){exit=stop;status="STOP";}
+  else if(targetHit){exit=target;status="WIN";}
+  if(status){
+   const pricePct=(entry-exit)/entry*100,marginReturnPct=pricePct*LEVERAGE;
+   return {symbol,side:"SHORT",status,signalTime,entryTime:bars[start].time,exitTime:b.time+INTERVAL["5m"],entry,stop,target,exit,pricePct,marginReturnPct,pnlUsd:MARGIN*marginReturnPct/100,holdMinutes:(b.time+INTERVAL["5m"]-bars[start].time)/60000};
+  }
+ }
+ const last=bars[Math.max(start,end-1)],pricePct=last?(entry-last.close)/entry*100:0,marginReturnPct=pricePct*LEVERAGE;
+ return {symbol,side:"SHORT",status:"OPEN_AT_END",signalTime,entryTime:bars[start]?.time??signalTime,entry,stop,target,exit:last?.close??null,pricePct,marginReturnPct,pnlUsd:0,holdMinutes:last?(last.time+INTERVAL["5m"]-bars[start].time)/60000:0};
+}
+async function main(){
+ const tickers=(await getJson(BASE+"/derivatives/api/v3/tickers")).tickers;
+ const excluded=new Set(["XAU","NVDAX","EUR","GBP","JPY","AUD","CAD","CHF","SPX","NDX","US500","US100"]);
+ const universe=tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&/^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&Number(t.volumeQuote)>=FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME&&Number(t.last)>0&&!excluded.has(String(t.symbol).toUpperCase().replace(/^(PI|PF)_/,"").replace(/USD$/,"")))
+  .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
+ if(!universe.length)throw new Error("No eligible Kraken perpetual symbols");
+ const from=END-(180+WARMUP_DAYS)*DAY,btcTicker=universe.find(t=>/XBTUSD$/.test(t.symbol))||{symbol:"PF_XBTUSD"};
+ const btc=await fetchCandles(btcTicker.symbol,"4h",from,END),datasets=[],errors=[];
+ for(const t of universe){
+  try{
+   const [one,four,fifteen,five]=await Promise.all([
+    fetchCandles(t.symbol,"1h",from,END),fetchCandles(t.symbol,"4h",from,END),
+    fetchCandles(t.symbol,"15m",from,END),fetchCandles(t.symbol,"5m",from,END)]);
+   if(one.length<100||four.length<60||fifteen.length<100||five.length<500)throw new Error("Insufficient historical candles");
+   datasets.push({symbol:t.symbol,one,four,fifteen,five});
+   console.log("downloaded",t.symbol,{one:one.length,four:four.length,fifteen:fifteen.length,five:five.length});
+  }catch(e){errors.push({symbol:t.symbol,error:String(e?.message||e)});console.error("failed",t.symbol,String(e?.message||e));}
+ }
+ const outputs={};
+ for(const days of WINDOWS){
+  const start=END-days*DAY,trades=[],locks=new Map();let eligible=0,rejected=0,lockSkips=0;
+  for(const d of datasets){
+   let i1=0,i4=0;
+   for(let i=40;i<d.fifteen.length;i++){
+    const signalBar=d.fifteen[i],signalTime=signalBar.time+INTERVAL["15m"];
+    if(signalTime<start||signalTime>=END)continue;
+    while(i1<d.one.length&&d.one[i1].time+INTERVAL["1h"]<=signalTime)i1++;
+    while(i4<d.four.length&&d.four[i4].time+INTERVAL["4h"]<=signalTime)i4++;
+    const one=d.one.slice(0,i1),four=d.four.slice(0,i4),fifteen=d.fifteen.slice(0,i+1);
+    if(one.length<60||four.length<60||fifteen.length<40)continue;
+    const btcIdx=lower(btc,signalTime-INTERVAL["4h"]+1),btcClosed=btc.slice(0,btcIdx);
+    const btcRegime=computeBtcRegime(btcClosed);
+    const entryIndex=lower(d.five,signalTime);if(entryIndex>=d.five.length)continue;
+    const entry=d.five[entryIndex].open;
+    const candidate=analyzeRabbitCorrection({candles1h:one,candles4h:four,candles15m:fifteen,price:entry,btcRegime});
+    if(!candidate.eligible){rejected++;continue;}
+    eligible++;
+    if((locks.get(d.symbol)||0)>signalTime){lockSkips++;continue;}
+    const risk=candidate.stop-entry;
+    if(!(risk>0)){rejected++;continue;}
+    const trade=simulate(d.symbol,entry,candidate.stop,d.five,entryIndex,signalTime);
+    trade.score=candidate.score;trade.surgePct=candidate.surgePct;trade.rsi15m=candidate.rsi15m;
+    trades.push(trade);locks.set(d.symbol,trade.exitTime||END);
+   }
+  }
+  const bySymbol={};for(const d of datasets){const ts=trades.filter(t=>t.symbol===d.symbol);bySymbol[d.symbol]=metrics(ts,ts.length,0,0);}
+  outputs[days]={period:{from:new Date(start).toISOString(),to:new Date(END).toISOString(),days},metrics:metrics(trades,eligible,rejected,lockSkips),bySymbol,trades};
+ }
+ const report={generatedAt:new Date().toISOString(),engine:"Rabbit experimental counter-trend SHORT",source:"Kraken Futures historical OHLC",
+  rules:{bullRegime:"BTC 4h computeBtcRegime bullish; traded symbol 1h and 4h EMA20>EMA50 and close>EMA20",
+   impulse:"last 8 closed 15m candles >=2.2% and >=2.6 ATR; impulse high >=1.35 ATR above 15m EMA20",
+   confirmation:"closed bearish 15m candle closes below prior two candle lows and EMA9; RSI14>=68; volume>=0.75x prior 20-bar average",
+   entry:"next 5m candle open after the 15m confirmation closes",stop:"impulse swing high + 0.2 ATR",target:"full close at 1R",
+   marginUsd:MARGIN,leverage:LEVERAGE,maxHoldHours:MAX_HOLD_HOURS,sameCandle:"stop-first unless open gaps through a level",
+   costs:"fees, slippage, funding and liquidation excluded",universe:"top 8 current-volume eligible Kraken crypto USD perpetuals; survivorship bias applies"},
+  symbolsRequested:SYMBOL_LIMIT,symbolsTested:datasets.length,errors,results:outputs};
+ await mkdir("artifacts",{recursive:true});await writeFile("artifacts/rabbit-backtest.json",JSON.stringify(report,null,2));
+ const fmt=n=>Number(n||0).toFixed(2),lines=["# Rabbit — bullish rally correction SHORT backtest","","Full close at 1R; $10 margin, 10x leverage; 90d and 180d; 5m OHLC; stop-first same-candle rule.","",
+ "| Period | Eligible signals | Trades | Wins | Stops | Open | Win rate | Gross PnL | PF | Max DD |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"];
+ for(const days of WINDOWS){const m=outputs[days].metrics;lines.push("| "+days+"d | "+m.eligibleSignals+" | "+m.tradesOpened+" | "+m.wins+" | "+m.stops+" | "+m.openAtEnd+" | "+fmt(m.winRatePct)+"% | $"+fmt(m.grossPnlUsd)+" | "+fmt(m.profitFactor)+" | $"+fmt(m.maxDrawdownUsd)+" |");}
+ lines.push("","## Per-symbol results","","| Symbol | Trades 90d | Wins 90d | Stops 90d | Trades 180d | Wins 180d | Stops 180d |","|---|---:|---:|---:|---:|---:|---:|");
+ for(const d of datasets){const a=outputs[90].bySymbol[d.symbol],b=outputs[180].bySymbol[d.symbol];lines.push("| "+d.symbol+" | "+a.tradesOpened+" | "+a.wins+" | "+a.stops+" | "+b.tradesOpened+" | "+b.wins+" | "+b.stops+" |");}
+ lines.push("","Limitations: gross results only; no fees, slippage, funding, liquidation or portfolio margin simulation. Current-volume symbol selection introduces survivorship bias. Signals use completed candles only; open-at-end trades are not classified as wins or stops.");
+ await writeFile("artifacts/rabbit-backtest.md",lines.join("\n"));console.log(JSON.stringify(report,null,2));if(!datasets.length)process.exitCode=1;
+}
+main().catch(e=>{console.error(e);process.exitCode=1;});
