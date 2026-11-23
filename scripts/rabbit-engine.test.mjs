@@ -7,7 +7,7 @@ function setup(){
  for(let i=8;i>=2;i--){const ix=fifteen.length-i,prev=fifteen[ix].close-.025,close=prev+.55;fifteen[ix]={...fifteen[ix],open:prev,high:close+.08,low:prev-.03,close,volume:180};}
  const p1=fifteen.at(-2).close,p2=fifteen.at(-3).close,close=Math.min(p1-.35,p2-.3);
  fifteen[fifteen.length-1]={...fifteen.at(-1),open:p1+.02,high:p1+.1,low:close-.05,close,volume:220};
- return {candles1h:one,candles4h:four,candles15m:fifteen,price:close};
+ return {candles1h:one,candles4h:four,candles15m:fifteen,price:close,btcRegime:{ok:true,longAllowed:true}};
 }
 test("Rabbit issues SHORT only after bull trend, extension and confirmed 15m breakdown",()=>{const r=analyzeRabbitCorrection(setup());assert.equal(r.eligible,true,JSON.stringify(r));assert.equal(r.engine,"Rabbit");assert.equal(r.side,"SHORT");assert.ok(r.stop>r.entry);assert.ok(r.target1<r.entry);});
 test("Rabbit refuses non-bullish 4h regime",()=>{const x=setup();x.candles4h=rising(120,-.5,180,14400000);const r=analyzeRabbitCorrection(x);assert.equal(r.eligible,false);assert.match(r.rejected,/صعودی هم‌جهت/);});
