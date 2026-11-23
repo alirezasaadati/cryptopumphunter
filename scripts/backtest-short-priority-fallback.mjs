@@ -213,7 +213,8 @@ function runWindowForSymbol(data,days,endMs) {
     symbol:ticker.symbol,
     baseline:{opportunities:baseline.opportunities,filled:baseline.filled,invalidLevels:baseline.invalidLevels,lockSkips:baseline.lockSkips,metrics:summarize(baseline.trades),trades:baseline.trades},
     experimental:{opportunities:experimental.opportunities,filled:experimental.filled,expired:experimental.expired,invalidLevels:experimental.invalidLevels,lockSkips:experimental.lockSkips,
-      marketOrders:experimental.marketOrders,limitOrders:experimental.limitOrders,limitGapFills:experimental.limitGapFills,
+      marketOrders:experimental.marketOrders,limitOrders:experimental.limitOrders,bullishLimitOrders:experimental.bullishLimitOrders,
+      dojiLimitOrders:experimental.dojiLimitOrders,limitGapFills:experimental.limitGapFills,
       limitTouchFills:experimental.limitTouchFills,metrics:summarize(experimental.trades),trades:experimental.trades}
   };
 }
