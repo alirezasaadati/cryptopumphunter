@@ -32,71 +32,100 @@ async function getJson(url) {
   throw new Error("Kraken API retries exhausted");
 }
 
-async function loadTrades() {
-  let cursor = (BigInt(WARMUP) * 1000000000n - 1n).toString();
-  const all = [];
-  let pages = 0, done = false;
-  while (!done) {
-    const url = new URL(BASE);
-    url.searchParams.set("pair", "XAUTUSD");
-    url.searchParams.set("since", cursor);
-    const data = await getJson(url);
-    const result = data.result || {};
-    const rows = Object.entries(result).find(([key, value]) => key !== "last" && Array.isArray(value))?.[1] || [];
-    const next = String(result.last ?? cursor);
-    if (!rows.length) break;
-    let maxTime = -Infinity;
-    for (const row of rows) {
-      const time = Number(row[2]), price = Number(row[0]), volume = Number(row[1]);
-      if (Number.isFinite(time)) maxTime = Math.max(maxTime, time);
-      if (time >= WARMUP && time < END && price > 0 && volume >= 0) {
-        all.push({ time, price, volume, side: row[3] });
-      }
-    }
-    pages++;
-    if (pages % 10 === 0) console.log(`Kraken trades pages: ${pages}; trades retained: ${all.length}`);
-    if (maxTime >= END || BigInt(next) <= BigInt(cursor)) done = true;
-    else cursor = next;
-    if (!done) await sleep(1050);
-    if (pages > 10000) throw new Error("Safety stop: more than 10,000 trade pages");
-  }
-  all.sort((a,b) => a.time - b.time);
-  const deduped = [];
-  let lastKey = "";
-  for (const t of all) {
-    const key = [t.time,t.price,t.volume,t.side].join("|");
-    if (key !== lastKey) deduped.push(t);
-    lastKey = key;
-  }
-  if (deduped.length < 1000) throw new Error(`Insufficient Kraken trade history: only ${deduped.length} trades`);
-  return { trades: deduped, pages };
+const BITFINEX_BASE = "https://api-pub.bitfinex.com/v2/candles";
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchCandleChunk(symbol, timeframe, fromMs, toMs) {
+  const url = new URL(`${BITFINEX_BASE}/trade:${timeframe}:${symbol}/hist`);
+  url.searchParams.set("start", String(fromMs));
+  url.searchParams.set("end", String(toMs));
+  url.searchParams.set("limit", "10000");
+  url.searchParams.set("sort", "1");
+  const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`Bitfinex HTTP ${response.status}: ${body.slice(0, 240)}`);
+  const rows = JSON.parse(body);
+  if (!Array.isArray(rows)) throw new Error("Bitfinex candle response is not an array: " + body.slice(0, 240));
+  return rows.map(row => ({
+    timestamp: Number(row[0]), open: Number(row[1]), close: Number(row[2]),
+    high: Number(row[3]), low: Number(row[4]), volume: Number(row[5])
+  })).filter(c => Number.isFinite(c.timestamp) && [c.open,c.high,c.low,c.close,c.volume].every(Number.isFinite) &&
+    c.open > 0 && c.low > 0 && c.high >= c.low && c.close > 0 && c.volume >= 0);
 }
 
-function aggregate(trades, intervalSec, fromSec, toSec) {
-  const buckets = new Map();
-  for (const t of trades) {
-    const ts = Math.floor(t.time / intervalSec) * intervalSec;
-    let b = buckets.get(ts);
-    if (!b) buckets.set(ts, b = { timestamp: ts * 1000, open: t.price, high: t.price, low: t.price, close: t.price, volume: 0 });
-    b.high = Math.max(b.high, t.price);
-    b.low = Math.min(b.low, t.price);
-    b.close = t.price;
-    b.volume += t.volume;
+async function fetchBitfinexCandles(symbol, timeframe, intervalMs, fromMs, toMs) {
+  const maxBars = 9000;
+  const chunkMs = maxBars * intervalMs;
+  const rows = [];
+  let requests = 0;
+  for (let start = fromMs; start < toMs; start += chunkMs) {
+    const end = Math.min(toMs - 1, start + chunkMs - 1);
+    const batch = await fetchCandleChunk(symbol, timeframe, start, end);
+    rows.push(...batch);
+    requests++;
+    if (requests % 2 === 0) console.log(`Bitfinex ${symbol} ${timeframe}: ${rows.length} candles across ${requests} requests`);
+    await sleep(250);
   }
-  const first = Math.floor(fromSec / intervalSec) * intervalSec;
-  const last = Math.floor((toSec - 1) / intervalSec) * intervalSec;
-  const out = [];
-  let previousClose = null;
-  for (let ts = first; ts <= last; ts += intervalSec) {
-    const b = buckets.get(ts);
-    if (b) {
-      out.push(b);
-      previousClose = b.close;
+  const byTime = new Map(rows.map(c => [c.timestamp,c]));
+  const sorted = [...byTime.values()].sort((a,b)=>a.timestamp-b.timestamp);
+  if (!sorted.length) throw new Error(`No ${timeframe} candles returned for ${symbol}`);
+  const first = Math.floor(fromMs / intervalMs) * intervalMs;
+  const last = Math.floor((toMs - 1) / intervalMs) * intervalMs;
+  const filled = [];
+  let previousClose = null, index = 0;
+  for (let ts = first; ts <= last; ts += intervalMs) {
+    while (index < sorted.length && sorted[index].timestamp < ts) index++;
+    const candle = sorted[index]?.timestamp === ts ? sorted[index] : null;
+    if (candle) {
+      filled.push(candle);
+      previousClose = candle.close;
+      index++;
     } else if (previousClose != null) {
-      out.push({ timestamp: ts * 1000, open: previousClose, high: previousClose, low: previousClose, close: previousClose, volume: 0 });
+      filled.push({ timestamp: ts, open: previousClose, high: previousClose, low: previousClose, close: previousClose, volume: 0 });
     }
   }
-  return out;
+  return { candles: filled, requests, rawCandles: sorted.length };
+}
+
+function aggregateHourlyTo4h(hourly) {
+  const buckets = new Map();
+  for (const c of hourly) {
+    const ts = Math.floor(c.timestamp / BAR4H) * BAR4H;
+    let b = buckets.get(ts);
+    if (!b) buckets.set(ts, b = { timestamp: ts, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume });
+    else {
+      b.high = Math.max(b.high,c.high);
+      b.low = Math.min(b.low,c.low);
+      b.close = c.close;
+      b.volume += c.volume;
+    }
+  }
+  return [...buckets.values()].sort((a,b)=>a.timestamp-b.timestamp);
+}
+
+async function loadMarketData() {
+  const fromMs = WARMUP * 1000;
+  const toMs = END * 1000;
+  const symbols = ["tXAUTUSD", "tXAUT:USD"];
+  let lastError = null;
+  for (const symbol of symbols) {
+    try {
+      console.log(`Loading XAUT/USD candles from Bitfinex using ${symbol}...`);
+      const [m15, h1] = await Promise.all([
+        fetchBitfinexCandles(symbol, "15m", BAR15 * 1000, fromMs, toMs),
+        fetchBitfinexCandles(symbol, "1h", 60 * 60 * 1000, fromMs, toMs)
+      ]);
+      if (m15.rawCandles < 1000 || h1.rawCandles < 100) throw new Error(`Insufficient candles for ${symbol}: 15m=${m15.rawCandles}, 1h=${h1.rawCandles}`);
+      return {
+        symbol, candles15: m15.candles, candles4h: aggregateHourlyTo4h(h1.candles),
+        raw15m: m15.rawCandles, raw1h: h1.rawCandles, requests: m15.requests + h1.requests
+      };
+    } catch (error) {
+      lastError = error;
+      console.log(`Bitfinex symbol ${symbol} unavailable: ${error.message}`);
+    }
+  }
+  throw new Error("Unable to load exact XAUT/USD candles from Bitfinex: " + (lastError?.message || "unknown error"));
 }
 
 function simulate(signal, bars, entryIndex) {
@@ -174,11 +203,11 @@ function metrics(trades) {
 }
 
 async function main() {
-  console.log("Downloading XAUT/USD historical trades from Kraken...");
-  const { trades, pages } = await loadTrades();
-  console.log(`Received ${trades.length} trades across ${pages} pages.`);
-  const candles15 = aggregate(trades, BAR15, WARMUP, END);
-  const candles4h = aggregate(trades, BAR4H, WARMUP, END);
+  console.log("Downloading one-year XAUT/USD OHLCV candles...");
+  const marketData = await loadMarketData();
+  const candles15 = marketData.candles15;
+  const candles4h = marketData.candles4h;
+  console.log(`Loaded ${marketData.raw15m} native 15m candles and ${marketData.raw1h} native 1h candles in ${marketData.requests} requests.`);
   const firstTestIndex = candles15.findIndex(c => c.timestamp >= START * 1000);
   if (firstTestIndex < 120 || candles4h.length < 100) throw new Error("Not enough warm-up candles to start a valid backtest");
   let state = {};
@@ -211,7 +240,7 @@ async function main() {
     symbol: "XAUT/USD",
     exchange: "Kraken Spot",
     period: { start: new Date(START * 1000).toISOString(), end: new Date(END * 1000).toISOString() },
-    data: { source: "Kraken public REST Trades endpoint", rawTrades: trades.length, tradePages: pages, candles15m: candles15.length, candles4h: candles4h.length, missingIntervalsFilledFlatAtPreviousClose: true },
+    data: { source: "Bitfinex public REST historical OHLCV candles", marketSymbol: marketData.symbol, raw15mCandles: marketData.raw15m, raw1hCandles: marketData.raw1h, requests: marketData.requests, candles15m: candles15.length, candles4h: candles4h.length, missingIntervalsFilledFlatAtPreviousClose: true },
     executionAssumptions: {
       entry: "next 15m candle open after a closed-candle signal",
       exit: "all-out at TP1 (1R), stop, or 24h time exit",
@@ -233,11 +262,11 @@ async function main() {
   const md = [
     "# Aurum v1.1 — XAUT/USD 1-year Kraken backtest",
     `Period: ${report.period.start} → ${report.period.end}`,
-    `Trades downloaded: ${trades.length} | 15m candles: ${candles15.length} | 4h candles: ${candles4h.length}`,
+    `Native 15m candles: ${marketData.raw15m} | Native 1h candles: ${marketData.raw1h} | 15m bars after gap fill: ${candles15.length} | 4h bars: ${candles4h.length}`,
     `Signals: ${signals} | Executed: ${tradesOut.length} | Overlap skipped: ${skippedOverlap} | Gap skipped: ${skippedGap}`,
     `Win rate: ${m.winRatePct.toFixed(2)}% | Net R: ${m.netR.toFixed(3)} | PF: ${m.profitFactor == null ? "∞" : m.profitFactor.toFixed(3)} | Max DD: ${m.maxDrawdownR.toFixed(3)}R`,
     `Gross R: ${m.grossR.toFixed(3)} | Fees R: ${m.feesR.toFixed(3)} | Expectancy: ${m.expectancyR.toFixed(4)}R/trade`,
-    `Fee/side: ${(FEE*100).toFixed(3)}% | Slippage/side: ${(SLIPPAGE*100).toFixed(3)}%`,
+    `Fee/side (assumption): ${(FEE*100).toFixed(3)}% | Slippage/side: ${(SLIPPAGE*100).toFixed(3)}%`,
     "",
     "Execution assumptions: next 15m open entry; all-out at TP1/SL/24h time exit; stop-first for same-candle ambiguity.",
     "TP2/TP3 and BE/trailing are excluded because the supplied signal engine does not specify position sizing across targets or a trailing-stop algorithm."
