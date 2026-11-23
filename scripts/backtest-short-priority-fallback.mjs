@@ -106,11 +106,11 @@ function buildShortLevels({oneHour,signalIndex,entry,atr}) {
     rewardRisk:target1Distance/risk,target1Mode:"ATR_CAPPED_SHORT"};
 }
 
-function simulateShortTrade({symbol,levels,candles5m,fillIndex,fee,slippage,maxHoldHours}) {
+function simulateShortTrade({symbol,levels,candles5m,fillIndex,fee,slippage,maxHoldHours,targetMode="LEGACY_3_PERCENT"}) {
   const entry=levels.entry, risk=levels.risk;
   const trade={symbol,side:"SHORT",status:"OPEN",entry,actualEntry:entry,stop:levels.stop,
-    initialStop:levels.stop,currentStop:levels.stop,target1:levels.target1,
-    target1Mode:levels.target1Mode||"ATR_CAPPED_SHORT"};
+    initialStop:levels.stop,currentStop:levels.stop,target1:levels.target1};
+  if(targetMode==="ATR_CAPPED_SHORT")trade.target1Mode="ATR_CAPPED_SHORT";
   const end=Math.min(candles5m.length-1,fillIndex+maxHoldHours*12);
   let exitPrice=null,exitReason="TIME_EXIT",exitIndex=end;
   for(let i=fillIndex;i<=end;i++){
@@ -126,7 +126,7 @@ function simulateShortTrade({symbol,levels,candles5m,fillIndex,fee,slippage,maxH
   const adjustedExit=exitPrice*(1+slippage);
   const netR=(entry-adjustedExit)/risk-fee*(entry+adjustedExit)/risk;
   return {symbol,entry,stop:levels.stop,target1:levels.target1,target2:levels.target2,target3:levels.target3,
-    target1Mode:levels.target1Mode,rewardRisk:levels.rewardRisk,exitPrice:adjustedExit,netR,
+    target1Mode:targetMode,rewardRisk:levels.rewardRisk,exitPrice:adjustedExit,netR,
     exitReason,fillIndex,exitIndex,entryTime:candles5m[fillIndex].time,exitTime:candles5m[exitIndex].time};
 }
 
@@ -143,9 +143,9 @@ function createArm() {
 function runWindowForSymbol(data,days,endMs) {
   const startMs=endMs-days*DAY;
   const {ticker,oneHour,fourHour,fifteenMinute,fiveMinute}=data;
-  const baseline=createArm(), experimental=createArm();
-  let lockUntilFiveIndex=0;
-  let fourIndex=0,fifteenIndex=0;
+  const arms={baselineLegacy:createArm(),baselineDynamic:createArm(),smartLegacy:createArm(),smartDynamic:createArm()};
+  const smartOrders={marketOrders:0,limitOrders:0,bullishLimitOrders:0,dojiLimitOrders:0,limitGapFills:0,limitTouchFills:0};
+  let lockUntilFiveIndex=0,fourIndex=0,fifteenIndex=0;
   const firstHourly=lowerBound(oneHour,startMs-WARMUP_DAYS*DAY);
   for(let i=Math.max(60,firstHourly);i<oneHour.length-1;i++){
     const signalBar=oneHour[i],signalCloseTime=signalBar.time+HOUR;
@@ -155,8 +155,7 @@ function runWindowForSymbol(data,days,endMs) {
     if(fourIndex<FUTURES_CONFIG.MIN_CANDLES)continue;
     const closed4h=fourHour.slice(0,fourIndex);
     const closed15m=fifteenMinute.slice(Math.max(0,fifteenIndex-160),fifteenIndex);
-    const historicalQuoteVolume=oneHour.slice(Math.max(0,i-23),i+1)
-      .reduce((sum,c)=>sum+Number(c.volume)*Number(c.close),0);
+    const historicalQuoteVolume=oneHour.slice(Math.max(0,i-23),i+1).reduce((sum,c)=>sum+Number(c.volume)*Number(c.close),0);
     const tickerAtSignal={symbol:ticker.symbol,last:signalBar.close,quoteVolume:historicalQuoteVolume,
       priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}};
     const candidate=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m);
@@ -164,15 +163,15 @@ function runWindowForSymbol(data,days,endMs) {
     const decisionIndex=lowerBound(fiveMinute,signalCloseTime);
     const decisionCandle=fiveMinute[decisionIndex];
     if(!decisionCandle||decisionIndex+1>=fiveMinute.length)continue;
-    const resistance=Number(oneHour[i-1]?.high);
-    const ema20=ema(oneHour.slice(0,i+1).map(c=>c.close),20);
+    const resistance=Number(oneHour[i-1]?.high),ema20=ema(oneHour.slice(0,i+1).map(c=>c.close),20);
     if(!Number.isFinite(resistance)||!Number.isFinite(ema20)||ema20<=0)continue;
     const observedPrice=decisionCandle.close;
-    const belowBoth=observedPrice<ema20&&observedPrice<resistance;
+    if(!(observedPrice<ema20&&observedPrice<resistance))continue;
     const levelGapPct=Math.abs(ema20-resistance)/Math.min(ema20,resistance)*100;
-    if(!belowBoth||levelGapPct<=0.5)continue;
-    baseline.opportunities++;experimental.opportunities++;
-    if(decisionIndex+1<lockUntilFiveIndex){baseline.lockSkips++;experimental.lockSkips++;continue;}
+    if(levelGapPct<=0.5)continue;
+    for(const arm of Object.values(arms))arm.opportunities++;
+    if(decisionIndex+1<lockUntilFiveIndex){for(const arm of Object.values(arms))arm.lockSkips++;continue;}
+
     const following=fiveMinute.slice(decisionIndex+1,decisionIndex+1+LIMIT_VALID_BARS);
     const decision=resolveShortFallbackFill({decisionCandle,followingCandles:following,validBars:LIMIT_VALID_BARS,
       marketSlippage:SLIPPAGE_PER_SIDE});
@@ -180,43 +179,54 @@ function runWindowForSymbol(data,days,endMs) {
     if(!Number.isFinite(marketRaw)||marketRaw<=0)continue;
     const baselineEntry=marketRaw*(1-SLIPPAGE_PER_SIDE);
     const baselineLevels=buildShortLevels({oneHour,signalIndex:i,entry:baselineEntry,atr:candidate.atr});
-    if(!baselineLevels){baseline.invalidLevels++;experimental.invalidLevels++;continue;}
-    if(decision.type==="MARKET")experimental.marketOrders++;
+    if(!baselineLevels){for(const arm of Object.values(arms))arm.invalidLevels++;continue;}
+
+    const baseMeta={entryType:"MARKET",signalTime:signalCloseTime};
+    const baseLegacy=simulateShortTrade({symbol:ticker.symbol,levels:baselineLevels,candles5m:fiveMinute,
+      fillIndex:decisionIndex+1,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS,targetMode:"LEGACY_3_PERCENT"});
+    const baseDynamic=simulateShortTrade({symbol:ticker.symbol,levels:baselineLevels,candles5m:fiveMinute,
+      fillIndex:decisionIndex+1,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS,targetMode:"ATR_CAPPED_SHORT"});
+    arms.baselineLegacy.trades.push({...baseLegacy,...baseMeta});
+    arms.baselineDynamic.trades.push({...baseDynamic,...baseMeta});
+    arms.baselineLegacy.filled++;arms.baselineDynamic.filled++;
+
+    if(decision.type==="MARKET")smartOrders.marketOrders++;
     else {
-      experimental.limitOrders++;
-      if(decision.decisionReason==="BULLISH_5M")experimental.bullishLimitOrders++;
-      if(decision.decisionReason==="DOJI_5M")experimental.dojiLimitOrders++;
+      smartOrders.limitOrders++;
+      if(decision.decisionReason==="BULLISH_5M")smartOrders.bullishLimitOrders++;
+      if(decision.decisionReason==="DOJI_5M")smartOrders.dojiLimitOrders++;
     }
-    const baselineTrade=simulateShortTrade({symbol:ticker.symbol,levels:baselineLevels,candles5m:fiveMinute,
-      fillIndex:decisionIndex+1,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS});
-    baseline.trades.push({...baselineTrade,entryType:"MARKET",signalTime:signalCloseTime});
-    baseline.filled++;
-    let experimentalTrade=null;
+    let smartLegacyTrade=null,smartDynamicTrade=null;
     if(decision.filled){
       const fillIndex=decisionIndex+1+decision.fillIndex;
       const levels=buildShortLevels({oneHour,signalIndex:i,entry:decision.fillPrice,atr:candidate.atr});
       if(levels){
-        experimentalTrade=simulateShortTrade({symbol:ticker.symbol,levels,candles5m:fiveMinute,fillIndex,
-          fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS});
-        experimental.trades.push({...experimentalTrade,entryType:decision.type,orderDecision:decision.decisionReason,fillReason:decision.reason,signalTime:signalCloseTime});
-        experimental.filled++;
-        if(decision.type==="LIMIT") {
-          if(decision.reason==="LIMIT_GAP_FILL")experimental.limitGapFills++;
-          if(decision.reason==="LIMIT_TOUCH_FILL")experimental.limitTouchFills++;
+        const meta={entryType:decision.type,orderDecision:decision.decisionReason,fillReason:decision.reason,signalTime:signalCloseTime};
+        smartLegacyTrade=simulateShortTrade({symbol:ticker.symbol,levels,candles5m:fiveMinute,fillIndex,
+          fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS,targetMode:"LEGACY_3_PERCENT"});
+        smartDynamicTrade=simulateShortTrade({symbol:ticker.symbol,levels,candles5m:fiveMinute,fillIndex,
+          fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS,targetMode:"ATR_CAPPED_SHORT"});
+        arms.smartLegacy.trades.push({...smartLegacyTrade,...meta});
+        arms.smartDynamic.trades.push({...smartDynamicTrade,...meta});
+        arms.smartLegacy.filled++;arms.smartDynamic.filled++;
+        if(decision.type==="LIMIT"){
+          if(decision.reason==="LIMIT_GAP_FILL")smartOrders.limitGapFills++;
+          if(decision.reason==="LIMIT_TOUCH_FILL")smartOrders.limitTouchFills++;
         }
-      } else experimental.invalidLevels++;
-    } else experimental.expired++;
-    const expExit=experimentalTrade?.exitIndex??(decision.type==="LIMIT"?decisionIndex+LIMIT_VALID_BARS:baselineTrade.exitIndex);
-    lockUntilFiveIndex=Math.max(baselineTrade.exitIndex,expExit)+1;
+      }else{arms.smartLegacy.invalidLevels++;arms.smartDynamic.invalidLevels++;}
+    }else{arms.smartLegacy.expired++;arms.smartDynamic.expired++;}
+    const expiryIndex=decision.filled
+      ? (smartDynamicTrade?.exitIndex??smartLegacyTrade?.exitIndex??decisionIndex+LIMIT_VALID_BARS)
+      : decisionIndex+LIMIT_VALID_BARS;
+    lockUntilFiveIndex=Math.max(baseLegacy.exitIndex,baseDynamic.exitIndex,
+      smartLegacyTrade?.exitIndex??expiryIndex,smartDynamicTrade?.exitIndex??expiryIndex,expiryIndex)+1;
   }
-  return {
-    symbol:ticker.symbol,
-    baseline:{opportunities:baseline.opportunities,filled:baseline.filled,invalidLevels:baseline.invalidLevels,lockSkips:baseline.lockSkips,metrics:summarize(baseline.trades),trades:baseline.trades},
-    experimental:{opportunities:experimental.opportunities,filled:experimental.filled,expired:experimental.expired,invalidLevels:experimental.invalidLevels,lockSkips:experimental.lockSkips,
-      marketOrders:experimental.marketOrders,limitOrders:experimental.limitOrders,bullishLimitOrders:experimental.bullishLimitOrders,
-      dojiLimitOrders:experimental.dojiLimitOrders,limitGapFills:experimental.limitGapFills,
-      limitTouchFills:experimental.limitTouchFills,metrics:summarize(experimental.trades),trades:experimental.trades}
-  };
+  const output={symbol:ticker.symbol,smartOrders};
+  for(const [name,arm] of Object.entries(arms)){
+    output[name]={opportunities:arm.opportunities,filled:arm.filled,expired:arm.expired,
+      invalidLevels:arm.invalidLevels,lockSkips:arm.lockSkips,metrics:summarize(arm.trades),trades:arm.trades};
+  }
+  return output;
 }
 
 async function main() {
@@ -236,93 +246,98 @@ async function main() {
         fetchHistoricalCandles(ticker.symbol,"15m",fromMs,endMs,FIFTEEN_MINUTES),
         fetchHistoricalCandles(ticker.symbol,"5m",fromMs,endMs,FIVE_MINUTES)
       ]);
-      if(oneHour.length<120||fourHour.length<FUTURES_CONFIG.MIN_CANDLES||fifteenMinute.length<120||fiveMinute.length<1000){
+      if(oneHour.length<120||fourHour.length<FUTURES_CONFIG.MIN_CANDLES||fifteenMinute.length<120||fiveMinute.length<1000)
         throw new Error("Insufficient history: 1h="+oneHour.length+", 4h="+fourHour.length+", 15m="+fifteenMinute.length+", 5m="+fiveMinute.length);
-      }
       loaded.push({ticker,oneHour,fourHour,fifteenMinute,fiveMinute});
     }catch(error){loaded.push({ticker,error:error.message});}
   }
   const windows={};
   for(const days of [90,180]){
     const symbolResults=loaded.map(data=>data.error?{symbol:data.ticker.symbol,error:data.error}:runWindowForSymbol(data,days,endMs));
-    const baselineTrades=symbolResults.flatMap(x=>x.baseline?.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
-    const experimentalTrades=symbolResults.flatMap(x=>x.experimental?.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
-    const sum=(arm,key)=>symbolResults.reduce((n,x)=>n+Number(x[arm]?.[key]||0),0);
-    const baselineBySignal=new Map(baselineTrades.map(t=>[t.symbol+"|"+t.signalTime,t]));
-    const experimentalBySignal=new Map(experimentalTrades.map(t=>[t.symbol+"|"+t.signalTime,t]));
-    const matchedKeys=[...experimentalBySignal.keys()].filter(key=>baselineBySignal.has(key));
-    const matchedBaseline=matchedKeys.map(key=>baselineBySignal.get(key));
-    const matchedExperimental=matchedKeys.map(key=>experimentalBySignal.get(key));
-    const matchedBaselineNetR=matchedBaseline.reduce((s,t)=>s+t.netR,0);
-    const matchedExperimentalNetR=matchedExperimental.reduce((s,t)=>s+t.netR,0);
-    const strategyNetRDelta=experimentalTrades.reduce((s,t)=>s+t.netR,0)-baselineTrades.reduce((s,t)=>s+t.netR,0);
+    const names=["baselineLegacy","baselineDynamic","smartLegacy","smartDynamic"];
+    const arms={};
+    for(const name of names){
+      const trades=symbolResults.flatMap(x=>x[name]?.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
+      const sum=key=>symbolResults.reduce((n,x)=>n+Number(x[name]?.[key]||0),0);
+      arms[name]={opportunities:sum("opportunities"),filled:sum("filled"),expired:sum("expired"),
+        invalidLevels:sum("invalidLevels"),lockSkips:sum("lockSkips"),metrics:summarize(trades),trades};
+    }
+    const smartOrders={};
+    for(const key of ["marketOrders","limitOrders","bullishLimitOrders","dojiLimitOrders","limitGapFills","limitTouchFills"])
+      smartOrders[key]=symbolResults.reduce((n,x)=>n+Number(x.smartOrders?.[key]||0),0);
+    function compare(baseName,expName){
+      const base=arms[baseName].trades,exp=arms[expName].trades;
+      const baseMap=new Map(base.map(t=>[t.symbol+"|"+t.signalTime,t]));
+      const expMap=new Map(exp.map(t=>[t.symbol+"|"+t.signalTime,t]));
+      const keys=[...expMap.keys()].filter(k=>baseMap.has(k));
+      const baseNet=keys.reduce((n,k)=>n+baseMap.get(k).netR,0);
+      const expNet=keys.reduce((n,k)=>n+expMap.get(k).netR,0);
+      return {matchedFills:keys.length,baselineMatchedNetR:baseNet,experimentalMatchedNetR:expNet,
+        matchedNetRDelta:expNet-baseNet,totalStrategyNetRDelta:exp.reduce((n,t)=>n+t.netR,0)-base.reduce((n,t)=>n+t.netR,0)};
+    }
     windows[days+"d"]={
       period:{from:new Date(endMs-days*DAY).toISOString(),to:new Date(endMs).toISOString(),days},
-      symbolsLoaded:loaded.filter(x=>!x.error).length,symbolsRequested:SYMBOL_LIMIT,
-      baseline:{opportunities:sum("baseline","opportunities"),filled:sum("baseline","filled"),invalidLevels:sum("baseline","invalidLevels"),lockSkips:sum("baseline","lockSkips"),metrics:summarize(baselineTrades)},
-      experimental:{
-        opportunities:sum("experimental","opportunities"),filled:sum("experimental","filled"),expired:sum("experimental","expired"),invalidLevels:sum("experimental","invalidLevels"),lockSkips:sum("experimental","lockSkips"),
-        marketOrders:sum("experimental","marketOrders"),limitOrders:sum("experimental","limitOrders"),
-        bullishLimitOrders:sum("experimental","bullishLimitOrders"),dojiLimitOrders:sum("experimental","dojiLimitOrders"),
-        limitGapFills:sum("experimental","limitGapFills"),limitTouchFills:sum("experimental","limitTouchFills"),
-        metrics:summarize(experimentalTrades)
+      symbolsLoaded:loaded.filter(x=>!x.error).length,symbolsRequested:SYMBOL_LIMIT,arms,smartOrders,
+      comparisons:{
+        dynamicTp1VsLegacyMarket:compare("baselineLegacy","baselineDynamic"),
+        smartFallbackVsMarketLegacyTp1:compare("baselineLegacy","smartLegacy"),
+        smartFallbackVsMarketDynamicTp1:compare("baselineDynamic","smartDynamic"),
+        combinedSmartVsCurrentLegacy:compare("baselineLegacy","smartDynamic")
       },
-      paired:{matchedFills:matchedKeys.length,baselineNetR:matchedBaselineNetR,experimentalNetR:matchedExperimentalNetR,
-        matchedNetRDelta:matchedExperimentalNetR-matchedBaselineNetR,strategyNetRDelta},
-      symbols:symbolResults.map(({baseline,experimental,...rest})=>({ ...rest,
-        baseline:baseline?{opportunities:baseline.opportunities,filled:baseline.filled,metrics:baseline.metrics}:null,
-        experimental:experimental?{opportunities:experimental.opportunities,filled:experimental.filled,expired:experimental.expired,lockSkips:experimental.lockSkips,
-          marketOrders:experimental.marketOrders,limitOrders:experimental.limitOrders,metrics:experimental.metrics}:null
-      })),
-      trades:{baseline:baselineTrades,experimental:experimentalTrades}
+      symbols:symbolResults.map(x=>({symbol:x.symbol,error:x.error||null,
+        baselineLegacy:x.baselineLegacy?{filled:x.baselineLegacy.filled,metrics:x.baselineLegacy.metrics}:null,
+        baselineDynamic:x.baselineDynamic?{filled:x.baselineDynamic.filled,metrics:x.baselineDynamic.metrics}:null,
+        smartLegacy:x.smartLegacy?{filled:x.smartLegacy.filled,expired:x.smartLegacy.expired,metrics:x.smartLegacy.metrics}:null,
+        smartDynamic:x.smartDynamic?{filled:x.smartDynamic.filled,expired:x.smartDynamic.expired,metrics:x.smartDynamic.metrics}:null,
+        smartOrders:x.smartOrders||null}))
     };
   }
-  const report={
-    generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical OHLC",
+  const report={generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical OHLC",
     settings:{symbolsRequested:SYMBOL_LIMIT,feePerSidePct:FEE_PER_SIDE*100,slippagePerSidePct:SLIPPAGE_PER_SIDE*100,
-      maxHoldHours:MAX_HOLD_HOURS,limitValidityMinutes:LIMIT_VALID_BARS*5,leverage:FUTURES_TRADE_LEVERAGE,
+      leverage:FUTURES_TRADE_LEVERAGE,maxHoldHours:MAX_HOLD_HOURS,limitValidityMinutes:LIMIT_VALID_BARS*5,
+      legacyTarget:"production legacy lifecycle target: fixed 3% favorable price move (30% margin return at 10x)",
+      dynamicTarget:"SHORT TP1 distance=min(1.5R,2.5*1h ATR); production lifecycle closes the whole trade at TP1 or stop; TP2/TP3 remain signal information only",
       fallback:"completed 5m bearish => market at next 5m open; bullish/Doji => sell limit at observed high; limit fills at open if gapped above, else at touched limit; expiry after 12 bars",
-      target1:"SHORT TP1 distance=min(1.5R,2.5*1h ATR); production lifecycle closes the whole trade at TP1 or stop; TP2/TP3 remain signal information only",
       entryCohort:"eligible SHORT candidates where first completed post-signal 5m close is below both 1h EMA20 and prior 1h high, with levels >0.5% apart",
-      stopTargetSameBar:"production lifecycle: an open-gap through a level wins; otherwise stop wins when both levels are touched intrabar",funding:"excluded",
-      drawdownMethod:"maximum drawdown of chronological additive per-trade R; not account or portfolio equity drawdown",
+      stopTargetSameBar:"production lifecycle: an open-gap through a level wins; otherwise stop wins when both levels are touched intrabar",
+      funding:"excluded",drawdownMethod:"maximum drawdown of chronological additive per-trade R; not account or portfolio equity drawdown",
       lookahead:"5m direction and high are taken only from the completed decision candle; entry starts on following 5m candles",
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
-    windows
-  };
+    windows};
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/short-priority-fallback-backtest.json",JSON.stringify(report,null,2));
-  const lines=["# SHORT priority and fallback experiment","",
+  const lines=["# SHORT priority, dynamic TP1 and fallback experiment","",
     "Generated: "+report.generatedAt,"",
     "Fees: "+report.settings.feePerSidePct+"% per side; slippage: "+report.settings.slippagePerSidePct+"% per side",
     "Universe: "+report.settings.symbolsRequested+" top current-volume Kraken perpetuals; survivorship bias applies.",""];
+  const rows=[["Current market + legacy 3% target","baselineLegacy"],["Market + dynamic TP1","baselineDynamic"],
+    ["Smart fallback + legacy 3% target","smartLegacy"],["Smart fallback + dynamic TP1","smartDynamic"]];
   for(const [label,w] of Object.entries(windows)){
     lines.push("## "+label,"",
-      "| Metric | Baseline Market | Smart Fallback |",
-      "|---|---:|---:|",
-      "| Opportunities | "+w.baseline.opportunities+" | "+w.experimental.opportunities+" |",
-      "| Filled | "+w.baseline.filled+" | "+w.experimental.filled+" |",
-      "| Expired | 0 | "+w.experimental.expired+" |",
-      "| Invalid post-fill risk levels | "+w.baseline.invalidLevels+" | "+w.experimental.invalidLevels+" |",
-      "| Lock skips | "+w.baseline.lockSkips+" | "+w.experimental.lockSkips+" |",
-      "| Matched fills | "+w.paired.matchedFills+" | "+w.paired.matchedFills+" |",
-      "| Matched net R delta (Exp - Base) | — | "+w.paired.matchedNetRDelta.toFixed(3)+" |",
-      "| Strategy net R delta incl. expired (Exp - Base) | — | "+w.paired.strategyNetRDelta.toFixed(3)+" |",
-      "| Win rate | "+w.baseline.metrics.winRatePct.toFixed(2)+"% | "+w.experimental.metrics.winRatePct.toFixed(2)+"% |",
-      "| TP1 closes | "+w.baseline.metrics.profitCloses+" | "+w.experimental.metrics.profitCloses+" |",
-      "| Stop closes | "+w.baseline.metrics.stopCloses+" | "+w.experimental.metrics.stopCloses+" |",
-      "| Net R | "+w.baseline.metrics.netR.toFixed(3)+" | "+w.experimental.metrics.netR.toFixed(3)+" |",
-      "| Expectancy R | "+w.baseline.metrics.expectancyR.toFixed(4)+" | "+w.experimental.metrics.expectancyR.toFixed(4)+" |",
-      "| Profit factor | "+w.baseline.metrics.profitFactor+" | "+w.experimental.metrics.profitFactor+" |",
-      "| Max drawdown R | "+w.baseline.metrics.maxDrawdownR.toFixed(3)+" | "+w.experimental.metrics.maxDrawdownR.toFixed(3)+" |",
-      "| Limit orders placed | 0 | "+w.experimental.limitOrders+" |",
-      "| Bullish-candle Limits | 0 | "+w.experimental.bullishLimitOrders+" |",
-      "| Doji Limits | 0 | "+w.experimental.dojiLimitOrders+" |",
-      "| Market orders | "+w.baseline.filled+" | "+w.experimental.marketOrders+" |",""
-    );
+      "| Strategy | Filled | Expired | Win rate | Profit closes | Stop closes | Net R | Expectancy R | Profit factor | Max DD R |",
+      "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for(const [name,key] of rows){const a=w.arms[key],m=a.metrics;
+      lines.push("| "+name+" | "+a.filled+" | "+a.expired+" | "+m.winRatePct.toFixed(2)+"% | "+m.profitCloses+" | "+
+        m.stopCloses+" | "+m.netR.toFixed(3)+" | "+m.expectancyR.toFixed(4)+" | "+m.profitFactor+" | "+m.maxDrawdownR.toFixed(3)+" |");
+    }
+    lines.push("",
+      "Opportunities: "+w.arms.baselineLegacy.opportunities+"; shared lock skips: "+w.arms.baselineLegacy.lockSkips+
+      "; invalid risk levels: "+w.arms.baselineLegacy.invalidLevels+".",
+      "Smart orders: market "+w.smartOrders.marketOrders+", limit "+w.smartOrders.limitOrders+
+      " (bullish "+w.smartOrders.bullishLimitOrders+", Doji "+w.smartOrders.dojiLimitOrders+
+      "); limit gap fills "+w.smartOrders.limitGapFills+", limit touch fills "+w.smartOrders.limitTouchFills+
+      "; unfilled limits "+w.arms.smartDynamic.expired+".","",
+      "| Comparison | Matched fills | Matched net R delta | Total strategy net R delta |",
+      "|---|---:|---:|---:|");
+    const comps=[["Dynamic TP1 vs current market",w.comparisons.dynamicTp1VsLegacyMarket],
+      ["Smart fallback vs market (legacy target)",w.comparisons.smartFallbackVsMarketLegacyTp1],
+      ["Smart fallback vs market (dynamic TP1)",w.comparisons.smartFallbackVsMarketDynamicTp1],
+      ["Combined smart vs current market",w.comparisons.combinedSmartVsCurrentLegacy]];
+    for(const [name,c] of comps)lines.push("| "+name+" | "+c.matchedFills+" | "+c.matchedNetRDelta.toFixed(3)+" | "+c.totalStrategyNetRDelta.toFixed(3)+" |");
+    lines.push("");
   }
-  lines.push("## Methodology","",report.settings.fallback,"",report.settings.target1,"",
-    "The test cohort is intentionally limited to the exact MARKET_FALLBACK condition. The signal is not removed when a Limit fails to fill; only the simulated execution expires. Exits use the production evaluateTradeCandle lifecycle: an open-gap through a level is honored; otherwise stop wins if both stop and TP1 are touched intrabar. Funding is excluded. Drawdown is additive per-trade R, not portfolio-level equity drawdown. Results are research-only and do not represent live execution.","");
+  lines.push("## Methodology","",report.settings.legacyTarget,"",report.settings.dynamicTarget,"",report.settings.fallback,"",
+    "The cohort is limited to the exact MARKET_FALLBACK condition. Signals are counted identically across arms; a failed Limit only expires that simulated execution. Exits use production evaluateTradeCandle. Open gaps are honored; otherwise stop wins if both stop and TP1 are touched intrabar. Funding is excluded. Drawdown is additive per-trade R, not portfolio-level equity drawdown. Results are research-only and do not represent live order execution.","");
   await writeFile("artifacts/short-priority-fallback-backtest.md",lines.join("\n"));
   console.log(JSON.stringify(report,null,2));
 }
