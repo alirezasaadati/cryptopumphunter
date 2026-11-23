@@ -32,6 +32,9 @@ export function analyzeRabbitCorrection(input={},overrides={}) {
   const cfg={...DEFAULTS,...overrides},one=input.candles1h,four=input.candles4h,fifteen=input.candles15m;
   if(![one,four,fifteen].every(Array.isArray)||one.length<cfg.minBullTrendBars||four.length<cfg.minBullTrendBars||fifteen.length<40)
     return reject("داده بسته‌شده ۱ساعته، ۴ساعته یا ۱۵دقیقه‌ای کافی نیست");
+  const btcRegime=input.btcRegime;
+  if(!btcRegime||btcRegime.ok!==true||btcRegime.longAllowed!==true)
+    return reject("رژیم کلی BTC صعودیِ تأییدشده نیست؛ Rabbit غیرفعال است",{btcRegime:btcRegime||null});
   const c1=one.map(c=>Number(c.close)),c4=four.map(c=>Number(c.close)),c15=fifteen.map(c=>Number(c.close));
   if(![...c1,...c4,...c15].every(finitePositive))return reject("داده قیمت نامعتبر است");
   const last1=one.at(-1),last4=four.at(-1),last15=fifteen.at(-1);
