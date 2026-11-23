@@ -79,7 +79,7 @@ test("T5: a newer lower-high impulse replaces a consumed old setup",()=>{
     x.candles15m.push({time:p.time+STEP,open:p.close,close,high:p.close+0.02,low:close-0.02,volume:1000});
   }
   appendSurge(x.candles15m,8,0.4,2200);appendCorrection(x.candles15m,2600);
-  const second=analyzeRabbitCorrection({...x,state:first.nextState});
+  const second=analyzeRabbitCorrection({...x,price:x.candles15m.at(-1).close,state:first.nextState});
   assert.ok(second.nextState.TESTUSDT);
   assert.ok(second.nextState.TESTUSDT.peakTime>first.nextState.TESTUSDT.peakTime);
   assert.ok(second.nextState.TESTUSDT.surgeHigh<oldHigh);
