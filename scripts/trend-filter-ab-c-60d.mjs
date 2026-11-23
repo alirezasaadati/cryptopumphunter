@@ -200,6 +200,7 @@ async function runSymbol(ticker, from, to) {
   }
   return Object.fromEntries(VARIANTS.map(v=>[v.id,{symbol:ticker.symbol,metrics:summarize(states[v.id].trades,states[v.id].counters),trades:states[v.id].trades}]));
 }
+// Historical holdout execution: end date is pinned by TREND_AB_END in the workflow.
 async function main(){
   const configuredEnd=process.env.TREND_AB_END?Date.parse(process.env.TREND_AB_END):Date.now();
   if(!Number.isFinite(configuredEnd)||configuredEnd>Date.now())throw new Error("TREND_AB_END must be a valid past ISO timestamp");
