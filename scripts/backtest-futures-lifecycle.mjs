@@ -446,3 +446,5 @@ async function main() {
   if (!successful.length) process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
+
+// 90d/180d SHORT entry-source experiment; production files are intentionally untouched.
