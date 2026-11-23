@@ -2,7 +2,7 @@ name: Current futures engine backtest
 on:
   workflow_dispatch:
   push:
-    branches: [add-entry-quality-filters]
+    branches: [backtest/current-engine-1120-20261123]
     paths:
       - "scripts/backtest-kraken.mjs"
       - ".github/workflows/current-engine-backtest.yml"
