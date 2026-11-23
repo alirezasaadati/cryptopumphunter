@@ -316,28 +316,26 @@ test("mandatory 4h filter rejects a LONG when the 4h trend is neutral",()=>{
   assert.equal(result.entryDiagnostics.longTrendOk,false);
 });
 
-test("HIGH_RISK accepts opposing 4h without 15m momentum; confirmation only affects priority",()=>{
+test("HIGH_RISK cannot bypass mandatory 4h alignment when 4h opposes SHORT",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
   fifteenMinute.at(-1).open=fifteenMinute.at(-1).close-0.05;
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.highRiskEligible,true);
-  assert.equal(result.riskLevel,"HIGH_RISK");
-  assert.equal(result.entryDiagnostics.fourHourOpposes,true);
-  assert.equal(result.entryDiagnostics.momentumConfirmed,false);
-  assert.equal(result.confirmationPriorityBonus,7);
+  assert.equal(result.eligible,undefined,JSON.stringify(result));
+  assert.match(result.rejected,/۴ساعته نزولی نیست/);
+  assert.equal(result.entryDiagnostics.fourHourRequired,true);
+  assert.equal(result.entryDiagnostics.shortTrendOk,false);
 });
 
-test("HIGH_RISK does not reject opposing 4h solely because 15m confirmation data is unavailable",()=>{
+test("HIGH_RISK cannot bypass mandatory 4h alignment when 15m data is unavailable",()=>{
   const {ticker,oneHour}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,[]);
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.highRiskEligible,true);
-  assert.equal(result.entryDiagnostics.confirmationUnavailable,true);
-  assert.equal(result.confirmationPriorityBonus,0);
+  assert.equal(result.eligible,undefined,JSON.stringify(result));
+  assert.match(result.rejected,/۴ساعته نزولی نیست/);
+  assert.equal(result.entryDiagnostics.fourHourRequired,true);
 });
+
 
 test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
