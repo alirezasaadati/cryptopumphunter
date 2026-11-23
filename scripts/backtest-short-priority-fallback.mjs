@@ -293,6 +293,7 @@ async function main() {
       target1:"SHORT TP1 distance=min(1.5R,2.5*1h ATR); TP2=2.5R; TP3=3.5R; weights 40/35/25",
       entryCohort:"eligible SHORT candidates where first completed post-signal 5m close is below both 1h EMA20 and prior 1h high, with levels >0.5% apart",
       stopTargetSameBar:"stop first (conservative)",funding:"excluded",
+      drawdownMethod:"maximum drawdown of chronological additive per-trade R; not account or portfolio equity drawdown",
       lookahead:"5m direction and high are taken only from the completed decision candle; entry starts on following 5m candles",
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
     windows
