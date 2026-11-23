@@ -47,39 +47,41 @@ function lowerBound(rows,time) {
   while(lo<hi){const mid=(lo+hi)>>1;if(rows[mid].time<time)lo=mid+1;else hi=mid;}
   return lo;
 }
-function closeTrade(side, entry, stop, target, bars, startIndex, options = {}) {
+function closeTrade(side, entry, stop, target, bars, startIndex) {
   const initialRisk = Math.abs(entry-stop), maxIndex = Math.min(bars.length-1,startIndex+MAX_HOLD_HOURS*12);
-  let activeStop=stop, bestFavorable=entry, trailingActivated=false;
   for(let i=startIndex;i<=maxIndex;i++){
     const c=bars[i]; if(!c)break;
-    const stopHit=side==="LONG"?c.low<=activeStop:c.high>=activeStop;
+    const stopHit=side==="LONG"?c.low<=stop:c.high>=stop;
     const targetHit=side==="LONG"?c.high>=target:c.low<=target;
     if(stopHit||targetHit){
       const open=Number(c.open);
-      const stopAtOpen=side==="LONG"?open<=activeStop:open>=activeStop;
+      const stopAtOpen=side==="LONG"?open<=stop:open>=stop;
       const targetAtOpen=side==="LONG"?open>=target:open<=target;
+      // Conservative same-candle rule: if both barriers are touched, count STOP first.
       const stopFirst=stopAtOpen||(!targetAtOpen&&stopHit);
-      let raw=stopFirst?(side==="LONG"?Math.min(open,activeStop):Math.max(open,activeStop)):(side==="LONG"?Math.max(open,target):Math.min(open,target));
+      const raw=stopFirst?(side==="LONG"?Math.min(open,stop):Math.max(open,stop))
+        :(side==="LONG"?Math.max(open,target):Math.min(open,target));
       const exit=side==="LONG"?raw*(1-SLIPPAGE):raw*(1+SLIPPAGE);
       const gross=(side==="LONG"?exit-entry:entry-exit)/initialRisk;
       const fees=FEE*(entry+exit)/initialRisk;
-      return {exitPrice:exit,exitTime:c.time,exitReason:stopFirst?(trailingActivated?"TRAILING_STOP":"STOP"):"TARGET",
-        netR:gross-fees,holdHours:(c.time-bars[startIndex].time)/HOUR,trailingActivated};
-    }
-    if(options.trailing){
-      if(side==="LONG"){
-        bestFavorable=Math.max(bestFavorable,Number(c.high));
-        if(bestFavorable>=entry+initialRisk){trailingActivated=true;activeStop=Math.max(activeStop,bestFavorable-initialRisk);}
-      }else{
-        bestFavorable=Math.min(bestFavorable,Number(c.low));
-        if(bestFavorable<=entry-initialRisk){trailingActivated=true;activeStop=Math.min(activeStop,bestFavorable+initialRisk);}
-      }
+      return {exitPrice:exit,exitTime:c.time,exitReason:stopFirst?"STOP":"TARGET",
+        netR:gross-fees,holdHours:(c.time-bars[startIndex].time)/HOUR};
     }
   }
   const c=bars[maxIndex], raw=Number(c?.close);
   const exit=side==="LONG"?raw*(1-SLIPPAGE):raw*(1+SLIPPAGE);
-  return {exitPrice:exit,exitTime:c?.time,exitReason:"TIME",netR:(side==="LONG"?exit-entry:entry-exit)/initialRisk-FEE*(entry+exit)/initialRisk,
-    holdHours:(c.time-bars[startIndex].time)/HOUR,trailingActivated};
+  return {exitPrice:exit,exitTime:c?.time,exitReason:"TIME",
+    netR:(side==="LONG"?exit-entry:entry-exit)/initialRisk-FEE*(entry+exit)/initialRisk,
+    holdHours:(c.time-bars[startIndex].time)/HOUR};
+}
+function outcomeMetrics(trades) {
+  const takeProfits=trades.filter(t=>t.exitReason==="TARGET").length;
+  const stops=trades.filter(t=>t.exitReason==="STOP").length;
+  const timeExits=trades.filter(t=>t.exitReason==="TIME").length;
+  const decisive=takeProfits+stops;
+  return {totalTrades:trades.length,takeProfitTrades:takeProfits,stopTrades:stops,timeExitTrades:timeExits,
+    winRatePct:decisive?takeProfits/decisive*100:0,
+    takeProfitShareOfAllTradesPct:trades.length?takeProfits/trades.length*100:0};
 }
 function metrics(trades) {
   const wins=trades.filter(t=>t.netR>0), losses=trades.filter(t=>t.netR<0);
@@ -134,21 +136,19 @@ function runSymbol(data, days, endMs) {
     const entry=signal.side==="LONG"?rawEntry*(1+SLIPPAGE):rawEntry*(1-SLIPPAGE);
     const adjustedRisk=signal.side==="LONG"?entry-signal.stop:signal.stop-entry;
     if(!(adjustedRisk>0)){counts.invalidFillRisk=(counts.invalidFillRisk||0)+1;continue;}
-    const isBreakout=signal.setup.includes("BREAKOUT");
-    const desiredR=isBreakout?2.5:1.5;
-    let target=signal.side==="LONG"?entry+adjustedRisk*desiredR:entry-adjustedRisk*desiredR;
-    if(!isBreakout){
-      target=signal.side==="LONG"?Math.min(target,signal.channel.upper):Math.max(target,signal.channel.lower);
-    }
+    // $10 margin at 10x = $100 notional. A 30% margin gain requires a 3% favorable price move.
+    const marginUsd=10, leverage=10, notionalUsd=marginUsd*leverage, quantity=notionalUsd/entry;
+    const target=signal.side==="LONG"?entry*1.03:entry*0.97;
     const actualTargetR=Math.abs(target-entry)/adjustedRisk;
-    if(!(actualTargetR>0)){counts.invalidTarget=(counts.invalidTarget||0)+1;continue;}
-    const riskBudgetUsd=10, quantity=riskBudgetUsd/adjustedRisk, notionalUsd=quantity*entry, leverage=10;
-    const result=closeTrade(signal.side,entry,signal.stop,target,m5,entryIndex,{trailing:isBreakout});
+    const result=closeTrade(signal.side,entry,signal.stop,target,m5,entryIndex);
     const trade={symbol:ticker.symbol,side:signal.side,setup:signal.setup,channelType:signal.channelType,
       score:scoreChannelSignal(signal),orderType,entry,stop:signal.stop,target,targetR:actualTargetR,
-      riskPct:adjustedRisk/entry,quantity,notionalUsd,estimatedMarginUsd:notionalUsd/leverage,
-      fixedRiskBudgetUsd:riskBudgetUsd,volumeConfirmed:signal.volumeConfirmed,rsiDivergence:signal.rsiDivergence,
-      entryTime:m5[entryIndex].time,...result};
+      riskPct:adjustedRisk/entry,quantity,notionalUsd,estimatedMarginUsd:marginUsd,
+      marginUsd,leverage,targetMovePct:3,volumeConfirmed:signal.volumeConfirmed,rsiDivergence:signal.rsiDivergence,
+      entryTime:m5[entryIndex].time,...result,
+      grossPnlUsd:(signal.side==="LONG"?result.exitPrice-entry:entry-result.exitPrice)*quantity,
+      netPnlUsd:(signal.side==="LONG"?result.exitPrice-entry:entry-result.exitPrice)*quantity-FEE*(entry+result.exitPrice)*quantity,
+      marginRoiPct:(((signal.side==="LONG"?result.exitPrice-entry:entry-result.exitPrice)*quantity-FEE*(entry+result.exitPrice)*quantity)/marginUsd)*100};
     trades.push(trade);
     counts.filled=(counts.filled||0)+1;
     counts[orderType==="MARKET"?"marketFills":"limitFills"]=(counts[orderType==="MARKET"?"marketFills":"limitFills"]||0)+1;
@@ -178,17 +178,19 @@ async function main(){
     const results=loaded.map(d=>d.error?{symbol:d.ticker.symbol,error:d.error}:runSymbol(d,days,endMs));
     const trades=results.flatMap(x=>x.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
     const group=(key)=>Object.fromEntries([...new Set(trades.map(t=>t[key]))].map(v=>[v,metrics(trades.filter(t=>t[key]===v))]));
+    const outcomeGroup=Object.fromEntries(["LONG","SHORT"].map(side=>[side,outcomeMetrics(trades.filter(t=>t.side===side))]));
     windows[days+"d"]={period:{from:new Date(endMs-days*DAY).toISOString(),to:new Date(endMs).toISOString(),days},
       symbolsRequested:SYMBOL_LIMIT,symbolsLoaded:loaded.filter(d=>!d.error).length,
       symbols:results.map(({trades,...rest})=>rest),overall:metrics(trades),
+      outcomes:outcomeMetrics(trades),outcomesBySide:outcomeGroup,
       bySide:group("side"),bySetup:group("setup"),byChannelType:group("channelType"),trades};
   }
   const output={strategy:"Channel Structure Engine v0.2",generatedAt:new Date().toISOString(),
-    dataSource:"Kraken Futures historical OHLC",execution:"signal at closed 1h; aligned completed 5m candle => next-open market; counter-direction/doji => limit at signal-candle low (LONG) or high (SHORT), valid 12 subsequent 5m bars; breakout target 2.5R with 1R trailing activation and 1R trail distance; reversal target 1.5R; stop-first OHLC exit",
-    assumptions:{feePerSide:FEE,slippagePerSide:SLIPPAGE,leverageContext:"10x illustrative margin; fixed $10 risk budget per filled trade; position quantity is reduced as stop-distance percentage increases, including above 8%; no 8% rejection gate",riskBudgetUsdPerTrade:10,maxHoldHours:MAX_HOLD_HOURS,
+    dataSource:"Kraken Futures historical OHLC",execution:"same v0.2 signal and smart-entry rules; fixed take-profit at +3% price for LONG / -3% for SHORT (30% gross return on $10 margin at 10x); original signal stop retained; no trailing stop; stop-first if stop and target are both touched in one 5m candle; 72h time exit reported separately",
+    assumptions:{feePerSide:FEE,slippagePerSide:SLIPPAGE,leverageContext:"$10 margin per trade at 10x = $100 notional; fixed +3% favorable price target corresponds to +$3 gross / +30% gross margin ROI; original signal stop; fees and slippage reduce realized net ROI",marginUsdPerTrade:10,notionalUsdPerTrade:100,targetMovePct:3,maxHoldHours:MAX_HOLD_HOURS,
       warmupDays:20,universe:"top current-volume eligible Kraken perpetuals; survivorship bias possible",
       limitations:["Historical OHLC cannot reveal intrabar path; stop-first is conservative when stop and target occur in same 5m candle.",
-        "Funding, liquidation, market impact and portfolio-level concurrency/capital constraints are not modeled.", "Trailing stop activates after +1R favorable excursion and trails the best favorable price by 1R; updates take effect on the next 5m candle to avoid same-candle lookahead.",
+        "Funding, liquidation, market impact and portfolio-level concurrency/capital constraints are not modeled.", "No trailing stop is used in this rerun. If both target and stop are touched in the same 5m candle, stop is counted first conservatively. Trades still open after 72 hours are TIME exits, not STOP trades.",
         "The 4h channel uses confirmed fractal pivots only; a pivot is available after its right-side confirmation candles close."]},
     windows};
   await mkdir("artifacts",{recursive:true});
