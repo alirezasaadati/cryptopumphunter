@@ -303,37 +303,42 @@ test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
 });
 
 
-test("mandatory 4h filter rejects a LONG when the 4h trend is neutral",()=>{
+test("neutral 4h trend does not block a valid LONG and adds no 4h score",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({
     time:Date.now()-(120-i)*4*60*60*1000,
     open:100,high:100.1,low:99.9,close:100,volume:100
   }));
   const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
-  assert.equal(result.eligible,undefined,JSON.stringify(result));
-  assert.match(result.rejected,/۴ساعته خنثی است/);
-  assert.equal(result.entryDiagnostics.fourHourRequired,true);
-  assert.equal(result.entryDiagnostics.longTrendOk,false);
+  assert.equal(result.side,"LONG",JSON.stringify(result));
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.fourHourTrend,"NEUTRAL");
+  assert.equal(result.fourHourScoreAdjustment,0);
+  assert.equal(result.entryDiagnostics.fourHourRequired,false);
 });
 
-test("HIGH_RISK cannot bypass mandatory 4h alignment when 4h opposes SHORT",()=>{
+test("opposing 4h trend reduces SHORT score but does not block even HIGH_RISK",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
   fifteenMinute.at(-1).open=fifteenMinute.at(-1).close-0.05;
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
-  assert.equal(result.eligible,undefined,JSON.stringify(result));
-  assert.match(result.rejected,/۴ساعته نزولی نیست/);
-  assert.equal(result.entryDiagnostics.fourHourRequired,true);
-  assert.equal(result.entryDiagnostics.shortTrendOk,false);
+  assert.equal(result.side,"SHORT",JSON.stringify(result));
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.equal(result.fourHourTrend,"BULLISH");
+  assert.equal(result.fourHourScoreAdjustment,-8);
+  assert.equal(result.entryDiagnostics.fourHourRequired,false);
 });
 
-test("HIGH_RISK cannot bypass mandatory 4h alignment when 15m data is unavailable",()=>{
+test("opposing 4h trend does not block HIGH_RISK when 15m data is unavailable",()=>{
   const {ticker,oneHour}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,[]);
-  assert.equal(result.eligible,undefined,JSON.stringify(result));
-  assert.match(result.rejected,/۴ساعته نزولی نیست/);
-  assert.equal(result.entryDiagnostics.fourHourRequired,true);
+  assert.equal(result.side,"SHORT",JSON.stringify(result));
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.equal(result.fourHourScoreAdjustment,-8);
+  assert.equal(result.entryDiagnostics.fourHourRequired,false);
 });
 
 
