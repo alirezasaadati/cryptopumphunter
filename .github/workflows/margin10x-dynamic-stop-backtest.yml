@@ -1,0 +1,26 @@
+name: Futures backtest — 10 USD margin 10x dynamic stop 30pct target
+on:
+  workflow_dispatch:
+  push:
+    branches: [backtest/margin10x-dynamic-stop-30pct-90-180d]
+    paths:
+      - "scripts/backtest-long-inverse-3pct.mjs"
+      - ".github/workflows/margin10x-dynamic-stop-backtest.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 90d and 180d dynamic-stop backtest
+        run: node scripts/backtest-long-inverse-3pct.mjs
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: margin10x-dynamic-stop-30pct-90-180d
+          path: artifacts/
+          if-no-files-found: warn
