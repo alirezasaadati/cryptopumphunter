@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { calculateAtr, detectPriceChannel, generateChannelSignal, scoreChannelSignal } from "../src/channel-structure-engine.js";
+import { CHANNEL_CONFIG, calculateAtr, detectPriceChannel, generateChannelSignal, scoreChannelSignal } from "../src/channel-structure-engine.js";
 
 function syntheticChannel({ slope = 0, count = 100, width = 20 } = {}) {
   const candles = [];
@@ -41,4 +41,19 @@ test("signal score is bounded and null-safe", () => {
 test("signal generator does not emit without confirmed channel", () => {
   const candles = syntheticChannel().slice(0, 20);
   assert.equal(generateChannelSignal({ candles4h: candles, candles1h: candles, candles15m: candles }), null);
+});
+
+test("v0.2 uses tighter reversal stops and larger breakout targets", () => {
+  assert.equal(CHANNEL_CONFIG.reversalStopBufferAtr, 0.15);
+  assert.equal(CHANNEL_CONFIG.stopBufferAtr, 0.35);
+  assert.equal(CHANNEL_CONFIG.reversalTargetR, 1.5);
+  assert.equal(CHANNEL_CONFIG.breakoutTargetR, 2.5);
+});
+
+test("volume and reversal RSI divergence are priority bonuses only", () => {
+  const channel = { upperTouches: 3, lowerTouches: 3, width: 20, lower: 90, upper: 110, widthAtr: 4 };
+  const base = { channel, referenceEntry: 91, setup: "CHANNEL_FLOOR_REVERSAL", targetR: 1.5 };
+  const baseScore = scoreChannelSignal(base);
+  assert.equal(scoreChannelSignal({ ...base, volumeConfirmed: true }), Math.min(100, baseScore + 15));
+  assert.equal(scoreChannelSignal({ ...base, rsiDivergence: true }), Math.min(100, baseScore + 10));
 });
