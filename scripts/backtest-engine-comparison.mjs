@@ -151,7 +151,8 @@ async function main(){
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if(!universe.length)throw new Error("No eligible crypto perpetuals");
   const btc4h=await fetchCandles(V48_CONFIG.BTC_SYMBOL,"4h",fromMs,endMs);
-  const currentTrades=[],v48Trades=[],perSymbol=[],errors=[];\n  const currentCounters={eligible:0,rejected:0,lockSkips:0},v48Counters={eligible:0,rejected:0,lockSkips:0};
+  const currentTrades=[],v48Trades=[],perSymbol=[],errors=[];
+  const currentCounters={eligible:0,rejected:0,lockSkips:0},v48Counters={eligible:0,rejected:0,lockSkips:0};
   for(const ticker of universe){
     try{
       const [oneHour,fourHour,fifteenMinute,fiveMinute]=await Promise.all([
@@ -163,12 +164,11 @@ async function main(){
         runEngine({name:"CURRENT_11_2_0",analyze:analyzeCurrent,config:CURRENT_CONFIG,useBtcGate:false},ticker,data,btc4h,testStart,endMs),
         runEngine({name:"V48_EXPERIMENTAL",analyze:analyzeV48,config:V48_CONFIG,useBtcGate:true},ticker,data,btc4h,testStart,endMs)]);
       currentTrades.push(...cur.trades);v48Trades.push(...v48.trades);
-      perSymbol.push({symbol:ticker.symbol,current:cur.metrics,v48:v48.metrics});
+      for(const k of ["eligible","rejected","lockSkips"]){currentCounters[k]+=cur.counters[k];v48Counters[k]+=v48.counters[k];}
+      perSymbol.push({symbol:ticker.symbol,current:cur.metrics,v48:v48.metrics,currentCounters:cur.counters,v48Counters:v48.counters});
     }catch(error){errors.push({symbol:ticker.symbol,error:String(error?.message||error)});}
   }
-  const countersCurrent={eligible:currentTrades.length,rejected:0,lockSkips:0};
-  const countersV48={eligible:v48Trades.length,rejected:0,lockSkips:0};
-  const current=summarize(currentTrades,countersCurrent),v48=summarize(v48Trades,countersV48);
+  const current=summarize(currentTrades,currentCounters),v48=summarize(v48Trades,v48Counters);
   const report={generatedAt:new Date().toISOString(),period:{from:new Date(testStart).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
     rules:{marginUsd:MARGIN_USD,leverage:LEVERAGE,targetMarginPercent:TARGET_MARGIN_PERCENT,fullCloseAtTarget:true,priceMoveTargetPercent:1.5,
       fees:"excluded",funding:"not included (historical funding series not supplied)",slippage:"excluded",
