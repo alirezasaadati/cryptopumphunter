@@ -1,0 +1,26 @@
+name: LONG inverse fixed 3 percent 90d and 180d backtest
+on:
+  workflow_dispatch:
+  push:
+    branches: [backtest/long-inverse-3pct-90-180d]
+    paths:
+      - "scripts/backtest-long-inverse-3pct.mjs"
+      - ".github/workflows/long-inverse-3pct-backtest.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 90d and 180d LONG inverse barrier test
+        run: node scripts/backtest-long-inverse-3pct.mjs
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-inverse-3pct-90-180d
+          path: artifacts/
+          if-no-files-found: warn
