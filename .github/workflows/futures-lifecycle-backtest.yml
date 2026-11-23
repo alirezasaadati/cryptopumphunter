@@ -2,7 +2,7 @@ name: Experimental futures lifecycle backtest
 on:
   workflow_dispatch:
   push:
-    branches: [feature/leveraged-profit-close-lifecycle]
+    branches: [feature/leveraged-profit-close-lifecycle, experiment/v48-r-scaled-btc-gated-20261123]
     paths:
       - "scripts/backtest-futures-lifecycle.mjs"
       - ".github/workflows/futures-lifecycle-backtest.yml"
