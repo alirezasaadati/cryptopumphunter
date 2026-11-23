@@ -54,12 +54,12 @@ for(let i=60;i<m15.length-2;i++){
  const mt=e20_15[i]>e50_15[i]&&bar.close>e20_15[i]?"LONG":e20_15[i]<e50_15[i]&&bar.close<e20_15[i]?"SHORT":null;
  if(mt!==ht){reject.m15Trend++;continue;}
  const priorHigh=Math.max(...m15.slice(i-3,i).map(x=>x.high)),priorLow=Math.min(...m15.slice(i-3,i).map(x=>x.low));
- const longPull=prev.low<=e20_15[i-1]+0.20*a && bar.close>priorHigh && bar.close>bar.open;
- const shortPull=prev.high>=e20_15[i-1]-0.20*a && bar.close<priorLow && bar.close<bar.open;
+ const longPull=prev.low<=e20_15[i-1]+0.15*a && prev.low>=e20_15[i-1]-0.50*a && bar.close>priorHigh && bar.close>bar.open;
+ const shortPull=prev.high>=e20_15[i-1]-0.15*a && prev.high<=e20_15[i-1]+0.50*a && bar.close<priorLow && bar.close<bar.open;
  const side=ht==="LONG"&&longPull?"LONG":ht==="SHORT"&&shortPull?"SHORT":null;
  if(!side){reject.noPullbackReclaim++;continue;}
- if(side==="LONG"?(r<48||r>68):(r<32||r>52)){reject.rsi++;continue;}
- if(bar.volume<vavg*0.80){reject.volume++;continue;}
+ if(side==="LONG"?(r<52||r>66):(r<34||r>48)){reject.rsi++;continue;}
+ if(bar.volume<vavg*1.00){reject.volume++;continue;}
  const entryBar=indexAtOrBefore(m5,bar.time+M15);
  const entryIndex=entryBar+1;
  if(entryIndex<0||entryIndex>=m5.length)continue;
@@ -90,10 +90,10 @@ for(let i=60;i<m15.length-2;i++){
  i=Math.max(i,Math.floor((t.exitTime-m15[0].time)/M15)-1);
 }
 const long=trades.filter(t=>t.side==="LONG"),short=trades.filter(t=>t.side==="SHORT");
-const result={symbol:SYMBOL,period:{from:new Date(from).toISOString(),to:new Date(to).toISOString()},candles:{m5:m5.length,m15:m15.length,h1:h1.length},settings:{strategy:"XAUT-only intraday trend-pullback continuation",independentOfBTC:true,entry:"next 5m open after closed 15m confirmation",riskPerTradePct:0.5,maxStopDistancePct:1.2,target1R:1,target2R:2,scaleOut:"50% at 1R, 50% at 2R",maxHoldHours:MAX_HOLD_HOURS,forceExitAtUtcDayEnd:true,feePerSide:FEE,slippagePerSide:SLIPPAGE,sameCandlePriority:"STOP_FIRST",startingEquity:START_EQUITY},summary:metrics(trades),long:metrics(long),short:metrics(short),rejections:reject,trades};
+const result={symbol:SYMBOL,period:{from:new Date(from).toISOString(),to:new Date(to).toISOString()},candles:{m5:m5.length,m15:m15.length,h1:h1.length},settings:{strategy:"XAUT-only intraday trend-pullback continuation v2 (strict pullback, RSI/volume confirmation, 0.45% minimum stop distance)",independentOfBTC:true,entry:"next 5m open after closed 15m confirmation",riskPerTradePct:0.5,minStopDistancePct:0.45,maxStopDistancePct:1.2,target1R:1,target2R:2,scaleOut:"50% at 1R, 50% at 2R",maxHoldHours:MAX_HOLD_HOURS,forceExitAtUtcDayEnd:true,feePerSide:FEE,slippagePerSide:SLIPPAGE,sameCandlePriority:"STOP_FIRST",startingEquity:START_EQUITY},summary:metrics(trades),long:metrics(long),short:metrics(short),rejections:reject,trades};
 await mkdir("artifacts",{recursive:true});
-await writeFile("artifacts/xaut-intraday-backtest.json",JSON.stringify(result,null,2));
+await writeFile("artifacts/xaut-intraday-backtest-v2.json",JSON.stringify(result,null,2));
 const fmt=x=>Number(x).toFixed(3);
-const md=["# XAUT independent intraday LONG/SHORT backtest","",`Period: ${result.period.from} — ${result.period.to}`,"",`Candles: 5m=${m5.length}, 15m=${m15.length}, 1h=${h1.length}`,"","| Metric | All | LONG | SHORT |","|---|---:|---:|---:|",`| Trades | ${result.summary.trades} | ${result.long.trades} | ${result.short.trades} |`,`| Win rate | ${fmt(result.summary.winRatePct)}% | ${fmt(result.long.winRatePct)}% | ${fmt(result.short.winRatePct)}% |`,`| Net R | ${fmt(result.summary.netR)} | ${fmt(result.long.netR)} | ${fmt(result.short.netR)} |`,`| Expectancy R | ${fmt(result.summary.expectancyR)} | ${fmt(result.long.expectancyR)} | ${fmt(result.short.expectancyR)} |`,`| Profit factor | ${result.summary.profitFactor===null?"∞":fmt(result.summary.profitFactor)} | ${result.long.profitFactor===null?"∞":fmt(result.long.profitFactor)} | ${result.short.profitFactor===null?"∞":fmt(result.short.profitFactor)} |`,`| Max drawdown R | ${fmt(result.summary.maxDrawdownR)} | ${fmt(result.long.maxDrawdownR)} | ${fmt(result.short.maxDrawdownR)} |`,"", "## Rejection counts",...Object.entries(reject).map(([k,v])=>`- ${k}: ${v}`),"","Costs include configured fee and slippage. Funding, liquidation, and live execution latency are not modeled.",""];
-await writeFile("artifacts/xaut-intraday-backtest.md",md.join("\n"));
+const md=["# XAUT independent intraday LONG/SHORT backtest — v2","",`Period: ${result.period.from} — ${result.period.to}`,"",`Candles: 5m=${m5.length}, 15m=${m15.length}, 1h=${h1.length}`,"","| Metric | All | LONG | SHORT |","|---|---:|---:|---:|",`| Trades | ${result.summary.trades} | ${result.long.trades} | ${result.short.trades} |`,`| Win rate | ${fmt(result.summary.winRatePct)}% | ${fmt(result.long.winRatePct)}% | ${fmt(result.short.winRatePct)}% |`,`| Net R | ${fmt(result.summary.netR)} | ${fmt(result.long.netR)} | ${fmt(result.short.netR)} |`,`| Expectancy R | ${fmt(result.summary.expectancyR)} | ${fmt(result.long.expectancyR)} | ${fmt(result.short.expectancyR)} |`,`| Profit factor | ${result.summary.profitFactor===null?"∞":fmt(result.summary.profitFactor)} | ${result.long.profitFactor===null?"∞":fmt(result.long.profitFactor)} | ${result.short.profitFactor===null?"∞":fmt(result.short.profitFactor)} |`,`| Max drawdown R | ${fmt(result.summary.maxDrawdownR)} | ${fmt(result.long.maxDrawdownR)} | ${fmt(result.short.maxDrawdownR)} |`,"", "## Rejection counts",...Object.entries(reject).map(([k,v])=>`- ${k}: ${v}`),"","Costs include configured fee and slippage. Funding, liquidation, and live execution latency are not modeled.",""];
+await writeFile("artifacts/xaut-intraday-backtest-v2.md",md.join("\n"));
 console.log(JSON.stringify({symbol:SYMBOL,period:result.period,candles:result.candles,summary:result.summary,long:result.long,short:result.short,rejections:reject},null,2));
