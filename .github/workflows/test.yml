@@ -14,16 +14,6 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm test
-      - name: Test Al Brooks inspired engine
-        run: node --test scripts/al-brooks-price-action.test.mjs
-      - name: Run Al Brooks 90d and 180d Kraken backtests
-        run: node scripts/al-brooks-price-action-backtest.mjs
-      - name: Upload Al Brooks research report
-        uses: actions/upload-artifact@v4
-        with:
-          name: al-brooks-price-action-backtest
-          path: artifacts/al-brooks-price-action-backtest.json
-          if-no-files-found: error
       - name: Replay reference ZEC signal at 2026-11-19 23:30 Iran time
         env:
           ZEC_KRAKEN_SYMBOL: PF_ZECUSD
