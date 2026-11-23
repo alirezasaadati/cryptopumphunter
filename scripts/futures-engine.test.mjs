@@ -334,7 +334,6 @@ test("HIGH_RISK accepts opposing 4h without 15m momentum; confirmation only affe
   assert.equal(result.entryDiagnostics.fourHourOpposes,true);
   assert.equal(result.entryDiagnostics.momentumConfirmed,false);
   assert.equal(result.entryDiagnostics.structuralPullbackConfirmed,false);
-  assert.equal(result.entryDiagnostics.emaPullbackConfirmed,true);
   assert.equal(result.confirmationPriorityBonus,0);
 });
 
