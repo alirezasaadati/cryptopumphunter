@@ -1,24 +1,33 @@
-# Rabbit — Bull Rally Correction SHORT Engine
+# Rabbit v2 — Bull Rally Correction SHORT Engine
 
-Rabbit is an experimental counter-trend SHORT strategy. Its only intended regime is a strong, aligned bullish trend on both 1h and 4h. It attempts to capture the first confirmed pullback after an unusually strong 15m rally; it does not predict tops.
+Rabbit v2 is an experimental counter-trend SHORT strategy for temporary corrections during an aligned bullish market. It is analysis-only: it does not place orders, deliver alerts, or modify the Kraken/V4.8 engine.
 
 ## Signal sequence
 
-1. Require 1h and 4h bullish structure: EMA20 above EMA50 and latest closed candle above EMA20 on both timeframes.
-2. Detect a recent 8-candle 15m impulse: at least 2.2% and 2.6 ATR from the start of the impulse.
-3. Require meaningful overextension: impulse high at least 1.35 ATR above 15m EMA20.
-4. Require a closed bearish 15m confirmation candle that closes below the lows of the prior two candles and below EMA9.
-5. Require RSI(14) >= 68 and confirmation-candle volume >= 0.75x the prior 20-candle average.
-6. Reject stale entries (>0.8% drift), and reject structural stop risk outside 0.2%-5.0%.
-7. Place the initial stop above the recent impulse swing high plus 0.2 ATR. Targets are 1R, 1.5R and 2R; first backtest version evaluates full close at 1R to isolate signal quality.
+1. Require a confirmed bullish BTC 4h regime.
+2. Require aligned bullish structure on the traded symbol: 1h and 4h EMA20 above EMA50, with each latest closed candle above EMA20.
+3. Search for an 8-candle 15m impulse ending at a fresh strict high. The peak must be no more than four completed 15m bars before the current confirmation candle.
+4. Measure the impulse from the open of its first candle to the peak high. Defaults: at least 1.5%, at least 1.8 ATR, and at least 1.2 ATR above EMA20 calculated only from candles before the impulse. RSI(14) is measured at the peak and must be at least 65.
+5. Require a closed bearish 15m confirmation candle below EMA9. By default it must also close below the lows of the two preceding candles; this can be disabled for controlled comparison tests.
+6. Require confirmation volume at least 0.7x the prior 20-candle average.
+7. Reject excessive entry drift (default 1.5%) and structural stop risk outside the configured 0.2%-7.0% range.
+8. Stop is above the registered impulse high plus 0.2 ATR measured at the peak. Targets are 1R, 1.5R and 2R; the historical harness currently evaluates a full close at 1R.
 
-## Explicit non-goals
+## State contract
 
-- No short merely because RSI is high.
-- No short while either 1h or 4h trend is not bullish.
-- No changes to Kraken/V4.8 strategy logic.
-- No production scan integration, alert delivery, or order execution in this initial research stage.
+The engine is pure and returns `nextState` on both eligible and rejected evaluations. The caller must persist that object for every symbol and pass it back as `input.state` on the next candle. The backtest harness does this independently for each symbol.
 
-## Validation
+Each setup is identified by the absolute timestamp of its peak, not an array index. A setup expires after the configured correction delay. A newer valid impulse replaces an older setup even when the newer absolute high is lower. A consumed setup cannot emit a duplicate signal, but does not block a later independent impulse.
 
-Run npm test for pure unit tests. The historical backtest is separate and reports 90d and 180d outcomes using Kraken 5m OHLC, next-5m-open entries, stop-first handling when target and stop occur in the same 5m candle, and a six-hour maximum holding period. Fees, funding, slippage, liquidation and current-volume universe survivorship bias are reported as limitations.
+15m candle objects must include `time`, `timestamp`, or `openTime` in Unix seconds or milliseconds. Pass only completed candles. OHLCV values are validated before indicator calculations.
+
+## Validation and backtest
+
+Run `node --test scripts/rabbit-engine.test.mjs` for the Rabbit unit suite. Run `node scripts/backtest-rabbit.mjs` for 90d and 180d Kraken Futures tests. The harness:
+- processes warm-up candles to initialize setup state and carry any still-open trade lock into each measured window;
+- enters at the next 5m candle open after the 15m signal closes;
+- records rejection-reason counts;
+- uses stop-first handling when stop and target are both touched in one 5m candle;
+- uses a six-hour maximum holding period, $10 margin and 10x leverage.
+
+Backtest limitations: fees, slippage, funding, liquidation and portfolio-margin effects are excluded. The top-eight current-volume universe introduces survivorship bias. This is research-only and must not be connected to production signal delivery or order execution without a separate review.
