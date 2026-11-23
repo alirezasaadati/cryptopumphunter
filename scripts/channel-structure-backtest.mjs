@@ -135,12 +135,13 @@ async function main(){
   const loaded=[];
   for(const ticker of universe){
     try{
-      const [h1,h4,m15,m5]=await Promise.all([
+      const [h1,h4,m15,m5,d1]=await Promise.all([
         fetchCandles(ticker.symbol,"1h",from,endMs,HOUR),fetchCandles(ticker.symbol,"4h",from,endMs,FOUR_HOURS),
-        fetchCandles(ticker.symbol,"15m",from,endMs,FIFTEEN),fetchCandles(ticker.symbol,"5m",from,endMs,FIVE)
+        fetchCandles(ticker.symbol,"15m",from,endMs,FIFTEEN),fetchCandles(ticker.symbol,"5m",from,endMs,FIVE),
+        fetchCandles(ticker.symbol,"1d",from-220*DAY,endMs,DAY)
       ]);
-      if(h1.length<100||h4.length<80||m15.length<100||m5.length<1000)throw new Error("Insufficient history");
-      loaded.push({ticker,h1,h4,m15,m5});
+      if(h1.length<100||h4.length<80||m15.length<100||m5.length<1000||d1.length<35)throw new Error("Insufficient history");
+      loaded.push({ticker,h1,h4,m15,m5,d1});
     }catch(error){loaded.push({ticker,error:String(error.message||error)});}
   }
   const windows={};
