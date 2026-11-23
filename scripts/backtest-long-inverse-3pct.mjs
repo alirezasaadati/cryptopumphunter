@@ -117,7 +117,7 @@ function summarize(trades, cutoff) {
   const wins=rows.filter(t=>t.outcome==="TARGET").length;
   const stops=rows.filter(t=>t.outcome==="STOP").length;
   const ambiguous=rows.filter(t=>t.outcome==="AMBIGUOUS").length;
-  const timeout=rows.filter(t=>t.outcome==="TIMEOUT").length;
+  const timeouts=rows.filter(t=>t.outcome==="TIMEOUT").length;
   const decided=wins+stops;
   return {trades:rows.length,winners:wins,stopLosses:stops,ambiguous,timeouts,decided,
     winRateOfDecidedPct:decided?wins/decided*100:0,stopRateOfDecidedPct:decided?stops/decided*100:0,
