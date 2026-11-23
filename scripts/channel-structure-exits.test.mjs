@@ -9,7 +9,7 @@ test("breakout takes half at 1.5R and trails the remainder", () => {
   const bars = [
     bar(0, 100, 103.2, 99.5, 103),
     bar(300000, 103, 104, 102.2, 103.5),
-    bar(600000, 103.5, 103.6, 102.4, 102.8)
+    bar(600000, 103.5, 103.6, 101.8, 102.8)
   ];
   const result = simulateChannelExit({ side:"LONG", setup:"UPPER_CHANNEL_BREAKOUT", entry, stop, target:105, bars, startIndex:0 });
   assert.equal(result.partialTaken, true);
