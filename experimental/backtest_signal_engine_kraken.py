@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Isolated historical test: calls the unchanged build()/make_signal() from experimental/signal_engine.py.
-import json, os, re, time, sys
+import json, os, re, time, sys, importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -8,7 +8,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 import pandas as pd
 import requests
-from experimental import signal_engine as engine
+_spec = importlib.util.spec_from_file_location('signal_engine_original', Path(__file__).with_name('signal_engine.py'))
+engine = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(engine)
 
 BASE = "https://futures.kraken.com"
 RES_MS = {"15m": 900_000, "1h": 3_600_000}
