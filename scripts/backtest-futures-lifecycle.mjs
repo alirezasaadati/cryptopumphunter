@@ -386,7 +386,7 @@ async function main() {
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top 10 current Kraken perpetuals by current quote volume; historical 24h quote-volume filter reconstructed from prior 24 closed 1h candles; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
-    metrics,baselineMetrics,fillTypeCounts,accountMetrics,account:{startingCapitalUsd:STARTING_CAPITAL,marginPerTradeUsd:MARGIN_PER_TRADE,maxConcurrentPositions:STARTING_CAPITAL/MARGIN_PER_TRADE,peakConcurrentPositions:peakOpenPositions,excludedForInsufficientFreeMargin:excludedForCapital,realizedPnlUsd:realizedPnl,openUnrealizedPnlUsd:openUnrealizedPnl,lockedMarginUsd:lockedMargin,finalEquityUsd:finalEquity},eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
+    metrics,baselineMetrics,fillTypeCounts,entrySourceMetrics,accountMetrics,account:{startingCapitalUsd:STARTING_CAPITAL,marginPerTradeUsd:MARGIN_PER_TRADE,maxConcurrentPositions:STARTING_CAPITAL/MARGIN_PER_TRADE,peakConcurrentPositions:peakOpenPositions,excludedForInsufficientFreeMargin:excludedForCapital,realizedPnlUsd:realizedPnl,openUnrealizedPnlUsd:openUnrealizedPnl,lockedMarginUsd:lockedMargin,finalEquityUsd:finalEquity},eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
     limitOrdersFilled:successful.reduce((n,r)=>n+r.limitOrdersFilled,0),
     limitOrdersExpired:successful.reduce((n,r)=>n+r.limitOrdersExpired,0),
     averageSignalsPerDay:successful.reduce((n,r)=>n+r.signalsAccepted,0)/DAYS,
