@@ -36,7 +36,10 @@ function metrics(trades){
  netProfitUsd:trades.reduce((s,t)=>s+t.netPnlUsd,0),grossProfitUsd:gp,grossLossUsd:gl,profitFactor:gl?gp/gl:gp?null:0,
  averageNetPnlUsd:trades.length?trades.reduce((s,t)=>s+t.netPnlUsd,0)/trades.length:0,
  sequentialAdditiveMaxDrawdownUsd:dd,averageHoldHours:trades.length?trades.reduce((s,t)=>s+t.holdHours,0)/trades.length:0,
- targets:trades.filter(t=>t.exitReason==="TARGET").length,stops:trades.filter(t=>t.exitReason==="STOP").length,timeExits:trades.filter(t=>t.exitReason==="TIME").length};
+ targets:trades.filter(t=>t.reason==="TARGET").length,stops:trades.filter(t=>t.reason==="STOP").length,timeExits:trades.filter(t=>t.reason==="TIME").length,
+ averageNotionalUsd:trades.length?trades.reduce((s,t)=>s+t.qty*t.entry,0)/trades.length:0,
+ maxNotionalUsd:trades.length?Math.max(...trades.map(t=>t.qty*t.entry)):0,
+ maxMarginAt10xUsd:trades.length?Math.max(...trades.map(t=>t.qty*t.entry/10)):0};
 }
 function simulateExit({side,entry,stop,bars,start,maxIndex}){
  const risk=Math.abs(entry-stop),target=side==="LONG"?entry+TARGET_R*risk:entry-TARGET_R*risk;
