@@ -239,7 +239,7 @@ test("ATR rejects insufficient candles and calculates positive volatility",()=>{
   assert.ok(calculateAtr(makeCandles(),14)>0);
 });
 
-test("momentum and pullback provide 0/7/15 priority bonuses without changing qualification score",()=>{
+test("LONG requires both 15m confirmations; partial confirmation is rejected",()=>{
   const evaluate=mode=>{
     const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
     const last=fifteenMinute.at(-1);
@@ -260,23 +260,19 @@ test("momentum and pullback provide 0/7/15 priority bonuses without changing qua
       assert.ok(fifteenMinute.slice(-9,-1).every(c=>c.low>ema21+atr15*0.35),
         JSON.stringify({ema21,atr15,recent:fifteenMinute.slice(-9,-1).map(c=>({low:c.low,close:c.close}))}));
     }
-    return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+    return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute,{btcRegime:{ok:true,longAllowed:true}});
   };
   const both=evaluate("both"), one=evaluate("pullback_only"), none=evaluate("neither");
   assert.equal(both.confirmationCount,2,JSON.stringify(both.entryDiagnostics));
   assert.equal(both.confirmationPriorityBonus,15);
-  assert.equal(one.confirmationCount,1,JSON.stringify(one.entryDiagnostics));
-  assert.equal(one.confirmationPriorityBonus,7);
-  assert.equal(none.confirmationCount,0,JSON.stringify(none.entryDiagnostics));
-  assert.equal(none.confirmationPriorityBonus,0);
   assert.equal(both.score,both.baseScore);
-  assert.equal(one.score,one.baseScore);
-  assert.equal(none.score,none.baseScore);
-  assert.equal(both.priorityScore,both.baseScore+both.volumePriorityBonus+15);
-  assert.equal(one.priorityScore,one.baseScore+one.volumePriorityBonus+7);
-  assert.equal(none.priorityScore,none.baseScore+none.volumePriorityBonus);
+  assert.match(one.rejected,/الزامی/);
+  assert.equal(one.entryDiagnostics.momentumConfirmed,false);
+  assert.equal(one.entryDiagnostics.pullbackConfirmed,true);
+  assert.match(none.rejected,/الزامی/);
+  assert.equal(none.entryDiagnostics.momentumConfirmed,false);
+  assert.equal(none.entryDiagnostics.pullbackConfirmed,false);
 });
-
 test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
