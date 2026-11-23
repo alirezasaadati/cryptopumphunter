@@ -1718,28 +1718,29 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   let score = 0;
   const reasons = [];
 
-  // Standard setup: at least one timeframe supports the direction and neither explicitly opposes it.
-  const strictLong = (up1h || up4h) && !down1h && !down4h && rsiValue >= 45 && rsiValue <= 72;
-  const strictShort = (down1h || down4h) && !up1h && !up4h && rsiValue >= 28 && rsiValue <= 55;
-  // High-risk fallback retains a clear 1h direction but uses wider RSI bounds.
-  const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
-  const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
+  // Mandatory 4h regime alignment applies to STANDARD and HIGH_RISK alike.
+  // A LONG is possible only while the 4h trend is bullish; a SHORT only while bearish.
+  const strictLong = up4h && !down1h && rsiValue >= 45 && rsiValue <= 72;
+  const strictShort = down4h && !up1h && rsiValue >= 28 && rsiValue <= 55;
+  // HIGH_RISK may relax RSI/entry thresholds, but it cannot bypass 4h alignment.
+  const relaxedLong = up1h && up4h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
+  const relaxedShort = down1h && down4h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
 
   if (strictLong || (!strictSetup && relaxedLong)) {
     side = "LONG";
     score = strictSetup ? 45 : 40;
     reasons.push(strictSetup
-      ? "حداقل یک تایم‌فریم صعودی است و تایم‌فریم دیگر مخالفت نمی‌کند"
-      : "ستاپ پرریسک: روند ۱ساعته صعودی؛ مخالفت ۴ساعته با تأیید ۱۵دقیقه‌ای کنترل می‌شود",
+      ? "روند ۴ساعته صعودی است و روند ۱ساعته مخالفت نمی‌کند"
+      : "ستاپ پرریسک: روندهای ۱ساعته و ۴ساعته صعودی هستند",
       "ساختار EMA تایم‌فریم جهت‌دهنده تأیید شده است");
     score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
   } else if (strictShort || (!strictSetup && relaxedShort)) {
     side = "SHORT";
     score = strictSetup ? 45 : 40;
     reasons.push(strictSetup
-      ? "حداقل یک تایم‌فریم نزولی است و تایم‌فریم دیگر مخالفت نمی‌کند"
-      : "ستاپ پرریسک: روند ۱ساعته نزولی؛ مخالفت ۴ساعته با تأیید ۱۵دقیقه‌ای کنترل می‌شود",
+      ? "روند ۴ساعته نزولی است و روند ۱ساعته مخالفت نمی‌کند"
+      : "ستاپ پرریسک: روندهای ۱ساعته و ۴ساعته نزولی هستند",
       "ساختار EMA تایم‌فریم جهت‌دهنده تأیید شده است");
     score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
   } else {
@@ -1747,12 +1748,14 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     const shortRsiOk = rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
     const failed = [];
     if (!up1h && !down1h) failed.push("روند ۱ساعته جهت مشخص ندارد");
-    if (!longRsiOk && !shortRsiOk) failed.push("RSI خارج از پنجره مجاز لانگ و شورت است");
+    if (up1h && !up4h) failed.push("روند ۴ساعته صعودی نیست؛ لانگ مسدود شد");
+    if (down1h && !down4h) failed.push("روند ۴ساعته نزولی نیست؛ شورت مسدود شد");
     if (!up4h && !down4h) failed.push("روند ۴ساعته خنثی است");
+    if (!longRsiOk && !shortRsiOk) failed.push("RSI خارج از پنجره مجاز لانگ و شورت است");
     return { symbol: ticker.symbol, rejected: failed.join("؛ ") || "جهت و RSI مجاز هم‌زمان تأیید نشد",
       entryDiagnostics: { stage:"trend_rsi", rsi:rsiValue, up1h, down1h, up4h, down4h,
         ema20_1h:e20, ema50_1h:e50, ema20_4h:e20_4h, ema50_4h:e50_4h, referencePrice,
-        longRsiOk, shortRsiOk, longTrendOk:up1h||up4h, shortTrendOk:down1h||down4h, failedChecks:failed } };
+        longRsiOk, shortRsiOk, longTrendOk:up4h, shortTrendOk:down4h, fourHourRequired:true, failedChecks:failed } };
   }
 
   // Relative volume no longer contributes to eligibility score; it only
@@ -2306,12 +2309,41 @@ export class SignalDeliveryCoordinator {
           const openTradeKeys=new Set(trades
             .filter(t=>t?.status==="OPEN"&&t?.symbol&&["LONG","SHORT"].includes(t?.side))
             .map(t=>String(t.symbol).trim().toUpperCase()+"|"+t.side));
+          const today=new Date(now).toISOString().slice(0,10);
+          const storedDirectionLocks=await this.ctx.storage.get("daily-signal-direction-locks");
+          const directionLocks=storedDirectionLocks?.day===today
+            ? {...(storedDirectionLocks.symbols||{})}
+            : {};
+          const utcDayOf=value=>{
+            const raw=String(value??"");
+            const timestamp=typeof value==="number"||/^\d+$/.test(raw)?Number(value):Date.parse(raw);
+            return Number.isFinite(timestamp)&&timestamp>0?new Date(timestamp).toISOString().slice(0,10):null;
+          };
+          // Rebuild today's lock from already-issued signals/trades as a migration-safe fallback.
+          for(const item of active){
+            if(utcDayOf(item.createdAt)===today&&item.symbol&&["LONG","SHORT"].includes(item.side)){
+              directionLocks[String(item.symbol).trim().toUpperCase()] ||= item.side;
+            }
+          }
+          for(const trade of trades){
+            if(utcDayOf(trade.createdAt)===today&&trade.symbol&&["LONG","SHORT"].includes(trade.side)){
+              directionLocks[String(trade.symbol).trim().toUpperCase()] ||= trade.side;
+            }
+          }
+          const openDirectionBySymbol=new Map(trades
+            .filter(t=>t?.status==="OPEN"&&t?.symbol&&["LONG","SHORT"].includes(t?.side))
+            .map(t=>[String(t.symbol).trim().toUpperCase(),t.side]));
           const seen=new Set();
           const fresh=[];
           const newTrades=[];
           for(const signal of Array.isArray(payload.signals)?payload.signals:[]){
             if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
-            const key=String(signal.symbol).trim().toUpperCase()+"|"+signal.side;
+            const symbol=String(signal.symbol).trim().toUpperCase();
+            const key=symbol+"|"+signal.side;
+            // Never allow an opposite signal while a trade is OPEN or after the symbol
+            // has already emitted the other direction during this UTC day.
+            if((openDirectionBySymbol.has(symbol)&&openDirectionBySymbol.get(symbol)!==signal.side)||
+              (directionLocks[symbol]&&directionLocks[symbol]!==signal.side))continue;
             if(activeKeys.has(key)||openTradeKeys.has(key)||seen.has(key))continue;
             const suppliedCreatedAt=Number(signal.createdAt);
             const createdAt=Number.isFinite(suppliedCreatedAt)&&suppliedCreatedAt>0?suppliedCreatedAt:now;
@@ -2324,6 +2356,7 @@ export class SignalDeliveryCoordinator {
             if(!Number.isFinite(expiresAt)||expiresAt<=now)continue;
             const normalizedSignal={...signal,createdAt,expiresAt};
             seen.add(key);fresh.push(normalizedSignal);
+            directionLocks[symbol]=signal.side;
             const trade=createTrackedFuturesTrade(normalizedSignal,"signal-evaluation");
             if(trade)newTrades.push(trade);
           }
@@ -2337,6 +2370,9 @@ export class SignalDeliveryCoordinator {
               await transaction.put("active-futures-trades",[...open,...history,...newTrades]);
             }
             await transaction.put("active-futures-pending",merged);
+            if(fresh.length||storedDirectionLocks?.day!==today){
+              await transaction.put("daily-signal-direction-locks",{day:today,symbols:directionLocks});
+            }
           });
           return Response.json({ok:true,signals:fresh,trackedTrades:newTrades.length});
         }
