@@ -34,3 +34,5 @@ jobs:
           name: futures-short-entry-${{ matrix.days }}d-backtest
           path: artifacts/
           if-no-files-found: error
+
+# Comparator pairing: MARKET_FALLBACK is evaluated only on its triggered signal subset.
