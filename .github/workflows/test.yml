@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [fix/telegram-kv-quota-fallback]
+    branches: [fix/telegram-kv-quota-fallback, experiment/v48-r-scaled-lifecycle-20261123]
 jobs:
   test:
     runs-on: ubuntu-latest
