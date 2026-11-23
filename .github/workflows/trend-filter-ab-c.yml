@@ -1,4 +1,4 @@
-name: Trend filter A-B-C isolated backtest
+name: Trend filter A-B-C-D historical holdout
 on:
   workflow_dispatch:
   push:
@@ -18,15 +18,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run 60-day A/B/C backtest
+      - name: Run 60-day historical holdout A/B/C/D backtest
         env:
           TREND_AB_DAYS: "60"
           TREND_AB_SYMBOLS: "12"
+          TREND_AB_END: "2026-09-24T00:00:00Z"
         run: node scripts/trend-filter-ab-c-60d.mjs
       - name: Upload isolated report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trend-filter-ab-c-60d
+          name: trend-filter-holdout-60d
           path: artifacts/
           if-no-files-found: warn
