@@ -2939,7 +2939,7 @@ async function runFuturesSignalsForChat(env, chatId) {
   activeManualFuturesScans.add(scanKey);
   try {
     await sendMessage(env, chatId,
-      "🔍 <b>درخواست بررسی بازار ثبت شد</b>\n" +
+      "🔍 <b>درخواست بررسی ثبت شد</b>\n" +
       "━━━━━━━━━━━━━━━━━━\n\n" +
       "📊 موتور کراکن در حال بررسی بازار است.\n\n" +
       "در صورت شناسایی فرصت معاملاتی معتبر، سیگنال نماد مربوطه به‌صورت خودکار در ربات منتشر خواهد شد.\n\n" +
