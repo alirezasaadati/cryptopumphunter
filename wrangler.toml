@@ -13,7 +13,7 @@ id = "dab441cdffc0460faeb497cee6edd314"
 crons = ["*/5 * * * *"]
 
 [secrets]
-required = ["OWNER_TELEGRAM_ID", "SIGNAL_DELIVERY_SECRET"]
+required = ["BOT_TOKEN", "OWNER_TELEGRAM_ID", "WEBHOOK_SECRET", "SIGNAL_DELIVERY_AUTH_SECRET"]
 
 
 [[durable_objects.bindings]]
@@ -23,3 +23,14 @@ class_name = "SignalDeliveryCoordinator"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SignalDeliveryCoordinator"]
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 0.01
