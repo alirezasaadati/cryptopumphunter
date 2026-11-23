@@ -151,12 +151,12 @@ async function main(){
       symbols:results.map(({trades,...rest})=>rest),overall:metrics(trades),
       bySide:group("side"),bySetup:group("setup"),byChannelType:group("channelType"),trades};
   }
-  const output={strategy:"Channel Structure Engine v0.2",generatedAt:new Date().toISOString(),
-    dataSource:"Kraken Futures historical OHLC",execution:"signal at closed 1h; aligned completed 5m candle => next-open market; counter-direction/doji => limit at signal-candle low (LONG) or high (SHORT), valid 12 subsequent 5m bars; breakout target 2.5R with 1R trailing activation and 1R trail distance; reversal target 1.5R; stop-first OHLC exit",
+  const output={strategy:"Channel Structure Engine v0.3",generatedAt:new Date().toISOString(),
+    dataSource:"Kraken Futures historical OHLC",execution:"signal at closed 1h; aligned completed 5m candle => next-open market; counter-direction/doji => limit at signal-candle low (LONG) or high (SHORT), valid 12 subsequent 5m bars; breakout stop 0.15 ATR, 50% partial take-profit at 1.5R then 1R trailing stop on remainder; reversal target 1.5R with break-even stop after +1R; stop-first OHLC exit",
     assumptions:{feePerSide:FEE,slippagePerSide:SLIPPAGE,leverageContext:"10x illustrative margin; fixed $10 risk budget per filled trade; position quantity is reduced as stop-distance percentage increases, including above 8%; no 8% rejection gate",riskBudgetUsdPerTrade:10,maxHoldHours:MAX_HOLD_HOURS,
       warmupDays:20,universe:"top current-volume eligible Kraken perpetuals; survivorship bias possible",
       limitations:["Historical OHLC cannot reveal intrabar path; stop-first is conservative when stop and target occur in same 5m candle.",
-        "Funding, liquidation, market impact and portfolio-level concurrency/capital constraints are not modeled.", "Trailing stop activates after +1R favorable excursion and trails the best favorable price by 1R; updates take effect on the next 5m candle to avoid same-candle lookahead.",
+        "Funding, liquidation, market impact and portfolio-level concurrency/capital constraints are not modeled.", "Breakout: 50% exits at +1.5R; remaining 50% trails by 1R, initially locking +0.5R after TP1. Reversal: break-even stop activates after +1R and applies from the next 5m candle. These conservative updates avoid same-candle lookahead.",
         "The 4h channel uses confirmed fractal pivots only; a pivot is available after its right-side confirmation candles close."]},
     windows};
   await mkdir("artifacts",{recursive:true});
