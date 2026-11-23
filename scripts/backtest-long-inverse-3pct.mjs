@@ -93,9 +93,8 @@ async function backtestSymbol(ticker, from, to) {
     const entry=Number(candidate.entry);
     if(!(entry>0)) continue;
     // Start checking at the first 15m candle opening at/after the signal's 1h close.
-    const first=m15.findIndex(c=>c.time>=signalClose);
-    if(first<0) continue;
-    const result=evaluateFirstBarrier(m15.slice(first),signalClose,entry);
+    if(m15i>=m15.length) continue;
+    const result=evaluateFirstBarrier(m15.slice(m15i),signalClose,entry);
     found.push({symbol:ticker.symbol,signalTime:signalClose,entry,score:candidate.score??null,
       eligibility:candidate.eligible?"STANDARD":"EXPERIMENTAL",...result});
   }
