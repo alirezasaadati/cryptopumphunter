@@ -32,3 +32,5 @@ jobs:
           name: long-inversion-vs-short-backtest
           path: artifacts/
           if-no-files-found: error
+
+# Trigger corrected script run
