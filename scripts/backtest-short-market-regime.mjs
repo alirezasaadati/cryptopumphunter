@@ -141,7 +141,7 @@ async function main(){
   const tickerData=await getJson(BASE+"/derivatives/api/v3/tickers");
   const all=tickerData.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&/^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&Number(t.volumeQuote)>=FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME&&Number(t.last)>0)
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote));
-  const tradeUniverse=all.filter(t=>Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME).slice(0,TRADE_SYMBOL_LIMIT);
+  const tradeUniverse=all.slice(0,TRADE_SYMBOL_LIMIT);
   const alts=all.filter(t=>!/(XBT|BTC|USDT|USDC)/i.test(t.symbol)).slice(0,BREADTH_SYMBOL_LIMIT);
   const btcTicker=all.find(t=>/XBTUSD$/.test(t.symbol))||{symbol:"PF_XBTUSD"};
   const dataMap=new Map();
