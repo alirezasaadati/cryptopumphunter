@@ -40,11 +40,13 @@ export function simulateChannelExit({ side, setup, entry, stop, target, bars, st
   let finalReason = "TIME";
   let finalTime = bars[maxIndex]?.time;
   let finalPrice = Number(bars[maxIndex]?.close);
+  let lastExitPrice = finalPrice;
 
   const recordExit = (rawPrice, weight) => {
     const leg = exitLeg(side, entry, rawPrice, weight, initialRisk);
     grossR += leg.grossR;
     exitFeeR += leg.feeR;
+    lastExitPrice = leg.price;
     return leg.price;
   };
 
@@ -133,12 +135,13 @@ export function simulateChannelExit({ side, setup, entry, stop, target, bars, st
   if (remaining > 0) {
     const raw = Number(finalPrice);
     recordExit(raw, remaining);
+    finalTime = bars[maxIndex]?.time;
   }
 
   const entryFeeR = FEE * entry / initialRisk;
   const netR = grossR - entryFeeR - exitFeeR;
   return {
-    exitPrice: finalPrice,
+    exitPrice: lastExitPrice,
     exitTime: finalTime,
     exitReason: finalReason,
     netR,
