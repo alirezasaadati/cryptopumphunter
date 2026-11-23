@@ -190,6 +190,8 @@ function runWindowForSymbol(data,days,endMs) {
     const following=fiveMinute.slice(decisionIndex+1,decisionIndex+1+LIMIT_VALID_BARS);
     const decision=resolveShortFallbackFill({decisionCandle,followingCandles:following,validBars:LIMIT_VALID_BARS,
       marketSlippage:SLIPPAGE_PER_SIDE});
+    if(decision.type==="MARKET")experimental.marketOrders++;
+    else experimental.limitOrders++;
     const marketRaw=Number(fiveMinute[decisionIndex+1]?.open);
     if(!Number.isFinite(marketRaw)||marketRaw<=0)continue;
     const baselineEntry=marketRaw*(1-SLIPPAGE_PER_SIDE);
@@ -208,9 +210,7 @@ function runWindowForSymbol(data,days,endMs) {
           fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS});
         experimental.trades.push({...experimentalTrade,entryType:decision.type,orderDecision:decision.decisionReason,fillReason:decision.reason,signalTime:signalCloseTime});
         experimental.filled++;
-        if(decision.type==="MARKET")experimental.marketOrders++;
-        else {
-          experimental.limitOrders++;
+        if(decision.type==="LIMIT") {
           if(decision.reason==="LIMIT_GAP_FILL")experimental.limitGapFills++;
           if(decision.reason==="LIMIT_TOUCH_FILL")experimental.limitTouchFills++;
         }
@@ -324,7 +324,7 @@ async function main() {
     );
   }
   lines.push("## Methodology","",report.settings.fallback,"",report.settings.target1,"",
-    "The test cohort is intentionally limited to the exact MARKET_FALLBACK condition. The signal is not removed when a Limit fails to fill; only the simulated execution expires. 5m OHLC cannot reveal intrabar order, so stop is evaluated before targets when both are touched. Funding is excluded. Results are research-only and do not represent live execution.","");
+    "The test cohort is intentionally limited to the exact MARKET_FALLBACK condition. The signal is not removed when a Limit fails to fill; only the simulated execution expires. 5m OHLC cannot reveal intrabar order, so stop is evaluated before targets when both are touched. Funding is excluded. Drawdown is additive per-trade R, not portfolio-level equity drawdown. Results are research-only and do not represent live execution.","");
   await writeFile("artifacts/short-priority-fallback-backtest.md",lines.join("\n"));
   console.log(JSON.stringify(report,null,2));
 }
