@@ -90,16 +90,21 @@ function findSetup(candles,ctx) {
     if(legs>=2)return {side:"SHORT",setup:"L2_CONTINUATION",bar,reference:n(prev.low),context:"WITH_TREND"};
     if(legs===1)return {side:"SHORT",setup:"L1_CONTINUATION",bar,reference:n(prev.low),context:"WITH_TREND"};
   }
-  // Three-push wedge approximation: three successively more extreme confirmed pivots.
-  const highs=pivotIndices(candles.slice(-30),"high",2,2), lows=pivotIndices(candles.slice(-30),"low",2,2);
-  if(bar.direction==="BEAR"&&highs.length>=3){
-    const p=highs.slice(-3).map(i=>n(candles.slice(-30)[i].high));
-    if(p[1]>p[0]&&p[2]>p[1]&&(p[2]-p[1])<(p[1]-p[0])*1.35)
+  // Three-push wedge approximation: require a prior trend, spaced confirmed pivots,
+  // diminishing extension, and a close through the immediately preceding bar.
+  const wedgeBars=candles.slice(-30);
+  const highs=pivotIndices(wedgeBars,"high",2,2), lows=pivotIndices(wedgeBars,"low",2,2);
+  const spaced=xs=>xs.length>=3&&xs.at(-2)-xs.at(-3)>=3&&xs.at(-1)-xs.at(-2)>=3;
+  if(sideTrend==="BULL"&&bar.direction==="BEAR"&&n(last.close)<n(prev.low)&&spaced(highs)){
+    const p=highs.slice(-3).map(i=>n(wedgeBars[i].high));
+    const leg1=p[1]-p[0],leg2=p[2]-p[1];
+    if(leg1>0&&leg2>0&&leg2<leg1*1.35)
       return {side:"SHORT",setup:"WEDGE_TOP",bar,reference:p[2],context:"REVERSAL"};
   }
-  if(bar.direction==="BULL"&&lows.length>=3){
-    const p=lows.slice(-3).map(i=>n(candles.slice(-30)[i].low));
-    if(p[1]<p[0]&&p[2]<p[1]&&(p[1]-p[2])<(p[0]-p[1])*1.35)
+  if(sideTrend==="BEAR"&&bar.direction==="BULL"&&n(last.close)>n(prev.high)&&spaced(lows)){
+    const p=lows.slice(-3).map(i=>n(wedgeBars[i].low));
+    const leg1=p[0]-p[1],leg2=p[1]-p[2];
+    if(leg1>0&&leg2>0&&leg2<leg1*1.35)
       return {side:"LONG",setup:"WEDGE_BOTTOM",bar,reference:p[2],context:"REVERSAL"};
   }
   return null;
