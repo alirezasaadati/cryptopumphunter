@@ -19,7 +19,7 @@ jobs:
       - name: Run historical backtest
         env:
           BACKTEST_DAYS: "60"
-          BACKTEST_SYMBOLS: "24"
+          BACKTEST_SYMBOLS: "14"
           BACKTEST_FEE: "0.0005"
           BACKTEST_SLIPPAGE: "0.0003"
         run: node scripts/backtest-kraken.mjs
