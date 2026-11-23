@@ -310,7 +310,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     candles:{ "1h":oneHour.length, "4h":fourHour.length, "15m":fifteenMinute.length, "5m":fiveMinute.length },
     signalsAccepted:acceptedSignals, limitOrdersFilled, limitOrdersExpired,
     skippedBySameSideLock:skippedByLock, rejectedSignals,
-    metrics:summarize(trades), trades
+    metrics:summarize(trades), trades, baselineTrades
   };
 }
 async function main() {
