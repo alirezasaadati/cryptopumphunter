@@ -230,7 +230,9 @@ function runWindowForSymbol(data,days,endMs) {
 }
 
 async function main() {
-  const endMs=Date.now(),fromMs=endMs-(180+WARMUP_DAYS)*DAY;
+  const dataEndMs=Date.now();
+  const endMs=dataEndMs-MAX_HOLD_HOURS*HOUR;
+  const fromMs=endMs-(180+WARMUP_DAYS)*DAY;
   const tickerData=await getJson(BASE+"/derivatives/api/v3/tickers");
   if(!Array.isArray(tickerData?.tickers))throw new Error("Kraken tickers response invalid");
   const universe=tickerData.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&
@@ -241,10 +243,10 @@ async function main() {
   for(const ticker of universe){
     try{
       const [oneHour,fourHour,fifteenMinute,fiveMinute]=await Promise.all([
-        fetchHistoricalCandles(ticker.symbol,"1h",fromMs,endMs,HOUR),
-        fetchHistoricalCandles(ticker.symbol,"4h",fromMs,endMs,FOUR_HOURS),
-        fetchHistoricalCandles(ticker.symbol,"15m",fromMs,endMs,FIFTEEN_MINUTES),
-        fetchHistoricalCandles(ticker.symbol,"5m",fromMs,endMs,FIVE_MINUTES)
+        fetchHistoricalCandles(ticker.symbol,"1h",fromMs,dataEndMs,HOUR),
+        fetchHistoricalCandles(ticker.symbol,"4h",fromMs,dataEndMs,FOUR_HOURS),
+        fetchHistoricalCandles(ticker.symbol,"15m",fromMs,dataEndMs,FIFTEEN_MINUTES),
+        fetchHistoricalCandles(ticker.symbol,"5m",fromMs,dataEndMs,FIVE_MINUTES)
       ]);
       if(oneHour.length<120||fourHour.length<FUTURES_CONFIG.MIN_CANDLES||fifteenMinute.length<120||fiveMinute.length<1000)
         throw new Error("Insufficient history: 1h="+oneHour.length+", 4h="+fourHour.length+", 15m="+fifteenMinute.length+", 5m="+fiveMinute.length);
@@ -302,6 +304,7 @@ async function main() {
       stopTargetSameBar:"production lifecycle: an open-gap through a level wins; otherwise stop wins when both levels are touched intrabar",
       funding:"excluded",drawdownMethod:"maximum drawdown of chronological additive per-trade R; not account or portfolio equity drawdown",
       lookahead:"5m direction and high are taken only from the completed decision candle; entry starts on following 5m candles",
+      rightCensoring:"analysis window ends 72 hours before data end so every trade can receive the full 72-hour maximum hold window",
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
     windows};
   await mkdir("artifacts",{recursive:true});
