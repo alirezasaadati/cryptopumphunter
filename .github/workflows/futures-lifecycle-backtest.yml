@@ -5,6 +5,7 @@ on:
     branches: [feature/leveraged-profit-close-lifecycle, experiment/v48-r-scaled-btc-gated-20261123]
     paths:
       - "scripts/backtest-futures-lifecycle.mjs"
+      - "scripts/backtest-fixed-margin-target.mjs"
       - ".github/workflows/futures-lifecycle-backtest.yml"
       - "src/futures-trade-lifecycle.js"
       - "src/index.js"
@@ -21,7 +22,7 @@ jobs:
         env:
           LIFECYCLE_BACKTEST_DAYS: "60"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
-        run: node scripts/backtest-futures-lifecycle.mjs
+        run: node scripts/backtest-fixed-margin-target.mjs
       - name: Upload lifecycle report
         if: always()
         uses: actions/upload-artifact@v4
