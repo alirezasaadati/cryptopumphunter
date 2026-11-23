@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run 90-day backtest
+      - name: Verify inversion mapping\n        run: node --test scripts/long-inversion-backtest.test.mjs\n      - name: Run 90-day backtest
         env:
           INVERSION_BACKTEST_DAYS: "90"
           INVERSION_BACKTEST_SYMBOLS: "10"
