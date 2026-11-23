@@ -138,8 +138,8 @@ async function main(){
  const fmt=n=>Number(n||0).toFixed(2),lines=["# Rabbit — fixed bullish rally-window correction SHORT backtest","","Fixed historical bullish window ending 2025-02-01 (123 days); full close at 1R; $10 margin, 10x leverage; 5m OHLC; stop-first same-candle rule. Open positions are marked to market at every completed 5m close.","",
  "| Period | Eligible signals | Trades | Wins | Stops | Open | Win rate | Realized PnL | MTM PnL | PF | MTM DD |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"];
  for(const days of WINDOWS){const m=outputs[days].metrics;lines.push("| "+days+"d | "+m.eligibleSignals+" | "+m.tradesOpened+" | "+m.wins+" | "+m.stops+" | "+m.openAtEnd+" | "+fmt(m.winRatePct)+"% | $"+fmt(m.grossPnlUsd)+" | $"+fmt(m.totalPnlWithOpenMtmUsd)+" | "+fmt(m.profitFactor)+" | $"+fmt(m.maxDrawdownMtmUsd)+" |");}
- lines.push("","## Per-symbol results","","| Symbol | Trades 90d | Wins 90d | Stops 90d | Trades 180d | Wins 180d | Stops 180d |","|---|---:|---:|---:|---:|---:|---:|");
- for(const d of datasets){const a=outputs[90].bySymbol[d.symbol],b=outputs[180].bySymbol[d.symbol];lines.push("| "+d.symbol+" | "+a.tradesOpened+" | "+a.wins+" | "+a.stops+" | "+b.tradesOpened+" | "+b.wins+" | "+b.stops+" |");}
+ lines.push("","## Per-symbol results","","| Symbol | Trades | Closed | Wins | Stops | Open at end | Realized PnL |","|---|---:|---:|---:|---:|---:|---:|");
+ for(const d of datasets){const a=outputs[WINDOWS[0]].bySymbol[d.symbol];lines.push("| "+d.symbol+" | "+a.tradesOpened+" | "+a.closed+" | "+a.wins+" | "+a.stops+" | "+a.openAtEnd+" | $"+fmt(a.grossPnlUsd)+" |");}
  lines.push("","Lock skips are Rabbit-only per-symbol lock collisions; detailed counts and samples are in JSON. MTM uses every completed 5m candle close. Fees, slippage, funding, liquidation and portfolio margin simulation are excluded; current-volume symbol selection has survivorship bias.");
  await writeFile("artifacts/rabbit-backtest.md",lines.join("\n"));console.log(JSON.stringify(report,null,2));if(!datasets.length)process.exitCode=1;
 }
