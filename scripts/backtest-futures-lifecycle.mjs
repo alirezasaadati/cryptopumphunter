@@ -164,7 +164,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   const baselineLockUntil = new Map();
   const lockUntil = new Map();
   let fourIndex = 0, fifteenIndex = 0;
-  let acceptedSignals = 0, skippedByLock = 0, rejectedSignals = 0;
+  let acceptedSignals = 0, skippedByLock = 0, rejectedSignals = 0, skippedNonShortSignals = 0;
   let limitOrdersFilled = 0, limitOrdersExpired = 0;
   const testStart = toMs - DAYS * 86400000;
 
@@ -186,7 +186,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     let candidate;
     try { candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m); }
     catch { rejectedSignals++; continue; }
-    if (!candidate || candidate.eligible !== true || candidate.side !== "SHORT") { rejectedSignals++; continue; }
+    if (!candidate || candidate.eligible !== true || !["LONG","SHORT"].includes(candidate.side)) { rejectedSignals++; continue; }
+    if (candidate.side !== "SHORT") { skippedNonShortSignals++; continue; }
 
     const lockKey = ticker.symbol + "|" + candidate.side;
     const firstOrderBar = lowerBound(fiveMinute,signalCloseTime);
@@ -309,7 +310,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     symbol:ticker.symbol,
     candles:{ "1h":oneHour.length, "4h":fourHour.length, "15m":fifteenMinute.length, "5m":fiveMinute.length },
     signalsAccepted:acceptedSignals, limitOrdersFilled, limitOrdersExpired,
-    skippedBySameSideLock:skippedByLock, rejectedSignals,
+    skippedBySameSideLock:skippedByLock, rejectedSignals, skippedNonShortSignals,
     metrics:summarize(trades), trades, baselineTrades
   };
 }
@@ -387,6 +388,7 @@ async function main() {
     bySymbol:successful.map(({trades,baselineTrades,...r})=>({...r,metrics:r.metrics,baselineMetrics:summarize(baselineTrades||[])})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
+    skippedNonShortSignals:successful.reduce((n,r)=>n+(r.skippedNonShortSignals||0),0),
     trades:allTrades
   };
   await mkdir("artifacts",{recursive:true});
@@ -420,7 +422,8 @@ async function main() {
     "| Experimental entry gross PnL ($10 margin/trade) | $"+(metrics.totalMarginReturnPct/10).toFixed(2)+" |",
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
     "| Same-side lock skips | "+report.lockSkips+" |",
-    "| Rejected signal opportunities | "+report.rejectedSignals+" |","",
+    "| Rejected signal opportunities | "+report.rejectedSignals+" |",
+    "| LONG signals ignored (SHORT-only test) | "+report.skippedNonShortSignals+" |","",
     "| Symbol | Signals | Closed | Profit | Stop | LONG | SHORT | Net margin % |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
     ...successful.map(r=>"| "+r.symbol+" | "+r.signalsAccepted+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.longs+" | "+r.metrics.shorts+" | "+r.metrics.totalMarginReturnPct.toFixed(2)+" |"),
