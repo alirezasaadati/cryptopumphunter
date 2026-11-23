@@ -1771,33 +1771,33 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const down1h = e20 < e50 && referencePrice < e20;
   const up4h = e20_4h > e50_4h;
   const down4h = e20_4h < e50_4h;
+  const fourHourTrend = up4h ? "BULLISH" : down4h ? "BEARISH" : "NEUTRAL";
   let side = null;
   let score = 0;
   const reasons = [];
 
-  // Mandatory 4h regime alignment applies to STANDARD and HIGH_RISK alike.
-  // A LONG is possible only while the 4h trend is bullish; a SHORT only while bearish.
-  const strictLong = up4h && !down1h && rsiValue >= 45 && rsiValue <= 72;
-  const strictShort = down4h && !up1h && rsiValue >= 28 && rsiValue <= 55;
-  // HIGH_RISK may relax RSI/entry thresholds, but it cannot bypass 4h alignment.
-  const relaxedLong = up1h && up4h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
-  const relaxedShort = down1h && down4h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
+  // 4h direction is a scoring input only: it never blocks LONG or SHORT by itself.
+  // The 1h setup selects the candidate side; 4h agreement adds points and disagreement subtracts points.
+  const strictLong = up1h && rsiValue >= 45 && rsiValue <= 72;
+  const strictShort = down1h && rsiValue >= 28 && rsiValue <= 55;
+  const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
+  const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
 
   if (strictLong || (!strictSetup && relaxedLong)) {
     side = "LONG";
     score = strictSetup ? 45 : 40;
     reasons.push(strictSetup
-      ? "روند ۴ساعته صعودی است و روند ۱ساعته مخالفت نمی‌کند"
-      : "ستاپ پرریسک: روندهای ۱ساعته و ۴ساعته صعودی هستند",
+      ? "روند ۱ساعته صعودی است"
+      : "ستاپ پرریسک با جهت صعودی ۱ساعته",
       "ساختار EMA تایم‌فریم جهت‌دهنده تأیید شده است");
     score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
   } else if (strictShort || (!strictSetup && relaxedShort)) {
     side = "SHORT";
     score = strictSetup ? 45 : 40;
     reasons.push(strictSetup
-      ? "روند ۴ساعته نزولی است و روند ۱ساعته مخالفت نمی‌کند"
-      : "ستاپ پرریسک: روندهای ۱ساعته و ۴ساعته نزولی هستند",
+      ? "روند ۱ساعته نزولی است"
+      : "ستاپ پرریسک با جهت نزولی ۱ساعته",
       "ساختار EMA تایم‌فریم جهت‌دهنده تأیید شده است");
     score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
   } else {
@@ -1805,15 +1805,24 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     const shortRsiOk = rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
     const failed = [];
     if (!up1h && !down1h) failed.push("روند ۱ساعته جهت مشخص ندارد");
-    if (up1h && !up4h) failed.push("روند ۴ساعته صعودی نیست؛ لانگ مسدود شد");
-    if (down1h && !down4h) failed.push("روند ۴ساعته نزولی نیست؛ شورت مسدود شد");
-    if (!up4h && !down4h) failed.push("روند ۴ساعته خنثی است");
+    if (!up1h && !down1h) failed.push("روند ۱ساعته جهت مشخص ندارد");
     if (!longRsiOk && !shortRsiOk) failed.push("RSI خارج از پنجره مجاز لانگ و شورت است");
-    return { symbol: ticker.symbol, rejected: failed.join("؛ ") || "جهت و RSI مجاز هم‌زمان تأیید نشد",
+    return { symbol: ticker.symbol, fourHourTrend, rejected: failed.join("؛ ") || "جهت و RSI مجاز هم‌زمان تأیید نشد",
       entryDiagnostics: { stage:"trend_rsi", rsi:rsiValue, up1h, down1h, up4h, down4h,
         ema20_1h:e20, ema50_1h:e50, ema20_4h:e20_4h, ema50_4h:e50_4h, referencePrice,
-        longRsiOk, shortRsiOk, longTrendOk:up4h, shortTrendOk:down4h, fourHourRequired:true, failedChecks:failed } };
+        longRsiOk, shortRsiOk, longTrendOk:up1h, shortTrendOk:down1h, fourHourRequired:false, fourHourTrend:up4h ? "BULLISH" : down4h ? "BEARISH" : "NEUTRAL", failedChecks:failed } };
   }
+
+  // The 4h trend is a score adjustment, not an eligibility gate.
+  const fourHourScoreAdjustment = side === "LONG"
+    ? (up4h ? 8 : down4h ? -8 : 0)
+    : (down4h ? 8 : up4h ? -8 : 0);
+  score += fourHourScoreAdjustment;
+  reasons.push(fourHourScoreAdjustment > 0
+    ? "روند ۴ساعته هم‌جهت است؛ امتیاز مثبت"
+    : fourHourScoreAdjustment < 0
+      ? "روند ۴ساعته مخالف است؛ امتیاز کاهشی، بدون مسدودکردن سیگنال"
+      : "روند ۴ساعته خنثی است؛ بدون تغییر امتیاز");
 
   // Relative volume no longer contributes to eligibility score; it only
   // supplies the independent priority bonus below.
@@ -1881,6 +1890,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   if (!entryFilters.ok) {
     return {
       symbol: ticker.symbol,
+      fourHourTrend,
       side,
       score: Math.max(0, Math.min(100, Math.round(score))),
       rejected: entryFilters.rejected,
@@ -1893,6 +1903,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   if (!standardEntryPassed && quoteVolume < FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME) {
     return {
       symbol: ticker.symbol,
+      fourHourTrend,
       side,
       score: Math.max(0, Math.min(100, Math.round(score))),
       rejected: "حجم معاملات ۲۴ساعته کمتر از کف ایمنی مسیر پرریسک (۱ میلیون دلار) است",
@@ -1907,6 +1918,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   if (!standardEntryPassed && volumeRatio < FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO) {
     return {
       symbol: ticker.symbol,
+      fourHourTrend,
       side,
       score: Math.max(0, Math.min(100, Math.round(score))),
       rejected: "نسبت حجم کندل ۱ساعته آخر به میانگین ۲۰ کندل قبلی کمتر از حداقل مسیر پرریسک (0.3x) است",
@@ -1948,7 +1960,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const risk = side === "LONG" ? entry - stop : stop - entry;
   const riskPct = risk / entry;
   if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
-    return { symbol: ticker.symbol, rejected: "فاصله حد ضرر غیرمنطقی است؛ سیگنال صادر نشد" };
+    return { symbol: ticker.symbol, fourHourTrend, rejected: "فاصله حد ضرر غیرمنطقی است؛ سیگنال صادر نشد" };
   }
 
   const direction = side === "LONG" ? 1 : -1;
@@ -1963,6 +1975,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   if (highRiskEligible) reasons.push("این سیگنال فقط از مسیر مستقل منعطف عبور کرده و پرریسک طبقه‌بندی شده است");
   return {
     symbol: ticker.symbol,
+    fourHourTrend,
     side,
     score,
     baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
@@ -2932,6 +2945,38 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const createdAt = Date.now();
+  // Classify overall 4h market breadth. This affects ranking only; it never blocks a side.
+  const regimeSamples = analyzed.filter(item => ["BULLISH", "BEARISH", "NEUTRAL"].includes(item?.fourHourTrend));
+  const regimeCount = {
+    bullish: regimeSamples.filter(item => item.fourHourTrend === "BULLISH").length,
+    bearish: regimeSamples.filter(item => item.fourHourTrend === "BEARISH").length,
+    neutral: regimeSamples.filter(item => item.fourHourTrend === "NEUTRAL").length
+  };
+  const regimeTotal = regimeSamples.length || 1;
+  const bullishShare = regimeCount.bullish / regimeTotal;
+  const bearishShare = regimeCount.bearish / regimeTotal;
+  let marketRegime = "NEUTRAL";
+  if (bullishShare >= 0.65) marketRegime = "BULLISH";
+  else if (bearishShare >= 0.65) marketRegime = "BEARISH";
+  else if (bullishShare - bearishShare >= 0.10) marketRegime = "LEAN_BULLISH";
+  else if (bearishShare - bullishShare >= 0.10) marketRegime = "LEAN_BEARISH";
+  for (const item of analyzed) {
+    if (item?.eligible !== true || !item.side) continue;
+    const aligned = (marketRegime === "BULLISH" && item.side === "LONG") ||
+      (marketRegime === "BEARISH" && item.side === "SHORT");
+    const leaningAligned = (marketRegime === "LEAN_BULLISH" && item.side === "LONG") ||
+      (marketRegime === "LEAN_BEARISH" && item.side === "SHORT");
+    const opposing = (marketRegime === "BULLISH" && item.side === "SHORT") ||
+      (marketRegime === "BEARISH" && item.side === "LONG");
+    const leaningOpposing = (marketRegime === "LEAN_BULLISH" && item.side === "SHORT") ||
+      (marketRegime === "LEAN_BEARISH" && item.side === "LONG");
+    const adjustment = aligned ? 8 : leaningAligned ? 5 : opposing ? -8 : leaningOpposing ? -5 : 0;
+    item.marketRegime = marketRegime;
+    item.marketRegimeAdjustment = adjustment;
+    item.priorityScore = Math.max(0, Math.min(125, Math.round(Number(item.priorityScore ?? item.score) + adjustment)));
+    if (adjustment) item.reasons = [...(item.reasons || []), "وضعیت کلی بازار: " + marketRegime + "؛ تغییر امتیاز اولویت " + (adjustment > 0 ? "+" : "") + adjustment];
+  }
+
   const eligibleCandidates = analyzed
     .filter(item => item?.eligible === true)
     // Preserve every standard candidate ahead of experimental high-risk candidates.
