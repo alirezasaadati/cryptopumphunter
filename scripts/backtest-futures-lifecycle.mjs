@@ -392,7 +392,7 @@ async function main() {
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"SHORT-only signals from the unchanged current Kraken Futures analyzer on closed 1h/4h/15m candles; choose nearer 1h EMA20 or previous closed 1h high from signal close; if market is below both and level gap >0.5%, market fallback at next 5m open; otherwise one-hour limit; stop recalculated using current short engine ATR 1.5x and prior seven closed 1h candles; TP1 1.5R; exits on 5m OHLC",
-      lock:"independent symbol+side lock until close; opposite side may overlap",
+      lock:"paired shared symbol+side lock: both market-entry control and experimental entry are evaluated on the same accepted signal opportunities; next signal waits until both arms close; opposite side may overlap",
       universe:"top 10 current Kraken perpetuals by current quote volume; historical 24h quote-volume filter reconstructed from prior 24 closed 1h candles; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
     metrics,baselineMetrics,fillTypeCounts,entrySourceMetrics,accountMetrics,account:{startingCapitalUsd:STARTING_CAPITAL,marginPerTradeUsd:MARGIN_PER_TRADE,maxConcurrentPositions:STARTING_CAPITAL/MARGIN_PER_TRADE,peakConcurrentPositions:peakOpenPositions,excludedForInsufficientFreeMargin:excludedForCapital,realizedPnlUsd:realizedPnl,openUnrealizedPnlUsd:openUnrealizedPnl,lockedMarginUsd:lockedMargin,finalEquityUsd:finalEquity},eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
@@ -440,6 +440,10 @@ async function main() {
     "| Baseline market-entry win rate | "+baselineMetrics.winRatePct.toFixed(2)+"% |",
     "| Baseline market-entry gross PnL ($10 margin/trade) | $"+(baselineMetrics.totalMarginReturnPct/10).toFixed(2)+" |",
     "| Experimental entry gross PnL ($10 margin/trade) | $"+(metrics.totalMarginReturnPct/10).toFixed(2)+" |",
+    "| Experimental minus baseline gross PnL | $"+((metrics.totalMarginReturnPct-baselineMetrics.totalMarginReturnPct)/10).toFixed(2)+" |",
+    "| Accepted signal cohort (shared by both arms) | "+report.eligibleSignalOpportunities+" |",
+    "| Experimental limit orders expired (no position) | "+report.limitOrdersExpired+" |",
+    "| Lock policy | shared until both variants close |",
     "| Ambiguous 5m candles | "+metrics.ambiguous5mCandles+" |",
     "| Same-side lock skips | "+report.lockSkips+" |",
     "| Rejected signal opportunities | "+report.rejectedSignals+" |",
@@ -447,7 +451,8 @@ async function main() {
     "| Symbol | Signals | Closed | Profit | Stop | LONG | SHORT | Net margin % |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
     ...successful.map(r=>"| "+r.symbol+" | "+r.signalsAccepted+" | "+r.metrics.closedTrades+" | "+r.metrics.profitCloses+" | "+r.metrics.stopCloses+" | "+r.metrics.longs+" | "+r.metrics.shorts+" | "+r.metrics.totalMarginReturnPct.toFixed(2)+" |"),
-    "", "Limitations: 5m OHLC cannot identify intrabar path; ambiguous candles use stop-first. Stop execution is assumed at the stop or gap open. Liquidation, funding, fees, and slippage are excluded. Universe selection uses current volume, so survivorship bias applies.",
+    "", "Paired design: each accepted SHORT signal is offered to both the market-entry control and the experimental entry. A shared symbol+side lock blocks the next signal until both variants have closed, preserving the same accepted signal cohort. Experimental limit orders that do not fill within one hour produce no experimental trade; the market control still enters on that signal.",
+    "", "Limitations: 5m OHLC cannot identify intrabar path; ambiguous candles use stop-first. Stop execution is assumed at the stop or gap open. Liquidation, funding, fees, and slippage are excluded. Universe selection uses current volume, so survivorship bias applies. The additive margin-return drawdown is not portfolio equity drawdown.",
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
   await writeFile("artifacts/futures-lifecycle-backtest.md",rows.join("\n"));
