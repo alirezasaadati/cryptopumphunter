@@ -2939,11 +2939,15 @@ async function runFuturesSignalsForChat(env, chatId) {
   activeManualFuturesScans.add(scanKey);
   try {
     await sendMessage(env, chatId,
-      "🔍 درخواست بررسی بازار ثبت شد.\n\n" +
-      "در حال اسکن بازار و بررسی فرصت‌های معاملاتی هستیم.\n" +
-      "در صورت شناسایی فرصت معتبر، نماد مربوطه به‌صورت خودکار در ربات سیگنال خواهد شد.\n\n" +
-      "⏳ لطفاً تا پایان بررسی منتظر بمانید.",
-      menuForChat(env, chatId));
+      "🔍 <b>درخواست بررسی بازار ثبت شد</b>\n" +
+      "━━━━━━━━━━━━━━━━━━\n\n" +
+      "📊 موتور کراکن در حال بررسی بازار است.\n\n" +
+      "در صورت شناسایی فرصت معاملاتی معتبر، سیگنال نماد مربوطه به‌صورت خودکار در ربات منتشر خواهد شد.\n\n" +
+      "━━━━━━━━━━━━━━━━━━\n" +
+      "⏳ <i>لطفاً تا پایان فرایند بررسی منتظر بمانید.</i>\n\n" +
+      "⚡ <b>تریدیار | پایش هوشمند بازار</b>",
+      menuForChat(env, chatId),
+      "HTML");
 
     const result = await runFuturesSignalScan(env, { excludeChatId: chatId });
     const signals = result.signals || [];
