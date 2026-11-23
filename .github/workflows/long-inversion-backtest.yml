@@ -1,0 +1,34 @@
+name: LONG inversion vs normal SHORT backtest
+on:
+  workflow_dispatch:
+  push:
+    branches: [experiment/long-inversion-vs-short]
+    paths:
+      - "scripts/backtest-long-inversion.mjs"
+      - ".github/workflows/long-inversion-backtest.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 90-day backtest
+        env:
+          INVERSION_BACKTEST_DAYS: "90"
+          INVERSION_BACKTEST_SYMBOLS: "10"
+        run: node scripts/backtest-long-inversion.mjs
+      - name: Run 180-day backtest
+        env:
+          INVERSION_BACKTEST_DAYS: "180"
+          INVERSION_BACKTEST_SYMBOLS: "10"
+        run: node scripts/backtest-long-inversion.mjs
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-inversion-vs-short-backtest
+          path: artifacts/
+          if-no-files-found: error
