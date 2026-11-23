@@ -598,6 +598,7 @@ test("SHORT TP1 is capped at 2.5 ATR while LONG keeps the original 1.5R target",
   short.ticker.last=entry;
   const shortResult=analyzeFuturesSymbol(short.ticker,short.oneHour,short.fourHour,short.fifteenMinute);
   assert.equal(shortResult.side,"SHORT");
+  assert.equal(shortResult.target1Mode,"ATR_CAPPED_SHORT");
   assert.ok(shortResult.eligible || shortResult.highRiskEligible,JSON.stringify(shortResult));
   const risk=shortResult.stop-shortResult.entry;
   assert.ok(Math.abs((shortResult.entry-shortResult.target1)-Math.min(1.5*risk,2.5*shortResult.atr))<1e-8);
@@ -606,6 +607,7 @@ test("SHORT TP1 is capped at 2.5 ATR while LONG keeps the original 1.5R target",
   const long=makeSetup("LONG");
   const longResult=analyzeFuturesSymbol(long.ticker,long.oneHour,long.fourHour,long.fifteenMinute);
   assert.equal(longResult.rewardRisk,1.5);
+  assert.equal(longResult.target1Mode,"LEGACY_MARGIN");
   assert.ok(Math.abs((longResult.target1-longResult.entry)-1.5*(longResult.entry-longResult.stop))<1e-8);
 });
 
