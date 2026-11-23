@@ -92,7 +92,9 @@ function findRecentSurge(candles, currentIndex, cfg) {
     if (impulse.length !== cfg.surgeLookback) continue;
     const peakHigh = Math.max(...impulse.map(c => Number(c.high)));
     const peakCandle = impulse[impulse.length - 1];
-    if (Number(peakCandle.high) < peakHigh) continue;
+    const priorImpulseHigh = Math.max(...impulse.slice(0, -1).map(c => Number(c.high)), -Infinity);
+    // Require a fresh strict high; equal highs on flat candles must not keep resetting expiry.
+    if (Number(peakCandle.high) < peakHigh || Number(peakCandle.high) <= priorImpulseHigh) continue;
 
     // A later higher high means this was not the latest completed impulse peak.
     const laterHigh = Math.max(...candles.slice(peakIndex + 1, currentIndex).map(c => Number(c.high)), -Infinity);
