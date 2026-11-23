@@ -113,9 +113,16 @@ export function generateChannelSignal({ candles4h, candles1h, candles15m, option
   if (!Array.isArray(candles1h) || candles1h.length < 2 || !Array.isArray(candles15m) || candles15m.length < 2) {
     return null;
   }
-  const channel = detectPriceChannel(candles4h, cfg);
-  if (!channel) return null;
+  const detectedChannel = detectPriceChannel(candles4h, cfg);
+  if (!detectedChannel) return null;
   const h = candles1h.at(-1), prevH = candles1h.at(-2);
+  const latest4h = candles4h.at(-1);
+  const signalCloseTime = Number(h.time) + 60 * 60 * 1000;
+  const channelAnchorTime = Number(latest4h.time) + 4 * 60 * 60 * 1000;
+  const projectionBars = Math.max(0, (signalCloseTime - channelAnchorTime) / (4 * 60 * 60 * 1000));
+  const upper = detectedChannel.upper + detectedChannel.slopePerBar * projectionBars;
+  const lower = detectedChannel.lower + detectedChannel.slopePerBar * projectionBars;
+  const channel = { ...detectedChannel, upper, lower, mid: (upper + lower) / 2 };
   const m = candles15m.at(-1), prevM = candles15m.at(-2);
   const close = Number(h.close), high = Number(h.high), low = Number(h.low);
   const mClose = Number(m.close), mOpen = Number(m.open), pmClose = Number(prevM.close);
@@ -147,8 +154,10 @@ export function generateChannelSignal({ candles4h, candles1h, candles15m, option
   const risk = side === "LONG" ? entryReference - stop : stop - entryReference;
   if (!(risk > 0) || risk / entryReference > 0.08) return null;
   const target = side === "LONG" ? entryReference + risk * cfg.targetR : entryReference - risk * cfg.targetR;
-  const boundaryTarget = side === "LONG" ? channel.upper : channel.lower;
-  const target1 = side === "LONG" ? Math.min(target, boundaryTarget) : Math.max(target, boundaryTarget);
+  const isReversal = setup.endsWith("REVERSAL");
+  const target1 = isReversal
+    ? (side === "LONG" ? Math.min(target, channel.upper) : Math.max(target, channel.lower))
+    : target;
   const targetR = Math.abs(target1 - entryReference) / risk;
   return {
     side, setup, trigger, channelType: channel.type, channel,
