@@ -337,6 +337,7 @@ async function main() {
   const baselineAllTrades = successful.flatMap(r=>r.baselineTrades || []).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
   const metrics = summarize(allTrades);
   const baselineMetrics = summarize(baselineAllTrades);
+  const fillTypeCounts = allTrades.reduce((acc,t)=>{ const key=t.fillType||"UNKNOWN"; acc[key]=(acc[key]||0)+1; return acc; },{});
   const STARTING_CAPITAL = 100;
   const MARGIN_PER_TRADE = 10;
   const events = allTrades.flatMap(t => [
@@ -397,7 +398,8 @@ async function main() {
     "| Metric | Result |","|---|---:|",
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
     "| Average eligible signals / day | "+report.averageSignalsPerDay.toFixed(2)+" |",
-    "| Selected-level limit fills / expired | "+report.limitOrdersFilled+" / "+report.limitOrdersExpired+" |",
+    "| Entry fills (all types) / expired limits | "+report.limitOrdersFilled+" / "+report.limitOrdersExpired+" |",
+    "| Market fallback / limit touch / marketable limit | "+(report.fillTypeCounts.MARKET_FALLBACK||0)+" / "+(report.fillTypeCounts.LIMIT_TOUCH||0)+" / "+(report.fillTypeCounts.MARKETABLE_LIMIT_AT_OPEN||0)+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
     "| TP1 closes (LONG 1.3R / SHORT 1.5R) | "+accountMetrics.profitCloses+" |",
