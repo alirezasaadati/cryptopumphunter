@@ -25,3 +25,26 @@ jobs:
         run: npm test
       - name: Cloudflare Worker dry-run build
         run: npx wrangler deploy --dry-run --outdir /tmp/worker-dry-run
+
+  short-priority-fallback-backtest:
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/short-priority-dynamic-tp-fallback'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 90d and 180d SHORT fallback backtests
+        env:
+          SHORT_PRIORITY_SYMBOLS: "7"
+          SHORT_PRIORITY_FEE: "0.0005"
+          SHORT_PRIORITY_SLIPPAGE: "0.0003"
+        run: node scripts/backtest-short-priority-fallback.mjs
+      - name: Upload SHORT priority and fallback reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: short-priority-fallback-backtest
+          path: artifacts/short-priority-fallback-backtest.*
+          if-no-files-found: warn

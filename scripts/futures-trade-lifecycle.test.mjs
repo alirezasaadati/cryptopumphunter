@@ -68,3 +68,24 @@ test("invalid inputs do not create a close event", () => {
   assert.equal(evaluateTradeCandle(longTrade, {open:100, high:99, low:101}).changed, false);
   assert.equal(profitTargetPrice("BUY", 100), null);
 });
+
+
+test("new SHORT trades explicitly marked ATR_CAPPED_SHORT close at their signal TP1", () => {
+  const dynamicShort = {
+    ...shortTrade,
+    target1: 98.25,
+    target1Mode: "ATR_CAPPED_SHORT"
+  };
+  const result = evaluateTradeCandle(dynamicShort, {open:100, high:100.5, low:98.1, time:7});
+  assert.equal(result.reason, "CLOSED_PROFIT");
+  assert.equal(result.trade.exitPrice, 98.25);
+  assert.ok(Math.abs(result.trade.marginReturnPercent - 17.5) < 1e-9);
+  assert.equal(result.trade.target1Mode, "ATR_CAPPED_SHORT");
+});
+
+test("legacy SHORT trades without the explicit TP1 mode retain the fixed 3% price target", () => {
+  const legacy = {...shortTrade, target1: 99.25};
+  const result = evaluateTradeCandle(legacy, {open:98, high:99, low:96.8, time:8});
+  assert.equal(result.reason, "CLOSED_PROFIT");
+  assert.equal(result.trade.exitPrice, 97);
+});

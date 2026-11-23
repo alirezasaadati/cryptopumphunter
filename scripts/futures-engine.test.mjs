@@ -5,6 +5,8 @@ import {
   SignalDeliveryCoordinator,
   isKrakenPerpetualTicker,
   calculateAtr,
+  calculateRsiSeries,
+  findBearishRsiDivergence,
   evaluateFuturesEntryFilters,
   analyzeFuturesSymbol,
   getKrakenFuturesCandles,
@@ -319,6 +321,11 @@ test("standard LONG path accepts aligned 1h with neutral 4h context",()=>{
 test("HIGH_RISK accepts opposing 4h without 15m momentum; confirmation only affects priority",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
+  const priorHourHigh=oneHour.at(-2).high;
+  for(const candle of fifteenMinute.slice(-9,-1)) {
+    candle.high=Math.min(candle.high,priorHourHigh-0.5);
+    candle.low=Math.min(candle.low,candle.high-0.1);
+  }
   fifteenMinute.at(-1).open=fifteenMinute.at(-1).close-0.05;
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
   assert.equal(result.eligible,true,JSON.stringify(result));
@@ -326,7 +333,8 @@ test("HIGH_RISK accepts opposing 4h without 15m momentum; confirmation only affe
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.equal(result.entryDiagnostics.fourHourOpposes,true);
   assert.equal(result.entryDiagnostics.momentumConfirmed,false);
-  assert.equal(result.confirmationPriorityBonus,7);
+  assert.equal(result.entryDiagnostics.structuralPullbackConfirmed,false);
+  assert.equal(result.confirmationPriorityBonus,0);
 });
 
 test("HIGH_RISK does not reject opposing 4h solely because 15m confirmation data is unavailable",()=>{
@@ -539,4 +547,96 @@ test("missing 15m pullback is diagnostic and does not suppress a candidate",()=>
   });
   assert.equal(result.ok,true);
   assert.equal(result.pullbackConfirmed,false);
+});
+
+
+test("SHORT bearish RSI divergence is detected only from two confirmed higher-high/lower-RSI pivots",()=>{
+  const closes=Array.from({length:60},(_,i)=>{
+    if(i<=35)return 100+(20*i/35);
+    if(i<=42)return 120-6*((i-35)/7);
+    if(i<=50)return 114+4*((i-42)/8);
+    if(i<=56)return 118-3*((i-50)/6);
+    return 115-0.1*(i-56);
+  });
+  const candles=closes.map((close,i)=>({
+    time:i,open:close-0.1,close,
+    high:close+0.2,low:close-0.3,volume:100
+  }));
+  candles[35].high=120.6;
+  candles[50].high=121.2;
+  const series=calculateRsiSeries(closes,14);
+  assert.equal(series.length,closes.length);
+  assert.ok(series[50]<series[35],JSON.stringify({rsi35:series[35],rsi50:series[50]}));
+  const divergence=findBearishRsiDivergence(candles);
+  assert.equal(divergence.confirmed,true,JSON.stringify(divergence));
+  assert.ok(divergence.secondPivot.high>divergence.firstPivot.high);
+  assert.ok(divergence.secondPivot.rsi<divergence.firstPivot.rsi);
+});
+
+test("SHORT structural pullback bonus is independent from EMA21 touch",()=>{
+  const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
+  const resistance=oneHour.at(-2).high;
+  const touch=fifteenMinute.at(-8);
+  touch.high=resistance;
+  touch.low=resistance-0.04;
+  const result=evaluateFuturesEntryFilters({
+    ticker,candles1h:oneHour,candles15m:fifteenMinute,side:"SHORT",
+    referencePrice:oneHour.at(-1).close,
+    ema20:testEma(oneHour.map(c=>c.close),20),
+    atr:calculateAtr(oneHour,14)
+  });
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(result.structuralPullbackConfirmed,true);
+  assert.equal(result.pullbackConfirmed,true);
+});
+
+test("SHORT TP1 is capped at 2.5 ATR while LONG keeps the original 1.5R target",()=>{
+  const short=makeSetup("SHORT");
+  const entry=short.ticker.last;
+  const atr=calculateAtr(short.oneHour,14);
+  short.oneHour.at(-2).high=entry+atr*3;
+  short.ticker.last=entry;
+  const shortResult=analyzeFuturesSymbol(short.ticker,short.oneHour,short.fourHour,short.fifteenMinute);
+  assert.equal(shortResult.side,"SHORT");
+  assert.equal(shortResult.target1Mode,"ATR_CAPPED_SHORT");
+  assert.ok(shortResult.eligible || shortResult.highRiskEligible,JSON.stringify(shortResult));
+  const risk=shortResult.stop-shortResult.entry;
+  assert.ok(Math.abs((shortResult.entry-shortResult.target1)-Math.min(1.5*risk,2.5*shortResult.atr))<1e-8);
+  assert.ok(shortResult.rewardRisk<1.5);
+
+  const long=makeSetup("LONG");
+  const longResult=analyzeFuturesSymbol(long.ticker,long.oneHour,long.fourHour,long.fifteenMinute);
+  assert.equal(longResult.rewardRisk,1.5);
+  assert.equal(longResult.target1Mode,"LEGACY_MARGIN");
+  assert.ok(Math.abs((longResult.target1-longResult.entry)-1.5*(longResult.entry-longResult.stop))<1e-8);
+});
+
+test("SHORT structural pullback priority is +12 alone and +15 with momentum; score and eligibility stay unchanged",()=>{
+  const makeShort=({momentum,structural})=>{
+    const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("SHORT");
+    const resistance=oneHour.at(-2).high;
+    for(const c of fifteenMinute.slice(-9,-1)) {
+      c.high=Math.min(c.high,resistance-0.5);
+      c.low=Math.min(c.low,c.high-0.1);
+    }
+    if(structural) {
+      fifteenMinute.at(-8).high=resistance;
+      fifteenMinute.at(-8).low=resistance-0.04;
+    }
+    const last=fifteenMinute.at(-1);
+    last.open=momentum?last.close+0.05:last.close-0.05;
+    return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  };
+  const structuralOnly=makeShort({momentum:false,structural:true});
+  const both=makeShort({momentum:true,structural:true});
+  assert.equal(structuralOnly.structuralPullbackConfirmed,true);
+  assert.equal(structuralOnly.confirmationPriorityBonus,12);
+  assert.equal(both.structuralPullbackConfirmed,true);
+  assert.equal(both.confirmationPriorityBonus,15);
+  assert.equal(structuralOnly.eligible,true);
+  assert.equal(both.eligible,true);
+  assert.equal(structuralOnly.score,structuralOnly.baseScore);
+  assert.equal(both.score,both.baseScore);
+  assert.ok(structuralOnly.priorityScore<=125);
+  assert.ok(both.priorityScore<=125);
 });

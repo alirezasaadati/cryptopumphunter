@@ -49,13 +49,18 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
 
   const entry = Number(trade.actualEntry ?? trade.entry);
   const stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
-  const target = profitTargetPrice(
-    trade.side,
-    entry,
-    options.leverage ?? FUTURES_TRADE_LEVERAGE,
-    options.targetMarginPercent ?? FUTURES_MARGIN_PROFIT_TARGET_PERCENT
-  );
-  if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0 || target === null) {
+  const usesSignalTarget1 = trade.side === "SHORT" && trade.target1Mode === "ATR_CAPPED_SHORT";
+  const signalTarget1 = Number(trade.target1);
+  const target = usesSignalTarget1 && Number.isFinite(signalTarget1) && signalTarget1 > 0
+    ? signalTarget1
+    : profitTargetPrice(
+      trade.side,
+      entry,
+      options.leverage ?? FUTURES_TRADE_LEVERAGE,
+      options.targetMarginPercent ?? FUTURES_MARGIN_PROFIT_TARGET_PERCENT
+    );
+  if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0 ||
+      target === null || !Number.isFinite(target) || target <= 0) {
     return { changed: false, trade, error: "INVALID_TRADE_LEVELS" };
   }
 
