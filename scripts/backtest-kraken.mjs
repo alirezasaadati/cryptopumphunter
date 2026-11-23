@@ -62,6 +62,17 @@ function historicalChange(candles, index) {
   return ((now.close / old.close) - 1) * 100;
 }
 
+// Approximate rolling 24h quote turnover using only completed hourly bars
+// available at the signal timestamp. No present-day ticker volume is used.
+function historicalQuoteVolume(candles, index) {
+  const start = Math.max(0, index - 23);
+  let quoteVolume = 0;
+  for (let j = start; j <= index; j++) {
+    quoteVolume += Number(candles[j].volume) * Number(candles[j].close);
+  }
+  return quoteVolume;
+}
+
 function closeTrade(position, rawPrice, reason, time, config) {
   const dir = position.direction;
   const exitFill = rawPrice * (1 - dir * config.slippage);
@@ -173,7 +184,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const closed15m=fifteenMinute.slice(Math.max(0,fifteenIndex-120),fifteenIndex);
     const nextBar=oneHour[i+1];
     const tickerAtSignal={
-      symbol:ticker.symbol,last:nextBar.open,quoteVolume:Number(ticker.volumeQuote)||0,
+      symbol:ticker.symbol,last:nextBar.open,quoteVolume:historicalQuoteVolume(oneHour,i),
       priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}
     };
     for (const mode of ["baseline","current"]) {
@@ -203,7 +214,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
         candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
       });
       trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
-      trade.entryModel=mode === "baseline" ? "last_1h_close" : "next_1h_open";
+      trade.entryModel="next_1h_open (identical for baseline/current)";
       state.trades.push(trade);
       const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
       nextAvailable[mode]=Math.max(i+1,exitIndex+1);
@@ -218,13 +229,15 @@ async function backtestSymbol(ticker, fromMs, toMs) {
 }
 async function main() {
   const endMs=Date.now(), startMs=endMs-DAYS*24*HOUR, fromMs=startMs-15*24*HOUR;
-  const tickerData=await getJson(BASE+"/derivatives/api/v3/tickers");
-  if (!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
-  const universe=tickerData.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&
-    /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&
-    Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME&&Number(t.last)>0)
-    .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
-  if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
+  // Fixed universe from the prior run: avoids selecting symbols by present-day volume.
+  // The universe is intentionally held constant across both A/B arms.
+  const FIXED_SYMBOLS = [
+    "PF_XBTUSD","PF_ETHUSD","PF_SOLUSD","PF_HYPEUSD","PF_ZECUSD",
+    "PF_NVDAXUSD","PF_XRPUSD","PF_NEARUSD","PF_XAUUSD","PF_SUIUSD",
+    "PF_XAGUSD","PF_INJUSD","PF_ANTXUSD","PF_UNIUSD"
+  ];
+  const universe = FIXED_SYMBOLS.slice(0, SYMBOL_LIMIT).map(symbol => ({ symbol }));
+  if (!universe.length) throw new Error("Fixed Kraken perpetual universe is empty");
   const results=[];
   for (const ticker of universe) {
     try { results.push(await backtestSymbol(ticker,fromMs,endMs)); }
@@ -239,9 +252,15 @@ async function main() {
     settings:{symbolsRequested:SYMBOL_LIMIT,symbolsTested:results.filter(r=>!r.error).length,feePerSidePct:FEE_PER_SIDE*100,
       slippagePerSidePct:SLIPPAGE_PER_SIDE*100,maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
       sameCandleStopTargetRule:"stop first (conservative)",funding:"excluded",
-      baselineEntry:"signal candle close",currentEntry:"next 1h candle open, adverse slippage applied",
-      currentFilters:"0.35% live/reference drift; 1.25 ATR max distance to 1h EMA20; 1.25 ATR max 15m reclaim extension; 15m momentum/pullback advisory only",
-      universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
+      baselineEntry:"next 1h candle open, adverse slippage applied",
+      currentEntry:"next 1h candle open, adverse slippage applied (same fill model as baseline)",
+      historicalQuoteVolume:"rolling sum of completed hourly volume × close over the trailing 24 bars; no live ticker volume",
+      currentFilters:{minQuoteVolume:FUTURES_CONFIG.MIN_QUOTE_VOLUME,highRiskMinQuoteVolume:FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME,
+        maxEntryDriftPct:FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,maxEntryEmaDistanceAtr:FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,
+        maxReclaimExtensionAtr:FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR,highRiskMaxEntryDriftPct:FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT,
+        highRiskMaxEntryEmaDistanceAtr:FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR,
+        highRiskMaxReclaimExtensionAtr:FUTURES_CONFIG.HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR},
+      universe:"fixed 14-symbol universe carried over from prior run; no present-day volume ranking; historical survivorship remains possible"},
     baseline:{signals:sum("baseline","signals"),valid:sum("baseline","valid"),risky:sum("baseline","risky"),metrics:summarize(allBaseline)},
     current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent)},
     signalCountChangePct:sum("baseline","signals")?((sum("current","signals")/sum("baseline","signals"))-1)*100:0,
@@ -267,7 +286,8 @@ async function main() {
     "| Current filter rejections | — | "+report.current.rejected+" |",
     "| Signal count change | — | "+report.signalCountChangePct.toFixed(2)+"% |","",
     "Assumptions: 0.05% fee and 0.03% slippage per side; 72h maximum hold; 40/35/25 partial exits; stop-first same-candle ambiguity.",
-    "Funding excluded. Current universe is selected using present-day volume and therefore has survivorship/universe bias. This is a comparative simulation, not a guarantee of live fills.","",
+    "Both A/B arms use next 1h open and identical adverse slippage. Rolling 24h quote turnover is reconstructed from historical completed hourly bars (volume × close).",
+    "Funding excluded. Fixed 14-symbol universe avoids current-volume ranking, but historical survivorship may remain. This is a comparative simulation, not a guarantee of live fills.","",
     "| Symbol | Baseline signals | Current signals | Change | Current valid | Current risky | Current rejected |",
     "|---|---:|---:|---:|---:|---:|---:|",
     ...results.map(r=>"| "+r.symbol+" | "+(r.baseline?.signals||0)+" | "+(r.current?.signals||0)+" | "+(((r.current?.signals||0)-(r.baseline?.signals||0)))+" | "+(r.current?.valid||0)+" | "+(r.current?.risky||0)+" | "+(r.current?.rejected||0)+" |")
