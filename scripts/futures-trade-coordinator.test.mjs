@@ -172,15 +172,27 @@ test("a different symbol remains eligible while another symbol-side trade is OPE
   assert.equal((await post("/trades/list")).body.trades.length, 2);
 });
 
-test("same symbol in opposite direction has an independent lock", async () => {
+test("same symbol cannot emit opposite directions during the same UTC day", async () => {
   const { post } = createCoordinator();
   await post("/signals/register", { signals: [signal("long-1")] });
   const short = signal("short-1", {
     side: "SHORT", entry: 100, stop: 105, target1: 92.5, target2: 89, target3: 85
   });
   const registered = await post("/signals/register", { signals: [short] });
+  assert.equal(registered.body.signals.length, 0);
+  assert.equal((await post("/trades/list")).body.trades.length, 1);
+});
+
+test("daily direction lock resets on the next UTC day", async () => {
+  const { post, data } = createCoordinator();
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
+  data.set("daily-signal-direction-locks", { day: yesterday, symbols: { PF_XBTUSD: "LONG" } });
+  const short = signal("short-next-day", {
+    side: "SHORT", entry: 100, stop: 105, target1: 92.5, target2: 89, target3: 85
+  });
+  const registered = await post("/signals/register", { signals: [short] });
   assert.equal(registered.body.signals.length, 1);
-  assert.equal((await post("/trades/list")).body.trades.length, 2);
+  assert.equal((await post("/trades/list")).body.trades.length, 1);
 });
 
 test("closed historical trade cannot be reopened by a stale update", async () => {
