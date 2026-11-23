@@ -24,16 +24,16 @@ export function resolveShortFallbackFill({
 }) {
   const decision = selectShortFallbackOrder(decisionCandle);
   if (!Array.isArray(followingCandles) || followingCandles.length === 0) {
-    return { ...decision, filled: false, fillPrice: null, fillIndex: null, reason: decision.reason + "_NO_FOLLOWING_CANDLE" };
+    return { ...decision, decisionReason: decision.reason, filled: false, fillPrice: null, fillIndex: null, reason: decision.reason + "_NO_FOLLOWING_CANDLE" };
   }
   const window = followingCandles.slice(0, Math.max(1, validBars));
   if (decision.type === "MARKET") {
     const open = Number(window[0]?.open);
     if (!Number.isFinite(open) || open <= 0) {
-      return { ...decision, filled: false, fillPrice: null, fillIndex: null, reason: "INVALID_MARKET_OPEN" };
+      return { ...decision, decisionReason: decision.reason, filled: false, fillPrice: null, fillIndex: null, reason: "INVALID_MARKET_OPEN" };
     }
     return {
-      ...decision, filled: true,
+      ...decision, decisionReason: decision.reason, filled: true,
       fillPrice: open * (1 - Math.max(0, Number(marketSlippage) || 0)),
       fillIndex: 0, reason: "MARKET_NEXT_5M_OPEN"
     };
@@ -43,14 +43,14 @@ export function resolveShortFallbackFill({
     const open = Number(bar?.open), high = Number(bar?.high);
     if (!Number.isFinite(open) || !Number.isFinite(high)) continue;
     if (open >= decision.limitPrice) {
-      return { ...decision, filled: true, fillPrice: open, fillIndex: i, reason: "LIMIT_GAP_FILL" };
+      return { ...decision, decisionReason: decision.reason, filled: true, fillPrice: open, fillIndex: i, reason: "LIMIT_GAP_FILL" };
     }
     if (high >= decision.limitPrice) {
-      return { ...decision, filled: true, fillPrice: decision.limitPrice, fillIndex: i, reason: "LIMIT_TOUCH_FILL" };
+      return { ...decision, decisionReason: decision.reason, filled: true, fillPrice: decision.limitPrice, fillIndex: i, reason: "LIMIT_TOUCH_FILL" };
     }
   }
   return {
-    ...decision, filled: false, fillPrice: null, fillIndex: null,
+    ...decision, decisionReason: decision.reason, filled: false, fillPrice: null, fillIndex: null,
     reason: decision.reason + "_LIMIT_EXPIRED"
   };
 }
