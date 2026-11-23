@@ -60,22 +60,26 @@ function completedAggregates(a,period,until){
     else{old.high=Math.max(old.high,c.high);old.low=Math.min(old.low,c.low);old.close=c.close;old.volume+=c.volume;}}
   return [...map.values()].sort((x,y)=>x.time-y.time);
 }
-function snapshot(hourly,time){
-  const endIndex=lowerBound(hourly,time);
+function prepareSeries(hourly){
+  return {hourly,daily:completedAggregates(hourly,DAY,Infinity),weekly:completedAggregates(hourly,WEEK,Infinity)};
+}
+function snapshot(series,time){
+  const hourly=series.hourly,endIndex=lowerBound(hourly,time);
   if(endIndex<1)return null;
-  const past=hourly.slice(0,endIndex),last=past.at(-1);
-  const dayStart=Math.floor(time/DAY)*DAY,weekStart=mondayStart(time);
-  const daily=completedAggregates(past,DAY,dayStart);
-  const weekly=completedAggregates(past,WEEK,weekStart);
-  const partialDay=aggregateRange(past,dayStart,time+1);
-  const partialWeek=aggregateRange(past,weekStart,time+1);
-  if(!partialDay||!partialWeek||daily.length<24||weekly.length<24)return null;
+  const last=hourly[endIndex-1],dayStart=Math.floor(time/DAY)*DAY,weekStart=mondayStart(time);
+  const dIndex=lowerBound(series.daily,dayStart),wIndex=lowerBound(series.weekly,weekStart);
+  const daily=series.daily.slice(Math.max(0,dIndex-25),dIndex);
+  const weekly=series.weekly.slice(Math.max(0,wIndex-24),wIndex);
+  const partialDay=aggregateRange(hourly,dayStart,time+1);
+  const partialWeek=aggregateRange(hourly,weekStart,time+1);
+  if(!partialDay||!partialWeek||daily.length<20||weekly.length<20)return null;
   const dCloses=daily.map(x=>x.close),wCloses=weekly.map(x=>x.close);
   const dEma=ema(dCloses,20),dEmaPrior=ema(dCloses.slice(0,-3),20);
   const wEma=ema(wCloses,20),wEmaPrior=ema(wCloses.slice(0,-4),20);
   if(![dEma,dEmaPrior,wEma,wEmaPrior].every(Number.isFinite))return null;
-  const old7=past.find(x=>x.time>=time-7*DAY-HOUR);
-  const weeklyReturn=old7?((last.close/old7.open)-1)*100:null;
+  const oldIndex=Math.max(0,lowerBound(hourly,time-7*DAY));
+  const old7=hourly[oldIndex];
+  const weeklyReturn=old7?((last.close/old7.close)-1)*100:null;
   const dailyReturn=((partialDay.close/partialDay.open)-1)*100;
   const dailySlope=((dEma/dEmaPrior)-1)*100;
   const weeklySlope=((wEma/wEmaPrior)-1)*100;
@@ -86,12 +90,12 @@ function snapshot(hourly,time){
 }
 function altBearishAt(altSeries,time){
   let valid=0,bear=0;
-  for(const candles of altSeries){
-    const s=snapshot(candles,time);
+  for(const series of altSeries){
+    const s=snapshot(series,time);
     if(!s)continue;
-    const idx=lowerBound(candles,time);
+    const idx=lowerBound(series.hourly,time);
     if(idx<25)continue;
-    const now=candles[idx-1],prev=candles[Math.max(0,idx-25)];
+    const now=series.hourly[idx-1],prev=series.hourly[Math.max(0,idx-25)];
     const ret=(now.close/prev.close-1)*100;
     valid++;
     if(now.close<s.dailyEma&&ret<0)bear++;
@@ -151,9 +155,9 @@ async function main(){
       dataMap.set(symbol,await fetchCandles(symbol,"1h",warmStart,end,HOUR));
     }));
   }
-  const btc=dataMap.get(btcTicker.symbol);
+  const btcRaw=dataMap.get(btcTicker.symbol);\n  const btc=btcRaw?prepareSeries(btcRaw):null;
   if(!btc||btc.length<500)throw new Error("BTC hourly history unavailable");
-  const altSeries=alts.map(x=>dataMap.get(x.symbol)).filter(x=>x&&x.length>500);
+  const altSeries=alts.map(x=>dataMap.get(x.symbol)).filter(x=>x&&x.length>500).map(prepareSeries);
   const results=[];
   for(const ticker of tradeUniverse){
     try{
