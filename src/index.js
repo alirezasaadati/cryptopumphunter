@@ -2573,7 +2573,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
         (i+1)+") "+formatFuturesSymbol(s.symbol)+" | "+side,
         "امتیاز: "+fmt(s.score)+" از 100",
         "ورود: "+fmt(s.entry)+" | حد ضرر: "+fmt(s.stop),
-        "تارگت اول (1.5R): "+fmt(s.target1)+" | تارگت دوم (2.5R): "+fmt(s.target2)+" | تارگت سوم (3.5R): "+fmt(s.target3),
+        "تارگت اول ("+Number(s.rewardRisk||1.5).toFixed(2)+"R): "+fmt(s.target1)+" | تارگت دوم (2.5R): "+fmt(s.target2)+" | تارگت سوم (3.5R): "+fmt(s.target3),
         "RSI: "+fmt(s.rsi)+" | نسبت حجم: "+fmt(s.volumeRatio)+" | تغییر ۲۴ساعته: "+fmt(s.change24h)+"٪",
         "حجم مظنه: "+fmt(s.quoteVolume)+" USD | فاندینگ: "+fmt(s.funding),
         "زمان ایجاد: "+createdText
