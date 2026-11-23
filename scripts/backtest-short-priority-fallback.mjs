@@ -197,7 +197,7 @@ function runWindowForSymbol(data,days,endMs) {
     if(!baselineLevels)continue;
     const baselineTrade=simulateShortTrade({symbol:ticker.symbol,levels:baselineLevels,candles5m:fiveMinute,
       fillIndex:decisionIndex+1,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS});
-    baseline.trades.push({...baselineTrade,entryType:"MARKET"});
+    baseline.trades.push({...baselineTrade,entryType:"MARKET",signalTime:signalCloseTime});
     baseline.filled++;
     let experimentalTrade=null;
     if(decision.filled){
@@ -206,7 +206,7 @@ function runWindowForSymbol(data,days,endMs) {
       if(levels){
         experimentalTrade=simulateShortTrade({symbol:ticker.symbol,levels,candles5m:fiveMinute,fillIndex,
           fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS});
-        experimental.trades.push({...experimentalTrade,entryType:decision.type,orderDecision:decision.decisionReason,fillReason:decision.reason});
+        experimental.trades.push({...experimentalTrade,entryType:decision.type,orderDecision:decision.decisionReason,fillReason:decision.reason,signalTime:signalCloseTime});
         experimental.filled++;
         if(decision.type==="MARKET")experimental.marketOrders++;
         else {
@@ -257,6 +257,14 @@ async function main() {
     const baselineTrades=symbolResults.flatMap(x=>x.baseline?.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
     const experimentalTrades=symbolResults.flatMap(x=>x.experimental?.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
     const sum=(arm,key)=>symbolResults.reduce((n,x)=>n+Number(x[arm]?.[key]||0),0);
+    const baselineBySignal=new Map(baselineTrades.map(t=>[t.symbol+"|"+t.signalTime,t]));
+    const experimentalBySignal=new Map(experimentalTrades.map(t=>[t.symbol+"|"+t.signalTime,t]));
+    const matchedKeys=[...experimentalBySignal.keys()].filter(key=>baselineBySignal.has(key));
+    const matchedBaseline=matchedKeys.map(key=>baselineBySignal.get(key));
+    const matchedExperimental=matchedKeys.map(key=>experimentalBySignal.get(key));
+    const matchedBaselineNetR=matchedBaseline.reduce((s,t)=>s+t.netR,0);
+    const matchedExperimentalNetR=matchedExperimental.reduce((s,t)=>s+t.netR,0);
+    const strategyNetRDelta=experimentalTrades.reduce((s,t)=>s+t.netR,0)-baselineTrades.reduce((s,t)=>s+t.netR,0);
     windows[days+"d"]={
       period:{from:new Date(endMs-days*DAY).toISOString(),to:new Date(endMs).toISOString(),days},
       symbolsLoaded:loaded.filter(x=>!x.error).length,symbolsRequested:SYMBOL_LIMIT,
@@ -267,8 +275,8 @@ async function main() {
         limitGapFills:sum("experimental","limitGapFills"),limitTouchFills:sum("experimental","limitTouchFills"),
         metrics:summarize(experimentalTrades)
       },
-      paired:{filledBoth:Math.min(baselineTrades.length,experimentalTrades.length),
-        netRDelta:experimentalTrades.reduce((s,t)=>s+t.netR,0)-baselineTrades.reduce((s,t)=>s+t.netR,0)},
+      paired:{matchedFills:matchedKeys.length,baselineNetR:matchedBaselineNetR,experimentalNetR:matchedExperimentalNetR,
+        matchedNetRDelta:matchedExperimentalNetR-matchedBaselineNetR,strategyNetRDelta},
       symbols:symbolResults.map(({baseline,experimental,...rest})=>({ ...rest,
         baseline:baseline?{opportunities:baseline.opportunities,filled:baseline.filled,metrics:baseline.metrics}:null,
         experimental:experimental?{opportunities:experimental.opportunities,filled:experimental.filled,expired:experimental.expired,lockSkips:experimental.lockSkips,
@@ -302,6 +310,10 @@ async function main() {
       "| Opportunities | "+w.baseline.opportunities+" | "+w.experimental.opportunities+" |",
       "| Filled | "+w.baseline.filled+" | "+w.experimental.filled+" |",
       "| Expired | 0 | "+w.experimental.expired+" |",
+      "| Lock skips | "+w.baseline.lockSkips+" | "+w.experimental.lockSkips+" |",
+      "| Matched fills | "+w.paired.matchedFills+" | "+w.paired.matchedFills+" |",
+      "| Matched net R delta (Exp - Base) | — | "+w.paired.matchedNetRDelta.toFixed(3)+" |",
+      "| Strategy net R delta incl. expired (Exp - Base) | — | "+w.paired.strategyNetRDelta.toFixed(3)+" |",
       "| Win rate | "+w.baseline.metrics.winRatePct.toFixed(2)+"% | "+w.experimental.metrics.winRatePct.toFixed(2)+"% |",
       "| Net R | "+w.baseline.metrics.netR.toFixed(3)+" | "+w.experimental.metrics.netR.toFixed(3)+" |",
       "| Expectancy R | "+w.baseline.metrics.expectancyR.toFixed(4)+" | "+w.experimental.metrics.expectancyR.toFixed(4)+" |",
