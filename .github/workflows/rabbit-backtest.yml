@@ -2,7 +2,7 @@ name: Rabbit strategy backtest
 on:
   workflow_dispatch:
   push:
-    branches: [experiment/compare-current-v48-15pct-20261123, experiment/rabbit-diagnostics-365d-mtm-20261123, experiment/rabbit-btc-only-123d-20261123, experiment/rabbit-btc-gold-90d-20261123]
+    branches: [experiment/compare-current-v48-15pct-20261123, experiment/rabbit-diagnostics-365d-mtm-20261123, experiment/rabbit-btc-only-123d-20261123, experiment/rabbit-btc-gold-90d-20261123, experiment/rabbit-btc-xaut-90d-20261123]
     paths:
       - "src/rabbit-engine.js"
       - "scripts/rabbit-engine.test.mjs"
@@ -21,12 +21,12 @@ jobs:
           node-version: 22
       - name: Run Rabbit unit tests
         run: node --test scripts/rabbit-engine.test.mjs
-      - name: Run Rabbit matched BTC vs Gold 90d Kraken backtest with MTM diagnostics
+      - name: Run Rabbit matched BTC vs XAUT 90d Kraken backtest with MTM diagnostics
         run: node scripts/backtest-rabbit-btc-gold.mjs
       - name: Upload Rabbit reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rabbit-backtest-btc-gold-90d-mtm
+          name: rabbit-backtest-btc-xaut-90d-mtm
           path: artifacts/
           if-no-files-found: warn
