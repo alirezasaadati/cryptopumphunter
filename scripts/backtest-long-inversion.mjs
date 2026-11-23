@@ -200,7 +200,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     catch { rejectedSignals++; continue; }
     if (!candidate || candidate.eligible !== true || !["LONG","SHORT"].includes(candidate.side)) { rejectedSignals++; continue; }
     acceptedSignals++;
-    const lockKey = ticker.symbol + "|" + candidate.side;
+    const lockKey = ticker.symbol + "|SHORT"; // both normal SHORT and inverted LONG execute as SHORT
     if ((lockUntil.get(lockKey) || 0) > signalCloseTime) { skippedByLock++; continue; }
 
 
