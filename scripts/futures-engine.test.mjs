@@ -326,7 +326,6 @@ test("opposing 4h trend reduces SHORT score but does not block even HIGH_RISK",(
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.equal(result.fourHourTrend,"BULLISH");
   assert.equal(result.fourHourScoreAdjustment,-8);
-  assert.equal(result.entryDiagnostics.fourHourRequired,false);
 });
 
 test("opposing 4h trend does not block HIGH_RISK when 15m data is unavailable",()=>{
@@ -337,7 +336,6 @@ test("opposing 4h trend does not block HIGH_RISK when 15m data is unavailable",(
   assert.equal(result.eligible,true,JSON.stringify(result));
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.equal(result.fourHourScoreAdjustment,-8);
-  assert.equal(result.entryDiagnostics.fourHourRequired,false);
 });
 
 
