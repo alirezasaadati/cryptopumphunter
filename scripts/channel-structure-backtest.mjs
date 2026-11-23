@@ -58,9 +58,9 @@ function metrics(trades) {
     profitFactor:gl?gw/gl:gw?null:0,maxDrawdownR:maxDD,
     averageHoldHours:trades.length?trades.reduce((s,t)=>s+t.holdHours,0)/trades.length:0};
 }
-function runSymbol(data, days, endMs) {
-  const start=endMs-days*DAY, {ticker,h1,h4,m15,m5}=data;
-  let h4Index=0,m15Index=0,lockedUntil=0;
+function runSymbol(data, days, endMs, mode) {
+  const start=endMs-days*DAY, {ticker,h1,h4,m15,m5,d1}=data;
+  let h4Index=0,m15Index=0,d1Index=0,lockedUntil=0;
   const trades=[], counts={opportunities:0,opportunitiesBySide:{LONG:0,SHORT:0},lockSkips:0,filled:0,marketFills:0,limitFills:0,limitExpired:0,invalidFillRisk:0,bySetup:{}};
   const first=lowerBound(h1,start-20*DAY);
   for(let i=Math.max(40,first);i<h1.length-1;i++){
@@ -68,10 +68,12 @@ function runSymbol(data, days, endMs) {
     if(signalTime<start||signalTime>endMs)continue;
     while(h4Index<h4.length&&h4[h4Index].time+FOUR_HOURS<=signalTime)h4Index++;
     while(m15Index<m15.length&&m15[m15Index].time+FIFTEEN<=signalTime)m15Index++;
+    while(d1Index<d1.length&&d1[d1Index].time+DAY<=signalTime)d1Index++;
+    const closedDaily=d1.slice(Math.max(0,d1Index-200),d1Index);
     const closed4h=h4.slice(Math.max(0,h4Index-120),h4Index);
     const closed15=m15.slice(Math.max(0,m15Index-4),m15Index);
     if(closed4h.length<40||closed15.length<2)continue;
-    const signal=generateChannelSignal({candles4h:closed4h,candles1h:h1.slice(0,i+1),candles15m:closed15});
+    const signal=generateChannelSignal({candles4h:closed4h,candles1h:h1.slice(0,i+1),candles15m:closed15,candles1d:closedDaily,mode});
     if(!signal)continue;
     counts.opportunities++;
     counts.opportunitiesBySide[signal.side]++;
