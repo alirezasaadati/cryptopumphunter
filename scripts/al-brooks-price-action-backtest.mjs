@@ -33,7 +33,7 @@ function lowerBound(a,t){let l=0,r=a.length;while(l<r){const m=(l+r)>>1;if(a[m].
 function metrics(trades){
  const wins=trades.filter(t=>t.netPnlUsd>0),losses=trades.filter(t=>t.netPnlUsd<0);
  const gp=wins.reduce((s,t)=>s+t.netPnlUsd,0),gl=Math.abs(losses.reduce((s,t)=>s+t.netPnlUsd,0));
- let equity=0,peak=0,dd=0;for(const t of [...trades].sort((a,b)=>a.entryTime-b.entryTime)){equity+=t.netPnlUsd;peak=Math.max(peak,equity);dd=Math.max(dd,peak-equity);}
+ let equity=0,peak=0,dd=0;for(const t of [...trades].sort((a,b)=>a.exitTime-b.exitTime)){equity+=t.netPnlUsd;peak=Math.max(peak,equity);dd=Math.max(dd,peak-equity);}
  return {trades:trades.length,wins:wins.length,losses:losses.length,winRatePct:trades.length?100*wins.length/trades.length:0,
  netProfitUsd:trades.reduce((s,t)=>s+t.netPnlUsd,0),grossProfitUsd:gp,grossLossUsd:gl,profitFactor:gl?gp/gl:gp?null:0,
  averageNetPnlUsd:trades.length?trades.reduce((s,t)=>s+t.netPnlUsd,0)/trades.length:0,
@@ -41,7 +41,9 @@ function metrics(trades){
  targets:trades.filter(t=>t.reason==="TARGET").length,stops:trades.filter(t=>t.reason==="STOP").length,timeExits:trades.filter(t=>t.reason==="TIME").length,
  averageNotionalUsd:trades.length?trades.reduce((s,t)=>s+t.qty*t.entry,0)/trades.length:0,
  maxNotionalUsd:trades.length?Math.max(...trades.map(t=>t.qty*t.entry)):0,
- maxMarginAt10xUsd:trades.length?Math.max(...trades.map(t=>t.qty*t.entry/10)):0};
+ maxMarginAt10xUsd:trades.length?Math.max(...trades.map(t=>t.qty*t.entry/10)):0,
+ averageActualRiskUsd:trades.length?trades.reduce((s,t)=>s+(t.riskUsdActual||0),0)/trades.length:0,
+ maxActualRiskUsd:trades.length?Math.max(...trades.map(t=>t.riskUsdActual||0)):0};
 }
 function simulateExit({side,entry,stop,qty,bars,start,maxIndex}){
  const risk=Math.abs(entry-stop),target=side==="LONG"?entry+TARGET_R*risk:entry-TARGET_R*risk;
@@ -60,15 +62,15 @@ function simulateExit({side,entry,stop,qty,bars,start,maxIndex}){
  return {target,exit,exitTime,reason,qty,gross,entryFee,exitFee,netPnlUsd,holdHours:(exitTime-bars[start].time)/HOUR,
   riskUsdActual:qty*risk,riskUsdBudget:RISK_USD,notionalUsd:qty*entry,marginAt10xUsd:qty*entry/10};
 }
-function runSymbol(data,days,end){
- const {ticker,m15,m5}=data,start=end-days*DAY,signals=[],trades=[];
+function runSymbol(data,days,end,windowEnd=end){
+ const {ticker,m15,m5}=data,start=windowEnd-days*DAY,signals=[],trades=[];
  const first=lowerBound(m15,start-90*DAY);let lockedUntil=0,expired=0,invalid=0;
  for(let i=Math.max(60,first);i<m15.length-1;i++){
-  const bar=m15[i],signalTime=bar.time+M15;if(signalTime<start||signalTime>end)continue;
+  const bar=m15[i],signalTime=bar.time+M15;if(signalTime<start||signalTime>windowEnd-MAX_HOLD_HOURS*HOUR)continue;
   const signal=analyzeBrooksPriceAction(m15.slice(Math.max(0,i-149),i+1));if(!signal)continue;
   signals.push({time:signalTime,side:signal.side,setup:signal.setup,score:signal.score});
-  const next=lowerBound(m5,signalTime);if(next>=m5.length||next<lockedUntil)continue;
-  const expiry=Math.min(m5.length-1,next+8);let entryIndex=-1,rawEntry=null;
+  const next=lowerBound(m5,signalTime),windowLast=lowerBound(m5,windowEnd)-1;if(next>=m5.length||next>windowLast||next<lockedUntil)continue;
+  const expiry=Math.min(windowLast,next+8);let entryIndex=-1,rawEntry=null;
   for(let j=next;j<=expiry;j++){
    const c=m5[j],hit=signal.side==="LONG"?c.high>=signal.entryTrigger:c.low<=signal.entryTrigger;
    if(hit){entryIndex=j;rawEntry=signal.side==="LONG"?Math.max(signal.entryTrigger,c.open):Math.min(signal.entryTrigger,c.open);break;}
@@ -79,7 +81,7 @@ function runSymbol(data,days,end){
   if(!(risk>0)){invalid++;continue;}
   const sizing=sizePosition(entry,stop,{riskBudgetUsd:RISK_USD,maxNotionalUsd:MAX_NOTIONAL_USD});
   if(!sizing){invalid++;continue;}
-  const maxIndex=Math.min(m5.length-1,entryIndex+MAX_HOLD_HOURS*12);
+  const maxIndex=Math.min(windowLast,entryIndex+MAX_HOLD_HOURS*12);
   const result=simulateExit({side:signal.side,entry,stop,qty:sizing.qty,bars:m5,start:entryIndex,maxIndex});
   trades.push({symbol:ticker.symbol,side:signal.side,setup:signal.setup,context:signal.context,score:signal.score,
    signalTime,entryTime:m5[entryIndex].time,entry,stop,target:result.target,riskPct:risk/entry*100,
@@ -94,7 +96,9 @@ async function main(){
  const end=Date.now(),from=end-(180+90)*DAY;
  const tick=await getJson(BASE+"/derivatives/api/v3/tickers");
  if(!Array.isArray(tick.tickers))throw new Error("Kraken ticker universe unavailable");
- const universe=tick.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&/^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&Number(t.volumeQuote)>0)
+ const nonCryptoBases=new Set(["XAU","XAG","EUR","GBP","JPY","CHF","AUD","CAD","NZD","SPX","NDX","US500","USTEC","DXY"]);
+ const universe=tick.tickers.filter(t=>{const sym=String(t?.symbol||""),base=sym.replace(/^(PI|PF)_/,"").replace(/USD$/,"");
+   return t?.tag==="perpetual"&&t.suspended!==true&&/^(PI|PF)_[A-Z0-9]+USD$/.test(sym)&&!nonCryptoBases.has(base)&&Number(t.volumeQuote)>0;})
   .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
  const loaded=[];
  for(const ticker of universe){
@@ -103,8 +107,8 @@ async function main(){
   }catch(e){loaded.push({ticker,error:String(e.message||e)});}
  }
  const windows={};
- for(const days of [90,180]){
-  const results=loaded.map(d=>d.error?{symbol:d.ticker.symbol,error:d.error}:runSymbol(d,days,end));
+ for(const [label,days,windowEnd] of [["90d",90,end],["180d",180,end],["prior90d",90,end-90*DAY]]){
+  const results=loaded.map(d=>d.error?{symbol:d.ticker.symbol,error:d.error}:runSymbol(d,days,end,windowEnd));
   const rawTrades=results.flatMap(x=>x.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const portfolio=selectPortfolioTrades(rawTrades,{maxConcurrent:MAX_CONCURRENT_TRADES});
   const trades=portfolio.accepted;
@@ -114,7 +118,7 @@ async function main(){
   const symbolSummaries=results.map(({trades:raw,...r})=>{const accepted=acceptedBySymbol.get(r.symbol)||[];return {...r,filledTrades:raw?.length||0,acceptedTrades:accepted.length,
     portfolioRejected:rejectedBySymbol.get(r.symbol)||0,overall:metrics(accepted),bySide:Object.fromEntries([...new Set(accepted.map(t=>t.side))].map(v=>[v,metrics(accepted.filter(t=>t.side===v))])),
     bySetup:Object.fromEntries([...new Set(accepted.map(t=>t.setup))].map(v=>[v,metrics(accepted.filter(t=>t.setup===v))]))};});
-  windows[days+"d"]={period:{from:new Date(end-days*DAY).toISOString(),to:new Date(end).toISOString()},symbolsRequested:SYMBOL_LIMIT,
+  windows[label]={period:{from:new Date(windowEnd-days*DAY).toISOString(),to:new Date(windowEnd).toISOString()},symbolsRequested:SYMBOL_LIMIT,
    symbolsLoaded:loaded.filter(d=>!d.error).length,symbols:symbolSummaries,rawFilledTrades:rawTrades.length,portfolioRejected:portfolio.rejected.length,
    maxConcurrentTrades:MAX_CONCURRENT_TRADES,peakConcurrentTrades:portfolio.peakConcurrent,overall:metrics(trades),
    bySide:group("side"),bySetup:group("setup"),trades};
