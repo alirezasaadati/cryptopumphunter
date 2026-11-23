@@ -5,7 +5,10 @@ import { evaluateTradeCandle } from "../src/futures-trade-lifecycle.js";
 
 const BASE = "https://futures.kraken.com";
 const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
-const DAYS = Number(process.env.LIFECYCLE_BACKTEST_DAYS || 60), WARMUP_DAYS = 15, SYMBOL_LIMIT = 10, MARGIN_USD = 10, LEVERAGE = 10, TARGET_MARGIN_PERCENT = 15;\nconst TAKER_FEE_RATE = Number(process.env.BACKTEST_TAKER_FEE_RATE || 0.0005);\nconst SLIPPAGE_RATE = Number(process.env.BACKTEST_SLIPPAGE_RATE || 0.0002);\nconst ROUND_TRIP_COST_USD = MARGIN_USD * LEVERAGE * 2 * (TAKER_FEE_RATE + SLIPPAGE_RATE);
+const DAYS = Number(process.env.LIFECYCLE_BACKTEST_DAYS || 60), WARMUP_DAYS = 15, SYMBOL_LIMIT = 10, MARGIN_USD = 10, LEVERAGE = 10, TARGET_MARGIN_PERCENT = 15;
+const TAKER_FEE_RATE = Number(process.env.BACKTEST_TAKER_FEE_RATE || 0.0005);
+const SLIPPAGE_RATE = Number(process.env.BACKTEST_SLIPPAGE_RATE || 0.0002);
+const ROUND_TRIP_COST_USD = MARGIN_USD * LEVERAGE * 2 * (TAKER_FEE_RATE + SLIPPAGE_RATE);
 
 async function getJson(url, attempt = 0) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
@@ -75,8 +78,10 @@ function blankStats() {
 function summarize(trades, counters) {
   const closed=trades.filter(t=>t.status==="CLOSED_PROFIT"||t.status==="CLOSED_STOP");
   const wins=closed.filter(t=>t.status==="CLOSED_PROFIT"), stops=closed.filter(t=>t.status==="CLOSED_STOP");
-  const grossPnl=t=>MARGIN_USD*Number(t.marginReturnPercent||0)/100;\n  const pnl=t=>grossPnl(t)-ROUND_TRIP_COST_USD;
-  const netTradePnls=closed.map(pnl);\n  const grossWins=netTradePnls.filter(x=>x>0).reduce((s,x)=>s+x,0), grossLoss=Math.abs(netTradePnls.filter(x=>x<0).reduce((s,x)=>s+x,0));
+  const grossPnl=t=>MARGIN_USD*Number(t.marginReturnPercent||0)/100;
+  const pnl=t=>grossPnl(t)-ROUND_TRIP_COST_USD;
+  const netTradePnls=closed.map(pnl);
+  const grossWins=netTradePnls.filter(x=>x>0).reduce((s,x)=>s+x,0), grossLoss=Math.abs(netTradePnls.filter(x=>x<0).reduce((s,x)=>s+x,0));
   let equity=0, peak=0, maxDD=0;
   for(const t of [...closed].sort((a,b)=>(a.closedAtMs||0)-(b.closedAtMs||0))){equity+=pnl(t);peak=Math.max(peak,equity);maxDD=Math.max(maxDD,peak-equity);}
   const sideStats=side=>{
@@ -141,7 +146,9 @@ async function runEngine(engine, ticker, data, btc4h, testStart, endMs) {
 }
 
 async function main(){
-  const configuredEnd=process.env.LIFECYCLE_BACKTEST_END ? Date.parse(process.env.LIFECYCLE_BACKTEST_END) : Date.now();\n  if(!Number.isFinite(configuredEnd)) throw new Error("Invalid LIFECYCLE_BACKTEST_END");\n  const endMs=configuredEnd,testStart=endMs-DAYS*86400000,fromMs=testStart-WARMUP_DAYS*86400000;
+  const configuredEnd=process.env.LIFECYCLE_BACKTEST_END ? Date.parse(process.env.LIFECYCLE_BACKTEST_END) : Date.now();
+  if(!Number.isFinite(configuredEnd)) throw new Error("Invalid LIFECYCLE_BACKTEST_END");
+  const endMs=configuredEnd,testStart=endMs-DAYS*86400000,fromMs=testStart-WARMUP_DAYS*86400000;
   const tickers=(await getJson(BASE+"/derivatives/api/v3/tickers")).tickers;
   if(!Array.isArray(tickers))throw new Error("Kraken tickers response invalid");
   const excluded=new Set(["XAU","NVDAX","EUR","GBP","JPY","AUD","CAD","CHF","SPX","NDX","US500","US100"]);
