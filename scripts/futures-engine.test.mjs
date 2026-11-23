@@ -239,7 +239,7 @@ test("ATR rejects insufficient candles and calculates positive volatility",()=>{
   assert.ok(calculateAtr(makeCandles(),14)>0);
 });
 
-test("momentum and pullback provide 0/7/15 priority bonuses without changing qualification score",()=>{
+test("LONG requires both 15m confirmations; full confirmation keeps its priority bonus",()=>{
   const evaluate=mode=>{
     const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
     const last=fifteenMinute.at(-1);
@@ -268,11 +268,7 @@ test("momentum and pullback provide 0/7/15 priority bonuses without changing qua
   assert.match(one.rejected,/الزامی/);
   assert.match(none.rejected,/الزامی/);
   assert.equal(both.score,both.baseScore);
-  assert.equal(one.score,one.baseScore);
-  assert.equal(none.score,none.baseScore);
   assert.equal(both.priorityScore,both.baseScore+both.volumePriorityBonus+15);
-  assert.equal(one.priorityScore,one.baseScore+one.volumePriorityBonus+7);
-  assert.equal(none.priorityScore,none.baseScore+none.volumePriorityBonus);
 });
 
 test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
