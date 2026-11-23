@@ -1,8 +1,10 @@
 import {writeFile,mkdir} from "node:fs/promises";
 import {analyzeBrooksPriceAction} from "../src/al-brooks-price-action.js";
+import {sizePosition,selectPortfolioTrades} from "../src/al-brooks-backtest-risk.js";
 
 const BASE="https://futures.kraken.com", HOUR=3600000, DAY=86400000, M15=900000, M5=300000;
 const FEE=0.0005, SLIPPAGE=0.0003, RISK_USD=10, TARGET_R=1.5, MAX_HOLD_HOURS=48;
+const MAX_NOTIONAL_USD=100, MAX_CONCURRENT_TRADES=5;
 const SYMBOL_LIMIT=Math.max(1,Math.min(10,Number(process.env.BROOKS_SYMBOLS||7)));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function getJson(url){
@@ -41,7 +43,7 @@ function metrics(trades){
  maxNotionalUsd:trades.length?Math.max(...trades.map(t=>t.qty*t.entry)):0,
  maxMarginAt10xUsd:trades.length?Math.max(...trades.map(t=>t.qty*t.entry/10)):0};
 }
-function simulateExit({side,entry,stop,bars,start,maxIndex}){
+function simulateExit({side,entry,stop,qty,bars,start,maxIndex}){
  const risk=Math.abs(entry-stop),target=side==="LONG"?entry+TARGET_R*risk:entry-TARGET_R*risk;
  let reason="TIME",rawExit=Number(bars[maxIndex]?.close),exitTime=bars[maxIndex]?.time;
  for(let i=start;i<=maxIndex;i++){
@@ -53,9 +55,10 @@ function simulateExit({side,entry,stop,bars,start,maxIndex}){
   if(targetHit){rawExit=targetAtOpen?o:target;reason="TARGET";exitTime=c.time;break;}
  }
  const exit=side==="LONG"?rawExit*(1-SLIPPAGE):rawExit*(1+SLIPPAGE);
- const qty=RISK_USD/risk,entryFee=qty*entry*FEE,exitFee=qty*exit*FEE;
+ const entryFee=qty*entry*FEE,exitFee=qty*exit*FEE;
  const gross=side==="LONG"?qty*(exit-entry):qty*(entry-exit),netPnlUsd=gross-entryFee-exitFee;
- return {target,exit,exitTime,reason,qty,gross,entryFee,exitFee,netPnlUsd,holdHours:(exitTime-bars[start].time)/HOUR,riskUsd:RISK_USD};
+ return {target,exit,exitTime,reason,qty,gross,entryFee,exitFee,netPnlUsd,holdHours:(exitTime-bars[start].time)/HOUR,
+  riskUsdActual:qty*risk,riskUsdBudget:RISK_USD,notionalUsd:qty*entry,marginAt10xUsd:qty*entry/10};
 }
 function runSymbol(data,days,end){
  const {ticker,m15,m5}=data,start=end-days*DAY,signals=[],trades=[];
@@ -73,11 +76,14 @@ function runSymbol(data,days,end){
   if(entryIndex<0){expired++;continue;}
   const entry=signal.side==="LONG"?rawEntry*(1+SLIPPAGE):rawEntry*(1-SLIPPAGE);
   const stop=signal.stop, risk=signal.side==="LONG"?entry-stop:stop-entry;
-  if(!(risk>0)||risk/entry>0.08){invalid++;continue;}
+  if(!(risk>0)){invalid++;continue;}
+  const sizing=sizePosition(entry,stop,{riskBudgetUsd:RISK_USD,maxNotionalUsd:MAX_NOTIONAL_USD});
+  if(!sizing){invalid++;continue;}
   const maxIndex=Math.min(m5.length-1,entryIndex+MAX_HOLD_HOURS*12);
-  const result=simulateExit({side:signal.side,entry,stop,bars:m5,start:entryIndex,maxIndex});
+  const result=simulateExit({side:signal.side,entry,stop,qty:sizing.qty,bars:m5,start:entryIndex,maxIndex});
   trades.push({symbol:ticker.symbol,side:signal.side,setup:signal.setup,context:signal.context,score:signal.score,
-   signalTime,entryTime:m5[entryIndex].time,entry,stop,target:result.target,riskPct:risk/entry*100,...result});
+   signalTime,entryTime:m5[entryIndex].time,entry,stop,target:result.target,riskPct:risk/entry*100,
+   positionCapApplied:sizing.capApplied,plannedRiskUsd:sizing.plannedRiskUsd,...result});
   lockedUntil=lowerBound(m5,result.exitTime)+1;
  }
  const by=(key)=>Object.fromEntries([...new Set(trades.map(t=>t[key]))].map(v=>[v,metrics(trades.filter(t=>t[key]===v))]));
@@ -99,19 +105,29 @@ async function main(){
  const windows={};
  for(const days of [90,180]){
   const results=loaded.map(d=>d.error?{symbol:d.ticker.symbol,error:d.error}:runSymbol(d,days,end));
-  const trades=results.flatMap(x=>x.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const rawTrades=results.flatMap(x=>x.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const portfolio=selectPortfolioTrades(rawTrades,{maxConcurrent:MAX_CONCURRENT_TRADES});
+  const trades=portfolio.accepted;
   const group=key=>Object.fromEntries([...new Set(trades.map(t=>t[key]))].map(v=>[v,metrics(trades.filter(t=>t[key]===v))]));
+  const acceptedBySymbol=new Map();for(const t of trades){const a=acceptedBySymbol.get(t.symbol)||[];a.push(t);acceptedBySymbol.set(t.symbol,a);}
+  const rejectedBySymbol=new Map();for(const t of portfolio.rejected){rejectedBySymbol.set(t.symbol,(rejectedBySymbol.get(t.symbol)||0)+1);}
+  const symbolSummaries=results.map(({trades:raw,...r})=>{const accepted=acceptedBySymbol.get(r.symbol)||[];return {...r,filledTrades:raw?.length||0,acceptedTrades:accepted.length,
+    portfolioRejected:rejectedBySymbol.get(r.symbol)||0,overall:metrics(accepted),bySide:Object.fromEntries([...new Set(accepted.map(t=>t.side))].map(v=>[v,metrics(accepted.filter(t=>t.side===v))])),
+    bySetup:Object.fromEntries([...new Set(accepted.map(t=>t.setup))].map(v=>[v,metrics(accepted.filter(t=>t.setup===v))]))};});
   windows[days+"d"]={period:{from:new Date(end-days*DAY).toISOString(),to:new Date(end).toISOString()},symbolsRequested:SYMBOL_LIMIT,
-   symbolsLoaded:loaded.filter(d=>!d.error).length,symbols:results.map(({trades,...r})=>r),overall:metrics(trades),
+   symbolsLoaded:loaded.filter(d=>!d.error).length,symbols:symbolSummaries,rawFilledTrades:rawTrades.length,portfolioRejected:portfolio.rejected.length,
+   maxConcurrentTrades:MAX_CONCURRENT_TRADES,peakConcurrentTrades:portfolio.peakConcurrent,overall:metrics(trades),
    bySide:group("side"),bySetup:group("setup"),trades};
  }
  const report={strategy:"Al Brooks inspired price action engine v1",generatedAt:new Date().toISOString(),dataSource:"Kraken Futures historical OHLC",
   assumptions:{signalTimeframe:"15m closed candles",executionTimeframe:"5m",entry:"stop entry above/below signal bar; valid for 9 subsequent 5m bars; gap-aware next candle fill",
    stop:"beyond signal bar with 0.12 ATR buffer",target:"1.5R",riskPerTradeUsd:RISK_USD,maxHoldHours:MAX_HOLD_HOURS,
    feePerSide:FEE,slippagePerSide:SLIPPAGE,exitAmbiguity:"stop-first when stop and target touched in same 5m candle; gap-at-open handled explicitly",
-   limitations:["Current-volume universe can introduce survivorship bias","No funding, liquidation, market impact or portfolio concurrency/capital model","$10 risk is per trade and concurrent trades are not portfolio-capped","5m OHLC cannot reveal intrabar path; ambiguous bars use conservative stop-first","Engine is an objective approximation of publicly described Al Brooks concepts, not an exact reproduction of discretionary judgment"]},
-  config:{symbolLimit:SYMBOL_LIMIT,targetR:TARGET_R,riskUsd:RISK_USD},windows};
+   positionSizing:"maximum $10 planned stop risk, capped at $100 notional ($10 margin at illustrative 10x); actual risk may be lower when cap binds",
+   portfolioModel:"maximum five concurrent positions globally; no overlapping position in same symbol; rejected entries are excluded",
+   limitations:["Current-volume universe can introduce survivorship bias","No funding, liquidation, market impact or intrabar path reconstruction","Illustrative $100 notional cap and five-position portfolio cap are research assumptions, not production settings","5m OHLC cannot reveal intrabar path; ambiguous bars use conservative stop-first","Engine is an objective approximation of publicly described Al Brooks concepts, not an exact reproduction of discretionary judgment"]},
+  config:{symbolLimit:SYMBOL_LIMIT,targetR:TARGET_R,riskUsd:RISK_USD,maxNotionalUsd:MAX_NOTIONAL_USD,maxConcurrentTrades:MAX_CONCURRENT_TRADES},windows};
  await mkdir("artifacts",{recursive:true});await writeFile("artifacts/al-brooks-price-action-backtest.json",JSON.stringify(report,null,2));
- console.log(JSON.stringify({generatedAt:report.generatedAt,universe:universe.map(t=>t.symbol),windows:Object.fromEntries(Object.entries(windows).map(([k,v])=>[k,{overall:v.overall,bySide:v.bySide,bySetup:v.bySetup,symbols:v.symbols.map(s=>({symbol:s.symbol,error:s.error,signals:s.signalCount,trades:s.filledTrades}))}]))},null,2));
+ console.log(JSON.stringify({generatedAt:report.generatedAt,universe:universe.map(t=>t.symbol),windows:Object.fromEntries(Object.entries(windows).map(([k,v])=>[k,{overall:v.overall,bySide:v.bySide,bySetup:v.bySetup,rawFilledTrades:v.rawFilledTrades,portfolioRejected:v.portfolioRejected,peakConcurrentTrades:v.peakConcurrentTrades,symbols:v.symbols.map(s=>({symbol:s.symbol,error:s.error,signals:s.signalCount,rawTrades:s.filledTrades,accepted:s.acceptedTrades,rejected:s.portfolioRejected}))}]))},null,2));
 }
 main().catch(e=>{console.error(e);process.exit(1);});
