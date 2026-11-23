@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - "src/channel-structure-engine.js"
+      - "src/channel-structure-mtf.js"
       - "scripts/channel-structure-backtest.mjs"
       - ".github/workflows/channel-structure-backtest.yml"
   workflow_dispatch:
