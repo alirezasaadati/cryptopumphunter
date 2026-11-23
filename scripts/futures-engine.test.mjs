@@ -303,17 +303,17 @@ test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
 });
 
 
-test("standard LONG path accepts aligned 1h with neutral 4h context",()=>{
+test("mandatory 4h filter rejects a LONG when the 4h trend is neutral",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({
     time:Date.now()-(120-i)*4*60*60*1000,
     open:100,high:100.1,low:99.9,close:100,volume:100
   }));
   const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.highRiskEligible,false);
-  assert.equal(result.riskLevel,"STANDARD");
-  assert.ok(result.score>=FUTURES_CONFIG.MIN_SCORE);
+  assert.equal(result.eligible,undefined,JSON.stringify(result));
+  assert.match(result.rejected,/۴ساعته خنثی است/);
+  assert.equal(result.entryDiagnostics.fourHourRequired,true);
+  assert.equal(result.entryDiagnostics.longTrendOk,false);
 });
 
 test("HIGH_RISK accepts opposing 4h without 15m momentum; confirmation only affects priority",()=>{
