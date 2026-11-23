@@ -105,10 +105,33 @@ function summarize(trades, counters) {
       winRatePct:xs.length?xs.filter(t=>t.status==="CLOSED_PROFIT").length/xs.length*100:0,
       netMarginReturnPct:xs.reduce((n,t)=>n+Number(t.marginReturnPercent||0),0)};
   }
+  const longClosed = closed.filter(t => t.side === "LONG");
+  const longGroups = {};
+  const addGroup = (name, key) => {
+    const xs = longClosed.filter(key);
+    longGroups[name] = { trades: xs.length, tp: xs.filter(t=>t.status==="CLOSED_PROFIT").length,
+      stops: xs.filter(t=>t.status==="CLOSED_STOP").length,
+      winRatePct: xs.length ? xs.filter(t=>t.status==="CLOSED_PROFIT").length/xs.length*100 : 0,
+      netMarginReturnPct: xs.reduce((n,t)=>n+Number(t.marginReturnPercent||0),0),
+      avgScore: xs.length ? xs.reduce((n,t)=>n+Number(t.score||0),0)/xs.length : 0 };
+  };
+  addGroup("4h_aligned",t=>t.trend4hAligned===true);
+  addGroup("4h_opposed",t=>t.trend4hAligned===false);
+  addGroup("15m_momentum_yes",t=>t.momentumConfirmed===true);
+  addGroup("15m_momentum_no",t=>t.momentumConfirmed===false);
+  addGroup("15m_pullback_yes",t=>t.pullbackConfirmed===true);
+  addGroup("15m_pullback_no",t=>t.pullbackConfirmed===false);
+  addGroup("both_confirmations",t=>t.momentumConfirmed===true&&t.pullbackConfirmed===true);
+  addGroup("no_confirmations",t=>t.momentumConfirmed!==true&&t.pullbackConfirmed!==true);
+  for (const [name,lo,hi] of [["rsi_32_45",32,45],["rsi_45_52",45,52],["rsi_52_65",52,65],["rsi_65_72",65,72],["rsi_72_82",72,82]]) addGroup(name,t=>Number(t.rsi)>=lo&&Number(t.rsi)<hi);
+  for (const [name,lo,hi] of [["score_40_49",40,50],["score_50_59",50,60],["score_60_plus",60,101]]) addGroup(name,t=>Number(t.score)>=lo&&Number(t.score)<hi);
+  addGroup("volume_ratio_below_0_5",t=>Number(t.volumeRatio)<0.5);
+  addGroup("volume_ratio_0_5_1",t=>Number(t.volumeRatio)>=0.5&&Number(t.volumeRatio)<1);
+  addGroup("volume_ratio_1_plus",t=>Number(t.volumeRatio)>=1);
   return {...counters,tradesStarted:trades.length,closedTrades:closed.length,profitCloses:wins.length,stopCloses:stops.length,
     openAtEnd:trades.length-closed.length,winRatePct:closed.length?wins.length/closed.length*100:0,
     totalMarginReturnPct:sum,averageMarginReturnPct:closed.length?sum/closed.length:0,maxDrawdownMarginPct:dd,
-    ambiguous5mCandles:trades.reduce((n,t)=>n+(t.ambiguousCandles||0),0),bySide,byRisk};
+    ambiguous5mCandles:trades.reduce((n,t)=>n+(t.ambiguousCandles||0),0),bySide,byRisk,longDiagnostics:longGroups};
 }
 async function runSymbol(ticker, from, to) {
   const [h1,h4,m15,m5]=await Promise.all([
@@ -150,7 +173,15 @@ async function runSymbol(ticker, from, to) {
       if((state.locks.get(lockKey)||0)>signalClose){count.lockSkips++;continue;}
       const trade={id:ticker.symbol+":"+candidate.side+":"+signalClose+":"+variant.id,symbol:ticker.symbol,side:candidate.side,
         riskLevel,status:"OPEN",entry:Number(candidate.entry),initialStop:Number(candidate.stop),currentStop:Number(candidate.stop),
-        stop:Number(candidate.stop),signalTime:bar.time,entryTime:signalClose,score:candidate.score,ambiguousCandles:0};
+        stop:Number(candidate.stop),signalTime:bar.time,entryTime:signalClose,score:candidate.score,ambiguousCandles:0,
+        rsi:Number(candidate.rsi),volumeRatio:Number(candidate.volumeRatio),
+        momentumConfirmed:candidate.entryDiagnostics?.momentumConfirmed===true,
+        pullbackConfirmed:candidate.entryDiagnostics?.pullbackConfirmed===true,
+        confirmationCount:Number(candidate.confirmationCount||0),trend4hAligned:aligned,
+        trend1hUp:Number(candidate.ema20)>Number(candidate.ema50)&&bar.close>Number(candidate.ema20),
+        trend1hDown:Number(candidate.ema20)<Number(candidate.ema50)&&bar.close<Number(candidate.ema20),
+        entryEmaDistanceAtr:Number(candidate.entryDiagnostics?.emaDistanceAtr),
+        entryDriftPct:Number(candidate.entryDiagnostics?.driftPct)};
       let closed=false;
       for(let j=lowerBound(m5,signalClose);j<m5.length&&m5[j].time<to;j++){
         const candle=m5[j];if(ambiguous(candidate.side,trade,candle))trade.ambiguousCandles++;
