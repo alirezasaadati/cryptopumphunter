@@ -1,4 +1,4 @@
-import { analyzeFuturesSymbol, FUTURES_CONFIG, calculateAtr } from "../src/index.js";
+import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
 import { resolveShortFallbackFill } from "../src/short-entry-fallback-experiment.js";
 import { mkdir, writeFile } from "node:fs/promises";
 
@@ -150,7 +150,7 @@ function lowerBound(candles,time) {
 }
 
 function createArm() {
-  return {trades:[],opportunities:0,filled:0,expired:0,marketOrders:0,limitOrders:0,limitGapFills:0,limitTouchFills:0};
+  return {trades:[],opportunities:0,filled:0,expired:0,lockSkips:0,marketOrders:0,limitOrders:0,limitGapFills:0,limitTouchFills:0};
 }
 
 function runWindowForSymbol(data,days,endMs) {
@@ -168,7 +168,9 @@ function runWindowForSymbol(data,days,endMs) {
     if(fourIndex<FUTURES_CONFIG.MIN_CANDLES)continue;
     const closed4h=fourHour.slice(0,fourIndex);
     const closed15m=fifteenMinute.slice(Math.max(0,fifteenIndex-160),fifteenIndex);
-    const tickerAtSignal={symbol:ticker.symbol,last:signalBar.close,quoteVolume:Number(ticker.volumeQuote)||0,
+    const historicalQuoteVolume=oneHour.slice(Math.max(0,i-23),i+1)
+      .reduce((sum,c)=>sum+Number(c.volume)*Number(c.close),0);
+    const tickerAtSignal={symbol:ticker.symbol,last:signalBar.close,quoteVolume:historicalQuoteVolume,
       priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}};
     const candidate=analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m);
     if(candidate?.side!=="SHORT"||candidate?.eligible!==true)continue;
@@ -183,7 +185,7 @@ function runWindowForSymbol(data,days,endMs) {
     const levelGapPct=Math.abs(ema20-resistance)/Math.min(ema20,resistance)*100;
     if(!belowBoth||levelGapPct<=0.5)continue;
     baseline.opportunities++;experimental.opportunities++;
-    if(decisionIndex+1<lockUntilFiveIndex)continue;
+    if(decisionIndex+1<lockUntilFiveIndex){baseline.lockSkips++;experimental.lockSkips++;continue;}
     const following=fiveMinute.slice(decisionIndex+1,decisionIndex+1+LIMIT_VALID_BARS);
     const decision=resolveShortFallbackFill({decisionCandle,followingCandles:following,validBars:LIMIT_VALID_BARS,
       marketSlippage:SLIPPAGE_PER_SIDE});
@@ -257,9 +259,9 @@ async function main() {
     windows[days+"d"]={
       period:{from:new Date(endMs-days*DAY).toISOString(),to:new Date(endMs).toISOString(),days},
       symbolsLoaded:loaded.filter(x=>!x.error).length,symbolsRequested:SYMBOL_LIMIT,
-      baseline:{opportunities:sum("baseline","opportunities"),filled:sum("baseline","filled"),metrics:summarize(baselineTrades)},
+      baseline:{opportunities:sum("baseline","opportunities"),filled:sum("baseline","filled"),lockSkips:sum("baseline","lockSkips"),metrics:summarize(baselineTrades)},
       experimental:{
-        opportunities:sum("experimental","opportunities"),filled:sum("experimental","filled"),expired:sum("experimental","expired"),
+        opportunities:sum("experimental","opportunities"),filled:sum("experimental","filled"),expired:sum("experimental","expired"),lockSkips:sum("experimental","lockSkips"),
         marketOrders:sum("experimental","marketOrders"),limitOrders:sum("experimental","limitOrders"),
         limitGapFills:sum("experimental","limitGapFills"),limitTouchFills:sum("experimental","limitTouchFills"),
         metrics:summarize(experimentalTrades)
@@ -268,7 +270,7 @@ async function main() {
         netRDelta:experimentalTrades.reduce((s,t)=>s+t.netR,0)-baselineTrades.reduce((s,t)=>s+t.netR,0)},
       symbols:symbolResults.map(({baseline,experimental,...rest})=>({ ...rest,
         baseline:baseline?{opportunities:baseline.opportunities,filled:baseline.filled,metrics:baseline.metrics}:null,
-        experimental:experimental?{opportunities:experimental.opportunities,filled:experimental.filled,expired:experimental.expired,
+        experimental:experimental?{opportunities:experimental.opportunities,filled:experimental.filled,expired:experimental.expired,lockSkips:experimental.lockSkips,
           marketOrders:experimental.marketOrders,limitOrders:experimental.limitOrders,metrics:experimental.metrics}:null
       })),
       trades:{baseline:baselineTrades,experimental:experimentalTrades}
