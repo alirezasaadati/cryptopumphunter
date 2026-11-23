@@ -205,7 +205,7 @@ function runWindowForSymbol(data,days,endMs) {
       if(levels){
         experimentalTrade=simulateShortTrade({symbol:ticker.symbol,levels,candles5m:fiveMinute,fillIndex,
           fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS});
-        experimental.trades.push({...experimentalTrade,entryType:decision.type,orderReason:decision.reason});
+        experimental.trades.push({...experimentalTrade,entryType:decision.type,orderDecision:decision.decisionReason,fillReason:decision.reason});
         experimental.filled++;
         if(decision.type==="MARKET")experimental.marketOrders++;
         else {
