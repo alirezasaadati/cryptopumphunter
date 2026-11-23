@@ -162,8 +162,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
 
   const trades = [];
   const baselineTrades = [];
-  const baselineLockUntil = new Map();
-  const lockUntil = new Map();
+  // Shared lock schedule keeps the accepted signal set identical in both arms.
+  const pairedLockUntil = new Map();
   let fourIndex = 0, fifteenIndex = 0;
   let acceptedSignals = 0, skippedByLock = 0, rejectedSignals = 0, skippedNonShortSignals = 0;
   let limitOrdersFilled = 0, limitOrdersExpired = 0;
@@ -193,14 +193,18 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const lockKey = ticker.symbol + "|" + candidate.side;
     const firstOrderBar = lowerBound(fiveMinute,signalCloseTime);
 
-    // Paired control: unchanged current short-engine market entry, same signal,
-    // same original stop/TP1, and an independent same-side lifecycle lock.
-    if ((baselineLockUntil.get(lockKey) || 0) <= signalCloseTime && fiveMinute[firstOrderBar] && fiveMinute[firstOrderBar].time < toMs) {
+    // Both arms must be eligible for this exact same signal opportunity.
+    if ((pairedLockUntil.get(lockKey) || 0) > signalCloseTime) { skippedByLock++; continue; }
+    acceptedSignals++;
+
+    // Paired control: unchanged current short-engine market entry.
+    let baselineTrade = null;
+    if (fiveMinute[firstOrderBar] && fiveMinute[firstOrderBar].time < toMs) {
       const baselineEntry = Number(candidate.entry);
       const baselineStop = Number(candidate.stop);
       const baselineTarget = Number(candidate.target1);
       if ([baselineEntry,baselineStop,baselineTarget].every(Number.isFinite) && baselineEntry > 0) {
-        const baselineTrade = {
+        baselineTrade = {
           id:ticker.symbol+":SHORT:BASELINE:"+signalCloseTime,
           symbol:ticker.symbol, side:"SHORT", status:"OPEN",
           entry:baselineEntry, initialStop:baselineStop, stop:baselineStop, target1:baselineTarget,
@@ -218,16 +222,10 @@ async function backtestSymbol(ticker, fromMs, toMs) {
           baselineTrade.lastMark=fiveMinute.at(-1)?.close ?? null;
           baselineTrade.marginReturnAtMarkPct=baselineTrade.lastMark
             ? -((baselineTrade.lastMark-baselineEntry)/baselineEntry)*100*LEVERAGE : null;
-          baselineLockUntil.set(lockKey,toMs);
-        } else {
-          baselineLockUntil.set(lockKey,baselineTrade.closedAtMs);
         }
         baselineTrades.push(baselineTrade);
       }
     }
-
-    if ((lockUntil.get(lockKey) || 0) > signalCloseTime) { skippedByLock++; continue; }
-    acceptedSignals++;
 
     // Select the closer of 1h EMA20 and the just-closed signal candle wick:
     // LONG: EMA20 or previous candle low; SHORT: EMA20 or previous candle high.
@@ -260,7 +258,11 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       }
       if (fill) break;
     }
-    if (!fill) { limitOrdersExpired++; continue; }
+    if (!fill) {
+      limitOrdersExpired++;
+      if (baselineTrade) pairedLockUntil.set(lockKey, baselineTrade.status === "OPEN_AT_BACKTEST_END" ? toMs : baselineTrade.closedAtMs);
+      continue;
+    }
 
     // Recalculate the existing structural/ATR stop around the actual EMA20 fill.
     // The same 1.5R / 2.5R / 3.5R target multipliers are retained.
@@ -276,6 +278,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     const riskPct = risk/fill.price;
     if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
       rejectedSignals++;
+      if (baselineTrade) pairedLockUntil.set(lockKey, baselineTrade.status === "OPEN_AT_BACKTEST_END" ? toMs : baselineTrade.closedAtMs);
       continue;
     }
     const direction = candidate.side === "LONG" ? 1 : -1;
@@ -300,10 +303,12 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       trade.status="OPEN_AT_BACKTEST_END";
       trade.lastMark=fiveMinute.at(-1)?.close ?? null;
       trade.marginReturnAtMarkPct=trade.lastMark ? direction*((trade.lastMark-fill.price)/fill.price)*100*LEVERAGE : null;
-      lockUntil.set(lockKey,toMs);
-    } else {
-      lockUntil.set(lockKey,trade.closedAtMs);
     }
+    const baselineUnlock = baselineTrade
+      ? (baselineTrade.status === "OPEN_AT_BACKTEST_END" ? toMs : baselineTrade.closedAtMs)
+      : signalCloseTime;
+    const experimentalUnlock = trade.status === "OPEN_AT_BACKTEST_END" ? toMs : trade.closedAtMs;
+    pairedLockUntil.set(lockKey, Math.max(baselineUnlock || signalCloseTime, experimentalUnlock || signalCloseTime));
     trades.push(trade);
   }
 
