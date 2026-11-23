@@ -86,7 +86,7 @@ function snapshot(series,time){
   return {lastPrice:last.close,dailyEma:dEma,dailySlope,dailyReturn,weeklyEma:wEma,weeklySlope,weeklyReturn,
     dailyBear:partialDay.close<dEma&&dailySlope<=0&&dailyReturn>=-3&&dailyReturn<=0.5,
     weeklyStrongBear:partialWeek.close<wEma&&weeklySlope<=-1&&weeklyReturn<=-5,
-    weeklyNeutral:Math.abs(weeklyReturn)<=3&&Math.abs(partialWeek.close/wEma-1)<=0.03&&Math.abs(weeklySlope)<=1};
+    weeklyNeutral:weeklyReturn>=-4&&weeklyReturn<=4&&Math.abs(partialWeek.close/wEma-1)<=0.05&&Math.abs(weeklySlope)<=1.5};
 }
 function altBearishAt(altSeries,time){
   let valid=0,bear=0;
@@ -221,7 +221,7 @@ async function main(){
     engine:"analyzeFuturesSymbol from src/index.js, SHORT candidates only; no strategy thresholds changed",
     regimeDefinitions:{
       weeklyStrongBear:"BTC rolling 7d return <= -5%, partial weekly close below EMA20W, EMA20W slope over four weekly observations <= -1%",
-      weeklyNeutral:"BTC rolling 7d return in [-3%,+3%], partial weekly close within +/-3% of EMA20W, EMA20W slope over four weekly observations in [-1%,+1%]",
+      weeklyNeutral:"BTC rolling 7d return in [-4%,+4%], partial weekly close within +/-5% of EMA20W, EMA20W slope over four weekly observations in [-1.5%,+1.5%]",
       dailyWeakModerateBear:"BTC partial daily close below prior completed daily EMA20, EMA20D slope over three daily observations <= 0%, partial UTC-day return in [-3%,+0.5%]",
       altsBroadlyBearish:"at least 60% of at least 10 sampled non-BTC top-volume Kraken perpetual altcoins have partial daily close below prior completed daily EMA20 and negative rolling 24h return",
       timing:"all market regime measurements use only candles completed by each signal timestamp; current UTC day/week are partial snapshots, no future candles"
