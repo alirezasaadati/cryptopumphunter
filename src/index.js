@@ -2886,18 +2886,43 @@ async function runFuturesSignalScan(env, options = {}) {
   return { report, signals, experimentalSent: 0, analyzed, diagnostics };
 }
 
+const activeManualFuturesScans = new Set();
+
 async function runFuturesSignalsForChat(env, chatId) {
   if (!(await isApproved(chatId, env))) {
     await sendMessage(env, chatId, "⛔ دسترسی شما فعال نیست.");
     return;
   }
+
+  const scanKey = String(chatId);
+  if (activeManualFuturesScans.has(scanKey)) {
+    await sendMessage(env, chatId, "⏳ اسکن فیوچرز شما در حال اجراست؛ لطفاً تا دریافت نتیجه منتظر بمان.", menuForChat(env, chatId));
+    return;
+  }
+
+  activeManualFuturesScans.add(scanKey);
   try {
+    // Send visible feedback before starting network-heavy market analysis.
+    await sendMessage(env, chatId,
+      "🔄 درخواست شما دریافت شد. اسکن بازار فیوچرز Kraken شروع شد.\n" +
+      "⏳ لطفاً تا ارسال نتیجه، ربات را باز نگه ندار؛ نتیجه همین‌جا ارسال می‌شود.",
+      menuForChat(env, chatId));
+
     const result = await runFuturesSignalScan(env, { excludeChatId: chatId });
     const signals = result.signals || [];
     if (!signals.length) {
-      await sendMessage(env, chatId, "در حال حاضر سیگنال معتبری وجود ندارد.", menuForChat(env, chatId));
+      const d = result.diagnostics || {};
+      await sendMessage(env, chatId,
+        "📊 اسکن فیوچرز به پایان رسید؛ سیگنال معتبری پیدا نشد.\n\n" +
+        "نمادهای بررسی‌شده: " + (d.analyzedCount ?? "—") + "\n" +
+        "نمادهای واجد حجم: " + (d.universeCount ?? "—") + "\n" +
+        "ردشده‌ها: " + (d.rejectedCount ?? "—") + "\n" +
+        "مدت اسکن: " + (d.durationMs != null ? Math.round(d.durationMs / 1000) + " ثانیه" : "—") +
+        "\n\nبا تغییر شرایط بازار می‌توانی دوباره اسکن کنی.",
+        menuForChat(env, chatId));
       return;
     }
+    await sendMessage(env, chatId, "✅ اسکن تمام شد؛ " + signals.length + " سیگنال معتبر پیدا شد. در حال ارسال جزئیات...");
     for (let i = 0; i < signals.length; i++) {
       const signal = signals[i];
       await sendAndArchiveFuturesSignal(env, chatId, signal, formatFuturesSignal(signal, i + 1));
@@ -2905,7 +2930,6 @@ async function runFuturesSignalsForChat(env, chatId) {
   } catch (error) {
     const diagnostic = String(error?.stack || error?.message || error).slice(0, 1800);
     console.error("Manual futures scan failed:", diagnostic);
-    // Keep the normal user-facing message concise; expose the exact failure only to the configured owner.
     if (String(chatId) === String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
       try {
         await sendMessage(env, chatId, "🧪 خطای فنی اسکن فیوچرز (فقط مدیر):\n" + diagnostic);
@@ -2913,7 +2937,9 @@ async function runFuturesSignalsForChat(env, chatId) {
         console.error("Could not deliver futures scan diagnostic:", String(diagnosticError?.message || diagnosticError));
       }
     }
-    await sendMessage(env, chatId, "⚠️ در حال حاضر دریافت سیگنال ممکن نیست. لطفاً کمی بعد دوباره تلاش کن.", menuForChat(env, chatId));
+    await sendMessage(env, chatId, "⚠️ اجرای اسکن فیوچرز با خطا مواجه شد؛ درخواست ثبت شد اما نتیجه‌ای تولید نشد. لطفاً بعداً دوباره تلاش کن.", menuForChat(env, chatId));
+  } finally {
+    activeManualFuturesScans.delete(scanKey);
   }
 }
 
