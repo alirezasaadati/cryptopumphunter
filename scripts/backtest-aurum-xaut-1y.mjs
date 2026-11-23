@@ -246,3 +246,5 @@ async function main() {
   console.log(md);
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
+
+// Workflow trigger refresh: run from an isolated experimental branch.
