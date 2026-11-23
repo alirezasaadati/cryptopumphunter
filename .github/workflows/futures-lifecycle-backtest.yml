@@ -9,6 +9,7 @@ on:
       - "scripts/backtest-futures-lifecycle.mjs"
       - "scripts/backtest-fixed-margin-target.mjs"
       - "scripts/backtest-engine-comparison.mjs"
+      - "scripts/backtest-v48-short-30pct.mjs"
       - "src/index-current.js"
       - ".github/workflows/futures-lifecycle-backtest.yml"
       - "src/futures-trade-lifecycle.js"
