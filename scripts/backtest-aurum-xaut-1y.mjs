@@ -33,7 +33,6 @@ async function getJson(url) {
 }
 
 const BITFINEX_BASE = "https://api-pub.bitfinex.com/v2/candles";
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function fetchCandleChunk(symbol, timeframe, fromMs, toMs) {
   const url = new URL(`${BITFINEX_BASE}/trade:${timeframe}:${symbol}/hist`);
@@ -90,7 +89,7 @@ async function fetchBitfinexCandles(symbol, timeframe, intervalMs, fromMs, toMs)
 function aggregateHourlyTo4h(hourly) {
   const buckets = new Map();
   for (const c of hourly) {
-    const ts = Math.floor(c.timestamp / BAR4H) * BAR4H;
+    const ts = Math.floor(c.timestamp / (BAR4H * 1000)) * (BAR4H * 1000);
     let b = buckets.get(ts);
     if (!b) buckets.set(ts, b = { timestamp: ts, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume });
     else {
@@ -260,7 +259,7 @@ async function main() {
   await writeFile("artifacts/aurum-xaut-1y-trades.csv", csv);
   const m = report.metrics;
   const md = [
-    "# Aurum v1.1 — XAUT/USD 1-year Kraken backtest",
+    "# Aurum v1.1 — XAUT/USD 1-year Bitfinex backtest",
     `Period: ${report.period.start} → ${report.period.end}`,
     `Native 15m candles: ${marketData.raw15m} | Native 1h candles: ${marketData.raw1h} | 15m bars after gap fill: ${candles15.length} | 4h bars: ${candles4h.length}`,
     `Signals: ${signals} | Executed: ${tradesOut.length} | Overlap skipped: ${skippedOverlap} | Gap skipped: ${skippedGap}`,
