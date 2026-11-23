@@ -1,0 +1,35 @@
+name: Isolated signal_engine.py Kraken backtest
+on:
+  push:
+    branches:
+      - experiment/signal-engine-kraken-backtest
+    paths:
+      - "experimental/signal_engine.py"
+      - "experimental/backtest_signal_engine_kraken.py"
+      - ".github/workflows/signal-engine-kraken-backtest.yml"
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install isolated backtest dependencies
+        run: python -m pip install --upgrade pip pandas numpy requests
+      - name: Run original signal logic against Kraken candles
+        env:
+          SIGNAL_BACKTEST_DAYS: "60"
+          SIGNAL_BACKTEST_SYMBOLS: "10"
+        run: python experimental/backtest_signal_engine_kraken.py
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-engine-kraken-backtest
+          path: artifacts/
+          if-no-files-found: warn
