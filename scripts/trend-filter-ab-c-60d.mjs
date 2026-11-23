@@ -13,7 +13,8 @@ const VARIANTS = [
   { id: "A_current", label: "Current production filter" },
   { id: "B_4h_aligned", label: "Require aligned 4h trend" },
   { id: "C_4h_or_15m_momentum", label: "Require aligned 4h OR confirmed 15m momentum" },
-  { id: "D_4h_plus_rsi_52_65", label: "Require aligned 4h AND RSI 52–65" }
+  { id: "D_4h_plus_rsi_52_65", label: "Require aligned 4h AND RSI 52–65 on all sides" },
+  { id: "E_long_4h_rsi_52_65", label: "Filter LONG only: aligned 4h AND RSI 52–65; keep SHORT unchanged" }
 ];
 
 async function getJson(url, attempt = 0) {
@@ -169,6 +170,7 @@ async function runSymbol(ticker, from, to) {
       if(variant.id==="B_4h_aligned")pass=aligned;
       if(variant.id==="C_4h_or_15m_momentum")pass=aligned||momentum;
       if(variant.id==="D_4h_plus_rsi_52_65")pass=aligned&&Number(candidate.rsi)>=52&&Number(candidate.rsi)<65;
+      if(variant.id==="E_long_4h_rsi_52_65")pass=candidate.side==="SHORT"||(aligned&&Number(candidate.rsi)>=52&&Number(candidate.rsi)<65);
       if(!pass){count.blockedByFilter++;continue;}
       count.signalsAccepted++;
       const lockKey=ticker.symbol+"|"+candidate.side;
