@@ -17,7 +17,8 @@ export const CHANNEL_CONFIG = Object.freeze({
   volumeMultiplier: 1.5,
   volumeLookback: 20,
   rsiPeriod: 14,
-  targetR: 1.5
+  targetR: 1.5,
+  allowBreakoutContinuation: false
 });
 
 function finitePositive(value) {
@@ -191,9 +192,9 @@ export function generateChannelSignal({ candles4h, candles1h, candles15m, option
     side = "LONG"; setup = "CHANNEL_FLOOR_REVERSAL"; trigger = "15M_BULLISH_REACTION"; boundary = channel.lower;
   } else if (close <= channel.upper && close >= channel.upper - zone && bearishConfirm) {
     side = "SHORT"; setup = "CHANNEL_CEILING_REVERSAL"; trigger = "15M_BEARISH_REACTION"; boundary = channel.upper;
-  } else if (close > channel.upper + breakoutBuffer && priorClose <= channel.upper + breakoutBuffer && mClose > channel.upper) {
+  } else if (close > channel.upper + breakoutBuffer && (priorClose <= channel.upper + breakoutBuffer || cfg.allowBreakoutContinuation) && mClose > channel.upper) {
     side = "LONG"; setup = "UPPER_CHANNEL_BREAKOUT"; trigger = "1H_CLOSE_OUTSIDE_AND_15M_CONFIRM"; boundary = channel.upper;
-  } else if (close < channel.lower - breakoutBuffer && priorClose >= channel.lower - breakoutBuffer && mClose < channel.lower) {
+  } else if (close < channel.lower - breakoutBuffer && (priorClose >= channel.lower - breakoutBuffer || cfg.allowBreakoutContinuation) && mClose < channel.lower) {
     side = "SHORT"; setup = "LOWER_CHANNEL_BREAKOUT"; trigger = "1H_CLOSE_OUTSIDE_AND_15M_CONFIRM"; boundary = channel.lower;
   }
   if (!side) return null;
