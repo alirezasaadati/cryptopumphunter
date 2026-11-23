@@ -12,7 +12,8 @@ const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
 const VARIANTS = [
   { id: "A_current", label: "Current production filter" },
   { id: "B_4h_aligned", label: "Require aligned 4h trend" },
-  { id: "C_4h_or_15m_momentum", label: "Require aligned 4h OR confirmed 15m momentum" }
+  { id: "C_4h_or_15m_momentum", label: "Require aligned 4h OR confirmed 15m momentum" },
+  { id: "D_4h_plus_rsi_52_65", label: "Require aligned 4h AND RSI 52–65" }
 ];
 
 async function getJson(url, attempt = 0) {
@@ -167,6 +168,7 @@ async function runSymbol(ticker, from, to) {
       let pass=true;
       if(variant.id==="B_4h_aligned")pass=aligned;
       if(variant.id==="C_4h_or_15m_momentum")pass=aligned||momentum;
+      if(variant.id==="D_4h_plus_rsi_52_65")pass=aligned&&Number(candidate.rsi)>=52&&Number(candidate.rsi)<65;
       if(!pass){count.blockedByFilter++;continue;}
       count.signalsAccepted++;
       const lockKey=ticker.symbol+"|"+candidate.side;
@@ -199,7 +201,9 @@ async function runSymbol(ticker, from, to) {
   return Object.fromEntries(VARIANTS.map(v=>[v.id,{symbol:ticker.symbol,metrics:summarize(states[v.id].trades,states[v.id].counters),trades:states[v.id].trades}]));
 }
 async function main(){
-  const end=Date.now(),start=end-DAYS*86400000,from=start-WARMUP_DAYS*86400000;
+  const configuredEnd=process.env.TREND_AB_END?Date.parse(process.env.TREND_AB_END):Date.now();
+  if(!Number.isFinite(configuredEnd)||configuredEnd>Date.now())throw new Error("TREND_AB_END must be a valid past ISO timestamp");
+  const end=configuredEnd,start=end-DAYS*86400000,from=start-WARMUP_DAYS*86400000;
   const data=await getJson(BASE+"/derivatives/api/v3/tickers");
   if(!Array.isArray(data?.tickers))throw new Error("Kraken tickers response invalid");
   const universe=data.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&/^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&Number(t.volumeQuote)>=FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME&&Number(t.last)>0)
@@ -230,7 +234,7 @@ async function main(){
     symbols:universe.map(t=>({symbol:t.symbol,currentQuoteVolume:Number(t.volumeQuote)||0})),symbolsTested:aggregate[VARIANTS[0].id].bySymbol.length,
     errors,variants};
   await mkdir("artifacts",{recursive:true});await writeFile("artifacts/trend-filter-ab-c-60d.json",JSON.stringify(report,null,2));
-  const rows=["# Trend filter A/B/C — Kraken Futures","",
+  const rows=["# Trend filter A/B/C/D — Kraken Futures","",
     "Period: "+report.period.from+" — "+report.period.to+" ("+DAYS+" days)",
     "Symbols tested: "+report.symbolsTested+"/"+universe.length,"",
     "| Variant | Accepted signals | Blocked | Trades | TP | SL | Win % | Net margin % | Max DD % |",
