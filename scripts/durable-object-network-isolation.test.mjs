@@ -10,6 +10,8 @@ const coordinator = source.slice(coordinatorStart, coordinatorEnd);
 
 test("Durable Object coordinator performs no Telegram network I/O", () => {
   assert.doesNotMatch(coordinator, /\btelegram\s*\(/);
+  assert.doesNotMatch(coordinator, /APP_KV/);
+  assert.doesNotMatch(coordinator, /await\s+fetch\s*\(/);
   assert.doesNotMatch(coordinator, /\bsendMessage\s*\(/);
   assert.doesNotMatch(coordinator, /sendAndArchiveFuturesSignalUnlocked/);
   assert.doesNotMatch(coordinator, /publishSignalToArchive\s*\(/);
