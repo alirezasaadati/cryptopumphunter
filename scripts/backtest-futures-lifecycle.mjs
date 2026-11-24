@@ -337,15 +337,18 @@ function simulatePortfolio(trades, initialCapital=100, marginPerTrade=10, endMs=
 }
 
 async function main() {
-  const endMs = Date.now();
+  const endMs = Number(process.env.BACKTEST_END_MS || Date.now());
   const startMs = endMs - DAYS*86400000;
   const fromMs = startMs - WARMUP_DAYS*86400000;
   const tickerData = await getJson(BASE + "/derivatives/api/v3/tickers");
   if (!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
-  const universe = tickerData.tickers.filter(t => t?.tag==="perpetual" && t.suspended!==true &&
+  const requestedSymbols = String(process.env.BACKTEST_SYMBOLS || "").split(",").map(s=>s.trim()).filter(Boolean);
+  const eligibleTickers = tickerData.tickers.filter(t => t?.tag==="perpetual" && t.suspended!==true &&
     /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||"")) &&
-    Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME && Number(t.last)>0)
-    .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
+    Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME && Number(t.last)>0);
+  const universe = requestedSymbols.length
+    ? requestedSymbols.map(symbol=>eligibleTickers.find(t=>t.symbol===symbol)).filter(Boolean)
+    : eligibleTickers.sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
 
   const results = [];
