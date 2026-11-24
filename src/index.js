@@ -927,7 +927,11 @@ function welcomeSeenKey(chatId) {
 async function showMenu(env, chatId) {
   await configureTelegramMenu(env, chatId);
   // Remove any legacy persistent Reply Keyboard already cached by Telegram clients.
-  await sendMessage(env, chatId, "⌨️ کیبورد قدیمی بسته شد.");
+  await telegram("sendMessage", env, {
+    chat_id: chatId,
+    text: "⌨️ کیبورد قدیمی بسته شد.",
+    reply_markup: { remove_keyboard: true }
+  });
   await telegram("sendMessage", env, {
     chat_id: chatId,
     text: "📋 منوی اصلی تریدیار",
@@ -994,7 +998,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     const selectedMenuText = String(message?.text || "").trim();
     const menuActions = new Map([
-      ...MAIN_MENU.inline_keyboard.flat().map(button => [button.text, button.callback_data]),
+      ...mainMenuForChat(env, chatId).inline_keyboard.flat().map(button => [button.text, button.callback_data]),
       ["👥 مدیریت اعضا", "members:0"],
       ["📊 گزارش سیگنال‌های اخیر", "admin:signals"],
       ["⚠️ ارسال‌های نامشخص", "outbox:review"]
