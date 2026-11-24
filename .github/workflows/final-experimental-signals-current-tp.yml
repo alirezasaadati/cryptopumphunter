@@ -6,6 +6,7 @@ on:
       - "src/index.js"
       - "src/futures-trade-lifecycle.js"
       - "scripts/backtest-futures-lifecycle.mjs"
+      - "scripts/futures-staged-lifecycle.test.mjs"
       - ".github/workflows/final-experimental-signals-current-tp.yml"
 jobs:
   validate-and-backtest:
