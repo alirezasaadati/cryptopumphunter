@@ -323,7 +323,7 @@ function analyze(coin, candles, market, profile = "strict") {
           volumeRatio >= 1.1 && dailyChange >= 0 && dailyChange <= 10 &&
           validRisk && rewardRisk >= minRewardRisk
         : score >= minScore && setup !== "بدون ستاپ" && trendUp && above20 &&
-          market.btcTrendUp === true && Number(market.relativeStrength24Pct) > 0 &&
+          Number(market.relativeStrength24Pct) > 0 &&
           rsiValue >= 45 && rsiValue <= 68 && volumeRatio >= 1.0 &&
           dailyChange >= 0 && dailyChange <= 12 && validRisk &&
           rewardRisk >= minRewardRisk) &&
