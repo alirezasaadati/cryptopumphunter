@@ -355,7 +355,7 @@ async function main() {
   const requestedSymbols = String(process.env.BACKTEST_SYMBOLS || "").split(",").map(s=>s.trim()).filter(Boolean);
   const eligibleTickers = tickerData.tickers.filter(t => t?.tag==="perpetual" && t.suspended!==true &&
     /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||"")) &&
-    Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME && Number(t.last)>0);
+    (requestedSymbols.includes(t.symbol) || Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME) && Number(t.last)>0);
   const universe = requestedSymbols.length
     ? requestedSymbols.map(symbol=>eligibleTickers.find(t=>t.symbol===symbol)).filter(Boolean)
     : eligibleTickers.sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
