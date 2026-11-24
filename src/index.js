@@ -128,8 +128,7 @@ function mainMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 سیگنال فیوچرز", callback_data: "futures" },
-      { text: "📊 سیگنال اسپات", callback_data: "spot" }
+      { text: "📈 سیگنال فیوچرز", callback_data: "futures" }
     ],
     [{ text: "🛡️ راهنمای مدیریت سرمایه", callback_data: "capital_guide" }],
     owner
@@ -902,8 +901,7 @@ function replyMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 سیگنال فیوچرز" },
-      { text: "📊 سیگنال اسپات" }
+      { text: "📈 سیگنال فیوچرز" }
     ],
     [
       { text: "🛡️ راهنمای مدیریت سرمایه" }
@@ -1008,7 +1006,7 @@ async function handleReplyMenuAction(action, env, chatId, message) {
     return;
   }
   if (action === "futures") return runFuturesSignalsForChat(env, chatId);
-  if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+  if (action === "spot") return sendMessage(env, chatId, "⚠️ قابلیت سیگنال اسپات غیرفعال شده است.");
   if (action.startsWith("spotd:")) {
     const [, symbol, quote] = action.split(":");
     return showSpotAssetDetailForChat(env, chatId, symbol, quote);
@@ -1264,10 +1262,7 @@ async function handleCallback(query, env) {
       return;
     }
     if (action === "spot") return runSpotMarketScanForChat(env, chatId);
-    if (action.startsWith("spotd:")) {
-      const [, symbol, quote] = action.split(":");
-      return showSpotAssetDetailForChat(env, chatId, symbol, quote);
-    }
+    if (action.startsWith("spotd:")) return sendMessage(env, chatId, "⚠️ قابلیت سیگنال اسپات غیرفعال شده است.");
     if (action === "issued_signals" || action === "ledger:archive" || action === "ledger:history") return sendArchiveAccessLink(env,chatId);
     if (action === "capital_guide") {
       await telegram("sendMessage", env, {
@@ -1337,13 +1332,13 @@ async function showSpotAssetDetailForChat(env, chatId, symbol, quote) {
   try {
     const result = await runSpotAssetDetail(symbol, quote);
     await sendMessage(env, chatId, result.detail, {
-      inline_keyboard: [[{ text: "🔄 اسکن دوباره بازار", callback_data: "spot" }]]
+      inline_keyboard: []
     });
   } catch (error) {
     await sendMessage(env, chatId,
       "⚠️ دریافت جزئیات " + symbol + "/" + quote + " ناموفق بود:\n" +
       String(error?.message || error).slice(0, 700),
-      { inline_keyboard: [[{ text: "🔄 اسکن دوباره", callback_data: "spot" }]] });
+      { inline_keyboard: [] });
   }
 }
 
