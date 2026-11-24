@@ -13,7 +13,7 @@ on:
       symbols:
         description: Maximum Kraken symbols (1-15)
         required: false
-        default: "5"
+        default: "10"
 
 permissions:
   contents: read
@@ -21,7 +21,7 @@ permissions:
 jobs:
   test-and-diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +39,7 @@ jobs:
         env:
           EQS_BASELINE_MODULE: /tmp/eqs-baseline/src/index.js
           EQS_BACKTEST_DAYS: ${{ inputs.days || '90' }}
-          EQS_BACKTEST_SYMBOLS: ${{ inputs.symbols || '5' }}
+          EQS_BACKTEST_SYMBOLS: ${{ inputs.symbols || '10' }}
         run: node scripts/backtest-eqs-diagnostics.mjs
       - name: Upload diagnostic reports
         if: always()
