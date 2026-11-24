@@ -2787,7 +2787,7 @@ async function runAutomaticFuturesAlertScanInternal(env) {
 
 // Owner-only, read-only diagnostics. This path reads public Kraken market data only;
 // it never registers signals, writes KV/DO state, or delivers trading alerts.
-async function runFuturesEntryDiagnostics(env) {
+async function runFuturesEntryDiagnostics(env, options = {}) {
   const startedAt = new Date().toISOString();
   const universe = await getKrakenFuturesUniverse();
   const analyzed = await mapLimit(
@@ -2795,9 +2795,20 @@ async function runFuturesEntryDiagnostics(env) {
     FUTURES_CONFIG.CONCURRENCY,
     async ticker => {
       try {
-        const marketData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
+        const intervals = [
           FUTURES_CONFIG.INTERVAL, FUTURES_CONFIG.CONFIRM_INTERVAL, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL
-        ]);
+        ];
+        let marketData;
+        if (options.directMarketData === true) {
+          const candles = {}, errors = {};
+          await Promise.all(intervals.map(async interval => {
+            try { candles[interval] = await getKrakenFuturesCandles(ticker.symbol, interval); }
+            catch (error) { errors[interval] = String(error?.message || error); }
+          }));
+          marketData = { candles, errors };
+        } else {
+          marketData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, intervals);
+        }
         const oneHour = marketData.candles[FUTURES_CONFIG.INTERVAL];
         const fourHour = marketData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
         const fifteenMinute = marketData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
@@ -2810,6 +2821,32 @@ async function runFuturesEntryDiagnostics(env) {
             "Required Kraken candle data is missing.");
         }
         const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute);
+        const closes1h = oneHour.map(c => c.close);
+        const referencePrice = Number(oneHour.at(-1)?.close);
+        const marketPrice = Number(ticker?.last);
+        const ema20Value = ema(closes1h, 20);
+        const prevEma20Value = ema(closes1h.slice(0, -1), 20);
+        const ema50Value = ema(closes1h, 50);
+        const ema20FourHour = ema(fourHour.map(c => c.close), 20);
+        const ema50FourHour = ema(fourHour.map(c => c.close), 50);
+        const atrValue = calculateAtr(oneHour, 14);
+        const rsiValue = rsi(closes1h, 14);
+        const last1h = oneHour.at(-1), prev1h = oneHour.at(-2);
+        const trend1hUp = ema20Value > ema50Value && ema20Value > prevEma20Value &&
+          referencePrice > ema20Value && last1h.close >= prev1h.low;
+        const trend1hDown = ema20Value < ema50Value && ema20Value < prevEma20Value &&
+          referencePrice < ema20Value && last1h.close <= prev1h.high;
+        const trend4h = ema20FourHour > ema50FourHour && fourHour.at(-1).close > ema20FourHour
+          ? "BULLISH" : ema20FourHour < ema50FourHour && fourHour.at(-1).close < ema20FourHour
+          ? "BEARISH" : "NEUTRAL";
+        const driftPct = Number.isFinite(marketPrice) && Number.isFinite(referencePrice) && referencePrice > 0
+          ? Math.abs(marketPrice - referencePrice) / referencePrice * 100 : null;
+        const emaDistanceAtr = Number.isFinite(marketPrice) && Number.isFinite(ema20Value) &&
+          Number.isFinite(atrValue) && atrValue > 0 ? Math.abs(marketPrice - ema20Value) / atrValue : null;
+        const maxDriftStandard = FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT;
+        const maxDriftHighRisk = FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT;
+        const maxEmaStandard = FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR;
+        const maxEmaHighRisk = FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR;
         return {
           symbol: ticker.symbol,
           stage: result.eligible ? "ELIGIBLE" : result.rejected ? "REJECTED" : "UNKNOWN",
@@ -2819,7 +2856,32 @@ async function runFuturesEntryDiagnostics(env) {
           candleCounts: { "1h": oneHour.length, "4h": fourHour.length, "15m": fifteenMinute.length },
           entry: result.entry ?? null, stop: result.stop ?? null,
           targets: result.eligible ? [result.target1, result.target2, result.target3] : null,
-          metrics: result.entryDiagnostics || null
+          metrics: {
+            rsi1h: Number.isFinite(rsiValue) ? Number(rsiValue.toFixed(2)) : null,
+            trend1h: trend1hUp ? "BULLISH" : trend1hDown ? "BEARISH" : "NOT_CONFIRMED",
+            trend4h,
+            marketPrice: Number.isFinite(marketPrice) ? marketPrice : null,
+            analyticalPrice: Number.isFinite(referencePrice) ? referencePrice : null,
+            driftPct: Number.isFinite(driftPct) ? Number(driftPct.toFixed(4)) : null,
+            driftLimitStandardPct: maxDriftStandard,
+            driftLimitHighRiskPct: maxDriftHighRisk,
+            ema20: Number.isFinite(ema20Value) ? ema20Value : null,
+            ema50: Number.isFinite(ema50Value) ? ema50Value : null,
+            ema20SlopePct: Number.isFinite(ema20Value) && Number.isFinite(prevEma20Value) && prevEma20Value !== 0
+              ? Number(((ema20Value - prevEma20Value) / prevEma20Value * 100).toFixed(5)) : null,
+            closeVsEma20Pct: Number.isFinite(referencePrice) && Number.isFinite(ema20Value) && ema20Value !== 0
+              ? Number(((referencePrice - ema20Value) / ema20Value * 100).toFixed(5)) : null,
+            previousLow: Number.isFinite(prev1h?.low) ? prev1h.low : null,
+            previousHigh: Number.isFinite(prev1h?.high) ? prev1h.high : null,
+            lastCloseVsPreviousLow: Number.isFinite(last1h?.close) && Number.isFinite(prev1h?.low)
+              ? last1h.close >= prev1h.low : null,
+            lastCloseVsPreviousHigh: Number.isFinite(last1h?.close) && Number.isFinite(prev1h?.high)
+              ? last1h.close <= prev1h.high : null,
+            emaDistanceAtr: Number.isFinite(emaDistanceAtr) ? Number(emaDistanceAtr.toFixed(3)) : null,
+            emaLimitStandardAtr: maxEmaStandard,
+            emaLimitHighRiskAtr: maxEmaHighRisk,
+            engineDetails: result.entryDiagnostics || null
+          }
         };
       } catch (error) {
         return { symbol: ticker.symbol, stage: "DATA_OR_ANALYSIS_ERROR",
@@ -2847,7 +2909,7 @@ function formatFuturesEntryDiagnostics(d) {
   ];
   for (const [stage, count] of Object.entries(d.stageCounts || {})) lines.push("• " + stage + ": " + count);
   lines.push("", "جزئیات نمادها:");
-  for (const item of (d.samples || []).slice(0, 15)) {
+  for (const item of (d.samples || []).slice(0, 30)) {
     lines.push("• " + item.symbol + " | " + item.stage +
       " | امتیاز: " + (item.score ?? "—") + " | جهت: " + (item.side || "—"));
     if (item.candleCounts) lines.push("  کندل‌ها: 1h=" + item.candleCounts["1h"] +
@@ -2855,6 +2917,17 @@ function formatFuturesEntryDiagnostics(d) {
     if (item.entry != null) lines.push("  ورود: " + formatPrice(item.entry) +
       " | استاپ: " + formatPrice(item.stop) +
       " | اهداف: " + (item.targets || []).map(formatPrice).join(" / "));
+    if (item.metrics) {
+      const m = item.metrics;
+      lines.push("  RSI 1h: " + (m.rsi1h ?? "—") +
+        " | روند 1h/4h: " + (m.trend1h || "—") + "/" + (m.trend4h || "—"));
+      lines.push("  قیمت بازار/تحلیلی: " + (m.marketPrice ?? "—") + " / " + (m.analyticalPrice ?? "—"));
+      lines.push("  فاصله قیمت: " + (m.driftPct == null ? "—" : m.driftPct + "%") +
+        " | حد عادی/پرریسک: " + m.driftLimitStandardPct + "% / " + m.driftLimitHighRiskPct + "%");
+      lines.push("  فاصله EMA20: " + (m.emaDistanceAtr ?? "—") +
+        " ATR | حد عادی/پرریسک: " + m.emaLimitStandardAtr + " / " + m.emaLimitHighRiskAtr + " ATR");
+      lines.push("  وضعیت تأیید روند 1h: " + m.trend1h);
+    }
     if (item.reason) lines.push("  علت: " + item.reason);
   }
   lines.push("", "⛔ این گزارش فقط‌خواندنی است؛ هیچ سیگنالی ثبت، ارسال یا معامله‌ای اجرا نشده است.");
@@ -3232,3 +3305,6 @@ export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER
 // Experimental futures signal engine validation branch; Telegram and UI handlers remain from main.
 
 // Re-run the pinned comparison harness after switching to the current TP lifecycle.
+
+
+export { runFuturesEntryDiagnostics };
