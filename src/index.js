@@ -970,7 +970,9 @@ async function handleReplyMenuAction(action, env, chatId, message) {
       await sendMessage(env, chatId, "⛔ قابلیت اسپات در مرحله آزمایشی فقط برای مالک ربات فعال است.", menuForChat(env, chatId));
       return;
     }
-    if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+  }
+  if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+  if (action.startsWith("spotd:")) {
     const [, symbol, quote] = action.split(":");
     return showSpotAssetDetailForChat(env, chatId, symbol, quote);
   }
@@ -1225,7 +1227,9 @@ async function handleCallback(query, env) {
         await answerCallback(env, query.id, "⛔ قابلیت اسپات در مرحله آزمایشی فقط برای مالک ربات فعال است.");
         return;
       }
-      if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+    }
+    if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+    if (action.startsWith("spotd:")) {
       const [, symbol, quote] = action.split(":");
       return showSpotAssetDetailForChat(env, chatId, symbol, quote);
     }
