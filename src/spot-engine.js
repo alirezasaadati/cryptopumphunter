@@ -222,8 +222,9 @@ export function formatSpotPrice(value) {
 
 function analyze(coin, candles, market, profile = "strict") {
   const baseline = profile === "baseline";
-  const minScore = baseline ? 65 : CFG.MIN_SCORE;
-  const minRewardRisk = baseline ? 1.5 : CFG.MIN_RR;
+  const strict = profile === "strict";
+  const minScore = baseline ? 65 : strict ? CFG.MIN_SCORE : 70;
+  const minRewardRisk = baseline ? 1.5 : strict ? CFG.MIN_RR : 1.5;
   if (candles.length < CFG.MIN_CANDLES) throw new Error("تعداد کندل بسته‌شده کافی نیست.");
   const closes = candles.map(c => c.close);
   const last = candles[candles.length - 1], previous = candles[candles.length - 2];
@@ -300,10 +301,15 @@ function analyze(coin, candles, market, profile = "strict") {
     eligible: (baseline
       ? score >= minScore && setup !== "بدون ستاپ" && volumeRatio >= 0.9 &&
         validRisk && rewardRisk >= minRewardRisk
-      : score >= minScore && ["شکست مقاومت", "پولبک به EMA20"].includes(setup) &&
-        trendUp && above20 && above50 && rsiValue >= 50 && rsiValue <= 68 &&
-        volumeRatio >= 1.1 && dailyChange >= 0 && dailyChange <= 10 &&
-        validRisk && rewardRisk >= minRewardRisk) &&
+      : strict
+        ? score >= minScore && ["شکست مقاومت", "پولبک به EMA20"].includes(setup) &&
+          trendUp && above20 && above50 && rsiValue >= 50 && rsiValue <= 68 &&
+          volumeRatio >= 1.1 && dailyChange >= 0 && dailyChange <= 10 &&
+          validRisk && rewardRisk >= minRewardRisk
+        : score >= minScore && setup !== "بدون ستاپ" && trendUp && above20 &&
+          rsiValue >= 45 && rsiValue <= 68 && volumeRatio >= 1.0 &&
+          dailyChange >= 0 && dailyChange <= 12 && validRisk &&
+          rewardRisk >= minRewardRisk) &&
       market.spreadPct <= CFG.MAX_SPREAD_PCT &&
       market.bidDepthUsd >= CFG.MIN_BOOK_DEPTH_USD &&
       market.askDepthUsd >= CFG.MIN_BOOK_DEPTH_USD,
