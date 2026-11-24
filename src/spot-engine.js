@@ -48,7 +48,7 @@ async function mapLimit(items, limit, fn) {
       const index = cursor++;
       if (index >= items.length) return;
       try { output[index] = await fn(items[index]); }
-      catch (error) { output[index] = { rejected: String(error?.message || error || "خطای ناشناخته") }; }
+      catch (error) { output[index] = { rejected: String(error?.message || error || "خطای ناشناخته"), coin: items[index] }; }
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
@@ -397,8 +397,10 @@ export async function testSpotDataSources() {
   if(!btcPairs.length)throw new Error("جفت BTC/USD یا BTC/USDT در Kraken Spot پیدا نشد.");
   const tickers=await fetchTickers(btcPairs),selected=selectBestSpotPair(btcPairs,tickers);
   if(!selected)throw new Error("Ticker جفت مرجع BTC در Kraken Spot قابل استفاده نیست.");
-  const candles=await fetchCandles(selected.pair),btcContext=buildBtcContext(candles,selected.last);
-  return {ok:true,coinLore:{ok:coinPage.length>0,rows:coinPage.length},krakenSpot:{ok:pairs.length>0,onlinePairs:pairs.length},btcReference:selected.pair.wsname,closedCandles:candles.length,btcTrendUp:btcContext.btcTrendUp};
+  const [candles,book]=await Promise.all([fetchCandles(selected.pair),fetchOrderBook(selected.pair)]);
+  const mid=(selected.bid+selected.ask)/2,depth=calculateDepth(book,mid);
+  const btcContext=buildBtcContext(candles,selected.last);
+  return {ok:true,coinLore:{ok:coinPage.length>0,rows:coinPage.length},krakenSpot:{ok:pairs.length>0,onlinePairs:pairs.length},btcReference:selected.pair.wsname,closedCandles:candles.length,bidDepthUsd:depth.bidUsd,askDepthUsd:depth.askUsd,btcTrendUp:btcContext.btcTrendUp};
 }
 
 export async function runSpotScan() {
@@ -459,7 +461,7 @@ export async function runSpotScan() {
     "زمان اسکن: "+Math.round((Date.now()-started)/1000)+" ثانیه",
     "⚠️ این رتبه‌بندی احتمال‌محور است و تضمین رشد یا سود ۲۴ ساعته نیست."
   ].join("\n");
-  return {report,opportunities,diagnostics:{selected:candidates.length,evaluated:evaluated.length,dataFailures:dataFailures.length,ruleRejected:ruleRejected.length,coinLorePageErrors:coinResult.errors.length,failedAssets:dataFailures.map(item=>({error:item.rejected}))}};
+  return {report,opportunities,diagnostics:{selected:candidates.length,evaluated:evaluated.length,dataFailures:dataFailures.length,ruleRejected:ruleRejected.length,coinLorePageErrors:coinResult.errors.length,failedAssets:dataFailures.map(item=>({symbol:item.coin?.symbol||null,error:item.rejected}))}};
 }
 
 export async function runSpotAssetDetail(symbol, quote) {
