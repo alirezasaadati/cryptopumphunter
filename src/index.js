@@ -2866,6 +2866,17 @@ async function runFuturesEntryDiagnostics(env, options = {}) {
             driftLimitStandardPct: maxDriftStandard,
             driftLimitHighRiskPct: maxDriftHighRisk,
             ema20: Number.isFinite(ema20Value) ? ema20Value : null,
+            ema50: Number.isFinite(ema50Value) ? ema50Value : null,
+            ema20SlopePct: Number.isFinite(ema20Value) && Number.isFinite(prevEma20Value) && prevEma20Value !== 0
+              ? Number(((ema20Value - prevEma20Value) / prevEma20Value * 100).toFixed(5)) : null,
+            closeVsEma20Pct: Number.isFinite(referencePrice) && Number.isFinite(ema20Value) && ema20Value !== 0
+              ? Number(((referencePrice - ema20Value) / ema20Value * 100).toFixed(5)) : null,
+            previousLow: Number.isFinite(prev1h?.low) ? prev1h.low : null,
+            previousHigh: Number.isFinite(prev1h?.high) ? prev1h.high : null,
+            lastCloseVsPreviousLow: Number.isFinite(last1h?.close) && Number.isFinite(prev1h?.low)
+              ? last1h.close >= prev1h.low : null,
+            lastCloseVsPreviousHigh: Number.isFinite(last1h?.close) && Number.isFinite(prev1h?.high)
+              ? last1h.close <= prev1h.high : null,
             emaDistanceAtr: Number.isFinite(emaDistanceAtr) ? Number(emaDistanceAtr.toFixed(3)) : null,
             emaLimitStandardAtr: maxEmaStandard,
             emaLimitHighRiskAtr: maxEmaHighRisk,
