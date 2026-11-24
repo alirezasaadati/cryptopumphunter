@@ -38,5 +38,5 @@ test("existing market-data interval and symbol validation remains enforced", () 
   const end = source.indexOf("\n\nfunction normalizeKrakenFuturesUnderlying", start);
   const adapter = source.slice(start, end);
   assert.match(adapter, /\^\(PI\|PF\)_\[A-Z0-9\]\+USD\$/);
-  assert.match(adapter, /"5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000/);
+  assert.ok(adapter.includes('"5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000'));
 });
