@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals } from "../src/signal-ledger.js";
 import { signalOutboxAction } from "../src/signal-outbox.js";
 import { createSerialExecutor } from "../src/serial-executor.js";
-import { SignalDeliveryCoordinator } from "../src/index.js";
+import { SignalDeliveryCoordinator, sendAndArchiveFuturesSignal } from "../src/index.js";
 
 const TEST_DELIVERY_SECRET = "unit-test-delivery-secret";
 
@@ -191,215 +191,240 @@ test("serial executor continues processing after an earlier delivery fails", asy
 });
 
 
+function deliveryEnvironment({ failComplete = 0, archive = false, kv = null } = {}) {
+  const storages = new Map();
+  const coordinators = new Map();
+  let remainingCompleteFailures = failComplete;
+  const namespace = {
+    idFromName(name) { return String(name); },
+    get(id) {
+      const key = String(id);
+      if (!coordinators.has(key)) {
+        const storage = memoryStorage();
+        storages.set(key, storage);
+        coordinators.set(key, new SignalDeliveryCoordinator(
+          { storage },
+          { SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET }
+        ));
+      }
+      const coordinator = coordinators.get(key);
+      return {
+        async fetch(url, init = {}) {
+          const path = new URL(url).pathname;
+          if (path === "/deliver/complete" && remainingCompleteFailures > 0) {
+            remainingCompleteFailures--;
+            return Response.json({ ok: false, error: "simulated DO state write interruption" }, { status: 409 });
+          }
+          return coordinator.fetch(new Request(url, init));
+        }
+      };
+    }
+  };
+  return {
+    env: {
+      BOT_TOKEN: "test-token",
+      SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET,
+      SIGNAL_DELIVERY: namespace,
+      APP_KV: kv || memoryKV(),
+      ...(archive ? { SIGNAL_ARCHIVE_CHANNEL_ID: "-1001234567890" } : {})
+    },
+    storages
+  };
+}
+
+async function withTelegramFetch(handler, callback) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = handler;
+  try { return await callback(); }
+  finally { globalThis.fetch = originalFetch; }
+}
+
 test("coordinator rejects missing or incorrect internal authentication secret", async () => {
-  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: memoryKV(), SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
-  const response = await coordinator.fetch(new Request("https://signal-delivery.internal/deliver", {
+  const coordinator = new SignalDeliveryCoordinator({ storage: memoryStorage() }, {
+    SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET
+  });
+  const response = await coordinator.fetch(new Request("https://signal-delivery.internal/deliver/reserve", {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chatId: "1", signal: { id: "unauthorized", symbol: "BTC-PERP", side: "LONG" }, messageText: "no" })
+    headers: { "content-type": "application/json", "x-signal-delivery-secret": "wrong" },
+    body: JSON.stringify({ chatId: "1", signal: signal("unauthorized"), messageText: "no" })
   }));
   assert.equal(response.status, 401);
   assert.equal((await response.json()).error, "Unauthorized.");
 });
 
-test("owner reconciliation confirms uncertain delivery without creating a duplicate KV ledger entry", async () => {
-  const kv = memoryKV();
-  const pending = signal("uncertain-confirm");
-  const key = "futures:signal-outbox:v1:909:uncertain-confirm";
-  await kv.put(key, JSON.stringify({
-    version: 1, chatId: "909", signalId: pending.id, symbol: pending.symbol,
-    status: "UNCERTAIN", signal: pending, messageText: "test signal",
-    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
-  }));
-  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
-  const request = () => new Request("https://signal-delivery.internal/reconcile", {
-    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
-    body: JSON.stringify({ action: "confirm_delivered", chatId: "909", signalId: pending.id })
-  });
-  const first = await coordinator.fetch(request());
-  assert.equal(first.status, 200);
-  assert.equal((await first.json()).result.confirmed, true);
-  const saved = await kv.get(key, "json");
-  assert.equal(saved.status, "ARCHIVED");
-  assert.ok(saved.manualConfirmedAt);
-  assert.equal((await listIssuedSignals(kv, "909")).length, 0);
-  const second = await coordinator.fetch(request());
-  assert.equal(second.status, 200);
-  assert.equal((await second.json()).result.alreadyArchived, true);
-  assert.equal((await listIssuedSignals(kv, "909")).length, 0);
-});
-
-test("owner reconciliation refuses to auto-archive legacy uncertain records without a signal snapshot", async () => {
-  const kv = memoryKV();
-  await kv.put("futures:signal-outbox:v1:910:legacy", JSON.stringify({
-    chatId: "910", signalId: "legacy", symbol: "BTC-PERP", status: "UNCERTAIN"
-  }));
-  const coordinator = new SignalDeliveryCoordinator({}, { APP_KV: kv, SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
-  const response = await coordinator.fetch(new Request("https://signal-delivery.internal/reconcile", {
-    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
-    body: JSON.stringify({ action: "confirm_delivered", chatId: "910", signalId: "legacy" })
-  }));
-  assert.equal(response.status, 409);
-  assert.match((await response.json()).error, /no signal snapshot/);
-  assert.equal((await kv.get("futures:signal-outbox:v1:910:legacy", "json")).status, "UNCERTAIN");
-});
-
-
-test("concurrent duplicate deliveries use durable storage and send one Telegram message", async () => {
+test("Durable Object reserve/complete state machine blocks duplicate delivery without network I/O", async () => {
   const storage = memoryStorage();
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
-  const originalFetch = globalThis.fetch;
+  const coordinator = new SignalDeliveryCoordinator({ storage }, {
+    SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET
+  });
+  const pending = signal("reserve-complete");
+  const post = async (path, payload) => {
+    const response = await coordinator.fetch(new Request("https://signal-delivery.internal" + path, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
+      body: JSON.stringify(payload)
+    }));
+    return { status: response.status, body: await response.json() };
+  };
+
+  const reserved = await post("/deliver/reserve", {
+    chatId: "909", signal: pending, messageText: "test signal"
+  });
+  assert.equal(reserved.status, 200);
+  assert.equal(reserved.body.result.reserved, true);
+  assert.equal((await storage.get("signal-outbox:futures:signal-outbox:v1:909:reserve-complete")).status, "SENDING");
+
+  const completed = await post("/deliver/complete", {
+    chatId: "909", signalId: pending.id, status: "SENT", telegramMessageId: 77
+  });
+  assert.equal(completed.status, 200);
+  assert.equal(completed.body.result.record.status, "SENT");
+  assert.equal(completed.body.result.record.telegramMessageId, 77);
+
+  const duplicate = await post("/deliver/reserve", {
+    chatId: "909", signal: pending, messageText: "test signal"
+  });
+  assert.equal(duplicate.status, 200);
+  assert.equal(duplicate.body.result.duplicate, true);
+  assert.equal((await post("/reconcile", { chatId: "909", signalId: pending.id, action: "confirm_delivered" })).status, 404);
+});
+
+test("concurrent duplicate Worker deliveries use durable reservations and send one Telegram message", async () => {
+  const { env, storages } = deliveryEnvironment();
   let sendCalls = 0;
-  globalThis.fetch = async () => {
+  await withTelegramFetch(async () => {
     sendCalls++;
     await new Promise(resolve => setTimeout(resolve, 5));
-    return new Response(JSON.stringify({ ok: true, result: { message_id: 321 } }), { status: 200 });
-  };
-  const pending = signal("concurrent-once");
-  const request = () => new Request("https://signal-delivery.internal/deliver", {
-    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
-    body: JSON.stringify({ chatId: "911", signal: pending, messageText: "test signal" })
-  });
-  try {
-    const responses = await Promise.all([coordinator.fetch(request()), coordinator.fetch(request())]);
-    const results = await Promise.all(responses.map(x => x.json()));
+    return Response.json({ ok: true, result: { message_id: 321 } });
+  }, async () => {
+    const pending = signal("concurrent-once");
+    const results = await Promise.allSettled([
+      sendAndArchiveFuturesSignal(env, "911", pending, "test signal"),
+      sendAndArchiveFuturesSignal(env, "911", pending, "test signal")
+    ]);
+    assert.equal(results.filter(x => x.status === "fulfilled").length, 1);
+    assert.equal(results.filter(x => x.status === "rejected").length, 1);
     assert.equal(sendCalls, 1);
-    assert.equal(results.filter(x => x.ok && x.result.duplicate === false).length, 1);
-    assert.equal(results.filter(x => x.ok && x.result.duplicate === true).length, 1);
+    const storage = storages.get("futures:signal-outbox:v1:911:concurrent-once");
     assert.equal((await storage.get("signal-outbox:futures:signal-outbox:v1:911:concurrent-once")).status, "ARCHIVED");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  });
 });
 
-test("legacy owner-authorized retry is transferred to durable storage before sending", async () => {
-  const kv = memoryKV(), storage = memoryStorage();
-  const pending = signal("uncertain-retry");
-  const key = "futures:signal-outbox:v1:912:uncertain-retry";
-  await kv.put(key, JSON.stringify({
-    version: 1, chatId: "912", signalId: pending.id, symbol: pending.symbol,
-    status: "UNCERTAIN", signal: pending, messageText: "retry signal",
-    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
-  }));
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { APP_KV: kv, BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
-  const originalFetch = globalThis.fetch;
-  let sendCalls = 0;
-  globalThis.fetch = async (_url, options) => {
-    sendCalls++;
-    const body = JSON.parse(options.body);
-    assert.equal(body.text, "retry signal");
-    return new Response(JSON.stringify({ ok: true, result: { message_id: 654 } }), { status: 200 });
-  };
-  try {
-    const response = await coordinator.fetch(new Request("https://signal-delivery.internal/reconcile", {
-      method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
-      body: JSON.stringify({ action: "retry", chatId: "912", signalId: pending.id })
-    }));
-    assert.equal(response.status, 200);
-    assert.equal((await response.json()).ok, true);
-    assert.equal(sendCalls, 1);
-    assert.equal((await storage.get("signal-outbox:"+key)).status, "ARCHIVED");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("network timeout is persisted as UNCERTAIN in Durable Object storage and never auto-resends", async () => {
-  const storage = memoryStorage();
-  const pending = signal("timeout-ambiguous");
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
-  const originalFetch = globalThis.fetch;
+test("Worker network timeout is persisted as UNCERTAIN and never auto-resends", async () => {
+  const { env, storages } = deliveryEnvironment();
   let calls = 0;
-  globalThis.fetch = async () => {
+  await withTelegramFetch(async () => {
     calls++;
     throw new Error("simulated socket timeout after request dispatch");
-  };
-  try {
-    const request = () => new Request("https://signal-delivery.internal/deliver", {
-      method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
-      body: JSON.stringify({ chatId: "913", signal: pending, messageText: "timeout test" })
-    });
-    const first = await coordinator.fetch(request());
-    assert.equal(first.status, 409);
+  }, async () => {
+    const pending = signal("timeout-ambiguous");
+    await assert.rejects(sendAndArchiveFuturesSignal(env, "913", pending, "timeout test"), /simulated socket timeout/);
+    const storage = storages.get("futures:signal-outbox:v1:913:timeout-ambiguous");
     assert.equal((await storage.get("signal-outbox:futures:signal-outbox:v1:913:timeout-ambiguous")).status, "UNCERTAIN");
-    const second = await new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET }).fetch(request());
-    assert.equal(second.status, 409);
+    await assert.rejects(sendAndArchiveFuturesSignal(env, "913", pending, "timeout test"), /uncertain and requires manual reconciliation/);
     assert.equal(calls, 1);
-  } finally { globalThis.fetch = originalFetch; }
+  });
 });
 
-test("worker interruption leaves SENDING durable state and restart blocks duplicate send", async () => {
-  const base = memoryStorage();
-  const storage = {
-    get: (...args) => base.get(...args),
-    async put(key, value) {
-      if (value.status === "UNCERTAIN") throw new Error("simulated interruption before recovery write");
-      return base.put(key, value);
-    },
-    delete: (...args) => base.delete(...args)
-  };
-  const pending = signal("worker-interruption");
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
-  const originalFetch = globalThis.fetch;
+test("Worker interruption after Telegram acceptance leaves a durable SENDING record and blocks duplicate send", async () => {
+  const { env, storages } = deliveryEnvironment({ failComplete: 1 });
   let calls = 0;
-  globalThis.fetch = async () => { calls++; throw new Error("simulated interrupted request"); };
-  try {
-    const request = () => new Request("https://signal-delivery.internal/deliver", {
-      method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
-      body: JSON.stringify({ chatId: "914", signal: pending, messageText: "restart test" })
-    });
-    const interrupted = await coordinator.fetch(request());
-    assert.equal(interrupted.status, 409);
-    assert.equal((await base.get("signal-outbox:futures:signal-outbox:v1:914:worker-interruption")).status, "SENDING");
-    const restarted = new SignalDeliveryCoordinator({ storage: base }, { BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
-    const response = await restarted.fetch(request());
-    assert.equal(response.status, 409);
+  await withTelegramFetch(async () => {
+    calls++;
+    return Response.json({ ok: true, result: { message_id: 654 } });
+  }, async () => {
+    const pending = signal("worker-interruption");
+    await assert.rejects(sendAndArchiveFuturesSignal(env, "914", pending, "restart test"), /durable delivery state confirmation failed/);
+    const storage = storages.get("futures:signal-outbox:v1:914:worker-interruption");
+    assert.equal((await storage.get("signal-outbox:futures:signal-outbox:v1:914:worker-interruption")).status, "SENDING");
+    await assert.rejects(sendAndArchiveFuturesSignal(env, "914", pending, "restart test"), /uncertain and requires manual reconciliation/);
     assert.equal(calls, 1);
-    assert.equal((await base.get("signal-outbox:futures:signal-outbox:v1:914:worker-interruption")).status, "SENDING");
-  } finally { globalThis.fetch = originalFetch; }
+  });
 });
 
-test("KV write quota exhaustion does not block validated signal delivery", async () => {
-  const storage = memoryStorage();
+test("KV write quota exhaustion does not block validated Worker delivery", async () => {
   const kv = {
     async get() { throw new Error("KV daily write quota is paused"); },
     async put() { throw new Error("KV daily write quota is paused"); },
     async delete() { throw new Error("KV daily write quota is paused"); },
     async list() { throw new Error("KV daily write quota is paused"); }
   };
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { APP_KV: kv, BOT_TOKEN: "test-token", SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
-  const originalFetch = globalThis.fetch;
+  const { env, storages } = deliveryEnvironment({ kv });
   let sends = 0;
-  globalThis.fetch = async () => {
+  await withTelegramFetch(async () => {
     sends++;
-    return new Response(JSON.stringify({ ok: true, result: { message_id: 765 } }), { status: 200 });
-  };
-  try {
+    return Response.json({ ok: true, result: { message_id: 765 } });
+  }, async () => {
     const pending = signal("kv-quota-does-not-block");
-    const response = await coordinator.fetch(new Request("https://signal-delivery.internal/deliver", {
-      method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
-      body: JSON.stringify({ chatId: "915", signal: pending, messageText: "quota test" })
-    }));
-    assert.equal(response.status, 200);
-    assert.equal((await response.json()).result.delivered, true);
+    const result = await sendAndArchiveFuturesSignal(env, "915", pending, "quota test");
+    assert.equal(result.delivered, true);
     assert.equal(sends, 1);
+    const storage = storages.get("futures:signal-outbox:v1:915:kv-quota-does-not-block");
     assert.equal((await storage.get("signal-outbox:futures:signal-outbox:v1:915:kv-quota-does-not-block")).status, "ARCHIVED");
-  } finally { globalThis.fetch = originalFetch; }
+  });
 });
 
-test("signal registration deduplicates active symbol and side in Durable Object storage", async () => {
-  const storage = memoryStorage();
-  const coordinator = new SignalDeliveryCoordinator({ storage }, { SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET });
-  const request = (signals) => new Request("https://signal-delivery.internal/signals/register", {
-    method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
-    body: JSON.stringify({ signals })
+test("archive Telegram network I/O runs in the Worker and remains idempotent", async () => {
+  const { env, storages } = deliveryEnvironment({ archive: true });
+  const calls = [];
+  await withTelegramFetch(async (_url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push(String(body.chat_id));
+    return Response.json({ ok: true, result: { message_id: 900 + calls.length } });
+  }, async () => {
+    const pending = signal("archive-from-worker");
+    const first = await sendAndArchiveFuturesSignal(env, "916", pending, "archive test");
+    assert.equal(first.delivered, true);
+    assert.equal(first.archivePending, false);
+    const second = await sendAndArchiveFuturesSignal(env, "916", pending, "archive test");
+    assert.equal(second.duplicate, true);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0], "916");
+    assert.equal(calls[1], "-1001234567890");
+    const archiveStorage = storages.get("global:signal-archive-publisher");
+    assert.equal((await archiveStorage.get("published-signal:archive-from-worker")).status, "PUBLISHED");
   });
-  const firstSignal = { ...signal("first"), expiresAt: Date.now() + 60_000 };
-  const secondSignal = { ...signal("second"), symbol: "BTC-PERP", expiresAt: Date.now() + 60_000 };
-  const first = await coordinator.fetch(request([firstSignal]));
-  assert.equal(first.status, 200);
-  assert.equal((await first.json()).signals.length, 1);
-  const second = await coordinator.fetch(request([secondSignal]));
-  assert.equal(second.status, 200);
-  assert.equal((await second.json()).signals.length, 0);
+});
+
+test("Worker can seed a queued durable record before an explicitly authorized retry", async () => {
+  const { env, storages } = deliveryEnvironment();
+  let sends = 0;
+  await withTelegramFetch(async () => {
+    sends++;
+    return Response.json({ ok: true, result: { message_id: 990 } });
+  }, async () => {
+    const pending = signal("queued-retry");
+    const key = "futures:signal-outbox:v1:917:queued-retry";
+    const queued = {
+      version: 2, chatId: "917", signalId: pending.id, symbol: pending.symbol,
+      signal: pending, messageText: "retry signal", status: "QUEUED",
+      createdAt: new Date().toISOString(), retryAuthorizedAt: new Date().toISOString()
+    };
+    const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
+    const seeded = await stub.fetch("https://signal-delivery.internal/deliver/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
+      body: JSON.stringify({ chatId: "917", signalId: pending.id, status: "QUEUED", seed: queued })
+    });
+    assert.equal(seeded.status, 200);
+    const result = await sendAndArchiveFuturesSignal(env, "917", pending, "retry signal");
+    assert.equal(result.delivered, true);
+    assert.equal(sends, 1);
+    const storage = storages.get(key);
+    assert.equal((await storage.get("signal-outbox:" + key)).status, "ARCHIVED");
+  });
+});
+
+test("legacy DO delivery and reconciliation routes are no longer exposed", async () => {
+  const coordinator = new SignalDeliveryCoordinator({ storage: memoryStorage() }, {
+    SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET
+  });
+  for (const path of ["/deliver", "/archive-publish", "/reconcile"]) {
+    const response = await coordinator.fetch(new Request("https://signal-delivery.internal" + path, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
+      body: "{}"
+    }));
+    assert.equal(response.status, 404);
+  }
 });
