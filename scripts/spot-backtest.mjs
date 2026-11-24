@@ -56,10 +56,19 @@ function candleRows(result) {
     c.open>0 && c.low>0 && c.close>0 && c.high>=Math.max(c.open,c.close) && c.low<=Math.min(c.open,c.close));
 }
 
-function simulate(candles, pair, barsPerDay, profile) {
+function ema(values, period) {
+  if (values.length < period) return null;
+  const multiplier=2/(period+1);
+  let value=values.slice(0,period).reduce((sum,item)=>sum+item,0)/period;
+  for(let i=period;i<values.length;i++) value=values[i]*multiplier+value*(1-multiplier);
+  return value;
+}
+
+function simulate(candles, pair, barsPerDay, profile, btcCandles) {
   const horizon = barsPerDay;
   const split = Math.floor(candles.length * 0.7);
   const trades = [];
+  const btcIndexByTime = new Map(btcCandles.map((candle,index)=>[candle.time,index]));
   let lastSignalIndex = -Infinity;
   for (let i = MIN_CANDLES; i + horizon < candles.length; i++) {
     if (i - lastSignalIndex < horizon) continue;
@@ -69,6 +78,14 @@ function simulate(candles, pair, barsPerDay, profile) {
     if (last24.length < barsPerDay) continue;
     const quoteVolume24 = last24.reduce((sum,c) => sum + c.volume, 0) * current;
     const change24 = history.at(-1).close / history.at(-(barsPerDay + 1)).close - 1;
+    const btcIndex=btcIndexByTime.get(history.at(-1).time);
+    if (btcIndex === undefined || btcIndex < Math.max(50,barsPerDay)) continue;
+    const btcHistory=btcCandles.slice(0,btcIndex+1);
+    const btcCloses=btcHistory.map(c=>c.close);
+    const btcEma20=ema(btcCloses,20), btcEma50=ema(btcCloses,50);
+    const btcCurrent=btcHistory.at(-1).close;
+    const btcChange24=(btcCurrent/btcCandles[btcIndex-barsPerDay].close-1)*100;
+    const assetChange24=(current/history.at(-(barsPerDay+1)).close-1)*100;
     const coin = {
       symbol: pair.coin.symbol,
       name: pair.coin.name,
@@ -82,7 +99,9 @@ function simulate(candles, pair, barsPerDay, profile) {
       spreadPct:0.20,
       quoteVolumeUsd:quoteVolume24,
       bidDepthUsd:10_000,
-      askDepthUsd:10_000
+      askDepthUsd:10_000,
+      btcTrendUp:btcEma20>btcEma50 && btcCurrent>btcEma50,
+      relativeStrength24Pct:assetChange24-btcChange24
     }, profile);
     if (!signal.eligible) continue;
 
@@ -160,14 +179,24 @@ const coins = await getCoinUniverse();
 const pairPayload = await getJson(BASE + "/AssetPairs","Kraken AssetPairs");
 const pairs = Object.entries(pairPayload).map(([key,value])=>({key,...value})).filter(p=>p.status==="online"&&p.wsname);
 const candidatePairs = coins.flatMap(coin=>findSpotPairs(coin,pairs));
-if (!candidatePairs.length) throw new Error("No eligible Kraken USD/USDT spot pairs found in the current CoinLore sample.");
-const tickerPayload = await getJson(BASE + "/Ticker?pair=" + encodeURIComponent([...new Set(candidatePairs.map(p=>p.altname||p.key))].join(",")),"Kraken Ticker");
+const btcPairs=findSpotPairs({symbol:"BTC"},pairs);
+if (!candidatePairs.length || !btcPairs.length) throw new Error("Eligible Kraken asset pairs or BTC/USD-USDT reference pair not found.");
+const tickerPairs=[...candidatePairs,...btcPairs];
+const tickerPayload = await getJson(BASE + "/Ticker?pair=" + encodeURIComponent([...new Set(tickerPairs.map(p=>p.altname||p.key))].join(",")),"Kraken Ticker");
+const btcSelected=selectBestSpotPair(btcPairs,tickerPayload);
+if (!btcSelected) throw new Error("Kraken BTC reference ticker unavailable.");
 const selected = [];
 for (const coin of coins) {
   const pair = selectBestSpotPair(findSpotPairs(coin,pairs),tickerPayload);
   if (pair) selected.push({coin,pair:pair.pair,quote:pair.quote});
 }
 if (!selected.length) throw new Error("Kraken returned no usable ticker data for the selected Spot universe.");
+const btcPairName=encodeURIComponent(btcSelected.pair.altname||btcSelected.pair.key);
+const [btc1hPayload,btc4hPayload]=await Promise.all([
+  getJson(BASE+"/OHLC?pair="+btcPairName+"&interval=60","Kraken BTC 1H OHLC"),
+  getJson(BASE+"/OHLC?pair="+btcPairName+"&interval=240","Kraken BTC 4H OHLC")
+]);
+const btcCandles1h=candleRows(btc1hPayload), btcCandles4h=candleRows(btc4hPayload);
 const downloaded = await mapLimit(selected,3,async item=>{
   const pairName=encodeURIComponent(item.pair.altname||item.pair.key);
   const [oneHourPayload,fourHourPayload]=await Promise.all([
@@ -185,11 +214,11 @@ for (const item of downloaded) {
     continue;
   }
   const base1=simulate(item.candles1h,item,HORIZON_1H,"baseline");
-  const balanced1=simulate(item.candles1h,item,HORIZON_1H,"balanced");
-  const strict1=simulate(item.candles1h,item,HORIZON_1H,"strict");
+  const balanced1=simulate(item.candles1h,item,HORIZON_1H,"balanced",btcCandles1h);
+  const strict1=simulate(item.candles1h,item,HORIZON_1H,"strict",btcCandles1h);
   const base4=simulate(item.candles4h,item,HORIZON_4H,"baseline");
-  const balanced4=simulate(item.candles4h,item,HORIZON_4H,"balanced");
-  const strict4=simulate(item.candles4h,item,HORIZON_4H,"strict");
+  const balanced4=simulate(item.candles4h,item,HORIZON_4H,"balanced",btcCandles4h);
+  const strict4=simulate(item.candles4h,item,HORIZON_4H,"strict",btcCandles4h);
   aggregate.baseline.oneHour.push(...base1);
   aggregate.balanced.oneHour.push(...balanced1);
   aggregate.strict.oneHour.push(...strict1);
@@ -220,6 +249,7 @@ for (const item of downloaded) {
 const output={
   periods:{oneHour:"Up to 720 latest 1h OHLC rows (approximately 30 days)",fourHour:"Up to 720 latest 4h OHLC rows (approximately 120 days)"},
   assetsSelected:selected.length,
+  btcReferencePair:btcSelected.pair.wsname,
   costs:"0.30% round trip assumed (0.10% fee + 0.05% slippage each side)",
   liquidity:"Historical order-book depth is unavailable in this OHLC test; spread 0.20% and $10,000 depth per side are assumptions, not observed history.",
   universe:"Current CoinLore market-cap/volume screen; survivorship and current-universe bias apply.",
