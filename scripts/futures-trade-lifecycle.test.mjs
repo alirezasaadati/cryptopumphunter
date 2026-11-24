@@ -68,3 +68,30 @@ test("invalid inputs do not create a close event", () => {
   assert.equal(evaluateTradeCandle(longTrade, {open:100, high:99, low:101}).changed, false);
   assert.equal(profitTargetPrice("BUY", 100), null);
 });
+
+
+test("LONG moves stop to fee-buffered break-even after +1R and persists the protected level", () => {
+  const trade = { id:"L-BE", side:"LONG", actualEntry:100, initialStop:99, currentStop:99, status:"OPEN" };
+  const moved = evaluateTradeCandle(trade, {open:100, high:101.2, low:100.2, time:10});
+  assert.equal(moved.changed, false);
+  assert.equal(moved.stopMoved, true);
+  assert.equal(moved.trade.currentStop, 100.12);
+  assert.equal(moved.trade.breakEvenActivated, true);
+  const stopped = evaluateTradeCandle(moved.trade, {open:100.5, high:100.6, low:100.1, time:11});
+  assert.equal(stopped.reason, "CLOSED_STOP");
+  assert.equal(stopped.trade.exitPrice, 100.12);
+  assert.ok(stopped.trade.marginReturnPercent > 0);
+});
+
+test("SHORT moves stop to fee-buffered break-even after +1R", () => {
+  const trade = { id:"S-BE", side:"SHORT", actualEntry:100, initialStop:101, currentStop:101, status:"OPEN" };
+  const moved = evaluateTradeCandle(trade, {open:100, high:99.8, low:98.8, time:12});
+  assert.equal(moved.changed, false);
+  assert.equal(moved.stopMoved, true);
+  assert.equal(moved.trade.currentStop, 99.88);
+  assert.equal(moved.trade.breakEvenActivated, true);
+  const stopped = evaluateTradeCandle(moved.trade, {open:99.5, high:99.9, low:99.4, time:13});
+  assert.equal(stopped.reason, "CLOSED_STOP");
+  assert.equal(stopped.trade.exitPrice, 99.88);
+  assert.ok(stopped.trade.marginReturnPercent > 0);
+});

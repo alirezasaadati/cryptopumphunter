@@ -89,29 +89,28 @@ function summarize(trades) {
     peak = Math.max(peak, equity);
     maxDrawdown = Math.max(maxDrawdown, peak - equity);
   }
+  const sum = xs => xs.reduce((n,t)=>n+Number(t.marginReturnPercent || 0),0);
+  const sideSummary = side => {
+    const started = trades.filter(t => t.side === side);
+    const resolved = started.filter(t => t.status === "CLOSED_PROFIT" || t.status === "CLOSED_STOP");
+    const wins = resolved.filter(t => t.status === "CLOSED_PROFIT");
+    return { tradesStarted: started.length, closedTrades: resolved.length, profitCloses: wins.length,
+      stopCloses: resolved.length - wins.length, openAtEnd: started.length - resolved.length,
+      winRatePct: resolved.length ? wins.length / resolved.length * 100 : 0,
+      netMarginReturnPct: sum(resolved) };
+  };
   const longs = closed.filter(t => t.side === "LONG");
   const shorts = closed.filter(t => t.side === "SHORT");
-  const sum = xs => xs.reduce((n,t)=>n+Number(t.marginReturnPercent || 0),0);
   return {
-    tradesStarted: trades.length,
-    closedTrades: closed.length,
-    profitCloses: profits.length,
-    stopCloses: stops.length,
-    openAtEnd: trades.length - closed.length,
-    longs: longs.length,
-    shorts: shorts.length,
+    tradesStarted: trades.length, closedTrades: closed.length, profitCloses: profits.length, stopCloses: stops.length,
+    openAtEnd: trades.length - closed.length, longs: longs.length, shorts: shorts.length,
     winRatePct: closed.length ? profits.length / closed.length * 100 : 0,
-    totalMarginReturnPct: sum(closed),
-    averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
-    maxDrawdownMarginPct: maxDrawdown,
-    ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
-    bySide: {
-      LONG: { trades: longs.length, profitCloses: longs.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: longs.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(longs) },
-      SHORT: { trades: shorts.length, profitCloses: shorts.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: shorts.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(shorts) }
-    }
+    totalMarginReturnPct: sum(closed), averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
+    maxDrawdownMarginPct: maxDrawdown, ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
+    breakEvenMoves: trades.reduce((n,t)=>n+(t.breakEvenMoveCount || 0),0),
+    bySide: { LONG: sideSummary("LONG"), SHORT: sideSummary("SHORT") }
   };
 }
-
 async function backtestSymbol(ticker, fromMs, toMs) {
   const [oneHour,fourHour,fifteenMinute,fiveMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs),
@@ -166,6 +165,10 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       const bar = fiveMinute[candleIndex];
       if (candleAmbiguous(candidate.side,trade,bar)) trade.ambiguousCandles++;
       const evaluated = evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
+      if (evaluated.stopMoved) {
+        Object.assign(trade,evaluated.trade);
+        trade.breakEvenMoveCount = (trade.breakEvenMoveCount || 0) + 1;
+      }
       if (evaluated.changed) {
         Object.assign(trade,evaluated.trade);
         trade.closedAtMs = bar.time + INTERVALS["5m"];
@@ -243,7 +246,12 @@ async function main() {
     "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
     "| Stop closes | "+metrics.stopCloses+" |",
     "| Open at end | "+metrics.openAtEnd+" |",
-    "| LONG / SHORT | "+metrics.longs+" / "+metrics.shorts+" |",
+    "| LONG / SHORT closed | "+metrics.longs+" / "+metrics.shorts+" |",
+    "| LONG win rate (resolved only) | "+metrics.bySide.LONG.winRatePct.toFixed(2)+"% |",
+    "| SHORT win rate (resolved only) | "+metrics.bySide.SHORT.winRatePct.toFixed(2)+"% |",
+    "| LONG net margin return | "+metrics.bySide.LONG.netMarginReturnPct.toFixed(2)+"% |",
+    "| SHORT net margin return | "+metrics.bySide.SHORT.netMarginReturnPct.toFixed(2)+"% |",
+    "| Automatic break-even moves | "+metrics.breakEvenMoves+" |",
     "| Win rate | "+metrics.winRatePct.toFixed(2)+"% |",
     "| Sum margin return (not compounded) | "+metrics.totalMarginReturnPct.toFixed(2)+"% |",
     "| Average margin return / trade | "+metrics.averageMarginReturnPct.toFixed(2)+"% |",

@@ -1,5 +1,4 @@
-// Experimental futures trade lifecycle. This module evaluates signal-level candles only;
-// it does not place orders or claim exchange execution.
+// Futures trade lifecycle with automatic +1.0R Break-Even protection.
 export const FUTURES_TRADE_LEVERAGE = 10;
 export const FUTURES_MARGIN_PROFIT_TARGET_PERCENT = 30;
 export const FUTURES_PRICE_MOVE_TARGET_PERCENT =
@@ -39,8 +38,6 @@ function validCandle(candle) {
     Number(candle.high) >= Number(candle.low);
 }
 
-// Stop is deliberately evaluated before profit. If one candle spans both levels,
-// candle OHLC data cannot prove which was touched first, so the result is conservative.
 export function evaluateTradeCandle(trade, candle, options = {}) {
   if (!trade || trade.status !== "OPEN" || !["LONG", "SHORT"].includes(trade.side)) {
     return { changed: false, trade };
@@ -48,7 +45,8 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
   if (!validCandle(candle)) return { changed: false, trade, error: "INVALID_CANDLE" };
 
   const entry = Number(trade.actualEntry ?? trade.entry);
-  const stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
+  const initialStop = Number(trade.initialStop ?? trade.stop);
+  let stop = Number(trade.currentStop ?? initialStop);
   const target = profitTargetPrice(
     trade.side,
     entry,
@@ -65,7 +63,32 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
   const stopHit = trade.side === "LONG" ? low <= stop : high >= stop;
   const profitHit = trade.side === "LONG" ? high >= target : low <= target;
 
-  if (!stopHit && !profitHit) return { changed: false, trade };
+  // فعال‌سازی Break-Even خودکار پس از رسیدن قیمت به +1.0R (جلوگیری از استاپ شدن معاملات وارد سود شده)
+  const risk = Math.abs(entry - initialStop);
+  let breakEvenMoved = false;
+  if (!stopHit && !profitHit && risk > 0 && !trade.breakEvenActivated) {
+    const oneRPrice = trade.side === "LONG" ? entry + risk : entry - risk;
+    const reachedOneR = trade.side === "LONG" ? high >= oneRPrice : low <= oneRPrice;
+    if (reachedOneR) {
+      const feeBuffer = entry * 0.0012; // پوشش کارمزد رفت و برگشت
+      const protectedStop = trade.side === "LONG" ? entry + feeBuffer : entry - feeBuffer;
+      if ((trade.side === "LONG" && protectedStop > stop) || (trade.side === "SHORT" && protectedStop < stop)) {
+        stop = protectedStop;
+        breakEvenMoved = true;
+      }
+    }
+  }
+
+  if (!stopHit && !profitHit) {
+    if (breakEvenMoved) {
+      return {
+        changed: false,
+        stopMoved: true,
+        trade: { ...trade, currentStop: stop, breakEvenActivated: true }
+      };
+    }
+    return { changed: false, trade };
+  }
 
   const stopExit = trade.side === "LONG"
     ? (open <= stop ? open : stop)
@@ -75,14 +98,14 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
     : (open <= target ? open : target);
   const stopAtOpen = trade.side === "LONG" ? open <= stop : open >= stop;
   const profitAtOpen = trade.side === "LONG" ? open >= target : open <= target;
-  // A gap through one level at the candle open establishes that level first.
-  // If both are touched later within the candle, stop remains the conservative choice.
+
   const closeAtStop = stopAtOpen || (!profitAtOpen && stopHit);
   const reason = closeAtStop ? "CLOSED_STOP" : "CLOSED_PROFIT";
   const exitPrice = closeAtStop ? stopExit : profitExit;
   const closedAt = candle.time ?? new Date().toISOString();
   const updatedTrade = {
     ...trade,
+    currentStop: stop,
     status: reason,
     closeReason: reason,
     exitPrice,

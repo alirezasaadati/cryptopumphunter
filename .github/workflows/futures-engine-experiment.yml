@@ -1,0 +1,40 @@
+name: Futures engine experiment validation and 30d backtest
+on:
+  push:
+    branches:
+      - experiment/futures-engine-import-20261124
+    paths:
+      - "src/index.js"
+      - "src/futures-trade-lifecycle.js"
+      - "scripts/backtest-futures-lifecycle.mjs"
+      - "scripts/futures-trade-lifecycle.test.mjs"
+      - ".github/workflows/futures-engine-experiment.yml"
+permissions:
+  contents: read
+jobs:
+  validate-and-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Check JavaScript syntax
+        run: npm run check
+      - name: Run lifecycle and project tests
+        run: node --test scripts/*.test.mjs
+      - name: Run 30-day Kraken Futures lifecycle backtest
+        env:
+          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+        run: node scripts/backtest-futures-lifecycle.mjs
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-lifecycle-30d-experiment
+          path: artifacts/
+          if-no-files-found: warn
