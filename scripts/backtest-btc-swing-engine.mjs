@@ -38,20 +38,25 @@ function simulateTrade(signal, candles5m) {
   const entryBar=candles5m[entryIndex],entry=entryBar.open,side=signal.side,dir=side==="LONG"?1:-1,initialStop=signal.stop;
   const risk=side==="LONG"?entry-initialStop:initialStop-entry,riskPct=risk/entry;
   if(!(risk>0)||riskPct<BTC_ENGINE_CONFIG.minRiskPct||riskPct>BTC_ENGINE_CONFIG.maxRiskPct)return null;
-  const tp1=entry+dir*risk*BTC_ENGINE_CONFIG.tp1R,tp2=entry+dir*risk*BTC_ENGINE_CONFIG.tp2R;
-  let stop=initialStop,be=false,tp1Done=false,remaining=1,realized=0,exitReason="OPEN_AT_END",closedAt=null,exitPrice=null,stopLock=false,sameCandleStopExits=0;
+  const cfg=BTC_ENGINE_CONFIG,tp1=entry+dir*risk*cfg.tp1R,tp2=entry+dir*risk*cfg.tp2R;
+  const margin=10,notional=margin*LEVERAGE,feeRate=0.0005;
+  let stop=initialStop,be=false,tp1Done=false,remaining=1,realized=0,exitReason="OPEN_AT_END",closedAt=null,exitPrice=null,sameCandleStopExits=0,feeUSD=notional*feeRate;
   const priceReturn=px=>dir*((px-entry)/entry)*100*LEVERAGE;
+  const applyExit=(fraction,px)=>{realized+=fraction*priceReturn(px);const fee=notional*fraction*feeRate;feeUSD+=fee;realized-=fee/margin*100;remaining-=fraction;};
+  // Entry taker fee is charged once; exits are conservatively charged at taker rate too.
+  realized-=notional*feeRate/margin*100;
   for(let i=entryIndex;i<candles5m.length&&candles5m[i].time<END;i++){
     const c=candles5m[i],open=c.open,high=c.high,low=c.low;
     const stopHit=side==="LONG"?low<=stop:high>=stop,stopAtOpen=side==="LONG"?open<=stop:open>=stop;
     if(stopHit){
-      exitPrice=stopAtOpen?open:stop;realized+=remaining*priceReturn(exitPrice);remaining=0;exitReason=tp1Done?"STOP_AFTER_TP1":"STOP";closedAt=c.time+MS["5m"];break;
+      exitPrice=stopAtOpen?open:stop;applyExit(remaining,exitPrice);remaining=0;
+      exitReason=tp1Done?"STOP_AFTER_TP1":"STOP";closedAt=c.time+MS["5m"];break;
     }
     let stopAdvancedThisBar=false;
-    const oneR=entry+dir*risk;
-    const hitOneR=side==="LONG"?high>=oneR:low<=oneR;
-    if(!be&&hitOneR){
-      const beStop=entry+dir*entry*0.0012;
+    const beLevel=entry+dir*risk*cfg.beTriggerR;
+    const hitBE=side==="LONG"?high>=beLevel:low<=beLevel;
+    if(!be&&hitBE){
+      const beStop=entry;
       if((dir===1&&beStop>stop)||(dir===-1&&beStop<stop)){stop=beStop;stopAdvancedThisBar=true;}
       be=true;
     }
@@ -59,30 +64,25 @@ function simulateTrade(signal, candles5m) {
       const hit1=side==="LONG"?high>=tp1:low<=tp1;
       if(hit1){
         const fill=side==="LONG"?(open>=tp1?open:tp1):(open<=tp1?open:tp1);
-        realized+=(1/3)*priceReturn(fill);remaining-=1/3;tp1Done=true;
-        const lock=entry+dir*risk*0.5;
+        applyExit(cfg.tp1Fraction,fill);tp1Done=true;
+        const lock=entry+dir*risk*cfg.tp1StopLockR;
         if((dir===1&&lock>stop)||(dir===-1&&lock<stop)){stop=lock;stopAdvancedThisBar=true;}
-        stopLock=true;
       }
     }
-    // Conservative same-candle resolution: credit TP1 if reached, then stop the remainder
-    // if the newly activated stop is also crossed within this same 5m candle.
     const advancedStopHit=stopAdvancedThisBar&&(side==="LONG"?low<=stop:high>=stop);
     if(advancedStopHit){
-      exitPrice=(side==="LONG"?open<=stop:open>=stop)?open:stop;
-      realized+=remaining*priceReturn(exitPrice);remaining=0;
-      exitReason=tp1Done?"STOP_AFTER_TP1_SAME_CANDLE":"BE_SAME_CANDLE";
-      closedAt=c.time+MS["5m"];sameCandleStopExits++;break;
+      exitPrice=(side==="LONG"?open<=stop:open>=stop)?open:stop;applyExit(remaining,exitPrice);remaining=0;
+      exitReason=tp1Done?"STOP_AFTER_TP1_SAME_CANDLE":"BE_SAME_CANDLE";closedAt=c.time+MS["5m"];sameCandleStopExits++;break;
     }
     const hit2=side==="LONG"?high>=tp2:low<=tp2;
     if(hit2){
       const fill=side==="LONG"?(open>=tp2?open:tp2):(open<=tp2?open:tp2);
-      realized+=remaining*priceReturn(fill);remaining=0;exitPrice=fill;exitReason="TP2";closedAt=c.time+MS["5m"];break;
+      applyExit(remaining,fill);remaining=0;exitPrice=fill;exitReason="TP2";closedAt=c.time+MS["5m"];break;
     }
   }
   const last=candles5m.filter(c=>c.time<END).at(-1);
-  if(remaining>0){exitPrice=last?.close??entry;realized+=remaining*priceReturn(exitPrice);exitReason="MARK_TO_MARKET_END";closedAt=END;}
-  return {id:"BTC:"+signal.candleTime,side,setupType:signal.setupType,score:signal.entryAccuracyScore,regime1h:signal.regime1h,signalTime:signal.candleTime,entryTime:entryBar.time,entry,initialStop,tp1,tp2,exitPrice,exitReason,closedAt,beActivated:be,tp1Done,stopLockedAtHalfR:stopLock,sameCandleStopExits,realizedMarginReturnPct:realized,win:realized>0};
+  if(remaining>0){exitPrice=last?.close??entry;applyExit(remaining,exitPrice);remaining=0;exitReason="MARK_TO_MARKET_END";closedAt=END;}
+  return {id:"BTC:"+signal.candleTime,side,setupType:signal.setupType,score:signal.entryAccuracyScore,regime1h:signal.regime1h,signalTime:signal.candleTime,entryTime:entryBar.time,entry,initialStop,tp1,tp2,exitPrice,exitReason,closedAt,beActivated:be,tp1Done,stopLockedAtConfiguredR:tp1Done,sameCandleStopExits,feeUSD:+feeUSD.toFixed(6),realizedMarginReturnPct:realized,win:realized>0};
 }
 function portfolio(trades){
   const events=[];for(const t of trades){events.push({time:t.entryTime,type:"IN",t});events.push({time:t.closedAt,type:"OUT",t});}
@@ -119,9 +119,9 @@ const report={
   candleCounts:{"1h":c1h.length,"15m":c15m.length,"5m":c5m.length},
   engineConfig:BTC_ENGINE_CONFIG,
   selectionMethod:"Causal streaming scan: evaluate each closed 15m candle, then pass only that candidate plus same-day issued signals to the supplied selector; execute at next 5m candle open.",
-  lifecycleAssumptions:{entry:"next available 5m candle open after 15m signal close",stop:"initial ATR/swing stop; at +1R move to entry plus 0.12% fee buffer; after TP1 move remaining stop to +0.5R",tp1:"close 1/3 at 1.5R",tp2:"close remaining 2/3 at 2.8R",intrabar:"active stop checked before targets; stop changes apply from following 5m candle",feesAndFunding:"not included beyond 0.12% BE buffer",margin:"$10 per position, 10x, $100 initial capital, max 6 concurrent positions, no compounding"},
+  lifecycleAssumptions:{entry:"next available 5m candle open after 15m signal close",stop:"initial stop; at +0.9R move stop exactly to entry; after TP1 move remaining stop to +0.4R",tp1:"close 60% at 1.2R",tp2:"close remaining 40% at 2.2R",intrabar:"active stop checked before targets; newly activated stops conservatively checked within same 5m candle",feesAndFunding:"Kraken Tier-1 taker fee 0.05% charged on entry and every partial exit; funding and slippage excluded",margin:"$10 per position, 10x, $100 initial capital, max 6 concurrent positions, no compounding"},
   scanStats:{validSetups:candidates.length,selectedSignals:accepted.length,signalsPerDay:accepted.length/DAYS,scoreAverage:+avg(accepted.map(x=>x.entryAccuracyScore)).toFixed(2),standardScoreSignals:accepted.filter(x=>x.entryAccuracyScore>=BTC_ENGINE_CONFIG.minEntryAccuracyScore).length,fallbackSignals:accepted.filter(x=>x.entryAccuracyScore<BTC_ENGINE_CONFIG.minEntryAccuracyScore).length,rejections},
-  tradeStats:{trades:trades.length,wins:wins.length,losses:losses.length,winRatePct:trades.length?+(wins.length/trades.length*100).toFixed(2):0,stopExits:stopTrades.length,stopLossExits:stopTrades.filter(t=>t.realizedMarginReturnPct<0).length,positiveStopExits:stopTrades.filter(t=>t.realizedMarginReturnPct>0).length,tp2Exits:trades.filter(t=>t.exitReason==="TP2").length,markToMarketAtEnd:trades.filter(t=>t.exitReason==="MARK_TO_MARKET_END").length,sameCandleStopExits:trades.reduce((n,t)=>n+t.sameCandleStopExits,0),averageMarginReturnPct:+avg(trades.map(t=>t.realizedMarginReturnPct)).toFixed(2),averageWinMarginPct:+avg(wins.map(t=>t.realizedMarginReturnPct)).toFixed(2),averageLossMarginPct:+avg(losses.map(t=>t.realizedMarginReturnPct)).toFixed(2),grossMarginReturnPct:+trades.reduce((n,t)=>n+t.realizedMarginReturnPct,0).toFixed(2)},
+  tradeStats:{trades:trades.length,wins:wins.length,losses:losses.length,winRatePct:trades.length?+(wins.length/trades.length*100).toFixed(2):0,stopExits:stopTrades.length,stopLossExits:stopTrades.filter(t=>t.realizedMarginReturnPct<0).length,positiveStopExits:stopTrades.filter(t=>t.realizedMarginReturnPct>0).length,tp2Exits:trades.filter(t=>t.exitReason==="TP2").length,markToMarketAtEnd:trades.filter(t=>t.exitReason==="MARK_TO_MARKET_END").length,sameCandleStopExits:trades.reduce((n,t)=>n+t.sameCandleStopExits,0),averageMarginReturnPct:+avg(trades.map(t=>t.realizedMarginReturnPct)).toFixed(2),averageWinMarginPct:+avg(wins.map(t=>t.realizedMarginReturnPct)).toFixed(2),averageLossMarginPct:+avg(losses.map(t=>t.realizedMarginReturnPct)).toFixed(2),grossMarginReturnPct:+trades.reduce((n,t)=>n+t.realizedMarginReturnPct,0).toFixed(2),totalFeesUSD:+trades.reduce((n,t)=>n+t.feeUSD,0).toFixed(4),profitFactor:+(trades.filter(t=>t.realizedMarginReturnPct>0).reduce((n,t)=>n+t.realizedMarginReturnPct,0)/Math.abs(trades.filter(t=>t.realizedMarginReturnPct<0).reduce((n,t)=>n+t.realizedMarginReturnPct,0)||1)).toFixed(3)},
   portfolio:portfolio(trades),trades
 };
 await mkdir("artifacts",{recursive:true});
