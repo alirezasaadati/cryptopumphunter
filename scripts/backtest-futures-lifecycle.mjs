@@ -242,7 +242,11 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       priceChangePercent: historicalChange(oneHour,i), premium: { lastFundingRate: null }
     };
     let candidate;
-    try { candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m); }
+    try { candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m, {
+      scorePriorHighReclaimShort: process.env.BACKTEST_SOFT_PRIOR_HIGH_RECLAIM === "1",
+      reclaimShortScorePenalty: Number(process.env.BACKTEST_RECLAIM_SCORE_PENALTY || 8),
+      highRiskMaxEntryEmaDistanceAtr: Number(process.env.BACKTEST_HIGH_RISK_EMA_LIMIT || 2.4)
+    }); }
     catch { rejectedSignals++; continue; }
     if (!candidate || candidate.eligible !== true || !["LONG","SHORT"].includes(candidate.side)) { rejectedSignals++; continue; }
     acceptedSignals++;
