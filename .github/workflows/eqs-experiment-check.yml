@@ -9,11 +9,11 @@ on:
       days:
         description: Historical days (7-90)
         required: false
-        default: "30"
+        default: "90"
       symbols:
         description: Maximum Kraken symbols (1-15)
         required: false
-        default: "10"
+        default: "5"
 
 permissions:
   contents: read
@@ -38,8 +38,8 @@ jobs:
       - name: Run real Kraken Futures EQS diagnostics
         env:
           EQS_BASELINE_MODULE: /tmp/eqs-baseline/src/index.js
-          EQS_BACKTEST_DAYS: ${{ inputs.days || '30' }}
-          EQS_BACKTEST_SYMBOLS: ${{ inputs.symbols || '10' }}
+          EQS_BACKTEST_DAYS: ${{ inputs.days || '90' }}
+          EQS_BACKTEST_SYMBOLS: ${{ inputs.symbols || '5' }}
         run: node scripts/backtest-eqs-diagnostics.mjs
       - name: Upload diagnostic reports
         if: always()
