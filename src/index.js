@@ -1750,6 +1750,55 @@ function calculateEntryQualityScore({ side, rsi: rsiValue, rsiSlope, emaDistance
   return { raw: rawScore, normalized, details, availableFactorCount };
 }
 
+function calculateEntryTimingScore({ side, rsi: rsiValue, rsiSlope, emaDistanceAtr, pullbackState, momentumState, reclaimExtensionAtr }) {
+  let raw = 0;
+  const details = { rsi: null, emaDistance: null, pullback: null, momentumTiming: null, ema9Extension: null };
+  if (Number.isFinite(rsiValue) && Number.isFinite(rsiSlope)) {
+    if (side === "LONG") {
+      if (rsiValue >= 30 && rsiValue <= 45 && rsiSlope > 0) { raw += 20; details.rsi = 20; }
+      else if (rsiValue > 45 && rsiValue <= 55 && rsiSlope > 0) { raw += 10; details.rsi = 10; }
+      else if (rsiValue > 70) { raw -= 15; details.rsi = -15; }
+      else if (rsiValue < 30 && rsiSlope <= 0) { raw -= 10; details.rsi = -10; }
+      else details.rsi = 0;
+    } else if (side === "SHORT") {
+      if (rsiValue >= 55 && rsiValue <= 70 && rsiSlope < 0) { raw += 20; details.rsi = 20; }
+      else if (rsiValue >= 45 && rsiValue < 55 && rsiSlope < 0) { raw += 10; details.rsi = 10; }
+      else if (rsiValue < 30) { raw -= 15; details.rsi = -15; }
+      else if (rsiValue > 70 && rsiSlope >= 0) { raw -= 10; details.rsi = -10; }
+      else details.rsi = 0;
+    }
+  }
+  if (Number.isFinite(emaDistanceAtr)) {
+    if (emaDistanceAtr <= 1) { raw += 20; details.emaDistance = 20; }
+    else if (emaDistanceAtr <= 2) { raw += 10; details.emaDistance = 10; }
+    else if (emaDistanceAtr <= 3) details.emaDistance = 0;
+    else { raw -= 20; details.emaDistance = -20; }
+  }
+  if (side === "LONG") {
+    if (pullbackState === "RECLAIM_CONFIRMED") { raw += 10; details.pullback = 10; }
+    else if (pullbackState === "TOUCHED_ZONE") { raw += 15; details.pullback = 15; }
+    else if (pullbackState === "NONE") { raw -= 15; details.pullback = -15; }
+  } else if (side === "SHORT") {
+    if (pullbackState === "RECLAIM_CONFIRMED") { raw += 25; details.pullback = 25; }
+    else if (pullbackState === "TOUCHED_ZONE") { raw += 10; details.pullback = 10; }
+    else if (pullbackState === "NONE") { raw -= 15; details.pullback = -15; }
+  }
+  // Momentum confirmation is useful for direction, but can mean the entry is late.
+  if (momentumState === "CONFIRMED") { raw -= 5; details.momentumTiming = -5; }
+  else if (momentumState === "NOT_CONFIRMED") { raw += 5; details.momentumTiming = 5; }
+  if (Number.isFinite(reclaimExtensionAtr)) {
+    const extension = Math.max(0, reclaimExtensionAtr);
+    if (extension <= 0.25) { raw += 20; details.ema9Extension = 20; }
+    else if (extension <= 0.5) { raw += 15; details.ema9Extension = 15; }
+    else if (extension <= 1) { raw += 5; details.ema9Extension = 5; }
+    else if (extension <= 1.5) details.ema9Extension = 0;
+    else if (extension <= 2) { raw -= 5; details.ema9Extension = -5; }
+    else { raw -= 10; details.ema9Extension = -10; }
+  }
+  const normalized = Math.max(0, Math.min(100, Math.round(((raw + 65) / 155) * 100)));
+  return { raw, normalized, details, availableFactorCount: Object.values(details).filter(v => v !== null).length };
+}
+
 function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr }) {
   const marketPrice = Number(ticker?.last);
   if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
@@ -2196,6 +2245,15 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     momentumState: entryFilters.eqsMomentumStateV2 || "UNAVAILABLE",
     fourHourTrend: side === "LONG" ? "NEUTRAL" : fourHourTrend
   });
+  const timingScore = calculateEntryTimingScore({
+    side,
+    rsi: rsiValue,
+    rsiSlope,
+    emaDistanceAtr: entryFilters.emaDistanceAtr,
+    pullbackState: entryFilters.eqsPullbackStateV2 || "UNAVAILABLE",
+    momentumState: entryFilters.eqsMomentumStateV2 || "UNAVAILABLE",
+    reclaimExtensionAtr: entryFilters.reclaimExtensionAtr
+  });
 
   const direction = side === "LONG" ? 1 : -1;
   const target1 = entry + direction * risk * 1.5;
@@ -2242,6 +2300,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     entryQualityRawV3: eqsV3.raw,
     entryQualityDetailsV3: eqsV3.details,
     entryQualityAvailableFactorsV3: eqsV3.availableFactorCount,
+    entryTimingScore: timingScore.normalized,
+    entryTimingRaw: timingScore.raw,
+    entryTimingDetails: timingScore.details,
+    entryTimingAvailableFactors: timingScore.availableFactorCount,
     ema20: e20,
     ema50: e50,
     atr,
