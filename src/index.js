@@ -1798,13 +1798,33 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
   const reclaimExtensionAtr = side === "LONG"
     ? (last15m.close - ema9_15m) / atr15m
     : (ema9_15m - last15m.close) / atr15m;
+  // EQS v2 is diagnostic only. A reclaim must cross EMA9 on the latest
+  // closed 15m candle, close near the directional edge, and avoid chasing.
+  const previous15m = candles15m[candles15m.length - 2];
+  const previousEma9 = ema(closes15m.slice(0, -1), 9);
+  const candleRange = Math.max(0, last15m.high - last15m.low);
+  const closeLocation = candleRange > 0
+    ? (side === "LONG" ? (last15m.close - last15m.low) / candleRange : (last15m.high - last15m.close) / candleRange)
+    : null;
+  const ema9Slope = Number.isFinite(previousEma9) ? ema9_15m - previousEma9 : null;
+  const eqsMomentumStateV2 = aligned && Number.isFinite(ema9Slope) &&
+    (side === "LONG" ? ema9Slope > 0 : ema9Slope < 0)
+    ? "CONFIRMED" : "NOT_CONFIRMED";
+  const crossedEma9 = previous15m && (side === "LONG"
+    ? previous15m.close <= previousEma9 && last15m.close > ema9_15m
+    : previous15m.close >= previousEma9 && last15m.close < ema9_15m);
+  const eqsPullbackStateV2 = touchedPullbackZone
+    ? (eqsIsReversal && crossedEma9 && Number.isFinite(closeLocation) &&
+      closeLocation >= 0.65 && reclaimExtensionAtr <= 1.5
+      ? "RECLAIM_CONFIRMED" : "TOUCHED_ZONE")
+    : "NONE";
   if (reclaimExtensionAtr > FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR) {
     return { ok: false, rejected: "قیمت پس از حرکت تأییدی بیش از حد از محدوده ورود فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
   }
 
   return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
     momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone,
-    eqsMomentumState, eqsPullbackState };
+    eqsMomentumState, eqsPullbackState, eqsMomentumStateV2, eqsPullbackStateV2 };
 }
 
 function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
@@ -1868,11 +1888,30 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
   const eqsPullbackState = touchedPullbackZone
     ? (eqsIsReversal ? "RECLAIM_CONFIRMED" : "TOUCHED_ZONE")
     : "NONE";
+  // Strict diagnostic-only reclaim/momentum states for EQS v2.
+  const previous15m = candles15m[candles15m.length - 2];
+  const previousEma9 = ema(closes15m.slice(0, -1), 9);
+  const candleRange = Math.max(0, last15m.high - last15m.low);
+  const closeLocation = candleRange > 0
+    ? (side === "LONG" ? (last15m.close - last15m.low) / candleRange : (last15m.high - last15m.close) / candleRange)
+    : null;
+  const ema9Slope = Number.isFinite(previousEma9) ? ema9_15m - previousEma9 : null;
+  const eqsMomentumStateV2 = momentumConfirmed && Number.isFinite(ema9Slope) &&
+    (side === "LONG" ? ema9Slope > 0 : ema9Slope < 0)
+    ? "CONFIRMED" : "NOT_CONFIRMED";
+  const crossedEma9 = previous15m && (side === "LONG"
+    ? previous15m.close <= previousEma9 && last15m.close > ema9_15m
+    : previous15m.close >= previousEma9 && last15m.close < ema9_15m);
+  const eqsPullbackStateV2 = touchedPullbackZone
+    ? (eqsIsReversal && crossedEma9 && Number.isFinite(closeLocation) &&
+      closeLocation >= 0.65 && reclaimExtensionAtr <= 1.5
+      ? "RECLAIM_CONFIRMED" : "TOUCHED_ZONE")
+    : "NONE";
   // Momentum and pullback are confirmations for ranking, never hard eligibility gates.
   // Drift and EMA/ATR distance remain hard safety limits.
   return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
     momentumConfirmed, pullbackConfirmed: touchedPullbackZone, fourHourOpposes,
-    eqsMomentumState, eqsPullbackState };
+    eqsMomentumState, eqsPullbackState, eqsMomentumStateV2, eqsPullbackStateV2 };
 }
 
 function calculateFourHourTrend(candles4h) {
@@ -2136,6 +2175,15 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     momentumState: entryFilters.eqsMomentumState || "UNAVAILABLE",
     fourHourTrend
   });
+  const eqsV2 = calculateEntryQualityScore({
+    side,
+    rsi: rsiValue,
+    rsiSlope,
+    emaDistanceAtr: entryFilters.emaDistanceAtr,
+    pullbackState: entryFilters.eqsPullbackStateV2 || "UNAVAILABLE",
+    momentumState: entryFilters.eqsMomentumStateV2 || "UNAVAILABLE",
+    fourHourTrend
+  });
 
   const direction = side === "LONG" ? 1 : -1;
   const target1 = entry + direction * risk * 1.5;
@@ -2174,6 +2222,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     entryQualityRaw: eqs.raw,
     entryQualityDetails: eqs.details,
     entryQualityAvailableFactors: eqs.availableFactorCount,
+    entryQualityScoreV2: eqsV2.normalized,
+    entryQualityRawV2: eqsV2.raw,
+    entryQualityDetailsV2: eqsV2.details,
+    entryQualityAvailableFactorsV2: eqsV2.availableFactorCount,
     ema20: e20,
     ema50: e50,
     atr,
