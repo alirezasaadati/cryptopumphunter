@@ -6,6 +6,7 @@ on:
       - "main"
     paths:
       - ".github/workflows/current-engine-xaut-60d.yml"
+      - "scripts/backtest-kraken.mjs"
   workflow_dispatch:
 jobs:
   backtest:
