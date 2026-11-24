@@ -2184,6 +2184,18 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     momentumState: entryFilters.eqsMomentumStateV2 || "UNAVAILABLE",
     fourHourTrend
   });
+  // EQS v3 is a direction-aware diagnostic candidate. The initial sample
+  // did not support a positive 4h-alignment bonus or extra reclaim premium for LONG.
+  const eqsV3 = calculateEntryQualityScore({
+    side,
+    rsi: rsiValue,
+    rsiSlope,
+    emaDistanceAtr: entryFilters.emaDistanceAtr,
+    pullbackState: side === "LONG" && entryFilters.eqsPullbackStateV2 === "RECLAIM_CONFIRMED"
+      ? "TOUCHED_ZONE" : (entryFilters.eqsPullbackStateV2 || "UNAVAILABLE"),
+    momentumState: entryFilters.eqsMomentumStateV2 || "UNAVAILABLE",
+    fourHourTrend: side === "LONG" ? "NEUTRAL" : fourHourTrend
+  });
 
   const direction = side === "LONG" ? 1 : -1;
   const target1 = entry + direction * risk * 1.5;
@@ -2226,6 +2238,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     entryQualityRawV2: eqsV2.raw,
     entryQualityDetailsV2: eqsV2.details,
     entryQualityAvailableFactorsV2: eqsV2.availableFactorCount,
+    entryQualityScoreV3: eqsV3.normalized,
+    entryQualityRawV3: eqsV3.raw,
+    entryQualityDetailsV3: eqsV3.details,
+    entryQualityAvailableFactorsV3: eqsV3.availableFactorCount,
     ema20: e20,
     ema50: e50,
     atr,
