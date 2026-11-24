@@ -17,9 +17,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run 90-day Kraken Futures comparison
+      - name: Run 180-day Kraken Futures comparison
         env:
-          BACKTEST_DAYS: "90"
+          BACKTEST_DAYS: "180"
           BACKTEST_SYMBOLS: "10"
           BACKTEST_FEE: "0.0005"
           BACKTEST_SLIPPAGE: "0.0003"
