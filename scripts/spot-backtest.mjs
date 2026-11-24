@@ -158,12 +158,14 @@ const coins = await getCoinUniverse();
 const pairPayload = await getJson(BASE + "/AssetPairs","Kraken AssetPairs");
 const pairs = Object.entries(pairPayload).map(([key,value])=>({key,...value})).filter(p=>p.status==="online"&&p.wsname);
 const candidatePairs = coins.flatMap(coin=>findSpotPairs(coin,pairs));
+if (!candidatePairs.length) throw new Error("No eligible Kraken USD/USDT spot pairs found in the current CoinLore sample.");
 const tickerPayload = await getJson(BASE + "/Ticker?pair=" + encodeURIComponent([...new Set(candidatePairs.map(p=>p.altname||p.key))].join(",")),"Kraken Ticker");
 const selected = [];
 for (const coin of coins) {
   const pair = selectBestSpotPair(findSpotPairs(coin,pairs),tickerPayload);
   if (pair) selected.push({coin,pair:pair.pair,quote:pair.quote});
 }
+if (!selected.length) throw new Error("Kraken returned no usable ticker data for the selected Spot universe.");
 const downloaded = await mapLimit(selected,3,async item=>{
   const payload=await getJson(BASE+"/OHLC?pair="+encodeURIComponent(item.pair.altname||item.pair.key)+"&interval=60","Kraken OHLC "+item.pair.wsname);
   return {...item,candles:candleRows(payload)};
