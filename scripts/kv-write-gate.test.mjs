@@ -71,7 +71,8 @@ test("KV quota guard works without a Durable Object binding", async () => {
       async get(key) { return key; }
     }
   };
-  const guarded = withQuotaAwareKV(env);
+  const isolated = await import("../src/index.js?without-do-binding-test");
+  const guarded = isolated.withQuotaAwareKV(env);
   await guarded.APP_KV.put("without-do", "ok");
   assert.equal(writes, 1);
 });
