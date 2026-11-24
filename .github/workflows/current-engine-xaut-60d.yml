@@ -1,5 +1,5 @@
 name: Current futures engine XAUT 60D backtest
-# Re-run trigger after excluding the warmup period from the measured sample.
+# Re-run trigger after adding the fixed 30% margin take-profit scenario.
 on:
   push:
     branches:
