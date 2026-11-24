@@ -177,7 +177,7 @@ const downloaded = await mapLimit(selected,3,async item=>{
   return {...item,candles1h:candleRows(oneHourPayload),candles4h:candleRows(fourHourPayload)};
 });
 const reports=[];
-const aggregate={baseline:{oneHour:[],fourHour:[]},strict:{oneHour:[],fourHour:[]}};
+const aggregate={baseline:{oneHour:[],fourHour:[]},balanced:{oneHour:[],fourHour:[]},strict:{oneHour:[],fourHour:[]}};
 for (const item of downloaded) {
   if (item.error || !item.candles1h || item.candles1h.length < MIN_CANDLES+HORIZON_1H+1 ||
       !item.candles4h || item.candles4h.length < MIN_CANDLES+HORIZON_4H+1) {
@@ -185,12 +185,16 @@ for (const item of downloaded) {
     continue;
   }
   const base1=simulate(item.candles1h,item,HORIZON_1H,"baseline");
+  const balanced1=simulate(item.candles1h,item,HORIZON_1H,"balanced");
   const strict1=simulate(item.candles1h,item,HORIZON_1H,"strict");
   const base4=simulate(item.candles4h,item,HORIZON_4H,"baseline");
+  const balanced4=simulate(item.candles4h,item,HORIZON_4H,"balanced");
   const strict4=simulate(item.candles4h,item,HORIZON_4H,"strict");
   aggregate.baseline.oneHour.push(...base1);
+  aggregate.balanced.oneHour.push(...balanced1);
   aggregate.strict.oneHour.push(...strict1);
   aggregate.baseline.fourHour.push(...base4);
+  aggregate.balanced.fourHour.push(...balanced4);
   aggregate.strict.fourHour.push(...strict4);
   const metrics=trades=>({
     inSample:summarize(trades.filter(t=>t.split==="in-sample")),
@@ -202,6 +206,10 @@ for (const item of downloaded) {
     baseline:{
       oneHour:{candles:item.candles1h.length,historyDays:+(item.candles1h.length/24).toFixed(1),...metrics(base1)},
       fourHour:{candles:item.candles4h.length,historyDays:+(item.candles4h.length*4/24).toFixed(1),...metrics(base4)}
+    },
+    balanced:{
+      oneHour:{candles:item.candles1h.length,historyDays:+(item.candles1h.length/24).toFixed(1),...metrics(balanced1)},
+      fourHour:{candles:item.candles4h.length,historyDays:+(item.candles4h.length*4/24).toFixed(1),...metrics(balanced4)}
     },
     strict:{
       oneHour:{candles:item.candles1h.length,historyDays:+(item.candles1h.length/24).toFixed(1),...metrics(strict1)},
@@ -219,6 +227,10 @@ const output={
     baseline:{
       oneHour:{inSample:summarize(aggregate.baseline.oneHour.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(aggregate.baseline.oneHour.filter(t=>t.split==="out-of-sample"),false)},
       fourHour:{inSample:summarize(aggregate.baseline.fourHour.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(aggregate.baseline.fourHour.filter(t=>t.split==="out-of-sample"),false)}
+    },
+    balanced:{
+      oneHour:{inSample:summarize(aggregate.balanced.oneHour.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(aggregate.balanced.oneHour.filter(t=>t.split==="out-of-sample"),false)},
+      fourHour:{inSample:summarize(aggregate.balanced.fourHour.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(aggregate.balanced.fourHour.filter(t=>t.split==="out-of-sample"),false)}
     },
     strict:{
       oneHour:{inSample:summarize(aggregate.strict.oneHour.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(aggregate.strict.oneHour.filter(t=>t.split==="out-of-sample"),false)},
