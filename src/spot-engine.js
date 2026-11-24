@@ -1,17 +1,404 @@
-const CFG={MIN_CAP:1_000_000,MAX_CAP:500_000_000,MIN_VOL:250_000,MAX_CANDIDATES:35,MAX_RESULTS:5,WATCHLIST:5,CONCURRENCY:2,MIN_SCORE:65,MIN_RR:1.5,INTERVAL:60,MIN_CANDLES:55,PAGES:[0,100,200,300,400,500,600,700,800,900]};
-async function getJson(url,label){const r=await fetch(url,{headers:{Accept:"application/json","User-Agent":"CryptoPumpHunter/spot-v3.6"}});const t=await r.text();let d;try{d=JSON.parse(t)}catch{throw new Error(label+": پاسخ JSON معتبر نیست؛ HTTP "+r.status)}if(!r.ok)throw new Error(label+": HTTP "+r.status);return d}
-function extract(payload){if(Array.isArray(payload))return payload;if(Array.isArray(payload?.data))return payload.data;if(Array.isArray(payload?.coins))return payload.coins;if(Array.isArray(payload?.data?.coins))return payload.data.coins;return []}
-async function fetchCoinLore(start){const p=await getJson("https://api.coinlore.net/api/tickers/?start="+start+"&limit=100","CoinLore");const assets=extract(p);if(!assets.length)throw new Error("CoinLore صفحه "+start+" داده قابل استفاده ندارد.");return assets}
-async function getCoins(){const pages=await mapLimit(CFG.PAGES,CFG.CONCURRENCY,async start=>{try{return {assets:await fetchCoinLore(start)}}catch(e){return {assets:[],error:e.message}}});const coins=[],seen=new Set(),errors=[];for(const p of pages){if(p.error)errors.push(p.error);for(const c of p.assets){const id=String(c.id||c.symbol||"").toLowerCase();if(id&&!seen.has(id)){seen.add(id);coins.push(c)}}}return {coins,errors}}
-async function getPairs(){const d=await getJson("https://api.kraken.com/0/public/AssetPairs","Kraken AssetPairs");if(d.error?.length)throw new Error(d.error.join(", "));return d.result||{}}
-function norm(s){let v=String(s||"").toUpperCase().trim();if(v==="BTC")v="XBT";return v.replace(/[^A-Z0-9]/g,"")}
-function findPair(coin,pairs){const symbol=norm(coin.symbol);if(!symbol)return null;for(const [key,p] of Object.entries(pairs)){const ws=String(p.wsname||"").toUpperCase(),alt=String(p.altname||"").toUpperCase(),parts=ws.split("/");if(norm(parts[0])===symbol&&(parts[1]==="USD"||parts[1]==="USDT"))return p.altname||key;if(alt===symbol+"USD"||alt===symbol+"USDT")return p.altname||key}return null}
-async function candlesFor(pair){const d=await getJson("https://api.kraken.com/0/public/OHLC?pair="+encodeURIComponent(pair)+"&interval="+CFG.INTERVAL,"Kraken OHLC");if(d.error?.length)throw new Error(d.error.join(", "));const r=d.result||{},k=Object.keys(r).find(x=>x!=="last");if(!k||!Array.isArray(r[k]))throw new Error("کندل‌های Kraken موجود نیستند.");return r[k].slice(0,-1).map(x=>({time:+x[0],open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+x[6]})).filter(x=>Number.isFinite(x.close)&&x.close>0&&x.high>=x.low&&x.low>0)}
-function ema(v,n){if(v.length<n)return null;const m=2/(n+1);let x=v.slice(0,n).reduce((a,b)=>a+b,0)/n;for(let i=n;i<v.length;i++)x=v[i]*m+x*(1-m);return x}
-function rsi(v,n=14){if(v.length<=n)return null;let g=0,l=0;for(let i=1;i<=n;i++){const d=v[i]-v[i-1];g+=Math.max(d,0);l+=Math.max(-d,0)}let ag=g/n,al=l/n;for(let i=n+1;i<v.length;i++){const d=v[i]-v[i-1];ag=(ag*(n-1)+Math.max(d,0))/n;al=(al*(n-1)+Math.max(-d,0))/n}if(al===0)return 100;if(ag===0)return 0;return 100-100/(1+ag/al)}
-function avg(v){return v.length?v.reduce((a,b)=>a+b,0)/v.length:0}
-function fmt(v){const n=Number(v);if(!Number.isFinite(n))return "-";if(n>=1000)return n.toFixed(2);if(n>=1)return n.toFixed(4);if(n>=.01)return n.toFixed(5);if(n>=.0001)return n.toFixed(7);return n.toExponential(3)}
-function analyze(coin,c){if(c.length<CFG.MIN_CANDLES)throw Error("تعداد کندل کافی نیست.");const closes=c.map(x=>x.close),last=c[c.length-1],prev=c[c.length-2],current=last.close,e20=ema(closes,20),e50=ema(closes,50),rv=rsi(closes);if([e20,e50,rv].some(x=>x===null))throw Error("محاسبه اندیکاتورها ناموفق بود.");const recent=c.slice(-31,-1);if(recent.length<10)throw Error("کندل کافی برای حمایت و مقاومت وجود ندارد.");const support=Math.min(...recent.map(x=>x.low)),resistance=Math.max(...recent.map(x=>x.high)),avgVol=avg(c.slice(-21,-1).map(x=>x.volume)),volumeRatio=avgVol>0?last.volume/avgVol:0,trendUp=e20>e50,above20=current>e20,above50=current>e50,dailyVolume=+coin.volume24||0,dailyChange=+coin.percent_change_24h||0;let score=0;const reasons=[];if(trendUp)score+=25;else reasons.push("EMA20 بالاتر از EMA50 نیست");if(rv>=45&&rv<=68)score+=15;else if(rv>68&&rv<=75){score+=7;reasons.push("RSI بالا است؛ احتمال ورود دیرهنگام")}else if(rv>75)reasons.push("RSI بیش از حد بالا است");else reasons.push("قدرت RSI کافی نیست");if(volumeRatio>=1.5)score+=20;else if(volumeRatio>=1.1)score+=15;else if(volumeRatio>=.9)score+=10;else reasons.push("حجم کندل اخیر پایین است");if(dailyVolume>=1e6)score+=10;else if(dailyVolume>=5e5)score+=7;else score+=4;if(dailyChange>0&&dailyChange<12)score+=10;else if(dailyChange>=12){score+=5;reasons.push("رشد روزانه زیاد است")}else reasons.push("تغییرات روزانه مثبت نیست");if(above20&&above50)score+=20;else if(above20||above50)score+=10;else reasons.push("قیمت زیر EMA20 و EMA50 است");score=Math.min(100,score);let setup="بدون ستاپ";const breakout=current>resistance*1.002&&prev.close<=resistance*1.005&&volumeRatio>=1.1&&trendUp,pullback=trendUp&&current>e20&&last.low<=e20*1.01&&current>last.open,bounce=last.low<=support*1.015&&current>support*1.01&&current>last.open;if(breakout)setup="شکست مقاومت";else if(pullback)setup="پولبک به EMA20";else if(bounce)setup="واکنش به حمایت";const recentLow=Math.min(...c.slice(-8,-1).map(x=>x.low)),entry=current;let stop;if(setup==="شکست مقاومت")stop=Math.min(resistance*.99,recentLow*.995);else if(setup==="پولبک به EMA20")stop=Math.min(e20*.985,recentLow*.995);else if(setup==="واکنش به حمایت")stop=Math.min(support*.985,recentLow*.995);else stop=Math.min(support*.99,recentLow*.995);const risk=entry-stop,valid=Number.isFinite(risk)&&risk>0;let target1=resistance;if(setup==="شکست مقاومت")target1=entry+Math.max(resistance-support,entry*.01);if(valid&&target1<=entry)target1=entry+risk*1.5;const rr=valid?(target1-entry)/risk:0,target2=valid?entry+risk*2.5:0,target3=valid?entry+risk*3.5:0;if(!valid)reasons.push("حد ضرر معتبر محاسبه نشد");if(setup==="بدون ستاپ")reasons.push("الگوی ورود مشخصی وجود ندارد");if(rr<CFG.MIN_RR)reasons.push("نسبت سود به ریسک کمتر از حداقل تعیین‌شده است");if(score<CFG.MIN_SCORE)reasons.push("امتیاز کمتر از "+CFG.MIN_SCORE+" است");return {coin,current,score,rsi:rv,support,resistance,volumeRatio,trend:trendUp?"صعودی":"خنثی یا نزولی",setup,entry,stop,target1,target2,target3,rewardRisk:rr,eligible:score>=CFG.MIN_SCORE&&setup!=="بدون ستاپ"&&volumeRatio>=.9&&valid&&rr>=CFG.MIN_RR,reasons}}
-function formatCoin(x,signal){let t="🪙 "+x.coin.name+" ("+x.coin.symbol+")\n⭐ امتیاز: "+x.score+"/100\n💵 قیمت فعلی: $"+fmt(x.current)+"\n📈 روند: "+x.trend+"\n📊 RSI: "+x.rsi.toFixed(1)+"\n📉 نسبت حجم: "+x.volumeRatio.toFixed(2)+"x\n🧩 الگو: "+x.setup+"\n🟢 حمایت: $"+fmt(x.support)+"\n🔴 مقاومت قبلی: $"+fmt(x.resistance)+"\n";if(signal)t+="\n🎯 قیمت بررسی/ورود: $"+fmt(x.entry)+"\n🛑 حد ضرر: $"+fmt(x.stop)+"\n🥇 هدف اول: $"+fmt(x.target1)+"\n🥈 هدف دوم: $"+fmt(x.target2)+"\n🥉 هدف سوم: $"+fmt(x.target3)+"\n⚖️ نسبت سود به ریسک: "+x.rewardRisk.toFixed(2)+"R\n";else t+="\n👀 وضعیت: فقط زیر نظر بگیر؛ سیگنال خرید نیست.\n📍 قیمت بررسی: $"+fmt(x.entry)+"\n🛑 حد ضرر فرضی: $"+fmt(x.stop)+"\n🎯 هدف محاسباتی اول: $"+fmt(x.target1)+"\n⚖️ نسبت سود به ریسک: "+x.rewardRisk.toFixed(2)+"R\n";return t}
-async function mapLimit(items,limit,fn){const out=new Array(items.length);let i=0;async function worker(){while(true){const n=i++;if(n>=items.length)return;try{out[n]=await fn(items[n])}catch(e){out[n]={rejected:e.message||"خطای پردازش"}}}}await Promise.all(Array.from({length:Math.min(limit,items.length)},worker));return out}
-export async function runSpotScan(env){const started=Date.now(),coinResult=await getCoins(),coins=coinResult.coins;if(!coins.length)return {report:"❌ دریافت اطلاعات بازار ناموفق بود.\nCoinLore هیچ فهرست ارز قابل استفاده‌ای برنگرداند.\n\n"+coinResult.errors.slice(0,5).join("\n"),watchlist:[]};const candidates=coins.filter(c=>{const cap=+c.market_cap_usd,vol=+c.volume24,price=+c.price_usd;return Number.isFinite(cap)&&Number.isFinite(vol)&&Number.isFinite(price)&&cap>=CFG.MIN_CAP&&cap<=CFG.MAX_CAP&&vol>=CFG.MIN_VOL&&price>0}).sort((a,b)=>(+b.volume24)-(+a.volume24)).slice(0,CFG.MAX_CANDIDATES);if(!candidates.length)return {report:"⚠️ از "+coins.length+" ارز دریافتی، هیچ ارزی با فیلترهای اولیه مطابقت نداشت.",watchlist:[]};let pairs;try{pairs=await getPairs()}catch(e){return {report:"❌ دریافت جفت‌ارزهای Kraken ناموفق بود:\n"+e.message,watchlist:[]}}const analyzed=await mapLimit(candidates,CFG.CONCURRENCY,async coin=>{try{const pair=findPair(coin,pairs);if(!pair)return {coin,rejected:"جفت معاملاتی USD/USDT در Kraken پیدا نشد"};const candles=await candlesFor(pair);if(candles.length<CFG.MIN_CANDLES)return {coin,rejected:"کندل کافی نیست؛ تعداد موجود: "+candles.length};return analyze(coin,candles)}catch(e){return {coin,rejected:e.message||"خطای ناشناخته در تحلیل"}}});const valid=analyzed.filter(x=>x?.eligible).sort((a,b)=>b.score-a.score).slice(0,CFG.MAX_RESULTS),watch=analyzed.filter(x=>x&&!x.eligible&&x.score!==undefined).sort((a,b)=>b.score-a.score).slice(0,CFG.WATCHLIST),diag=analyzed.filter(x=>x&&!x.eligible).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,8),matched=analyzed.filter(x=>x&&x.score!==undefined).length,noPair=analyzed.filter(x=>x?.rejected?.includes("جفت معاملاتی")).length;let report="🚀 CRYPTO PUMP HUNTER | SPOT SCAN\n━━━━━━━━━━━━━━━━━━\n\n📊 ارزش بازار: 1M تا 500M دلار\n💧 حداقل حجم روزانه: 250K دلار\n⏱ تایم‌فریم: 1 ساعت\n📥 ارزهای دریافت‌شده: "+coins.length+"\n🔎 کاندیداهای فیلترشده: "+candidates.length+"\n📈 دارای داده کندل معتبر: "+matched+"\n🔗 بدون جفت معاملاتی Kraken: "+noPair+"\n⭐ سیگنال‌های واجد شرایط: "+valid.length+"\n\n";if(valid.length)report+="🔥 سیگنال‌های واجد شرایط\n━━━━━━━━━━━━━━━━━━\n\n"+valid.map(x=>formatCoin(x,true)).join("\n")+"\n";else report+="⚠️ در این اسکن هیچ سیگنالی تمام شرایط ورود را نداشت.\n\n";if(watch.length)report+="👀 واچ‌لیست\n━━━━━━━━━━━━━━━━━━\n\n"+watch.map(x=>formatCoin(x,false)).join("\n")+"\n";if(diag.length)report+="🧪 دلایل رد شدن یا ناقص بودن شرایط\n━━━━━━━━━━━━━━━━━━\n"+diag.map(x=>"• "+(x.coin?.name||"Unknown")+" ("+(x.coin?.symbol||"—")+") | امتیاز: "+(x.score??"-")+"\n  دلیل: "+(x.reasons?.join("، ")||x.rejected||"شرایط ورود کامل نیست")).join("\n");if(coinResult.errors.length)report+="\n⚠️ خطا در بعضی صفحات CoinLore: "+coinResult.errors.length+" صفحه ناموفق بود.\n";report+="\n━━━━━━━━━━━━━━━━━━\n⏱ زمان اسکن: "+Math.round((Date.now()-started)/1000)+" ثانیه\n📌 منابع: CoinLore و Kraken\n⚠️ سیگنال‌ها احتمالی‌اند و تضمین سود نیستند.";const saved=watch.map(x=>({name:x.coin.name,symbol:x.coin.symbol,current:x.current,score:x.score,rsi:x.rsi,trend:x.trend,setup:x.setup,support:x.support,resistance:x.resistance,entry:x.entry,stop:x.stop,target1:x.target1,rewardRisk:x.rewardRisk,volumeRatio:x.volumeRatio,eligible:x.eligible,reasons:x.reasons,dailyVolume:+x.coin.volume24||0,dailyChange:+x.coin.percent_change_24h||0}));const analysis=analyzed.filter(x=>x&&x.score!==undefined).map(x=>({name:x.coin.name,symbol:x.coin.symbol,current:x.current,score:x.score,rsi:x.rsi,trend:x.trend,setup:x.setup,support:x.support,resistance:x.resistance,entry:x.entry,stop:x.stop,target1:x.target1,rewardRisk:x.rewardRisk,volumeRatio:x.volumeRatio,eligible:x.eligible,reasons:x.reasons,dailyVolume:+x.coin.volume24||0,dailyChange:+x.coin.percent_change_24h||0}));if(env.APP_KV){await env.APP_KV.put("last_scan",JSON.stringify({version:"3.7-spot-analysis-data",timestamp:Date.now(),report,watchlist:saved,analysis,received:coins.length,candidates:candidates.length,analyzed:matched,noPair,signalCount:valid.length}))}else report+="\n⚠️ اتصال KV تنظیم نشده؛ واچ‌لیست ذخیره نشد.";return {report,watchlist:saved}}
+const CFG = Object.freeze({
+  MIN_CAP: 1_000_000,
+  MAX_CAP: 500_000_000,
+  MIN_MARKET_VOLUME_USD: 250_000,
+  MIN_PAIR_VOLUME_USD: 50_000,
+  MIN_BOOK_DEPTH_USD: 5_000,
+  MAX_SPREAD_PCT: 0.8,
+  MAX_CANDIDATES: 25,
+  MAX_RESULTS: 8,
+  CONCURRENCY: 3,
+  MIN_SCORE: 65,
+  MIN_RR: 1.5,
+  INTERVAL: 60,
+  MIN_CANDLES: 55,
+  PAGES: [0,100,200,300,400,500,600,700,800,900]
+});
+
+const json = async (url, label) => {
+  const response = await fetch(url, { headers: { Accept: "application/json", "User-Agent": "CryptoPumpHunter/spot-v4" } });
+  const raw = await response.text();
+  let data;
+  try { data = JSON.parse(raw); }
+  catch { throw new Error(label + ": پاسخ JSON معتبر نیست؛ HTTP " + response.status); }
+  if (!response.ok) throw new Error(label + ": HTTP " + response.status);
+  return data;
+};
+
+function extract(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.coins)) return payload.coins;
+  if (Array.isArray(payload?.data?.coins)) return payload.data.coins;
+  return [];
+}
+
+async function fetchCoinLore(start) {
+  const payload = await json("https://api.coinlore.net/api/tickers/?start=" + start + "&limit=100", "CoinLore");
+  const coins = extract(payload);
+  if (!coins.length) throw new Error("CoinLore صفحه " + start + " داده قابل استفاده ندارد.");
+  return coins;
+}
+
+async function mapLimit(items, limit, fn) {
+  const output = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      try { output[index] = await fn(items[index]); }
+      catch (error) { output[index] = { rejected: String(error?.message || error || "خطای ناشناخته") }; }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return output;
+}
+
+async function getCoins() {
+  const pages = await mapLimit(CFG.PAGES, 2, async start => {
+    try { return { coins: await fetchCoinLore(start) }; }
+    catch (error) { return { coins: [], error: String(error?.message || error) }; }
+  });
+  const coins = [], seen = new Set(), errors = [];
+  for (const page of pages) {
+    if (page.error) errors.push(page.error);
+    for (const coin of page.coins) {
+      const id = String(coin.id || coin.symbol || "").toLowerCase();
+      if (id && !seen.has(id)) { seen.add(id); coins.push(coin); }
+    }
+  }
+  return { coins, errors };
+}
+
+async function getPairs() {
+  const payload = await json("https://api.kraken.com/0/public/AssetPairs", "Kraken AssetPairs");
+  if (payload.error?.length) throw new Error(payload.error.join(", "));
+  return Object.entries(payload.result || {}).map(([key, value]) => ({ key, ...value }))
+    .filter(pair => pair.status === "online" && pair.wsname);
+}
+
+function norm(value) {
+  let result = String(value || "").toUpperCase().trim();
+  if (result === "BTC") result = "XBT";
+  return result.replace(/[^A-Z0-9]/g, "");
+}
+
+function canonicalAsset(value) {
+  const result = norm(value);
+  if (result.startsWith("XX") && result.length > 3) return result.slice(1);
+  return result;
+}
+
+function pairQuote(pair) {
+  const parts = String(pair.wsname || "").toUpperCase().split("/");
+  return parts.length === 2 ? parts[1] : "";
+}
+
+function pairMatchesCoin(pair, coin) {
+  const parts = String(pair.wsname || "").toUpperCase().split("/");
+  if (parts.length !== 2 || !["USD", "USDT"].includes(parts[1])) return false;
+  return canonicalAsset(parts[0]) === canonicalAsset(coin.symbol);
+}
+
+export function findSpotPairs(coin, pairs) {
+  return (Array.isArray(pairs) ? pairs : []).filter(pair => pairMatchesCoin(pair, coin));
+}
+
+function pairRequestName(pair) {
+  return pair.altname || pair.key;
+}
+
+function tickerForPair(pair, tickerResult) {
+  const aliases = [pair.key, pair.altname, String(pair.wsname || "").replace("/", "")].map(norm).filter(Boolean);
+  for (const [key, ticker] of Object.entries(tickerResult || {})) {
+    const normalized = norm(key);
+    if (aliases.includes(normalized)) return ticker;
+    const quote = norm(pairQuote(pair));
+    if (quote && normalized.endsWith(quote)) {
+      const returnedBase = canonicalAsset(normalized.slice(0, -quote.length));
+      const expectedBase = canonicalAsset(String(pair.wsname).split("/")[0]);
+      if (returnedBase === expectedBase) return ticker;
+    }
+  }
+  return null;
+}
+
+export function selectBestSpotPair(pairs, tickerResult) {
+  const candidates = [];
+  for (const pair of pairs || []) {
+    const ticker = tickerForPair(pair, tickerResult);
+    if (!ticker) continue;
+    const bid = Number(ticker.b?.[0]), ask = Number(ticker.a?.[0]), last = Number(ticker.c?.[0]);
+    const baseVolume = Number(ticker.v?.[1]);
+    if (![bid, ask, last, baseVolume].every(Number.isFinite) || bid <= 0 || ask <= bid || last <= 0 || baseVolume <= 0) continue;
+    const spreadPct = ((ask - bid) / ((ask + bid) / 2)) * 100;
+    const quoteVolumeUsd = baseVolume * last;
+    if (spreadPct > CFG.MAX_SPREAD_PCT || quoteVolumeUsd < CFG.MIN_PAIR_VOLUME_USD) continue;
+    candidates.push({
+      pair, ticker, quote: pairQuote(pair), bid, ask, last, spreadPct, quoteVolumeUsd,
+      liquidityScore: Math.log10(quoteVolumeUsd + 1) * 10 - spreadPct * 20
+    });
+  }
+  return candidates.sort((a, b) => b.liquidityScore - a.liquidityScore)[0] || null;
+}
+
+async function fetchTickers(pairs) {
+  if (!pairs.length) return {};
+  const names = [...new Set(pairs.map(pairRequestName))];
+  const payload = await json("https://api.kraken.com/0/public/Ticker?pair=" + encodeURIComponent(names.join(",")), "Kraken Ticker");
+  if (payload.error?.length) throw new Error(payload.error.join(", "));
+  return payload.result || {};
+}
+
+async function fetchOrderBook(pair) {
+  const payload = await json("https://api.kraken.com/0/public/Depth?pair=" + encodeURIComponent(pairRequestName(pair)) + "&count=20", "Kraken Order Book");
+  if (payload.error?.length) throw new Error(payload.error.join(", "));
+  const result = payload.result || {};
+  const key = Object.keys(result).find(name => name !== "last");
+  const book = key ? result[key] : null;
+  if (!book || !Array.isArray(book.bids) || !Array.isArray(book.asks)) throw new Error("دفتر سفارش Kraken ناقص است.");
+  return book;
+}
+
+function calculateDepth(book, mid) {
+  const thresholdBid = mid * 0.99, thresholdAsk = mid * 1.01;
+  const bidUsd = book.bids.reduce((sum, level) => Number(level[0]) >= thresholdBid ? sum + Number(level[0]) * Number(level[1]) : sum, 0);
+  const askUsd = book.asks.reduce((sum, level) => Number(level[0]) <= thresholdAsk ? sum + Number(level[0]) * Number(level[1]) : sum, 0);
+  return { bidUsd, askUsd };
+}
+
+async function fetchCandles(pair) {
+  const payload = await json("https://api.kraken.com/0/public/OHLC?pair=" + encodeURIComponent(pairRequestName(pair)) + "&interval=" + CFG.INTERVAL, "Kraken OHLC");
+  if (payload.error?.length) throw new Error(payload.error.join(", "));
+  const result = payload.result || {};
+  const key = Object.keys(result).find(name => name !== "last");
+  if (!key || !Array.isArray(result[key])) throw new Error("کندل‌های Kraken موجود نیستند.");
+  return result[key].slice(0, -1).map(row => ({
+    time: Number(row[0]), open: Number(row[1]), high: Number(row[2]),
+    low: Number(row[3]), close: Number(row[4]), volume: Number(row[6])
+  })).filter(c => [c.time,c.open,c.high,c.low,c.close,c.volume].every(Number.isFinite) &&
+    c.open > 0 && c.low > 0 && c.close > 0 && c.high >= Math.max(c.open,c.close) &&
+    c.low <= Math.min(c.open,c.close));
+}
+
+function ema(values, period) {
+  if (values.length < period) return null;
+  const multiplier = 2 / (period + 1);
+  let value = values.slice(0, period).reduce((sum, item) => sum + item, 0) / period;
+  for (let i = period; i < values.length; i++) value = values[i] * multiplier + value * (1 - multiplier);
+  return value;
+}
+
+function rsi(values, period = 14) {
+  if (values.length <= period) return null;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = values[i] - values[i - 1];
+    gains += Math.max(change, 0); losses += Math.max(-change, 0);
+  }
+  let averageGain = gains / period, averageLoss = losses / period;
+  for (let i = period + 1; i < values.length; i++) {
+    const change = values[i] - values[i - 1];
+    averageGain = (averageGain * (period - 1) + Math.max(change, 0)) / period;
+    averageLoss = (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
+  }
+  if (averageLoss === 0) return 100;
+  if (averageGain === 0) return 0;
+  return 100 - 100 / (1 + averageGain / averageLoss);
+}
+
+const average = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+
+export function formatSpotPrice(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  if (number >= 1000) return number.toFixed(2);
+  if (number >= 1) return number.toFixed(4);
+  if (number >= 0.01) return number.toFixed(5);
+  if (number >= 0.0001) return number.toFixed(7);
+  return number.toExponential(3);
+}
+
+function analyze(coin, candles, market) {
+  if (candles.length < CFG.MIN_CANDLES) throw new Error("تعداد کندل بسته‌شده کافی نیست.");
+  const closes = candles.map(c => c.close);
+  const last = candles[candles.length - 1], previous = candles[candles.length - 2];
+  const current = Number(market?.last || last.close);
+  const ema20 = ema(closes, 20), ema50 = ema(closes, 50), rsiValue = rsi(closes);
+  if ([ema20, ema50, rsiValue, current].some(value => !Number.isFinite(value))) throw new Error("محاسبه اندیکاتورها ناموفق بود.");
+  const recent = candles.slice(-31, -1);
+  if (recent.length < 10) throw new Error("کندل کافی برای حمایت و مقاومت وجود ندارد.");
+  const support = Math.min(...recent.map(c => c.low));
+  const resistance = Math.max(...recent.map(c => c.high));
+  const averageVolume = average(candles.slice(-21, -1).map(c => c.volume));
+  const volumeRatio = averageVolume > 0 ? last.volume / averageVolume : 0;
+  const trendUp = ema20 > ema50;
+  const above20 = current > ema20, above50 = current > ema50;
+  const dailyVolume = Number(coin.volume24) || 0;
+  const dailyChange = Number(coin.percent_change_24h) || 0;
+  let score = 0;
+  const reasons = [];
+  if (trendUp) score += 25; else reasons.push("EMA20 بالاتر از EMA50 نیست");
+  if (rsiValue >= 45 && rsiValue <= 68) score += 15;
+  else if (rsiValue > 68 && rsiValue <= 75) { score += 7; reasons.push("RSI بالا است؛ احتمال ورود دیرهنگام"); }
+  else if (rsiValue > 75) reasons.push("RSI بیش از حد بالا است");
+  else reasons.push("قدرت RSI کافی نیست");
+  if (volumeRatio >= 1.5) score += 20;
+  else if (volumeRatio >= 1.1) score += 15;
+  else if (volumeRatio >= 0.9) score += 10;
+  else reasons.push("حجم کندل اخیر پایین است");
+  if (dailyVolume >= 1_000_000) score += 10;
+  else if (dailyVolume >= 500_000) score += 7;
+  else score += 4;
+  if (dailyChange > 0 && dailyChange < 12) score += 10;
+  else if (dailyChange >= 12) { score += 5; reasons.push("رشد روزانه زیاد است"); }
+  else reasons.push("تغییرات روزانه مثبت نیست");
+  if (above20 && above50) score += 20;
+  else if (above20 || above50) score += 10;
+  else reasons.push("قیمت زیر EMA20 و EMA50 است");
+  score = Math.min(100, score);
+
+  let setup = "بدون ستاپ";
+  const breakout = current > resistance * 1.002 && previous.close <= resistance * 1.005 && volumeRatio >= 1.1 && trendUp;
+  const pullback = trendUp && current > ema20 && last.low <= ema20 * 1.01 && current > last.open;
+  const bounce = last.low <= support * 1.015 && current > support * 1.01 && current > last.open;
+  if (breakout) setup = "شکست مقاومت";
+  else if (pullback) setup = "پولبک به EMA20";
+  else if (bounce) setup = "واکنش به حمایت";
+
+  const recentLow = Math.min(...candles.slice(-8, -1).map(c => c.low));
+  const stop = setup === "شکست مقاومت" ? Math.min(resistance * 0.99, recentLow * 0.995) :
+    setup === "پولبک به EMA20" ? Math.min(ema20 * 0.985, recentLow * 0.995) :
+    setup === "واکنش به حمایت" ? Math.min(support * 0.985, recentLow * 0.995) :
+    Math.min(support * 0.99, recentLow * 0.995);
+  const risk = current - stop;
+  const validRisk = Number.isFinite(risk) && risk > 0;
+  let target1 = resistance;
+  if (setup === "شکست مقاومت") target1 = current + Math.max(resistance - support, current * 0.01);
+  if (validRisk && target1 <= current) target1 = current + risk * 1.5;
+  const rewardRisk = validRisk ? (target1 - current) / risk : 0;
+  const target2 = validRisk ? current + risk * 2.5 : 0;
+  const target3 = validRisk ? current + risk * 3.5 : 0;
+  if (!validRisk) reasons.push("حد ضرر معتبر محاسبه نشد");
+  if (setup === "بدون ستاپ") reasons.push("الگوی ورود مشخصی وجود ندارد");
+  if (rewardRisk < CFG.MIN_RR) reasons.push("نسبت سود به ریسک کمتر از حداقل تعیین‌شده است");
+  if (score < CFG.MIN_SCORE) reasons.push("امتیاز کمتر از " + CFG.MIN_SCORE + " است");
+
+  return {
+    coin, pair: market.pair, quote: market.quote, current, score, rsi: rsiValue,
+    support, resistance, volumeRatio, trend: trendUp ? "صعودی" : "خنثی یا نزولی",
+    setup, entry: current, stop, target1, target2, target3, rewardRisk,
+    spreadPct: market.spreadPct, quoteVolumeUsd: market.quoteVolumeUsd,
+    bidDepthUsd: market.bidDepthUsd, askDepthUsd: market.askDepthUsd,
+    eligible: score >= CFG.MIN_SCORE && setup !== "بدون ستاپ" && volumeRatio >= 0.9 &&
+      validRisk && rewardRisk >= CFG.MIN_RR &&
+      market.spreadPct <= CFG.MAX_SPREAD_PCT &&
+      market.bidDepthUsd >= CFG.MIN_BOOK_DEPTH_USD &&
+      market.askDepthUsd >= CFG.MIN_BOOK_DEPTH_USD,
+    reasons
+  };
+}
+
+function formatCoin(item) {
+  return "🪙 " + item.coin.name + " (" + item.coin.symbol + ")\n" +
+    "جفت منتخب: " + item.pair + "\n" +
+    "⭐ امتیاز: " + item.score + "/100\n" +
+    "💵 قیمت بررسی: " + formatSpotPrice(item.current) + " " + item.quote + "\n" +
+    "📈 روند: " + item.trend + "\n" +
+    "📊 RSI: " + item.rsi.toFixed(1) + " | حجم کندل: " + item.volumeRatio.toFixed(2) + "x\n" +
+    "🧩 الگو: " + item.setup + "\n" +
+    "🟢 حمایت: " + formatSpotPrice(item.support) + " " + item.quote + "\n" +
+    "🔴 مقاومت: " + formatSpotPrice(item.resistance) + " " + item.quote + "\n" +
+    "↔️ اسپرد: " + item.spreadPct.toFixed(3) + "% | عمق bid/ask: " +
+    Math.round(item.bidDepthUsd).toLocaleString("en-US") + "/" +
+    Math.round(item.askDepthUsd).toLocaleString("en-US") + " USD\n" +
+    "🎯 ورود: " + formatSpotPrice(item.entry) + " " + item.quote + "\n" +
+    "🛑 حد ضرر: " + formatSpotPrice(item.stop) + " " + item.quote + "\n" +
+    "🥇 هدف ۱: " + formatSpotPrice(item.target1) + " " + item.quote + "\n" +
+    "🥈 هدف ۲: " + formatSpotPrice(item.target2) + " " + item.quote + "\n" +
+    "🥉 هدف ۳: " + formatSpotPrice(item.target3) + " " + item.quote + "\n" +
+    "⚖️ نسبت سود به ریسک: " + item.rewardRisk.toFixed(2) + "R";
+}
+
+async function analyzeCoinOnBestPair(coin, pairs, tickerResult) {
+  const matching = findSpotPairs(coin, pairs);
+  if (!matching.length) throw new Error("جفت USD یا USDT در Kraken پیدا نشد.");
+  const selected = selectBestSpotPair(matching, tickerResult);
+  if (!selected) throw new Error("جفت USD/USDT با حجم و اسپرد قابل قبول پیدا نشد.");
+  const book = await fetchOrderBook(selected.pair);
+  const depth = calculateDepth(book, (selected.bid + selected.ask) / 2);
+  const candles = await fetchCandles(selected.pair);
+  return analyze(coin, candles, {
+    ...selected, pair: selected.pair.wsname,
+    bidDepthUsd: depth.bidUsd, askDepthUsd: depth.askUsd
+  });
+}
+
+export async function runSpotScan() {
+  const started = Date.now();
+  const coinResult = await getCoins();
+  if (!coinResult.coins.length) {
+    return { report: "❌ دریافت فهرست بازار از CoinLore ناموفق بود.\n" + coinResult.errors.slice(0, 5).join("\n"), opportunities: [], diagnostics: [] };
+  }
+  const candidates = coinResult.coins.filter(coin => {
+    const cap = Number(coin.market_cap_usd), volume = Number(coin.volume24), price = Number(coin.price_usd);
+    return Number.isFinite(cap) && Number.isFinite(volume) && Number.isFinite(price) &&
+      cap >= CFG.MIN_CAP && cap <= CFG.MAX_CAP && volume >= CFG.MIN_MARKET_VOLUME_USD && price > 0;
+  }).sort((a, b) => Number(b.volume24) - Number(a.volume24)).slice(0, CFG.MAX_CANDIDATES);
+  if (!candidates.length) return { report: "⚠️ هیچ ارزی با فیلترهای اولیه ارزش بازار و حجم مطابقت نداشت.", opportunities: [], diagnostics: [] };
+
+  let pairs;
+  try { pairs = await getPairs(); }
+  catch (error) { return { report: "❌ دریافت جفت‌ارزهای Kraken ناموفق بود:\n" + String(error.message || error), opportunities: [], diagnostics: [] }; }
+
+  const candidatePairs = candidates.flatMap(coin => findSpotPairs(coin, pairs));
+  let tickerResult;
+  try { tickerResult = await fetchTickers(candidatePairs); }
+  catch (error) { return { report: "❌ دریافت Tickerهای Kraken ناموفق بود:\n" + String(error.message || error), opportunities: [], diagnostics: [] }; }
+
+  const analyzed = await mapLimit(candidates, CFG.CONCURRENCY, async coin => analyzeCoinOnBestPair(coin, pairs, tickerResult));
+  const opportunities = analyzed.filter(item => item && item.eligible)
+    .sort((a, b) => b.score - a.score || b.rewardRisk - a.rewardRisk)
+    .slice(0, CFG.MAX_RESULTS);
+  const report = [
+    "📊 اسکن دستی بازار اسپات Kraken",
+    "━━━━━━━━━━━━━━━━━━",
+    "ارزهای بررسی‌شده: " + candidates.length,
+    "جفت‌های معاملاتی بررسی‌شده: " + candidatePairs.length + " (USD و USDT)",
+    "دارای شرایط ورود و نقدینگی: " + opportunities.length,
+    "حداکثر اسپرد: " + CFG.MAX_SPREAD_PCT + "% | حداقل عمق هر سمت دفتر سفارش: " + CFG.MIN_BOOK_DEPTH_USD.toLocaleString("en-US") + " USD",
+    "",
+    opportunities.length ? "فرصت‌های واجد شرایط برای بررسی:" :
+      "فعلاً سیگنال اسپات معتبر نداریم؛ هیچ نمادی همه شروط ورود و نقدینگی را هم‌زمان پاس نکرد.",
+    ...opportunities.map((item, index) => (index + 1) + ". " + item.coin.name + " (" + item.coin.symbol + ") | " +
+      item.pair + " | امتیاز " + item.score + " | قیمت " + formatSpotPrice(item.current) + " " + item.quote),
+    "",
+    "زمان اسکن: " + Math.round((Date.now() - started) / 1000) + " ثانیه",
+    "⚠️ این رتبه‌بندی احتمال‌محور است و تضمین رشد یا سود ۲۴ ساعته نیست."
+  ].join("\n");
+  return { report, opportunities };
+}
+
+export async function runSpotAssetDetail(symbol, quote) {
+  const normalizedSymbol = norm(symbol), normalizedQuote = norm(quote);
+  if (!normalizedSymbol || !["USD", "USDT"].includes(normalizedQuote)) throw new Error("نماد یا ارز مظنه نامعتبر است.");
+  const pairs = await getPairs();
+  const coin = { symbol: normalizedSymbol, name: normalizedSymbol, volume24: 0, percent_change_24h: 0 };
+  const pair = pairs.find(item => pairMatchesCoin(item, coin) && pairQuote(item) === normalizedQuote);
+  if (!pair) throw new Error("جفت انتخاب‌شده دیگر در Kraken در دسترس نیست.");
+  const tickerResult = await fetchTickers([pair]);
+  const selected = selectBestSpotPair([pair], tickerResult);
+  if (!selected) throw new Error("نقدینگی یا اسپرد جفت انتخاب‌شده دیگر قابل قبول نیست.");
+  const book = await fetchOrderBook(pair);
+  const depth = calculateDepth(book, (selected.bid + selected.ask) / 2);
+  const candles = await fetchCandles(pair);
+  const item = analyze(coin, candles, {
+    ...selected, pair: pair.wsname, bidDepthUsd: depth.bidUsd, askDepthUsd: depth.askUsd
+  });
+  const detail = formatCoin(item) + "\n\n" +
+    (item.eligible ? "✅ شرایط فنی و نقدینگی در زمان بررسی برقرار است." :
+      "⚠️ این نماد اکنون تمام شروط ورود را ندارد؛ از ورود صرفاً بر اساس این گزارش خودداری کن.\nدلایل: " + item.reasons.join("، ")) +
+    "\n\n⏱ افق بررسی: ۲۴ ساعت آینده؛ بدون تضمین نتیجه.";
+  return { item, detail };
+}
