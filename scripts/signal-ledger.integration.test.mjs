@@ -289,7 +289,8 @@ test("Durable Object reserve/complete state machine blocks duplicate delivery wi
   });
   assert.equal(duplicate.status, 200);
   assert.equal(duplicate.body.result.duplicate, true);
-  assert.equal((await post("/reconcile", { chatId: "909", signalId: pending.id, action: "confirm_delivered" })).status, 404);
+  const legacyReconcile = await coordinator.fetch(new Request("https://signal-delivery.internal/reconcile", { method: "POST", headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET }, body: "{}" }));
+  assert.equal(legacyReconcile.status, 404);
 });
 
 test("concurrent duplicate Worker deliveries use durable reservations and send one Telegram message", async () => {
