@@ -127,7 +127,8 @@ const CAPITAL_MANAGEMENT_TEXT =
 const MAIN_MENU = {
   inline_keyboard: [
     [
-      { text: "📈 سیگنال فیوچرز", callback_data: "futures" }
+      { text: "📈 سیگنال فیوچرز", callback_data: "futures" },
+      { text: "📊 سیگنال اسپات", callback_data: "spot" }
     ],
     [
       { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" }
@@ -147,14 +148,18 @@ const MAIN_MENU = {
 };
 
 function replyMenuForChat(env, chatId) {
-  const keyboard = MAIN_MENU.inline_keyboard.map(row =>
-    row.map(button => ({ text: button.text }))
-  );
-  if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0,
-    [{ text: "👥 مدیریت اعضا" }],
-    [{ text: "📊 گزارش سیگنال‌های اخیر" }],
-    [{ text: "⚠️ بررسی ارسال‌های نامشخص" }]
-  );
+  const buttons = MAIN_MENU.inline_keyboard.flat().map(button => ({ text: button.text }));
+  if (isOwner(chatId, env)) {
+    buttons.push(
+      { text: "👥 مدیریت اعضا" },
+      { text: "📊 گزارش سیگنال‌های اخیر" },
+      { text: "⚠️ بررسی ارسال‌های نامشخص" }
+    );
+  }
+  const keyboard = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    keyboard.push(buttons.slice(i, i + 2));
+  }
   return {
     keyboard,
     resize_keyboard: true,
