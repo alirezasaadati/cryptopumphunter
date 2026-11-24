@@ -1788,13 +1788,17 @@ function calculateEntryTimingScore({ side, rsi: rsiValue, rsiSlope, emaDistanceA
   return { raw, normalized, details, availableFactorCount: Object.values(details).filter(v => v !== null).length };
 }
 
-function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr, isHighRisk = false }) {
+function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr, isHighRisk = false, highRiskMaxEntryEmaDistanceAtr = null }) {
   const marketPrice = Number(ticker?.last);
   if (!Number.isFinite(marketPrice) || marketPrice <= 0) return { ok: false, rejected: "قیمت لحظه‌ای بازار معتبر نیست" };
   const maxDrift = isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT : FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT;
   const driftPct = Math.abs(marketPrice - referencePrice) / referencePrice * 100;
   if (driftPct > maxDrift) return { ok: false, rejected: "فاصله قیمت لحظه‌ای تا قیمت تحلیلی بیش از حد مجاز است", driftPct };
-  const maxEmaDist = isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR : FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR;
+  const requestedHighRiskEmaLimit = Number(highRiskMaxEntryEmaDistanceAtr);
+  const maxEmaDist = isHighRisk
+    ? (Number.isFinite(requestedHighRiskEmaLimit) && requestedHighRiskEmaLimit >= FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR && requestedHighRiskEmaLimit <= 2.6
+      ? requestedHighRiskEmaLimit : FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR)
+    : FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR;
   const emaDistanceAtr = Math.abs(marketPrice - ema20) / atr;
   if (emaDistanceAtr > maxEmaDist) return { ok: false, rejected: "ورود دیرهنگام است؛ قیمت بیش از حد از EMA20 فاصله دارد", driftPct, emaDistanceAtr };
   if (!Array.isArray(candles15m) || candles15m.length < 30) return { ok: false, rejected: "داده ۱۵ دقیقه‌ای برای تأیید نقطه ورود کافی نیست" };
@@ -1912,16 +1916,18 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   if ([e20, prevE20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) throw new Error("محاسبه اندیکاتورها معتبر نیست.");
   const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume)), volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
   const up1h = e20 > e50 && e20 > prevE20 && referencePrice > e20 && last.close >= prev.low;
-  const down1h = e20 < e50 && e20 < prevE20 && referencePrice < e20 && last.close <= prev.high;
+  const down1hBase = e20 < e50 && e20 < prevE20 && referencePrice < e20;
+  const down1h = down1hBase && last.close <= prev.high;
+  const softPriorHighReclaimShort = options.scorePriorHighReclaimShort === true && down1hBase && last.close > prev.high;
   const up4h = e20_4h > e50_4h && candles4h.at(-1).close > e20_4h, down4h = e20_4h < e50_4h && candles4h.at(-1).close < e20_4h;
   const fourHourTrend = up4h ? "BULLISH" : down4h ? "BEARISH" : "NEUTRAL";
   let side = null, score = 0; const reasons = [];
   const strictLong = up1h && rsiValue >= 48 && rsiValue <= 66, strictShort = down1h && rsiValue >= 34 && rsiValue <= 52;
   const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
-  const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
+  const relaxedShort = (down1h || softPriorHighReclaimShort) && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
   if (strictLong || (!strictSetup && relaxedLong)) { side = "LONG"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "روند ۱ساعته صعودی با شیب مثبت EMA20" : "ستاپ پرریسک صعودی ۱ساعته"); score += rsiValue >= 52 && rsiValue <= 62 ? 15 : 8; }
-  else if (strictShort || (!strictSetup && relaxedShort)) { side = "SHORT"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "روند ۱ساعته نزولی با شیب منفی EMA20" : "ستاپ پرریسک نزولی ۱ساعته"); score += rsiValue >= 38 && rsiValue <= 48 ? 15 : 8; }
+  else if (strictShort || (!strictSetup && relaxedShort)) { side = "SHORT"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "روند ۱ساعته نزولی با شیب منفی EMA20" : "ستاپ پرریسک نزولی ۱ساعته"); score += rsiValue >= 38 && rsiValue <= 48 ? 15 : 8; if (softPriorHighReclaimShort) { const penalty = Number.isFinite(Number(options.reclaimShortScorePenalty)) ? Math.max(0, Math.min(20, Number(options.reclaimShortScorePenalty))) : 8; score -= penalty; reasons.push("شکست سقف کندل قبلی؛ کسر امتیاز آزمایشی " + penalty); } }
   else return { symbol: ticker.symbol, fourHourTrend, rejected: "روند ۱ساعته و محدوده بهینه RSI هم‌زمان تأیید نشد", entryDiagnostics: { stage: "trend_rsi", rsi: rsiValue, up1h, down1h, fourHourTrend } };
   const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
   if (fourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "روند ۴ساعته نماد هم‌جهت با سیگنال نیست" };
@@ -1937,8 +1943,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const standardThresholdMet = strictSetup && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.85;
   let standardEntryPassed = false, entryFilters;
   if (options.skipEntryFilters) { entryFilters = { ok: true, skippedForBaseline: true, momentumConfirmed: true, pullbackConfirmed: true }; standardEntryPassed = standardThresholdMet; }
-  else if (standardThresholdMet) { const strictEntry = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: false }); if (strictEntry.ok) { entryFilters = strictEntry; standardEntryPassed = true; } else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true }); }
-  else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true });
+  else if (standardThresholdMet) { const strictEntry = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: false, highRiskMaxEntryEmaDistanceAtr: options.highRiskMaxEntryEmaDistanceAtr }); if (strictEntry.ok) { entryFilters = strictEntry; standardEntryPassed = true; } else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true, highRiskMaxEntryEmaDistanceAtr: options.highRiskMaxEntryEmaDistanceAtr }); }
+  else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true, highRiskMaxEntryEmaDistanceAtr: options.highRiskMaxEntryEmaDistanceAtr });
   if (!entryFilters.ok) return { symbol: ticker.symbol, fourHourTrend, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
   if (!standardEntryPassed && quoteVolume < FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "حجم ۲۴ساعته کمتر از کف ایمنی است" };
   if (!standardEntryPassed && volumeRatio < FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "حجم نسبی کندل آخر کافی نیست" };
