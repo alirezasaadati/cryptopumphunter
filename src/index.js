@@ -1630,39 +1630,62 @@ async function getKrakenFuturesCandles(symbol, interval) {
 }
 
 async function getKrakenFuturesCandlesViaCoordinator(env, symbol, intervals) {
-  if (!env?.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) {
-    throw new Error("Durable Object market-data coordinator is unavailable.");
-  }
+  // Market data is fetched by the stateless Worker, never while a Durable Object
+  // is active. The strategy receives the same closed-candle arrays and shape.
   const normalizedSymbol = String(symbol || "").trim().toUpperCase();
   const requestedIntervals = [...new Set(Array.isArray(intervals) ? intervals : [])];
+  const intervalMsMap = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
   if (!/^(PI|PF)_[A-Z0-9]+USD$/.test(normalizedSymbol)) {
     throw new Error("Invalid Kraken perpetual symbol for market-data request.");
   }
   if (!requestedIntervals.length || requestedIntervals.length > 3 ||
-      requestedIntervals.some(interval => !["5m", "15m", "1h", "4h"].includes(interval))) {
+      requestedIntervals.some(interval => !Object.hasOwn(intervalMsMap, interval))) {
     throw new Error("Invalid Kraken candle interval request.");
   }
-  const stub = env.SIGNAL_DELIVERY.get(
-    env.SIGNAL_DELIVERY.idFromName("market-data:" + normalizedSymbol)
-  );
-  const response = await stub.fetch("https://signal-delivery.internal/market-data/candles", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-signal-delivery-secret": getSignalDeliverySecret(env)
-    },
-    body: JSON.stringify({ symbol: normalizedSymbol, intervals: requestedIntervals })
-  });
-  let payload;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new Error("Kraken market-data coordinator returned an unreadable response.");
+
+  const cache = globalThis.caches?.default || null;
+  const now = Date.now();
+  const results = await Promise.all(requestedIntervals.map(async interval => {
+    const cacheUrl = "https://market-data-cache.internal/kraken-futures/" +
+      encodeURIComponent(normalizedSymbol) + "/" + encodeURIComponent(interval);
+    const cacheRequest = new Request(cacheUrl, { method: "GET" });
+    try {
+      if (cache) {
+        const cached = await cache.match(cacheRequest);
+        if (cached) return { interval, candles: await cached.json(), cache: "HIT" };
+      }
+
+      const candles = await getKrakenFuturesCandles(normalizedSymbol, interval);
+      if (cache) {
+        const nextClose = (Math.floor(now / intervalMsMap[interval]) + 1) * intervalMsMap[interval];
+        const ttlSeconds = Math.max(1, Math.ceil((nextClose - now + 1500) / 1000));
+        const response = new Response(JSON.stringify(candles), {
+          headers: { "content-type": "application/json", "cache-control": "public, max-age=" + ttlSeconds }
+        });
+        try { await cache.put(cacheRequest, response); }
+        catch (cacheError) {
+          console.warn("FUTURES_MARKET_DATA_CACHE_WRITE_FAILED", normalizedSymbol, interval,
+            String(cacheError?.message || cacheError).slice(0, 180));
+        }
+      }
+      return { interval, candles, cache: "MISS" };
+    } catch (error) {
+      return { interval, error: String(error?.message || error).slice(0, 400), cache: "ERROR" };
+    }
+  }));
+
+  const candles = {};
+  const errors = {};
+  const cacheStats = { hit: 0, miss: 0, error: 0 };
+  for (const result of results) {
+    if (result.error) errors[result.interval] = result.error;
+    else candles[result.interval] = result.candles;
+    cacheStats[result.cache.toLowerCase()]++;
   }
-  if (!response.ok || !payload?.ok || !payload?.candles) {
-    throw new Error(payload?.error || "Kraken market-data coordinator failed.");
-  }
-  return payload;
+  console.log("FUTURES_MARKET_DATA_FETCH", JSON.stringify({
+    symbol: normalizedSymbol, intervals: requestedIntervals, cache: cacheStats
+  }));
+  return { ok: true, symbol: normalizedSymbol, candles, errors, cacheStats };
 }
 
 
@@ -2247,7 +2270,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/spot-scan-lock/acquire","/spot-scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update","/market-data/candles"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/spot-scan-lock/acquire","/spot-scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=getSignalDeliverySecret(this.env);
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!(await verifySignalDeliverySecret(suppliedSecret,expectedSecret)))return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -2255,25 +2278,6 @@ export class SignalDeliveryCoordinator {
     try{payload=await request.json()}catch{return Response.json({ok:false,error:"Invalid JSON payload."},{status:400});}
     return this.serial(async()=>{
       try{
-        if(url.pathname==="/market-data/candles"){
-          const symbol=String(payload.symbol||"").trim().toUpperCase();
-          const intervals=[...new Set(Array.isArray(payload.intervals)?payload.intervals:[])];
-          if(!/^(PI|PF)_[A-Z0-9]+USD$/.test(symbol))throw new Error("Invalid Kraken perpetual symbol.");
-          if(!intervals.length||intervals.length>3||intervals.some(interval=>!["5m","15m","1h","4h"].includes(interval))){
-            throw new Error("Invalid candle intervals.");
-          }
-          const results=await Promise.all(intervals.map(async interval=>{
-            try{return {interval,candles:await getKrakenFuturesCandles(symbol,interval)};}
-            catch(error){return {interval,error:String(error?.message||error).slice(0,400)};}
-          }));
-          const candles={};
-          const errors={};
-          for(const result of results){
-            if(result.error)errors[result.interval]=result.error;
-            else candles[result.interval]=result.candles;
-          }
-          return Response.json({ok:true,symbol,candles,errors});
-        }
         if(url.pathname==="/kv-write/allow"){
           const today=quotaDayKey();
           const paused=await this.ctx.storage.get("kv-daily-write-pause");
