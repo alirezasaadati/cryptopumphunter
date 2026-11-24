@@ -19,9 +19,19 @@ test("main inline menu keeps the approved button order and row layout", () => {
   assert.match(source, /\["⚠️ ارسال‌های نامشخص", "outbox:review"\]/);
 });
 
-test("legacy reply keyboards are removed and never recreated", () => {
-  assert.doesNotMatch(source, /resize_keyboard\s*:\s*true/);
-  assert.doesNotMatch(source, /is_persistent\s*:\s*true/);
-  assert.match(source, /reply_markup:\s*\{\s*remove_keyboard:\s*true\s*\}/);
-  assert.match(source, /function menuForChat\(env, chatId\)[\s\S]*?inline_keyboard/);
+test("reply menu keeps the original layout but hides after selection and is not reattached to every response", () => {
+  const start = source.indexOf("function replyMenuForChat(env, chatId) {");
+  const end = source.indexOf("\\n}\\n", start) + 2;
+  assert.ok(start >= 0 && end > start, "replyMenuForChat must exist");
+  const menu = source.slice(start, end);
+  assert.match(menu, /resize_keyboard:\\s*true/);
+  assert.match(menu, /one_time_keyboard:\\s*true/);
+  assert.doesNotMatch(menu, /is_persistent:\\s*true/);
+  assert.match(menu, /"📈 سیگنال فیوچرز"/);
+  assert.match(menu, /"📊 سیگنال اسپات"/);
+  assert.match(menu, /"🛡️ راهنمای مدیریت سرمایه"/);
+  assert.match(menu, /"👥 مدیریت اعضا"/);
+  assert.match(source, /function menuForChat\\(env, chatId\\)\\s*\\{\\s*return null;/);
+  assert.doesNotMatch(source, /remove_keyboard:\\s*true/);
+  assert.match(source, /replyMenuForChat\\(env, chatId\\)/);
 });
