@@ -3227,3 +3227,5 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
 // They do not add HTTP routes or enable order execution.
 export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
 // Experimental futures signal engine validation branch; Telegram and UI handlers remain from main.
+
+// Re-run the pinned comparison harness after switching to the current TP lifecycle.
