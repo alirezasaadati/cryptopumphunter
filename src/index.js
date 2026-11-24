@@ -2817,18 +2817,90 @@ async function showOutboxSignalDetail(env,ownerId,token){
   await sendMessage(env,ownerId,body.join("\n"),{inline_keyboard:keyboard});
 }
 
-async function reconcileSignalOutbox(env,ownerId,token,action){
-  if(!isOwner(ownerId,env)||!env.APP_KV||!env.SIGNAL_DELIVERY)return;
-  const selection=await env.APP_KV.get(outboxSelectionKey(ownerId,token),"json");
-  if(!selection){await sendMessage(env,ownerId,"این مورد منقضی شده است؛ فهرست را دوباره باز کن.");return;}
-  const key=signalOutboxKey(selection.chatId,selection.signalId);
-  const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
-  if(!getSignalDeliverySecret(env)){await sendMessage(env,ownerId,"❌ کلید امنیتی ارتباط داخلی تنظیم نشده است.");return;}
-   const response=await stub.fetch("https://signal-delivery.internal/reconcile",{method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":getSignalDeliverySecret(env)},body:JSON.stringify({...selection,action})});
-  let payload={};try{payload=await response.json()}catch{}
-  if(!response.ok||!payload.ok){await sendMessage(env,ownerId,"❌ تعیین تکلیف انجام نشد: "+String(payload.error||"خطای نامشخص"));return;}
-  await sendMessage(env,ownerId,action==="confirm_delivered"?"✅ سیگنال به‌عنوان ارسال‌شده ثبت شد.":action==="retry_archive"?"📚 انتشار سیگنال در آرشیو دوباره انجام شد.":"🔁 تلاش مجدد ارسال انجام شد.");
-  await showUncertainSignalOutbox(env,ownerId);
+async function reconcileSignalOutbox(env, ownerId, token, action) {
+  if (!isOwner(ownerId, env) || !env.APP_KV || !env.SIGNAL_DELIVERY) return;
+  const selection = await env.APP_KV.get(outboxSelectionKey(ownerId, token), "json");
+  if (!selection) {
+    await sendMessage(env, ownerId, "این مورد منقضی شده است؛ فهرست را دوباره باز کن.");
+    return;
+  }
+  const key = signalOutboxKey(selection.chatId, selection.signalId);
+  const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
+  if (!getSignalDeliverySecret(env)) {
+    await sendMessage(env, ownerId, "❌ کلید امنیتی ارتباط داخلی تنظیم نشده است.");
+    return;
+  }
+
+  let payload;
+  try {
+    const response = await stub.fetch("https://signal-delivery.internal/reconcile", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-signal-delivery-secret": getSignalDeliverySecret(env) },
+      body: JSON.stringify({ ...selection, action })
+    });
+    payload = await response.json();
+    if (!response.ok || !payload?.ok) throw new Error(payload?.error || "خطای نامشخص");
+  } catch (error) {
+    await sendMessage(env, ownerId, "❌ تعیین تکلیف انجام نشد: " + String(error?.message || error));
+    return;
+  }
+
+  const record = payload.result?.record;
+  if (action === "retry" && payload.result?.retry) {
+    try {
+      await sendAndArchiveFuturesSignal(
+        env, selection.chatId, record.signal, record.messageText,
+        record.replyMarkup ?? null, record.parseMode ?? "HTML"
+      );
+      await sendMessage(env, ownerId, "🔁 تلاش مجدد ارسال انجام شد.");
+    } catch (error) {
+      await sendMessage(env, ownerId, "❌ تلاش مجدد ارسال کامل نشد: " + String(error?.message || error));
+    }
+  } else if (action === "retry_archive" && payload.result?.retryArchive) {
+    try {
+      const archiveResult = await publishSignalToArchive(
+        env, record.signal, record.messageText, record.parseMode ?? "HTML", { force: true }
+      );
+      const archivedAt = new Date().toISOString();
+      const archived = {
+        ...record, status: "ARCHIVED",
+        archivePublished: archiveResult?.published !== false,
+        archiveMessageId: archiveResult?.messageId ?? null,
+        archivedAt, updatedAt: archivedAt, archiveRetryAt: archivedAt
+      };
+      await signalDeliveryRequest(env, stub, "/deliver/complete", {
+        chatId: String(selection.chatId), signalId: String(selection.signalId),
+        status: "ARCHIVED", archivePublished: archived.archivePublished,
+        archiveMessageId: archived.archiveMessageId, archivedAt, updatedAt: archivedAt
+      });
+      await persistSignalOutboxMirror(env, selection.chatId, selection.signalId, archived, "SIGNAL_OUTBOX_ARCHIVE_RETRY_MIRROR_FAILED");
+      await sendMessage(env, ownerId, "📚 انتشار سیگنال در آرشیو دوباره انجام شد.");
+    } catch (error) {
+      const failedAt = new Date().toISOString();
+      const pending = {
+        ...record, status: "ARCHIVE_PENDING",
+        archivePublished: false,
+        archivePublishError: String(error?.message || error).slice(0, 500),
+        updatedAt: failedAt
+      };
+      try {
+        await signalDeliveryRequest(env, stub, "/deliver/complete", {
+          chatId: String(selection.chatId), signalId: String(selection.signalId),
+          status: "ARCHIVE_PENDING", archivePublished: false,
+          archivePublishError: pending.archivePublishError, updatedAt: failedAt
+        });
+      } catch (stateError) {
+        console.error("ARCHIVE_RETRY_FAILURE_STATE_PERSIST_FAILED", String(stateError?.message || stateError));
+      }
+      await persistSignalOutboxMirror(env, selection.chatId, selection.signalId, pending, "SIGNAL_OUTBOX_ARCHIVE_RETRY_MIRROR_FAILED");
+      await sendMessage(env, ownerId, "❌ انتشار آرشیو انجام نشد: " + String(error?.message || error));
+    }
+  } else if (action === "confirm_delivered") {
+    await sendMessage(env, ownerId, "✅ سیگنال به‌عنوان ارسال‌شده ثبت شد.");
+  } else {
+    await sendMessage(env, ownerId, "❌ عملیات در وضعیت فعلی قابل اجرا نیست.");
+  }
+  await showUncertainSignalOutbox(env, ownerId);
 }
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت و پیگیری نتایج معاملات در این نسخه غیرفعال است.")}
 async function countUncertainSignalOutbox(env) {
