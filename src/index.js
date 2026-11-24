@@ -2404,7 +2404,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver/reserve","/deliver/complete","/reconcile","/archive-publish/reserve","/archive-publish/complete","/scan-lock/acquire","/scan-lock/release","/spot-scan-lock/acquire","/spot-scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver/reserve","/deliver/complete","/archive-publish/reserve","/archive-publish/complete","/scan-lock/acquire","/scan-lock/release","/spot-scan-lock/acquire","/spot-scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=getSignalDeliverySecret(this.env);
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!(await verifySignalDeliverySecret(suppliedSecret,expectedSecret)))return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -2625,10 +2625,11 @@ export class SignalDeliveryCoordinator {
           const chatId=String(payload.chatId||""),signalId=String(payload.signalId||"");
           const key="signal-outbox:"+signalOutboxKey(chatId,signalId);
           const old=await this.ctx.storage.get(key);
-          if(!old)throw new Error("Signal delivery reservation was not found.");
+          const seed=payload.seed&&typeof payload.seed==="object"?payload.seed:null;
+          if(!old&&!seed)throw new Error("Signal delivery reservation was not found.");
           const allowedStatuses=["SENT","UNCERTAIN","ARCHIVED","ARCHIVE_PENDING","QUEUED"];
           if(!allowedStatuses.includes(payload.status))throw new Error("Signal delivery completion status is invalid.");
-          const next={...old,status:payload.status,updatedAt:payload.updatedAt||new Date().toISOString()};
+          const next={...(old||seed),status:payload.status,updatedAt:payload.updatedAt||new Date().toISOString()};
           for(const field of ["telegramMessageId","sentAt","retryAttempts","error","archivePublished","archiveMessageId","archivedAt","archivePublishError","retryAuthorizedAt"]){
             if(Object.prototype.hasOwnProperty.call(payload,field))next[field]=payload[field];
           }
@@ -2666,39 +2667,8 @@ export class SignalDeliveryCoordinator {
           }
           throw new Error("Archive publishing completion status is invalid.");
         }
-        if(!this.env.APP_KV)throw new Error("APP_KV is required for reconciliation.");
-        const chatId=String(payload.chatId), signalId=String(payload.signalId);
-        const key=signalOutboxKey(chatId,signalId);
-        const record=await this.env.APP_KV.get(key,"json");
-        if(!record)throw new Error("Outbox record was not found.");
-        if(payload.action==="confirm_delivered"){
-          if(record.status==="ARCHIVED")return Response.json({ok:true,result:{alreadyArchived:true}});
-          if(!["SENDING","UNCERTAIN","SENT"].includes(record.status))throw new Error("This signal is not awaiting delivery reconciliation.");
-          if(!record.signal)throw new Error("This older outbox record has no signal snapshot; it cannot be safely archived automatically.");
-          const confirmed={...record,status:"ARCHIVED",archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),manualConfirmedAt:new Date().toISOString()};
-          await this.env.APP_KV.put(key,JSON.stringify(confirmed));
-          await this.ctx.storage.put("signal-outbox:"+key,confirmed);
-          return Response.json({ok:true,result:{confirmed:true}});
-        }
-        if(payload.action==="retry_archive"){
-          if(!["SENT","ARCHIVE_PENDING"].includes(record.status))throw new Error("Only privately delivered signals awaiting archive can be retried.");
-          if(!record.signal||typeof record.messageText!=="string")throw new Error("This outbox record has no archive payload.");
-          return Response.json({ok:true,result:{retryArchive:true,record}});
-        }
-        if(payload.action==="retry"){
-          if(!["SENDING","UNCERTAIN"].includes(record.status))throw new Error("Only SENDING or UNCERTAIN records can be retried.");
-          if(!record.signal||typeof record.messageText!=="string")throw new Error("This older outbox record has no retry payload.");
-          const queued={...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-          await this.env.APP_KV.put(key,JSON.stringify(queued));
-          await this.ctx.storage.put("signal-outbox:"+key,queued);
-          return Response.json({ok:true,result:{retry:true,record:queued}});
-        }
-        throw new Error("Unknown reconciliation action.");
+
       }catch(error){
-        if(isKvDailyWriteQuotaError(error)){
-          if(this.env.SIGNAL_DELIVERY)await kvWriteGate(this.env,"pause",error);
-          await this.ctx.storage.put("kv-daily-write-pause",{day:quotaDayKey(),pausedAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,300)});
-        }
         return Response.json({ok:false,error:String(error?.message||error).slice(0,500)},{status:409});
       }
     });
