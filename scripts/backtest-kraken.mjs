@@ -115,6 +115,49 @@ export function simulateTrade({ side, entry, stop, targets, candles, startIndex,
   };
 }
 
+function simulateMargin30Trade({ side, entry, stop, candles, startIndex, fee=0.0005, slippage=0.0003, maxHoldHours=72, marginUsd=10, leverage=10, targetMarginPct=30 }) {
+  const direction=side==="LONG"?1:-1;
+  if (!(direction===1?entry>stop:stop>entry)) throw new Error("Invalid trade risk");
+  const notional=marginUsd*leverage, quantity=notional/entry;
+  const target=entry*(1+direction*(targetMarginPct/100/leverage));
+  const endIndex=Math.min(candles.length-1,startIndex+maxHoldHours);
+  for(let i=startIndex;i<=endIndex;i++){
+    const bar=candles[i];
+    const stopGap=direction===1?bar.open<=stop:bar.open>=stop;
+    const stopTouched=direction===1?bar.low<=stop:bar.high>=stop;
+    const targetGap=direction===1?bar.open>=target:bar.open<=target;
+    const targetTouched=direction===1?bar.high>=target:bar.low<=target;
+    // If both barriers occur in one hourly candle, assume stop first (conservative OHLC assumption).
+    const reason=(stopGap||stopTouched)?"STOP":(targetGap||targetTouched)?"TP_30_MARGIN":null;
+    if(reason){
+      const rawExit=reason==="STOP"?(stopGap?bar.open:stop):(targetGap?bar.open:target);
+      const exitFill=rawExit*(1-direction*slippage);
+      const gross=direction*quantity*(exitFill-entry), fees=fee*quantity*(entry+exitFill);
+      return {side,entry,stop,target,exitTime:bar.time,exitReason:reason,grossPnlUsd:gross,feesUsd:fees,netPnlUsd:gross-fees,marginUsd,notionalUsd:notional,returnOnMarginPct:(gross-fees)/marginUsd*100};
+    }
+  }
+  return {side,entry,stop,target,exitTime:candles[endIndex]?.time??null,exitReason:"TIMEOUT",grossPnlUsd:0,feesUsd:0,netPnlUsd:0,marginUsd,notionalUsd:notional,returnOnMarginPct:0};
+}
+function summarizeMargin30Side(trades){
+  const closed=trades.filter(t=>t.exitReason!=="TIMEOUT"), wins=closed.filter(t=>t.exitReason==="TP_30_MARGIN"), losses=closed.filter(t=>t.exitReason==="STOP");
+  const net=closed.reduce((s,t)=>s+t.netPnlUsd,0), gw=wins.reduce((s,t)=>s+t.netPnlUsd,0), gl=Math.abs(losses.reduce((s,t)=>s+t.netPnlUsd,0));
+  return {trades:trades.length,closedTrades:closed.length,timeouts:trades.length-closed.length,takeProfits:wins.length,stops:losses.length,
+    winRatePct:closed.length?wins.length/closed.length*100:0,grossPnlUsd:closed.reduce((s,t)=>s+t.grossPnlUsd,0),
+    feesUsd:closed.reduce((s,t)=>s+t.feesUsd,0),netPnlUsd:net,averageNetPnlPerTradeUsd:closed.length?net/closed.length:0,
+    profitFactor:gl?gw/gl:gw?null:0};
+}
+function summarizeMargin30(trades){
+  const closed=trades.filter(t=>t.exitReason!=="TIMEOUT"), wins=closed.filter(t=>t.exitReason==="TP_30_MARGIN"), losses=closed.filter(t=>t.exitReason==="STOP");
+  const net=closed.reduce((s,t)=>s+t.netPnlUsd,0), gw=wins.reduce((s,t)=>s+t.netPnlUsd,0), gl=Math.abs(losses.reduce((s,t)=>s+t.netPnlUsd,0));
+  let equity=0,peak=0,maxDrawdown=0; for(const t of closed){equity+=t.netPnlUsd;peak=Math.max(peak,equity);maxDrawdown=Math.max(maxDrawdown,peak-equity);}
+  return {marginPerTradeUsd:10,leverage:10,notionalPerTradeUsd:100,targetGrossProfitOnMarginPct:30,trades:trades.length,closedTrades:closed.length,timeouts:trades.length-closed.length,
+    takeProfits:wins.length,stops:losses.length,winRatePct:closed.length?wins.length/closed.length*100:0,
+    grossPnlUsd:closed.reduce((s,t)=>s+t.grossPnlUsd,0),feesUsd:closed.reduce((s,t)=>s+t.feesUsd,0),netPnlUsd:net,
+    netReturnOnDeployedMarginPct:net/(closed.length*10||1)*100,averageNetPnlPerClosedTradeUsd:closed.length?net/closed.length:0,
+    profitFactor:gl?gw/gl:gw?null:0,maxDrawdownUsd:maxDrawdown,
+    bySide:{LONG:summarizeMargin30Side(trades.filter(t=>t.side==="LONG")),SHORT:summarizeMargin30Side(trades.filter(t=>t.side==="SHORT"))}};
+}
+
 function sideMetrics(trades) {
   const wins = trades.filter(t => t.netR > 0), losses = trades.filter(t => t.netR < 0);
   const grossWin = wins.reduce((sum,t)=>sum+t.netR,0);
@@ -161,7 +204,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   }
   const strategies = {
     baseline: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {} },
-    current: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {} }
+    current: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {} },
+    currentMargin30: { trades: [] }
   };
   const nextAvailable = { baseline: 60, current: 60 };
   let fifteenIndex = 0;
@@ -207,6 +251,10 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
       trade.entryModel=mode === "baseline" ? "last_1h_close" : "next_1h_open";
       state.trades.push(trade);
+      const margin30Trade=simulateMargin30Trade({side:candidate.side,entry,stop:candidate.stop,candles:tradeCandles,startIndex:0,
+        fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS,marginUsd:10,leverage:10,targetMarginPct:30});
+      margin30Trade.symbol=ticker.symbol; margin30Trade.score=candidate.score; margin30Trade.signalTime=signalBar.time;
+      strategies.currentMargin30.trades.push(margin30Trade);
       const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
       nextAvailable[mode]=Math.max(i+1,exitIndex+1);
     }
@@ -215,6 +263,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,candles15m:fifteenMinute.length,
     baseline:{signals:strategies.baseline.signals,valid:strategies.baseline.valid,risky:strategies.baseline.risky,metrics:summarize(strategies.baseline.trades)},
     current:{signals:strategies.current.signals,valid:strategies.current.valid,risky:strategies.current.risky,rejected:strategies.current.rejected,rejectReasons:strategies.current.rejectReasons,metrics:summarize(strategies.current.trades)},
+    currentMargin30:{metrics:summarizeMargin30(strategies.currentMargin30.trades)},
     trades:{baseline:strategies.baseline.trades,current:strategies.current.trades}
   };
 }
@@ -235,6 +284,7 @@ async function main() {
   }
   const allBaseline=results.flatMap(r=>r.trades?.baseline||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const allCurrent=results.flatMap(r=>r.trades?.current||[]).sort((a,b)=>a.entryTime-b.entryTime);
+  const allMargin30=results.flatMap(r=>r.trades?.currentMargin30||[]);
   const sum=(mode,key)=>results.reduce((n,r)=>n+Number(r[mode]?.[key]||0),0);
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
@@ -247,6 +297,7 @@ async function main() {
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
     baseline:{signals:sum("baseline","signals"),valid:sum("baseline","valid"),risky:sum("baseline","risky"),metrics:summarize(allBaseline)},
     current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent)},
+    currentMargin30:summarizeMargin30(allMargin30),
     signalCountChangePct:sum("baseline","signals")?((sum("current","signals")/sum("baseline","signals"))-1)*100:0,
     symbols:results.map(({trades,...r})=>r),trades:{baseline:allBaseline,current:allCurrent}
   };
@@ -276,7 +327,7 @@ async function main() {
     ...results.map(r=>"| "+r.symbol+" | "+(r.baseline?.signals||0)+" | "+(r.current?.signals||0)+" | "+(((r.current?.signals||0)-(r.baseline?.signals||0)))+" | "+(r.current?.valid||0)+" | "+(r.current?.risky||0)+" | "+(r.current?.rejected||0)+" |")
   ];
   await writeFile("artifacts/kraken-futures-backtest-comparison.md",lines.join("\n"));
-  console.log(JSON.stringify({ok:true,baseline:report.baseline,current:report.current,signalCountChangePct:report.signalCountChangePct,symbols:report.symbols},null,2));
+  console.log(JSON.stringify({ok:true,baseline:report.baseline,current:report.current,currentMargin30:report.currentMargin30,signalCountChangePct:report.signalCountChangePct,symbols:report.symbols},null,2));
 }
 if (process.argv[1] && import.meta.url === new URL("file://" + process.argv[1]).href) {
   main().catch(error=>{console.error(error);process.exitCode=1;});
