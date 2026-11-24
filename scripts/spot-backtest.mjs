@@ -213,10 +213,10 @@ for (const item of downloaded) {
     reports.push({symbol:item.coin?.symbol,pair:item.pair?.wsname,error:item.error||"Not enough historical candles"});
     continue;
   }
-  const base1=simulate(item.candles1h,item,HORIZON_1H,"baseline");
+  const base1=simulate(item.candles1h,item,HORIZON_1H,"baseline",btcCandles1h);
   const balanced1=simulate(item.candles1h,item,HORIZON_1H,"balanced",btcCandles1h);
   const strict1=simulate(item.candles1h,item,HORIZON_1H,"strict",btcCandles1h);
-  const base4=simulate(item.candles4h,item,HORIZON_4H,"baseline");
+  const base4=simulate(item.candles4h,item,HORIZON_4H,"baseline",btcCandles4h);
   const balanced4=simulate(item.candles4h,item,HORIZON_4H,"balanced",btcCandles4h);
   const strict4=simulate(item.candles4h,item,HORIZON_4H,"strict",btcCandles4h);
   aggregate.baseline.oneHour.push(...base1);
