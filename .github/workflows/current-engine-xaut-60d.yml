@@ -1,5 +1,5 @@
 name: Current futures engine XAUT 60D backtest
-# Re-run trigger after adding the fixed 30% margin take-profit scenario.
+# Re-run trigger after including the per-trade margin-target outcomes in the report.
 on:
   push:
     branches:
