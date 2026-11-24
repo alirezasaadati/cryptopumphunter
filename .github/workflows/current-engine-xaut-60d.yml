@@ -1,5 +1,5 @@
 name: Current futures engine XAUT 60D backtest
-# Re-run trigger after adding XAUT ticker diagnostics.
+# Re-run trigger after excluding the warmup period from the measured sample.
 on:
   push:
     branches:
