@@ -1727,7 +1727,7 @@ function calculateEntryQualityScore({ side, rsi: rsiValue, rsiSlope, emaDistance
     if (emaDistanceAtr <= 1) { rawScore += 20; details.ema = 20; }
     else if (emaDistanceAtr <= 2) { rawScore += 10; details.ema = 10; }
     else if (emaDistanceAtr <= 3) details.ema = 0;
-    else if (emaDistanceAtr <= 4) { rawScore -= 20; details.ema = -20; }
+    else { rawScore -= 20; details.ema = -20; }
   }
 
   if (pullbackState === "CONFIRMED_REVERSAL") { rawScore += 25; details.pullback = 25; }
