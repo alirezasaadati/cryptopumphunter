@@ -93,3 +93,5 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
   };
   return { changed: true, reason, trade: updatedTrade };
 }
+
+// The current production TP/SL lifecycle is intentionally retained for this experiment.
