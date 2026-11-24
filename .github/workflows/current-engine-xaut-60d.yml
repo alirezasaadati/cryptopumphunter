@@ -1,5 +1,5 @@
 name: Current futures engine XAUT 60D backtest
-# Re-run trigger after allowing the XAUT high-risk liquidity tier.
+# Re-run trigger after adding XAUT ticker diagnostics.
 on:
   push:
     branches:
