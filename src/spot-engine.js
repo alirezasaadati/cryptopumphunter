@@ -340,25 +340,36 @@ export function analyzeSpotCandles(coin, candles, market, profile = "strict") {
   return analyze(coin, candles, market, profile);
 }
 
+function formatTargetReturn(entry, target) {
+  const base = Number(entry), price = Number(target);
+  if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(price) || price <= 0) return "—";
+  return "+" + ((price / base - 1) * 100).toFixed(2) + "%";
+}
+
 function formatCoin(item) {
-  return "🪙 " + item.coin.name + " (" + item.coin.symbol + ")\n" +
-    "جفت منتخب: " + item.pair + "\n" +
-    "⭐ امتیاز: " + item.score + "/100\n" +
-    "💵 قیمت بررسی: " + formatSpotPrice(item.current) + " " + item.quote + "\n" +
+  return "📊 <b>سیگنال اسپات | " + item.coin.name + " (" + item.coin.symbol + ")</b>\n" +
+    "━━━━━━━━━━━━━━━━━━\n" +
+    "💱 جفت معاملاتی: <b>" + item.pair + "</b>\n" +
+    "💵 قیمت فعلی: <b>" + formatSpotPrice(item.current) + " " + item.quote + "</b>\n" +
+    "🎯 نقطه ورود: <b>" + formatSpotPrice(item.entry) + " " + item.quote + "</b>\n" +
+    "🛑 حد ضرر: <b>" + formatSpotPrice(item.stop) + " " + item.quote + "</b>\n" +
+    "━━━━━━━━━━━━━━━━━━\n" +
+    "🥇 تارگت اول: <b>" + formatSpotPrice(item.target1) + " " + item.quote + "</b>  ( " + formatTargetReturn(item.entry, item.target1) + " )\n" +
+    "🥈 تارگت دوم: <b>" + formatSpotPrice(item.target2) + " " + item.quote + "</b>  ( " + formatTargetReturn(item.entry, item.target2) + " )\n" +
+    "🥉 تارگت سوم: <b>" + formatSpotPrice(item.target3) + " " + item.quote + "</b>  ( " + formatTargetReturn(item.entry, item.target3) + " )\n" +
+    "━━━━━━━━━━━━━━━━━━\n" +
     "📈 روند: " + item.trend + "\n" +
-    "📊 RSI: " + item.rsi.toFixed(1) + " | حجم کندل: " + item.volumeRatio.toFixed(2) + "x\n" +
-    "🧩 الگو: " + item.setup + "\n" +
+    "🧩 ساختار ورود: " + item.setup + "\n" +
+    "⭐ امتیاز کیفیت: " + item.score + "/100\n" +
+    "📊 RSI: " + item.rsi.toFixed(1) + " | قدرت حجم: " + item.volumeRatio.toFixed(2) + "x\n" +
     "🟢 حمایت: " + formatSpotPrice(item.support) + " " + item.quote + "\n" +
     "🔴 مقاومت: " + formatSpotPrice(item.resistance) + " " + item.quote + "\n" +
-    "↔️ اسپرد: " + item.spreadPct.toFixed(3) + "% | عمق bid/ask: " +
-    Math.round(item.bidDepthUsd).toLocaleString("en-US") + "/" +
-    Math.round(item.askDepthUsd).toLocaleString("en-US") + " USD\n" +
-    "🎯 ورود: " + formatSpotPrice(item.entry) + " " + item.quote + "\n" +
-    "🛑 حد ضرر: " + formatSpotPrice(item.stop) + " " + item.quote + "\n" +
-    "🥇 هدف ۱: " + formatSpotPrice(item.target1) + " " + item.quote + "\n" +
-    "🥈 هدف ۲: " + formatSpotPrice(item.target2) + " " + item.quote + "\n" +
-    "🥉 هدف ۳: " + formatSpotPrice(item.target3) + " " + item.quote + "\n" +
-    "⚖️ نسبت سود به ریسک: " + item.rewardRisk.toFixed(2) + "R";
+    "↔️ اسپرد: " + item.spreadPct.toFixed(3) + "%\n" +
+    "━━━━━━━━━━━━━━━━━━\n" +
+    (item.eligible
+      ? "✅ شرایط فنی و نقدینگی در زمان بررسی برقرار است."
+      : "⚠️ شرایط ورود کامل نیست؛ فعلاً صرفاً گزارش تحلیلی است.\nدلایل: " + item.reasons.join("، ")) +
+    "\n⏱ افق بررسی: ۲۴ ساعت آینده؛ بدون تضمین نتیجه.";
 }
 
 async function analyzeCoinOnBestPair(coin, pairs, tickerResult, btcContext) {
