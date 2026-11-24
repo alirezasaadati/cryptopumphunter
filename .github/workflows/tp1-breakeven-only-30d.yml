@@ -1,7 +1,7 @@
-name: TP1 exact-entry stop backtest (30d)
+name: BTC and XAUT isolated TP1 exact-entry stop backtests (30d)
 on:
   push:
-    branches: [experiment/tp1-breakeven-only-20261124]
+    branches: [experiment/btc-xaut-tp1-be-30d-20261125]
     paths:
       - "scripts/backtest-futures-lifecycle.mjs"
       - ".github/workflows/tp1-breakeven-only-30d.yml"
@@ -9,6 +9,14 @@ jobs:
   backtest:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: BTC
+            symbol: PF_XBTUSD
+          - label: XAUT
+            symbol: PF_XAUTUSD
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,17 +28,16 @@ jobs:
         run: |
           npm run check
           node --check scripts/backtest-futures-lifecycle.mjs
-      - name: Run 30-day Kraken historical backtest
+      - name: Run isolated 30-day Kraken historical backtest
         env:
           LIFECYCLE_BACKTEST_DAYS: "30"
-          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+          LIFECYCLE_BACKTEST_SYMBOLS: "1"
           BACKTEST_END_MS: "1795527325576"
-          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_NVDAXUSD,PF_XRPUSD,PF_NEARUSD,PF_ANTXUSD,PF_UNIUSD"
+          BACKTEST_SYMBOLS: "${{ matrix.symbol }}"
         run: node scripts/backtest-futures-lifecycle.mjs
-      - name: Upload backtest report
-        if: always()
+      - name: Upload ${{ matrix.label }} backtest report
         uses: actions/upload-artifact@v4
         with:
-          name: tp1-exact-entry-stop-30d
+          name: ${{ matrix.label }}-tp1-exact-entry-stop-30d
           path: artifacts/
           if-no-files-found: error
