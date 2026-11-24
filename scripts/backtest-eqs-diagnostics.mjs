@@ -98,9 +98,11 @@ function measureExcursion(side, entry, bars, start, end) {
 function summarize(rows) {
   const avg=(xs,key)=>xs.length?xs.reduce((s,x)=>s+Number(x[key]||0),0)/xs.length:null;
   const p=(xs,key)=>xs.length?xs.slice().sort((a,b)=>a[key]-b[key])[Math.floor((xs.length-1)*0.95)][key]:null;
-  return {count:rows.length,maeAvgPct:avg(rows,"maePct"),maeP95Pct:p(rows,"maePct"),
-    mfeAvgPct:avg(rows,"mfePct"),mfeP95Pct:p(rows,"mfePct"),
-    maeToStopRatioAvg:avg(rows,"maeToStopRatio"),mfeMaeRatioAvg:avg(rows,"mfeMaeRatio")};
+  const maeAvgPct=avg(rows,"maePct"), mfeAvgPct=avg(rows,"mfePct"), stopAvgPct=avg(rows,"stopDistancePct");
+  return {count:rows.length,maeAvgPct,maeP95Pct:p(rows,"maePct"),
+    mfeAvgPct,mfeP95Pct:p(rows,"mfePct"),stopDistanceAvgPct:stopAvgPct,
+    maeToStopRatio:maeAvgPct!==null&&stopAvgPct>0?maeAvgPct/stopAvgPct:null,
+    mfeMaeRatio:maeAvgPct>0&&mfeAvgPct!==null?mfeAvgPct/maeAvgPct:null};
 }
 async function main() {
   const endMs=Date.now(), startMs=endMs-DAYS*86400000, fromMs=startMs-WARMUP_DAYS*86400000;
@@ -158,7 +160,7 @@ async function main() {
           entryQualityScore:exp.entryQualityScore??null,entryQualityRaw:exp.entryQualityRaw??null,
           entryQualityAvailableFactors:exp.entryQualityAvailableFactors??0,
           riskLevel:exp.riskLevel??null,stop:Number(exp.stop),stopDistancePct:Math.abs(entry-Number(exp.stop))/entry*100,
-          horizons,maePct:full.maePct,mfePct:full.mfePct,maeToStopRatio:full.maePct/(Math.abs(entry-Number(exp.stop))/entry*100),mfeMaeRatio:full.maePct>0?full.mfePct/full.maePct:null,legacyParity:diffs.length===0,parityDiffs:diffs};
+          horizons,maePct:full.maePct,mfePct:full.mfePct,legacyParity:diffs.length===0,parityDiffs:diffs};
         local.push(row); records.push(row);
       }
       symbolResults.push({symbol:ticker.symbol,candles:{h1:h1.length,h4:h4.length,m15:m15.length,m5:m5.length},
@@ -211,18 +213,18 @@ async function main() {
     "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...["LONG","SHORT"].map(s=>{const x=bySide[s],m=x.maeMfe60m;return "| "+s+" | "+x.signals+" | "+(m.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(m.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(m.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(m.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mae15mAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mae30mAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mae60mAvgPct?.toFixed(3)??"n/a")+"% |";}),
     "","## EQS buckets","",
-    "| Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / stop | MFE / MAE |",
+    "| Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / avg stop | avg MFE / avg MAE |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
-    ...Object.entries(byEqsBucket).map(([k,x])=>"| "+k+" | "+x.count+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatioAvg?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatioAvg?.toFixed(3)??"n/a")+" |"),
+    ...Object.entries(byEqsBucket).map(([k,x])=>"| "+k+" | "+x.count+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatio?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatio?.toFixed(3)??"n/a")+" |"),
     "","## EQS buckets by side (do not pool LONG and SHORT)","",
-    "| Side | Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / stop | MFE / MAE |",
+    "| Side | Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / avg stop | avg MFE / avg MAE |",
     "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ...["LONG","SHORT"].flatMap(side=>Object.entries(byEqsBucketAndSide[side]).map(([bucket,x])=>"| "+side+" | "+bucket+" | "+x.signals+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatioAvg?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatioAvg?.toFixed(3)??"n/a")+" |")),
     "","## Method limitations","",
     "- This is an entry-quality diagnostic, not a PnL/exit backtest.",
     "- EQS buckets are descriptive; thresholds 40/70 are provisional.",
     "- 5m OHLC provides range excursions, not intrabar ordering.",
-    "- Universe uses current volume and has survivorship bias.",
+    "- Universe selection uses current ticker quote volume (survivorship bias); historical eligibility also reuses present-day 24h quoteVolume, creating look-ahead bias in the volume gate. Treat the signal sample and EQS bucket results as preliminary until historical quote volume is reconstructed.",
     "- No fees, funding, slippage, liquidation, or execution latency are modeled.",
     "- Parity is required before attributing any MAE/MFE change to EQS.",
     "","## Per-symbol results","",
