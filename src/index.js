@@ -1903,15 +1903,6 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
     eqsMomentumState, eqsPullbackState, eqsMomentumStateV2, eqsPullbackStateV2 };
 }
 
-function calculateFourHourTrend(candles4h) {
-  if (!Array.isArray(candles4h) || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) return null;
-  const closes = candles4h.map(c => c.close);
-  const fast = ema(closes, 20);
-  const slow = ema(closes, 50);
-  if (!Number.isFinite(fast) || !Number.isFinite(slow)) return null;
-  return fast > slow ? "BULLISH" : fast < slow ? "BEARISH" : "NEUTRAL";
-}
-
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
   const closes1h = candles1h.map(c => c.close), closes4h = candles4h.map(c => c.close);
