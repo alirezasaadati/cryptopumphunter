@@ -2065,7 +2065,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   return {
     symbol: ticker.symbol,
     fourHourTrend,
+    btcFourHourTrend: options.btcFourHourTrend || null,
     side,
+    momentumConfirmed,
+    pullbackConfirmed,
     score,
     baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
     priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))),
