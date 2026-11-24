@@ -225,7 +225,7 @@ async function main() {
     Number(t.volumeQuote)>=(process.env.BACKTEST_SYMBOL?FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME:FUTURES_CONFIG.MIN_QUOTE_VOLUME)&&Number(t.last)>0)
     .filter(t => !process.env.BACKTEST_SYMBOL || String(t.symbol) === String(process.env.BACKTEST_SYMBOL))
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
-  if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
+  if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found; XAUT ticker diagnostics: " + JSON.stringify(tickerData.tickers.filter(t=>String(t.symbol||"").includes("XAUT")).map(t=>({symbol:t.symbol,tag:t.tag,suspended:t.suspended,volumeQuote:t.volumeQuote,last:t.last,keys:Object.keys(t)}))));
   const results=[];
   for (const ticker of universe) {
     try { results.push(await backtestSymbol(ticker,fromMs,endMs)); }
