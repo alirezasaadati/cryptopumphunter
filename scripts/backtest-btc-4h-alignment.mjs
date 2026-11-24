@@ -158,6 +158,18 @@ function summarize(trades) {
   };
 }
 
+function summarizeConfirmationCohorts(trades) {
+  const result = {};
+  for (const side of ["LONG", "SHORT"]) {
+    result[side] = {};
+    for (const group of ["BOTH", "ONE", "NEITHER"]) {
+      const selected = trades.filter(t => t.side === side && t.confirmationGroup === group);
+      result[side][group] = summarize(selected);
+    }
+  }
+  return result;
+}
+
 async function backtestSymbol(ticker, fromMs, toMs, btcFourHourCandles) {
   const [oneHour,fourHour,fifteenMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs,HOUR),
@@ -224,6 +236,10 @@ async function backtestSymbol(ticker, fromMs, toMs, btcFourHourCandles) {
         candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
       });
       trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
+      trade.momentumConfirmed = candidate.momentumConfirmed === true;
+      trade.pullbackConfirmed = candidate.pullbackConfirmed === true;
+      const confirmationCount = Number(trade.momentumConfirmed) + Number(trade.pullbackConfirmed);
+      trade.confirmationGroup = confirmationCount === 2 ? "BOTH" : confirmationCount === 1 ? "ONE" : "NEITHER";
       trade.entryModel=mode === "baseline" ? "last_1h_close" : "next_1h_open";
       state.trades.push(trade);
       const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
@@ -270,6 +286,10 @@ async function main() {
     baseline:{signals:sum("baseline","signals"),valid:sum("baseline","valid"),risky:sum("baseline","risky"),metrics:summarize(allBaseline)},
     current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent)},
     aligned:{signals:sum("aligned","signals"),valid:sum("aligned","valid"),risky:sum("aligned","risky"),rejected:sum("aligned","rejected"),rawCandidates:sum("aligned","rawCandidates"),metrics:summarize(allAligned)},
+    confirmationCohorts:{
+      current:summarizeConfirmationCohorts(allCurrent),
+      aligned:summarizeConfirmationCohorts(allAligned)
+    },
     signalCountChangePct:sum("baseline","signals")?((sum("current","signals")/sum("baseline","signals"))-1)*100:0,
     symbols:results.map(({trades,...r})=>r),trades:{baseline:allBaseline,current:allCurrent}
   };
