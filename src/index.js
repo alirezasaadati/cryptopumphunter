@@ -3226,3 +3226,4 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
 export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels };
+// Experimental futures signal engine validation branch; Telegram and UI handlers remain from main.
