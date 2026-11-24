@@ -1,0 +1,48 @@
+name: Entry execution optimization backtest
+on:
+  push:
+    branches:
+      - experiment/eqs-diagnostics-20261124
+    paths:
+      - scripts/backtest-entry-execution.mjs
+      - .github/workflows/entry-execution-backtest.yml
+      - src/index.js
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Historical days (7-180)
+        required: false
+        default: "30"
+      symbols:
+        description: Maximum Kraken symbols (1-15)
+        required: false
+        default: "10"
+permissions:
+  contents: read
+jobs:
+  entry-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/eqs-diagnostics-20261124
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests
+        run: npm test
+      - name: Run 30 percent margin ROI entry backtest
+        env:
+          ENTRY_DAYS: ${{ inputs.days || '30' }}
+          ENTRY_SYMBOLS: ${{ inputs.symbols || '10' }}
+        run: node scripts/backtest-entry-execution.mjs
+      - name: Upload entry execution report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: entry-execution-report-${{ github.sha }}
+          path: |
+            artifacts/entry-execution-report.json
+            artifacts/entry-execution-report.md
+          if-no-files-found: warn
