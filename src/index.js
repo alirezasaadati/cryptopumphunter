@@ -898,11 +898,54 @@ async function changeMemberAccess(env,ownerId,id,allow) {
 }
 
 // ---------------- MAIN MENU ----------------
-function menuForChat(env, chatId) {
-  // Keep only a compact inline shortcut; never attach a persistent Reply Keyboard.
+function replyMenuForChat(env, chatId) {
+  const owner = isOwner(chatId, env);
+  const keyboard = [
+    [
+      { text: "📈 سیگنال فیوچرز" },
+      { text: "📊 سیگنال اسپات" }
+    ],
+    [
+      { text: "🛡️ راهنمای مدیریت سرمایه" }
+    ],
+    owner
+      ? [
+          { text: "🗂 سیگنال‌های صادرشده" },
+          { text: "📊 گزارش سیگنال‌های اخیر" }
+        ]
+      : [
+          { text: "🗂 سیگنال‌های صادرشده" },
+          { text: "🔍 پایش معاملات کاربران" }
+        ],
+    ...(owner ? [[
+      { text: "👥 مدیریت اعضا" },
+      { text: "🔍 پایش معاملات کاربران" }
+    ]] : []),
+    [
+      { text: "📡 وضعیت ربات" },
+      { text: "🔌 تست اتصال" }
+    ],
+    owner
+      ? [
+          { text: "⚠️ ارسال‌های نامشخص" },
+          { text: "ℹ️ درباره" }
+        ]
+      : [
+          { text: "ℹ️ درباره" }
+        ]
+  ];
   return {
-    inline_keyboard: [[{ text: "📋 منوی اصلی", callback_data: "menu" }]]
+    keyboard,
+    resize_keyboard: true,
+    one_time_keyboard: true,
+    input_field_placeholder: "یکی از گزینه‌های تریدیار را انتخاب کنید"
   };
+}
+
+// Ordinary responses must not reattach the keyboard. Telegram keeps the
+// keyboard available in the chat; users can reopen it manually or with /menu.
+function menuForChat(env, chatId) {
+  return null;
 }
 async function configureTelegramMenu(env, chatId) {
   const commands = [
@@ -927,34 +970,24 @@ function welcomeSeenKey(chatId) {
 
 async function showMenu(env, chatId) {
   await configureTelegramMenu(env, chatId);
-  // Remove any legacy persistent Reply Keyboard already cached by Telegram clients.
-  await telegram("sendMessage", env, {
-    chat_id: chatId,
-    text: "⌨️ کیبورد قدیمی بسته شد.",
-    reply_markup: { remove_keyboard: true }
-  });
-  await telegram("sendMessage", env, {
-    chat_id: chatId,
-    text: "📋 منوی اصلی تریدیار",
-    disable_web_page_preview: true,
-    reply_markup: mainMenuForChat(env, chatId)
-  });
+  await sendMessage(
+    env,
+    chatId,
+    "📋 منوی اصلی تریدیار",
+    replyMenuForChat(env, chatId)
+  );
 }
 
 async function showWelcome(env, chatId, welcome = true) {
   await configureTelegramMenu(env, chatId);
-  // ReplyKeyboardRemove is sent once to clear keyboards left by older bot versions.
-  await telegram("sendMessage", env, {
-    chat_id: chatId,
-    text: "⌨️ کیبورد قدیمی بسته شد.",
-    reply_markup: { remove_keyboard: true }
-  });
-  await telegram("sendMessage", env, {
-    chat_id: chatId,
-    text: welcome ? "🤖 خوش آمدید به تریدیار!\nبرای دسترسی به امکانات، از منوی زیر استفاده کنید." : "منوی اصلی تریدیار:",
-    disable_web_page_preview: true,
-    reply_markup: mainMenuForChat(env, chatId)
-  });
+  await sendMessage(
+    env,
+    chatId,
+    welcome
+      ? "🤖 خوش آمدید به تریدیار!\\nبرای باز کردن منو، دکمه کیبورد کنار کادر پیام را بزنید."
+      : "منوی اصلی تریدیار:",
+    replyMenuForChat(env, chatId)
+  );
 }
 
 async function handleReplyMenuAction(action, env, chatId, message) {
