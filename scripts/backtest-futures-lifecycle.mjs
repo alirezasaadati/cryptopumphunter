@@ -286,6 +286,56 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   };
 }
 
+function simulatePortfolio(trades, initialCapital=100, marginPerTrade=10, endMs=Date.now()) {
+  const events = [];
+  for (const trade of trades) {
+    events.push({time:Number(trade.entryTime),type:"ENTRY",trade});
+    if (trade.status==="CLOSED_PROFIT" || trade.status==="CLOSED_STOP") {
+      events.push({time:Number(trade.closedAtMs),type:"EXIT",trade});
+    }
+  }
+  // Exit events are processed before entries at an identical timestamp.
+  events.sort((a,b)=>a.time-b.time || (a.type==="EXIT"?-1:1));
+  let freeMargin=initialCapital, usedMargin=0, peakEquity=initialCapital, maxDrawdown=0;
+  let accepted=0, skipped=0, maxConcurrent=0, realizedPnl=0;
+  const active=new Map(), skippedIds=new Set();
+  for (const event of events) {
+    const t=event.trade;
+    if (event.type==="ENTRY") {
+      if (freeMargin + 1e-9 < marginPerTrade) { skipped++; skippedIds.add(t.id); continue; }
+      freeMargin-=marginPerTrade; usedMargin+=marginPerTrade;
+      active.set(t.id,t); accepted++; maxConcurrent=Math.max(maxConcurrent,active.size);
+    } else if (active.has(t.id)) {
+      const pnl=marginPerTrade*Number(t.marginReturnPercent||0)/100;
+      freeMargin+=marginPerTrade+pnl; usedMargin-=marginPerTrade;
+      realizedPnl+=pnl; active.delete(t.id);
+      const equity=freeMargin+usedMargin;
+      peakEquity=Math.max(peakEquity,equity);
+      maxDrawdown=Math.max(maxDrawdown,peakEquity-equity);
+    }
+  }
+  let openUnrealizedPnl=0;
+  for (const t of active.values()) {
+    openUnrealizedPnl += marginPerTrade*Number(t.marginReturnAtMarkPct||0)/100;
+  }
+  const endingEquity=freeMargin+usedMargin+openUnrealizedPnl;
+  return {
+    initialCapitalUSD:initialCapital, marginPerTradeUSD:marginPerTrade,
+    leverage:LEVERAGE, notionalPerTradeUSD:marginPerTrade*LEVERAGE,
+    maxConcurrentPositions:maxConcurrent, acceptedTrades:accepted, skippedForInsufficientFreeMargin:skipped,
+    closedPositions:accepted-active.size, openPositionsAtEnd:active.size,
+    realizedNetPnlUSD:Number(realizedPnl.toFixed(4)),
+    openPositionsMarkToMarketPnlUSD:Number(openUnrealizedPnl.toFixed(4)),
+    endingEquityUSD:Number(endingEquity.toFixed(4)),
+    netReturnPct:Number(((endingEquity/initialCapital-1)*100).toFixed(4)),
+    maxDrawdownFromRealizedEquityUSD:Number(maxDrawdown.toFixed(4)),
+    freeMarginAtEndUSD:Number(freeMargin.toFixed(4)),
+    usedMarginAtEndUSD:Number(usedMargin.toFixed(4)),
+    skippedTradeIds:[...skippedIds],
+    accounting:"Fixed $10 initial margin per accepted trade; margin remains reserved until the full position closes. Realized trade PnL is applied at final close; open positions are marked to the final 5m close. No compounding of per-trade margin size."
+  };
+}
+
 async function main() {
   const endMs = Date.now();
   const startMs = endMs - DAYS*86400000;
@@ -306,6 +356,7 @@ async function main() {
   const successful = results.filter(r=>!r.error);
   const allTrades = successful.flatMap(r=>r.trades).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
   const metrics = summarize(allTrades);
+  const portfolio = simulatePortfolio(allTrades,100,10,endMs);
   const report = {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
@@ -317,7 +368,7 @@ async function main() {
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
-    metrics,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
+    portfolio,metrics,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
     bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
@@ -330,6 +381,17 @@ async function main() {
     "Period: "+report.period.from+" — "+report.period.to+" ("+DAYS+" days)",
     "Symbols tested: "+report.symbolsTested+"/"+SYMBOL_LIMIT,"",
     "| Metric | Result |","|---|---:|",
+    "| Starting account equity (USD) | $"+portfolio.initialCapitalUSD.toFixed(2)+" |",
+    "| Fixed margin per trade (USD) | $"+portfolio.marginPerTradeUSD.toFixed(2)+" |",
+    "| Leverage / notional per trade | "+portfolio.leverage+"x / $"+portfolio.notionalPerTradeUSD.toFixed(2)+" |",
+    "| Accepted / skipped for insufficient free margin | "+portfolio.acceptedTrades+" / "+portfolio.skippedForInsufficientFreeMargin+" |",
+    "| Maximum concurrent positions | "+portfolio.maxConcurrentPositions+" |",
+    "| Realized net PnL (USD) | $"+portfolio.realizedNetPnlUSD.toFixed(2)+" |",
+    "| Open-position mark-to-market PnL (USD) | $"+portfolio.openPositionsMarkToMarketPnlUSD.toFixed(2)+" |",
+    "| Ending account equity (USD) | $"+portfolio.endingEquityUSD.toFixed(2)+" |",
+    "| Net account return | "+portfolio.netReturnPct.toFixed(2)+"% |",
+    "| Ending free / used margin (USD) | $"+portfolio.freeMarginAtEndUSD.toFixed(2)+" / $"+portfolio.usedMarginAtEndUSD.toFixed(2)+" |",
+
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
@@ -367,7 +429,7 @@ async function main() {
     "", "Symbol errors:", ...report.symbolErrors.map(x=>"- "+x.symbol+": "+x.error)
   ];
   await writeFile("artifacts/futures-lifecycle-backtest.md",rows.join("\n"));
-  console.log(JSON.stringify({ok:successful.length>0,period:report.period,metrics,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals},null,2));
+  console.log(JSON.stringify({ok:successful.length>0,period:report.period,portfolio,metrics,symbols:report.bySymbol,symbolErrors:report.symbolErrors,lockSkips:report.lockSkips,rejectedSignals:report.rejectedSignals},null,2));
   if (!successful.length) process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
