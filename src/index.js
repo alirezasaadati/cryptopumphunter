@@ -1730,7 +1730,7 @@ function calculateEntryQualityScore({ side, rsi: rsiValue, rsiSlope, emaDistance
     else { rawScore -= 20; details.ema = -20; }
   }
 
-  if (pullbackState === "CONFIRMED_REVERSAL") { rawScore += 25; details.pullback = 25; }
+  if (pullbackState === "RECLAIM_CONFIRMED") { rawScore += 25; details.pullback = 25; }
   else if (pullbackState === "TOUCHED_ZONE") { rawScore += 10; details.pullback = 10; }
   else if (pullbackState === "NONE") { rawScore -= 15; details.pullback = -15; }
 
@@ -1792,7 +1792,7 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
     : last15m.close < last15m.open && last15m.close < ema9_15m;
   const eqsMomentumState = aligned ? "CONFIRMED" : "NOT_CONFIRMED";
   const eqsPullbackState = touchedPullbackZone
-    ? (eqsIsReversal ? "CONFIRMED_REVERSAL" : "TOUCHED_ZONE")
+    ? (eqsIsReversal ? "RECLAIM_CONFIRMED" : "TOUCHED_ZONE")
     : "NONE";
 
   const reclaimExtensionAtr = side === "LONG"
@@ -1866,7 +1866,7 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
     : last15m.close < last15m.open && last15m.close < ema9_15m;
   const eqsMomentumState = momentumConfirmed ? "CONFIRMED" : "NOT_CONFIRMED";
   const eqsPullbackState = touchedPullbackZone
-    ? (eqsIsReversal ? "CONFIRMED_REVERSAL" : "TOUCHED_ZONE")
+    ? (eqsIsReversal ? "RECLAIM_CONFIRMED" : "TOUCHED_ZONE")
     : "NONE";
   // Momentum and pullback are confirmations for ranking, never hard eligibility gates.
   // Drift and EMA/ATR distance remain hard safety limits.
