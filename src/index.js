@@ -42,44 +42,78 @@ export function isKvDailyWriteQuotaError(error) {
   const message = String(error?.message || error || "").toLowerCase();
   return message.includes("limit exceeded for the day") || (message.includes("quota") && (message.includes("put") || message.includes("delete")));
 }
+const kvWriteGateCache = new Map();
+let localKvWritePausedDay = null;
+const KV_WRITE_GATE_CACHE_MS = 5 * 60 * 1000;
+const KV_WRITE_GATE_FAILURE_CACHE_MS = 15 * 1000;
+
 async function kvWriteGate(env, action, error = null) {
-  if (!env.SIGNAL_DELIVERY) return { allowed: true };
-  try {
-    const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global-kv-write-quota"));
-    const response = await stub.fetch("https://signal-delivery.internal/kv-write/" + action, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-signal-delivery-secret": getSignalDeliverySecret(env) || "" },
-      body: JSON.stringify({ day: quotaDayKey(), message: error ? String(error?.message || error).slice(0, 300) : undefined })
-    });
-    if (!response.ok) throw new Error("KV quota gate returned HTTP " + response.status + "; refusing KV write.");
-    const result = await response.json();
-    if (typeof result?.allowed !== "boolean") throw new Error("KV quota gate returned an invalid response; refusing KV write.");
-    return result;
-  } catch (gateError) {
-    console.error("KV quota gate unavailable; KV write blocked:", String(gateError?.message || gateError));
-    throw new Error("KV quota gate unavailable; write blocked to protect the daily quota.");
+  const today = quotaDayKey();
+  if (!env.SIGNAL_DELIVERY) return { allowed: true, gateUnavailable: true };
+
+  if (action === "allow") {
+    const cached = kvWriteGateCache.get(today);
+    if (cached && cached.expiresAt > Date.now()) return cached.promise;
   }
+
+  const request = (async () => {
+    try {
+      const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global-kv-write-quota"));
+      const response = await stub.fetch("https://signal-delivery.internal/kv-write/" + action, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-signal-delivery-secret": getSignalDeliverySecret(env) || "" },
+        body: JSON.stringify({ day: today, message: error ? String(error?.message || error).slice(0, 300) : undefined })
+      });
+      if (!response.ok) throw new Error("KV quota gate returned HTTP " + response.status + ".");
+      const result = await response.json();
+      if (typeof result?.allowed !== "boolean") throw new Error("KV quota gate returned an invalid response.");
+      if (action === "allow") {
+        const ttl = result.allowed ? KV_WRITE_GATE_CACHE_MS : Math.max(1000, Date.now() + 24 * 60 * 60 * 1000 - Date.now());
+        kvWriteGateCache.set(today, { expiresAt: Date.now() + ttl, promise: Promise.resolve(result) });
+      }
+      return result;
+    } catch (gateError) {
+      console.warn("KV quota gate unavailable; relying on the KV namespace quota enforcement:", String(gateError?.message || gateError));
+      if (action === "allow") {
+        const fallback = { allowed: true, gateUnavailable: true };
+        kvWriteGateCache.set(today, { expiresAt: Date.now() + KV_WRITE_GATE_FAILURE_CACHE_MS, promise: Promise.resolve(fallback) });
+        return fallback;
+      }
+      return { allowed: false, gateUnavailable: true };
+    }
+  })();
+
+  if (action === "allow") {
+    kvWriteGateCache.set(today, { expiresAt: Date.now() + KV_WRITE_GATE_FAILURE_CACHE_MS, promise: request });
+  }
+  return request;
 }
+
 export function withQuotaAwareKV(env) {
   if (!env.APP_KV) return env;
-  if (!env.SIGNAL_DELIVERY) {
-    console.error("KV_QUOTA_GUARD_BYPASSED: SIGNAL_DELIVERY binding is unavailable; continuing without quota gate.");
-    return env;
-  }
   const raw = env.APP_KV;
   const guarded = new Proxy(raw, {
     get(target, property) {
       if (property === "put" || property === "delete") return async (...args) => {
+        const today = quotaDayKey();
+        if (localKvWritePausedDay === today) {
+          throw new Error("KV daily write quota is paused until the next UTC day; this change was not saved.");
+        }
+
         const gate = await kvWriteGate(env, "allow");
         if (gate?.allowed === false) {
+          localKvWritePausedDay = today;
           console.warn("KV write suppressed by daily quota circuit breaker.");
           throw new Error("KV daily write quota is paused until the next UTC day; this change was not saved.");
         }
-        try { return await target[property](...args); }
-        catch (error) {
+
+        try {
+          return await target[property](...args);
+        } catch (error) {
           if (isKvDailyWriteQuotaError(error)) {
+            localKvWritePausedDay = today;
             await kvWriteGate(env, "pause", error);
-            console.error("KV daily write quota reached; writes paused until the next UTC day.");
+            console.error("KV daily write quota reached; writes paused locally until the next UTC day.");
           }
           throw error;
         }
