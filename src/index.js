@@ -1747,6 +1747,15 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
     momentumConfirmed, pullbackConfirmed: touchedPullbackZone, fourHourOpposes };
 }
 
+function calculateFourHourTrend(candles4h) {
+  if (!Array.isArray(candles4h) || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) return null;
+  const closes = candles4h.map(c => c.close);
+  const fast = ema(closes, 20);
+  const slow = ema(closes, 50);
+  if (!Number.isFinite(fast) || !Number.isFinite(slow)) return null;
+  return fast > slow ? "BULLISH" : fast < slow ? "BEARISH" : "NEUTRAL";
+}
+
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
     throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
@@ -1811,6 +1820,29 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
       entryDiagnostics: { stage:"trend_rsi", rsi:rsiValue, up1h, down1h, up4h, down4h,
         ema20_1h:e20, ema50_1h:e50, ema20_4h:e20_4h, ema50_4h:e50_4h, referencePrice,
         longRsiOk, shortRsiOk, longTrendOk:up1h, shortTrendOk:down1h, fourHourRequired:false, fourHourTrend:up4h ? "BULLISH" : down4h ? "BEARISH" : "NEUTRAL", failedChecks:failed } };
+  }
+
+  // Mandatory directional alignment: signal side, symbol 4h and BTC 4h must agree.
+  // 15m momentum and pullback remain ranking/quality inputs, never hard gates.
+  if (options.requireBtcFourHourAlignment === true) {
+    const btcFourHourTrend = options.btcFourHourTrend;
+    const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
+    if (btcFourHourTrend !== expectedTrend || fourHourTrend !== expectedTrend) {
+      const reason = !btcFourHourTrend || btcFourHourTrend === "NEUTRAL"
+        ? "روند ۴ساعته بیت‌کوین خنثی یا نامعتبر است؛ صدور سیگنال متوقف شد"
+        : btcFourHourTrend !== expectedTrend
+          ? "جهت سیگنال با روند ۴ساعته بیت‌کوین هم‌جهت نیست"
+          : "روند ۴ساعته نماد با روند ۴ساعته بیت‌کوین هم‌جهت نیست";
+      return {
+        symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: btcFourHourTrend || null,
+        side, rejected: reason,
+        entryDiagnostics: {
+          stage: "btc_4h_alignment", side, fourHourTrend,
+          btcFourHourTrend: btcFourHourTrend || null,
+          required: true, passed: false
+        }
+      };
+    }
   }
 
   // The 4h trend is a score adjustment, not an eligibility gate.
@@ -1976,7 +2008,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   return {
     symbol: ticker.symbol,
     fourHourTrend,
+    btcFourHourTrend: options.btcFourHourTrend || null,
     side,
+    momentumConfirmed: entryFilters.momentumConfirmed ?? false,
+    pullbackConfirmed: entryFilters.pullbackConfirmed ?? false,
     score,
     baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
     priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))),
@@ -2908,6 +2943,19 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const filteredUniverse = universe;
+  // Fetch BTC 4h once per scan. Fail closed: never emit signals without a valid BTC trend.
+  const btcMarketData = await getKrakenFuturesCandlesViaCoordinator(
+    env, "PF_XBTUSD", [FUTURES_CONFIG.CONFIRM_INTERVAL]
+  );
+  const btcFourHourTrend = calculateFourHourTrend(
+    btcMarketData.candles?.[FUTURES_CONFIG.CONFIRM_INTERVAL]
+  );
+  if (!btcFourHourTrend) {
+    throw new Error("روند ۴ساعته بیت‌کوین قابل محاسبه نیست؛ اسکن برای جلوگیری از صدور سیگنال بدون تأیید BTC متوقف شد.");
+  }
+  console.log("BTC_4H_ALIGNMENT_CONTEXT", JSON.stringify({
+    timestamp: new Date().toISOString(), btcFourHourTrend, required: true
+  }));
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   let analysisErrorCount = 0;
   let fifteenMinuteDataErrorCount = 0;
@@ -2928,7 +2976,9 @@ async function runFuturesSignalScan(env, options = {}) {
           marketData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
           "Required Kraken candle data is missing.");
       }
-      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, options);
+      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, {
+        ...options, btcFourHourTrend, requireBtcFourHourAlignment: true
+      });
     } catch (error) {
       analysisErrorCount++;
       return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticType: "data_or_analysis_error" };

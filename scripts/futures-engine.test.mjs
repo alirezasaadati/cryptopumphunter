@@ -303,6 +303,53 @@ test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
 });
 
 
+test("mandatory BTC 4h alignment blocks LONG when BTC 4h is bearish",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute,{
+    requireBtcFourHourAlignment:true,btcFourHourTrend:"BEARISH"
+  });
+  assert.equal(result.eligible,undefined);
+  assert.equal(result.side,"LONG");
+  assert.equal(result.entryDiagnostics.stage,"btc_4h_alignment");
+  assert.equal(result.entryDiagnostics.passed,false);
+  assert.match(result.rejected,/بیت‌کوین/);
+});
+
+test("mandatory BTC and symbol 4h trends must both match the signal direction",()=>{
+  const long=makeSetup("LONG");
+  const longOk=analyzeFuturesSymbol(long.ticker,long.oneHour,long.fourHour,long.fifteenMinute,{
+    requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
+  });
+  assert.equal(longOk.eligible,true,JSON.stringify(longOk));
+  assert.equal(longOk.btcFourHourTrend,"BULLISH");
+
+  const short=makeSetup("SHORT");
+  const shortOk=analyzeFuturesSymbol(short.ticker,short.oneHour,short.fourHour,short.fifteenMinute,{
+    requireBtcFourHourAlignment:true,btcFourHourTrend:"BEARISH"
+  });
+  assert.equal(shortOk.eligible,true,JSON.stringify(shortOk));
+
+  const opposingSymbol4h=makeCandles({slope:-0.04,base:100});
+  const mismatch=analyzeFuturesSymbol(long.ticker,long.oneHour,opposingSymbol4h,long.fifteenMinute,{
+    requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
+  });
+  assert.equal(mismatch.eligible,undefined);
+  assert.equal(mismatch.entryDiagnostics.stage,"btc_4h_alignment");
+});
+
+test("15m momentum and pullback remain optional under mandatory BTC alignment",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const altered=fifteenMinute.map(c=>({...c}));
+  altered.at(-1).open=altered.at(-1).close+0.5;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,altered,{
+    requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
+  });
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.momentumConfirmed,false);
+  assert.equal(result.pullbackConfirmed,true);
+  assert.equal(result.confirmationCount,1);
+});
+
 test("neutral 4h trend does not block a valid LONG and adds no 4h score",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({

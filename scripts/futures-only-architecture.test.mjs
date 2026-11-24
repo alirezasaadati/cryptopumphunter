@@ -28,7 +28,9 @@ test("manual and scheduled alerts both use the same futures scan", () => {
 
 
 test("the live scan is explicitly routed through the Kraken Futures analyzer", () => {
-  assert.match(source, /return analyzeFuturesSymbol\(ticker, oneHour, fourHour, fifteenMinute, options\);/);
+  assert.ok(source.includes("return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, {"));
+  assert.ok(source.includes("...options, btcFourHourTrend, requireBtcFourHourAlignment: true"));
+  assert.ok(source.includes("function calculateFourHourTrend("));
   assert.doesNotMatch(source, /analyzePriceAction|TREND_SHORT|RALLY_FADE/);
   assert.doesNotMatch(source, /from ["\']\.\/price-action-engine\.js["\']/);
 });
