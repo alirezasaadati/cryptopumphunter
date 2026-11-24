@@ -8,8 +8,8 @@ const CFG = Object.freeze({
   MAX_CANDIDATES: 15,
   MAX_RESULTS: 8,
   CONCURRENCY: 3,
-  MIN_SCORE: 65,
-  MIN_RR: 1.5,
+  MIN_SCORE: 75,
+  MIN_RR: 1.8,
   INTERVAL: 60,
   MIN_CANDLES: 55,
   PAGES: [0,100,200,300,400,500,600,700,800,900]
@@ -294,7 +294,11 @@ function analyze(coin, candles, market) {
     setup, entry: current, stop, target1, target2, target3, rewardRisk,
     spreadPct: market.spreadPct, quoteVolumeUsd: market.quoteVolumeUsd,
     bidDepthUsd: market.bidDepthUsd, askDepthUsd: market.askDepthUsd,
-    eligible: score >= CFG.MIN_SCORE && setup !== "بدون ستاپ" && volumeRatio >= 0.9 &&
+    eligible: score >= CFG.MIN_SCORE &&
+      ["شکست مقاومت", "پولبک به EMA20"].includes(setup) &&
+      trendUp && above20 && above50 &&
+      rsiValue >= 50 && rsiValue <= 68 &&
+      volumeRatio >= 1.1 && dailyChange >= 0 && dailyChange <= 10 &&
       validRisk && rewardRisk >= CFG.MIN_RR &&
       market.spreadPct <= CFG.MAX_SPREAD_PCT &&
       market.bidDepthUsd >= CFG.MIN_BOOK_DEPTH_USD &&
