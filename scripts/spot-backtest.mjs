@@ -3,7 +3,8 @@ import { findSpotPairs, selectBestSpotPair, analyzeSpotCandles } from "../src/sp
 const BASE = "https://api.kraken.com/0/public";
 const COST_PCT = 0.30; // 0.10% fee + 0.05% slippage per side, round trip.
 const MIN_CANDLES = 55;
-const HORIZON = 24;
+const HORIZON_1H = 24;
+const HORIZON_4H = 6;
 const MAX_ASSETS = 15;
 
 async function getJson(url, label) {
@@ -55,18 +56,19 @@ function candleRows(result) {
     c.open>0 && c.low>0 && c.close>0 && c.high>=Math.max(c.open,c.close) && c.low<=Math.min(c.open,c.close));
 }
 
-function simulate(candles, pair) {
+function simulate(candles, pair, barsPerDay) {
+  const horizon = barsPerDay;
   const split = Math.floor(candles.length * 0.7);
   const trades = [];
   let lastSignalIndex = -Infinity;
-  for (let i = MIN_CANDLES; i + HORIZON < candles.length; i++) {
-    if (i - lastSignalIndex < HORIZON) continue;
+  for (let i = MIN_CANDLES; i + horizon < candles.length; i++) {
+    if (i - lastSignalIndex < horizon) continue;
     const history = candles.slice(0,i);
     const current = history.at(-1).close;
-    const last24 = history.slice(-24);
+    const last24 = history.slice(-barsPerDay);
     if (last24.length < 24) continue;
     const quoteVolume24 = last24.reduce((sum,c) => sum + c.volume, 0) * current;
-    const change24 = history.at(-1).close / history.at(-24).close - 1;
+    const change24 = history.at(-1).close / history.at(-barsPerDay).close - 1;
     const coin = {
       symbol: pair.coin.symbol,
       name: pair.coin.name,
@@ -84,13 +86,13 @@ function simulate(candles, pair) {
     });
     if (!signal.eligible) continue;
 
-    const future = candles.slice(i,i+HORIZON);
+    const future = candles.slice(i,i+horizon);
     const entry = future[0].open;
     if (!(entry > signal.stop && entry < signal.target1)) continue;
     // Exclude large opening gaps: the live alert would no longer be actionable.
     if (Math.abs(entry/current - 1) > 0.005) continue;
 
-    let exitPrice = future[HORIZON-1].close;
+    let exitPrice = future[horizon-1].close;
     let exitReason = "24h-time-exit";
     let stopped = false, targeted = false;
     for (const bar of future) {
@@ -100,14 +102,14 @@ function simulate(candles, pair) {
       if (hitStop) { exitPrice = Math.min(signal.stop, bar.open); exitReason = "stop"; stopped = true; break; }
       if (hitTarget) { exitPrice = signal.target1; exitReason = "target1"; targeted = true; break; }
     }
-    const close24 = future[HORIZON-1].close;
+    const close24 = future[horizon-1].close;
     const net24hPct = (close24 / entry - 1) * 100 - COST_PCT;
     const exitNetPct = (exitPrice / entry - 1) * 100 - COST_PCT;
     const minLow = Math.min(...future.map(c => c.low));
     const maxHigh = Math.max(...future.map(c => c.high));
     trades.push({
       time:future[0].time,
-      split:i+HORIZON < split ? "in-sample" : i >= split ? "out-of-sample" : "boundary",
+      split:i+horizon < split ? "in-sample" : i >= split ? "out-of-sample" : "boundary",
       net24hPct,
       exitNetPct,
       exitReason,
@@ -167,35 +169,46 @@ for (const coin of coins) {
 }
 if (!selected.length) throw new Error("Kraken returned no usable ticker data for the selected Spot universe.");
 const downloaded = await mapLimit(selected,3,async item=>{
-  const payload=await getJson(BASE+"/OHLC?pair="+encodeURIComponent(item.pair.altname||item.pair.key)+"&interval=60","Kraken OHLC "+item.pair.wsname);
-  return {...item,candles:candleRows(payload)};
+  const pairName=encodeURIComponent(item.pair.altname||item.pair.key);
+  const [oneHourPayload,fourHourPayload]=await Promise.all([
+    getJson(BASE+"/OHLC?pair="+pairName+"&interval=60","Kraken 1H OHLC "+item.pair.wsname),
+    getJson(BASE+"/OHLC?pair="+pairName+"&interval=240","Kraken 4H OHLC "+item.pair.wsname)
+  ]);
+  return {...item,candles1h:candleRows(oneHourPayload),candles4h:candleRows(fourHourPayload)};
 });
 const reports=[];
+const allTrades1h=[], allTrades4h=[];
 for (const item of downloaded) {
-  if (item.error || !item.candles || item.candles.length < MIN_CANDLES+HORIZON+1) {
-    reports.push({symbol:item.coin.symbol,pair:item.pair.wsname,error:item.error||"Not enough historical candles"});
+  if (item.error || !item.candles1h || item.candles1h.length < MIN_CANDLES+HORIZON_1H+1 ||
+      !item.candles4h || item.candles4h.length < MIN_CANDLES+HORIZON_4H+1) {
+    reports.push({symbol:item.coin?.symbol,pair:item.pair?.wsname,error:item.error||"Not enough historical candles"});
     continue;
   }
-  const trades=simulate(item.candles,item);
+  const trades1h=simulate(item.candles1h,item,HORIZON_1H);
+  const trades4h=simulate(item.candles4h,item,HORIZON_4H);
+  allTrades1h.push(...trades1h);
+  allTrades4h.push(...trades4h);
   reports.push({
     symbol:item.coin.symbol,
     pair:item.pair.wsname,
-    candles:item.candles.length,
-    historyDays:+(item.candles.length/24).toFixed(1),
-    inSample:summarize(trades.filter(t=>t.split==="in-sample")),
-    outOfSample:summarize(trades.filter(t=>t.split==="out-of-sample"))
+    oneHour:{candles:item.candles1h.length,historyDays:+(item.candles1h.length/24).toFixed(1),
+      inSample:summarize(trades1h.filter(t=>t.split==="in-sample")),
+      outOfSample:summarize(trades1h.filter(t=>t.split==="out-of-sample"))},
+    fourHour:{candles:item.candles4h.length,historyDays:+(item.candles4h.length*4/24).toFixed(1),
+      inSample:summarize(trades4h.filter(t=>t.split==="in-sample")),
+      outOfSample:summarize(trades4h.filter(t=>t.split==="out-of-sample"))}
   });
 }
-const allTrades = [];
-// Aggregate from per-market simulations again, preserving the exact same rules.
-for (const item of downloaded) if (item.candles?.length >= MIN_CANDLES+HORIZON+1) allTrades.push(...simulate(item.candles,item));
 const output={
-  period:"Up to 720 latest 1h OHLC rows per Kraken pair (approximately 30 days)",
+  periods:{oneHour:"Up to 720 latest 1h OHLC rows (approximately 30 days)",fourHour:"Up to 720 latest 4h OHLC rows (approximately 120 days)"},
   assetsSelected:selected.length,
   costs:"0.30% round trip assumed (0.10% fee + 0.05% slippage each side)",
   liquidity:"Historical order-book depth is unavailable in this OHLC test; spread 0.20% and $10,000 depth per side are assumptions, not observed history.",
   universe:"Current CoinLore market-cap/volume screen; survivorship and current-universe bias apply.",
-  aggregate:{inSample:summarize(allTrades.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(allTrades.filter(t=>t.split==="out-of-sample"),false)},
+  aggregate:{
+    oneHour:{inSample:summarize(allTrades1h.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(allTrades1h.filter(t=>t.split==="out-of-sample"),false)},
+    fourHour:{inSample:summarize(allTrades4h.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(allTrades4h.filter(t=>t.split==="out-of-sample"),false)}
+  },
   markets:reports,
   elapsedSeconds:+((Date.now()-started)/1000).toFixed(1)
 };
