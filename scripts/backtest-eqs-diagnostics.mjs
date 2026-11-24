@@ -68,10 +68,18 @@ function historicalChange(candles, i) {
   const old=candles[i-24], now=candles[i];
   return !old || old.close<=0 ? 0 : (now.close/old.close-1)*100;
 }
+// Kraken trade candles expose base-asset quantity. Estimate historical USD
+// quote turnover from closed hourly volume * close, never today's ticker volume.
+function historicalQuoteVolume(candles, i) {
+  if (i < 23) return 0;
+  let total = 0;
+  for (let k=i-23;k<=i;k++) total += Number(candles[k].volume) * Number(candles[k].close);
+  return Number.isFinite(total) ? total : 0;
+}
 function cleanLegacy(value) {
   if (Array.isArray(value)) return value.map(cleanLegacy);
   if (!value || typeof value !== "object") return value;
-  const omit = new Set(["eqsMomentumState","eqsPullbackState","entryQualityScore","entryQualityRaw","entryQualityDetails","entryQualityAvailableFactors"]);
+  const omit = new Set(["eqsMomentumState","eqsPullbackState","eqsMomentumStateV2","eqsPullbackStateV2","entryQualityScore","entryQualityRaw","entryQualityDetails","entryQualityAvailableFactors","entryQualityScoreV2","entryQualityRawV2","entryQualityDetailsV2","entryQualityAvailableFactorsV2"]);
   return Object.fromEntries(Object.entries(value).filter(([k])=>!omit.has(k)).map(([k,v])=>[k,cleanLegacy(v)]));
 }
 function stable(value) { return JSON.stringify(value, (_k,v)=>typeof v==="number" ? Number(v.toPrecision(12)) : v); }
@@ -110,7 +118,7 @@ async function main() {
   if(!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
   const universe=tickerData.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&
     /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&
-    Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME&&Number(t.last)>0)
+    Number(t.last)>0)
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if(!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
 
@@ -132,7 +140,7 @@ async function main() {
         while(fifteenIndex<m15.length&&m15[fifteenIndex].time+INTERVALS["15m"]<=signalClose)fifteenIndex++;
         const closed4h=h4.slice(0,fourIndex), closed15m=m15.slice(Math.max(0,fifteenIndex-120),fifteenIndex);
         if(closed4h.length<FUTURES_CONFIG.MIN_CANDLES||closed15m.length<40)continue;
-        const next=h1[i+1], commonTicker={symbol:ticker.symbol,last:next.open,quoteVolume:Number(ticker.volumeQuote)||0,
+        const next=h1[i+1], commonTicker={symbol:ticker.symbol,last:next.open,quoteVolume:historicalQuoteVolume(h1,i),
           priceChangePercent:historicalChange(h1,i),premium:{lastFundingRate:null}};
         let base,exp;
         try{
@@ -158,9 +166,12 @@ async function main() {
         if(!full)continue;
         const row={symbol:ticker.symbol,side:exp.side,signalTime:signalClose,entry,score:exp.score,
           entryQualityScore:exp.entryQualityScore??null,entryQualityRaw:exp.entryQualityRaw??null,
-          entryQualityAvailableFactors:exp.entryQualityAvailableFactors??0,
+          entryQualityAvailableFactors:exp.entryQualityAvailableFactors??0,entryQualityDetails:exp.entryQualityDetails??null,
+          entryQualityScoreV2:exp.entryQualityScoreV2??null,entryQualityRawV2:exp.entryQualityRawV2??null,
+          entryQualityDetailsV2:exp.entryQualityDetailsV2??null,
           riskLevel:exp.riskLevel??null,stop:Number(exp.stop),stopDistancePct:Math.abs(entry-Number(exp.stop))/entry*100,
-          horizons,maePct:full.maePct,mfePct:full.mfePct,legacyParity:diffs.length===0,parityDiffs:diffs};
+          historicalQuoteVolume:commonTicker.quoteVolume,horizons,maePct:full.maePct,mfePct:full.mfePct,
+          legacyParity:diffs.length===0,parityDiffs:diffs};
         local.push(row); records.push(row);
       }
       symbolResults.push({symbol:ticker.symbol,candles:{h1:h1.length,h4:h4.length,m15:m15.length,m5:m5.length},
@@ -177,21 +188,26 @@ async function main() {
       mae60mAvgPct:xs.filter(x=>x.horizons[60]).length?xs.filter(x=>x.horizons[60]).reduce((s,x)=>s+x.horizons[60].maePct,0)/xs.filter(x=>x.horizons[60]).length:null};
   }
   const bucketFor = score => score==null ? "UNAVAILABLE" : score<40 ? "LOW_0_39" : score<70 ? "MID_40_69" : "HIGH_70_100";
-  for(const label of ["LOW_0_39","MID_40_69","HIGH_70_100","UNAVAILABLE"]){
+  const bucketLabels=["LOW_0_39","MID_40_69","HIGH_70_100","UNAVAILABLE"];
+  const byEqsBucket={}, byEqsBucketAndSide={}, byEqsV2Bucket={}, byEqsV2BucketAndSide={};
+  for(const label of bucketLabels){
     const xs=records.filter(r=>bucketFor(r.entryQualityScore)===label);
     byEqsBucket[label]={signals:xs.length,...summarize(xs)};
+    const v2=records.filter(r=>bucketFor(r.entryQualityScoreV2)===label);
+    byEqsV2Bucket[label]={signals:v2.length,...summarize(v2)};
   }
-  const byEqsBucketAndSide={};
   for(const side of ["LONG","SHORT"]){
-    byEqsBucketAndSide[side]={};
-    for(const label of ["LOW_0_39","MID_40_69","HIGH_70_100","UNAVAILABLE"]){
+    byEqsBucketAndSide[side]={}; byEqsV2BucketAndSide[side]={};
+    for(const label of bucketLabels){
       const xs=records.filter(r=>r.side===side&&bucketFor(r.entryQualityScore)===label);
       byEqsBucketAndSide[side][label]={signals:xs.length,...summarize(xs)};
+      const v2=records.filter(r=>r.side===side&&bucketFor(r.entryQualityScoreV2)===label);
+      byEqsV2BucketAndSide[side][label]={signals:v2.length,...summarize(v2)};
     }
   }
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures public historical OHLC",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
-    methodology:{sameDataAndTimestamps:true,closedCandlesOnly:true,signalAt:"closed 1h candle",entry:"next 1h candle open",
+    methodology:{sameDataAndTimestamps:true,closedCandlesOnly:true,historicalQuoteVolume:"rolling 24h sum of hourly base volume * close (approximate USD turnover)",signalAt:"closed 1h candle",entry:"next 1h candle open",
       excursionResolution:"5m OHLC",horizonsMinutes:HORIZONS,mae:"maximum adverse price excursion from entry",
       mfe:"maximum favorable price excursion from entry",legacyParityFields:"signal side, eligibility, entry/stop/targets, score/priority and legacy entry diagnostics",
       ambiguity:"MAE/MFE are range excursions, not simulated stop/target fills",universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies",
@@ -200,7 +216,7 @@ async function main() {
     opportunitiesCompared:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0),
     measuredSignals:records.length,legacyParityMismatches:symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0),
     legacyParityMatchRatePct:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0)?(1-symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0)/symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0))*100:null,
-    bySide,byEqsBucket,byEqsBucketAndSide,signals:records};
+    bySide,byEqsBucket,byEqsBucketAndSide,byEqsV2Bucket,byEqsV2BucketAndSide,signals:records};
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/eqs-diagnostics.json",JSON.stringify(report,null,2));
   const md=["# EQS 5m diagnostic backtest","",
@@ -220,11 +236,19 @@ async function main() {
     "| Side | Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / avg stop | avg MFE / avg MAE |",
     "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ...["LONG","SHORT"].flatMap(side=>Object.entries(byEqsBucketAndSide[side]).map(([bucket,x])=>"| "+side+" | "+bucket+" | "+x.signals+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatio?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatio?.toFixed(3)??"n/a")+" |")),
+    "","## EQS v2 buckets (strict EMA9 reclaim; diagnostic only)","",
+    "| Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / avg stop | avg MFE / avg MAE |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ...Object.entries(byEqsV2Bucket).map(([k,x])=>"| "+k+" | "+x.signals+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatio?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatio?.toFixed(3)??"n/a")+" |"),
+    "","## EQS v2 buckets by side","",
+    "| Side | Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / avg stop | avg MFE / avg MAE |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+    ...["LONG","SHORT"].flatMap(side=>Object.entries(byEqsV2BucketAndSide[side]).map(([bucket,x])=>"| "+side+" | "+bucket+" | "+x.signals+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatio?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatio?.toFixed(3)??"n/a")+" |")),
     "","## Method limitations","",
     "- This is an entry-quality diagnostic, not a PnL/exit backtest.",
     "- EQS buckets are descriptive; thresholds 40/70 are provisional.",
     "- 5m OHLC provides range excursions, not intrabar ordering.",
-    "- Universe selection uses current ticker quote volume (survivorship bias); historical eligibility also reuses present-day 24h quoteVolume, creating look-ahead bias in the volume gate. Treat the signal sample and EQS bucket results as preliminary until historical quote volume is reconstructed.",
+    "- Universe selection uses current ticker quote volume (survivorship bias); historical eligibility now estimates rolling 24h USD turnover from closed hourly base-volume × close; this removes the use of present-day quoteVolume for historical gates, but it is an approximation and the selected symbol universe still uses current tickers.",
     "- No fees, funding, slippage, liquidation, or execution latency are modeled.",
     "- Parity is required before attributing any MAE/MFE change to EQS.",
     "","## Per-symbol results","",
@@ -236,7 +260,7 @@ async function main() {
   console.log(JSON.stringify({ok:report.symbolsTested>0,period:report.period,symbolsTested:report.symbolsTested,
     opportunitiesCompared:report.opportunitiesCompared,measuredSignals:report.measuredSignals,
     legacyParityMismatches:report.legacyParityMismatches,legacyParityMatchRatePct:report.legacyParityMatchRatePct,
-    bySide,byEqsBucket,byEqsBucketAndSide,symbolResults},null,2));
+    bySide,byEqsBucket,byEqsBucketAndSide,byEqsV2Bucket,byEqsV2BucketAndSide,symbolResults},null,2));
   if(!report.symbolsTested)process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
