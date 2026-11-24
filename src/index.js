@@ -45,7 +45,7 @@ export function isKvDailyWriteQuotaError(error) {
 const kvWriteGateCache = new Map();
 let localKvWritePausedDay = null;
 const KV_WRITE_GATE_CACHE_MS = 5 * 60 * 1000;
-const KV_WRITE_GATE_FAILURE_CACHE_MS = 15 * 1000;
+const KV_WRITE_GATE_FAILURE_CACHE_MS = 5 * 60 * 1000;
 
 async function kvWriteGate(env, action, error = null) {
   const today = quotaDayKey();
