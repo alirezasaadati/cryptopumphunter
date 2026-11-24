@@ -965,7 +965,15 @@ async function handleReplyMenuAction(action, env, chatId, message) {
     return;
   }
   if (action === "futures") return runFuturesSignalsForChat(env, chatId);
-  if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+  if (action === "spot" || action.startsWith("spotd:")) {
+    if (!isOwner(chatId, env)) {
+      await sendMessage(env, chatId, "⛔ قابلیت اسپات در مرحله آزمایشی فقط برای مالک ربات فعال است.", menuForChat(env, chatId));
+      return;
+    }
+    if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+    const [, symbol, quote] = action.split(":");
+    return showSpotAssetDetailForChat(env, chatId, symbol, quote);
+  }
   if (action === "issued_signals") return sendArchiveAccessLink(env, chatId);
   if (action === "capital_guide") {
     await telegram("sendMessage", env, {
@@ -1212,8 +1220,12 @@ async function handleCallback(query, env) {
       await runFuturesSignalsForChat(env, chatId);
       return;
     }
-    if (action === "spot") return runSpotMarketScanForChat(env, chatId);
-    if (action.startsWith("spotd:")) {
+    if (action === "spot" || action.startsWith("spotd:")) {
+      if (!isOwner(chatId, env) || String(query.from?.id) !== String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
+        await answerCallback(env, query.id, "⛔ قابلیت اسپات در مرحله آزمایشی فقط برای مالک ربات فعال است.");
+        return;
+      }
+      if (action === "spot") return runSpotMarketScanForChat(env, chatId);
       const [, symbol, quote] = action.split(":");
       return showSpotAssetDetailForChat(env, chatId, symbol, quote);
     }
