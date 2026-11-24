@@ -66,7 +66,7 @@ function simulate(candles, pair, barsPerDay) {
     const history = candles.slice(0,i);
     const current = history.at(-1).close;
     const last24 = history.slice(-barsPerDay);
-    if (last24.length < 24) continue;
+    if (last24.length < barsPerDay) continue;
     const quoteVolume24 = last24.reduce((sum,c) => sum + c.volume, 0) * current;
     const change24 = history.at(-1).close / history.at(-barsPerDay).close - 1;
     const coin = {
