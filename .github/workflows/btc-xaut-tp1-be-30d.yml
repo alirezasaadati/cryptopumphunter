@@ -1,0 +1,42 @@
+name: BTC and XAUT isolated TP1 exact-entry stop backtests (30d)
+on:
+  push:
+    branches: [experiment/btc-xaut-tp1-be-30d-20261125]
+    paths:
+      - ".github/workflows/btc-xaut-tp1-be-30d.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: BTC
+            symbol: PF_XBTUSD
+          - label: XAUT
+            symbol: PF_XAUTUSD
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Syntax check
+        run: |
+          npm run check
+          node --check scripts/backtest-futures-lifecycle.mjs
+      - name: Run isolated 30-day Kraken historical backtest
+        env:
+          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_SYMBOLS: "1"
+          BACKTEST_END_MS: "1795527325576"
+          BACKTEST_SYMBOLS: "${{ matrix.symbol }}"
+        run: node scripts/backtest-futures-lifecycle.mjs
+      - name: Upload ${{ matrix.label }} backtest report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}-tp1-exact-entry-stop-30d
+          path: artifacts/
+          if-no-files-found: error
