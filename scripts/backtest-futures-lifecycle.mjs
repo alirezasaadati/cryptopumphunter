@@ -64,6 +64,17 @@ function historicalChange(candles, index) {
   const old = candles[index - 24], now = candles[index];
   return !old || old.close <= 0 ? 0 : ((now.close / old.close) - 1) * 100;
 }
+function historicalQuoteVolume(candles, index) {
+  const start = Math.max(0, index - 23);
+  let quoteVolume = 0;
+  for (let i = start; i <= index; i++) {
+    const candle = candles[i];
+    if (Number.isFinite(candle?.volume) && Number.isFinite(candle?.close)) {
+      quoteVolume += candle.volume * candle.close;
+    }
+  }
+  return quoteVolume;
+}
 function lowerBound(candles, time) {
   let lo = 0, hi = candles.length;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (candles[mid].time < time) lo = mid + 1; else hi = mid; }
@@ -227,7 +238,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
 
     const nextBar = oneHour[i+1];
     const tickerAtSignal = {
-      symbol: ticker.symbol, last: nextBar.open, quoteVolume: Number(ticker.volumeQuote)||0,
+      symbol: ticker.symbol, last: nextBar.open, quoteVolume: historicalQuoteVolume(oneHour,i),
       priceChangePercent: historicalChange(oneHour,i), premium: { lastFundingRate: null }
     };
     let candidate;
