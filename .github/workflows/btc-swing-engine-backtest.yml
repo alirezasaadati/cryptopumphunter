@@ -2,7 +2,7 @@ name: BTC swing signal engine 30d backtest
 on:
   workflow_dispatch:
   push:
-    branches: [experiment/btc-swing-engine-backtest-30d-20261125]
+    branches: [experiment/btc-swing-engine-backtest-30d-20261125, experiment/btc-swing-engine-v2-netfees-30d-20261125]
     paths:
       - "src/btc-swing-signal-engine.js"
       - "scripts/backtest-btc-swing-engine.mjs"
