@@ -440,7 +440,7 @@ export async function runSpotScan() {
     .sort((a,b)=>b.score-a.score||b.rewardRisk-a.rewardRisk).slice(0,CFG.MAX_RESULTS);
   if (!opportunities.length) {
     return {
-      report: "🔎 فرصت سرمایه‌گذاری مناسبی پیدا نشد.\n\nبرای پیدا کردن فرصت تازه، هر زمان خواستی دوباره دکمه «سیگنال اسپات» را بزن.",
+      report: "🔎 فرصت سرمایه‌گذاری مناسبی پیدا نشد.\n\nبرای پیدا کردن فرصت‌های تازه، یه تایم دیگه دوباره از همین بخش اقدام کنید.",
       opportunities,
       diagnostics: { selected:candidates.length, evaluated:evaluated.length, dataFailures:dataFailures.length, ruleRejected:ruleRejected.length, coinLorePageErrors:coinResult.errors.length, failedAssets:dataFailures.map(item=>({symbol:item.coin?.symbol||null,error:item.rejected})) }
     };
