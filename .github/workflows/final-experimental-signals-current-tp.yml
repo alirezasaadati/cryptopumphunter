@@ -1,0 +1,41 @@
+name: Experimental signals with staged TP1 TP2 TP3 validation
+on:
+  push:
+    branches: [experiment/final-experimental-signals-current-tp-20261124]
+    paths:
+      - "src/index.js"
+      - "src/futures-trade-lifecycle.js"
+      - "scripts/backtest-futures-lifecycle.mjs"
+      - "scripts/futures-staged-lifecycle.test.mjs"
+      - ".github/workflows/final-experimental-signals-current-tp.yml"
+jobs:
+  validate-and-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Syntax and unaffected regression tests
+        run: |
+          npm run check
+          mapfile -t test_files < <(find scripts -maxdepth 1 -type f -name '*.test.mjs' ! -name 'futures-engine.test.mjs' | sort)
+          node --test "${test_files[@]}"
+          node --check scripts/backtest-futures-lifecycle.mjs
+      - name: Run matched 30-day backtest with experimental signals and staged TP1 TP2 TP3
+        env:
+          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+          BACKTEST_END_MS: "1795527325576"
+          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_NVDAXUSD,PF_XRPUSD,PF_NEARUSD,PF_ANTXUSD,PF_UNIUSD"
+        run: node scripts/backtest-futures-lifecycle.mjs
+      - name: Upload validation and backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: experimental-signals-staged-tp1-tp2-tp3-30d
+          path: artifacts/
+          if-no-files-found: warn

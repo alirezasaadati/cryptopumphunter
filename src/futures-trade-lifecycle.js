@@ -93,3 +93,98 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
   };
   return { changed: true, reason, trade: updatedTrade };
 }
+
+// The current production TP/SL lifecycle is intentionally retained for this experiment.
+
+
+export function evaluateStagedTradeCandle(trade, candle, options = {}) {
+  if (!trade || trade.status !== "OPEN" || !["LONG", "SHORT"].includes(trade.side)) {
+    return { changed: false, trade };
+  }
+  if (!validCandle(candle) || !Number.isFinite(Number(candle.close))) {
+    return { changed: false, trade, error: "INVALID_CANDLE" };
+  }
+
+  const entry = Number(trade.actualEntry ?? trade.entry);
+  const initialStop = Number(trade.initialStop ?? trade.stop);
+  const targets = [1.5, 2.5, 3.5].map(r => {
+    const risk = Math.abs(entry - initialStop);
+    return entry + tradeDir(trade.side) * risk * r;
+  });
+  const dir = tradeDir(trade.side);
+  const open = Number(candle.open), high = Number(candle.high), low = Number(candle.low);
+  const stop = Number(trade.currentStop ?? initialStop);
+  if (![entry, initialStop, ...targets, open, high, low].every(Number.isFinite) ||
+      entry <= 0 || initialStop <= 0 || stop <= 0 || targets.some(x => x <= 0)) {
+    return { changed: false, trade, error: "INVALID_TRADE_LEVELS" };
+  }
+
+  const stopHit = trade.side === "LONG" ? low <= stop : high >= stop;
+  const stopAtOpen = trade.side === "LONG" ? open <= stop : open >= stop;
+  const risk = Math.abs(entry - initialStop);
+  let realized = Number(trade.realizedMarginReturnPct || 0);
+  let remaining = Number(trade.remainingFraction ?? 1);
+  const tpHits = Array.isArray(trade.tpHits) ? [...trade.tpHits] : [];
+  const leverage = Number(options.leverage ?? FUTURES_TRADE_LEVERAGE);
+  const pricePct = exit => dir * ((exit - entry) / entry) * 100 * leverage;
+
+  const closeStop = () => {
+    const exit = stopAtOpen ? open : stop;
+    realized += remaining * pricePct(exit);
+    return { changed: true, closed: true, reason: "CLOSED_STOP", trade: {
+      ...trade, status: "CLOSED_STOP", closeReason: "CLOSED_STOP", exitPrice: exit,
+      closePriceChangePercent: priceChangePercent(trade.side, entry, exit),
+      tpHits, remainingFraction: 0, realizedMarginReturnPct: realized,
+      marginReturnPercent: realized, closedAt: candle.time ?? new Date().toISOString(),
+      currentStop: stop, lockReleaseEligible: true
+    }};
+  };
+
+  // Same conservative intrabar policy as the staged-exit backtest: active stop first.
+  if (stopHit) return closeStop();
+
+  let currentStop = stop;
+  let breakEvenActivated = trade.breakEvenActivated === true;
+  const oneR = entry + dir * risk;
+  const reachedOneR = trade.side === "LONG" ? high >= oneR : low <= oneR;
+  if (!breakEvenActivated && risk > 0 && reachedOneR) {
+    const feeBuffer = entry * 0.0012;
+    const beStop = entry + dir * feeBuffer;
+    if ((dir === 1 && beStop > currentStop) || (dir === -1 && beStop < currentStop)) {
+      currentStop = beStop;
+      breakEvenActivated = true;
+    }
+  }
+
+  for (let i = 0; i < 3; i++) {
+    const name = "TP" + (i + 1);
+    if (tpHits.includes(name)) continue;
+    const target = targets[i];
+    const hit = trade.side === "LONG" ? high >= target : low <= target;
+    if (!hit) break;
+    const favorableGap = trade.side === "LONG" ? open >= target : open <= target;
+    const exit = favorableGap ? open : target;
+    const fraction = i < 2 ? 1 / 3 : remaining;
+    realized += fraction * pricePct(exit);
+    remaining = Math.max(0, remaining - fraction);
+    tpHits.push(name);
+  }
+
+  const updatedAt = candle.time ?? new Date().toISOString();
+  if (remaining <= 1e-9) {
+    return { changed: true, closed: true, reason: "CLOSED_PROFIT", trade: {
+      ...trade, status: "CLOSED_PROFIT", closeReason: "CLOSED_PROFIT",
+      exitPrice: targets[2], closePriceChangePercent: priceChangePercent(trade.side, entry, targets[2]),
+      tpHits, remainingFraction: 0, realizedMarginReturnPct: realized,
+      marginReturnPercent: realized, closedAt: updatedAt, currentStop,
+      breakEvenActivated, lockReleaseEligible: true
+    }};
+  }
+
+  const changed = tpHits.length !== (trade.tpHits || []).length ||
+    currentStop !== stop || breakEvenActivated !== (trade.breakEvenActivated === true);
+  return { changed, stopMoved: currentStop !== stop, closed: false, trade: {
+    ...trade, tpHits, remainingFraction: remaining, realizedMarginReturnPct: realized,
+    currentStop, breakEvenActivated
+  }};
+}
