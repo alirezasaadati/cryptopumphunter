@@ -79,7 +79,7 @@ function historicalQuoteVolume(candles, i) {
 function cleanLegacy(value) {
   if (Array.isArray(value)) return value.map(cleanLegacy);
   if (!value || typeof value !== "object") return value;
-  const omit = new Set(["eqsMomentumState","eqsPullbackState","eqsMomentumStateV2","eqsPullbackStateV2","entryQualityScore","entryQualityRaw","entryQualityDetails","entryQualityAvailableFactors","entryQualityScoreV2","entryQualityRawV2","entryQualityDetailsV2","entryQualityAvailableFactorsV2","entryQualityScoreV3","entryQualityRawV3","entryQualityDetailsV3","entryQualityAvailableFactorsV3"]);
+  const omit = new Set(["eqsMomentumState","eqsPullbackState","eqsMomentumStateV2","eqsPullbackStateV2","entryQualityScore","entryQualityRaw","entryQualityDetails","entryQualityAvailableFactors","entryQualityScoreV2","entryQualityRawV2","entryQualityDetailsV2","entryQualityAvailableFactorsV2","entryQualityScoreV3","entryQualityRawV3","entryQualityDetailsV3","entryQualityAvailableFactorsV3","entryTimingScore","entryTimingRaw","entryTimingDetails","entryTimingAvailableFactors"]);
   return Object.fromEntries(Object.entries(value).filter(([k])=>!omit.has(k)).map(([k,v])=>[k,cleanLegacy(v)]));
 }
 function stable(value) { return JSON.stringify(value, (_k,v)=>typeof v==="number" ? Number(v.toPrecision(12)) : v); }
@@ -168,7 +168,7 @@ async function main() {
           entryQualityScore:exp.entryQualityScore??null,entryQualityRaw:exp.entryQualityRaw??null,
           entryQualityAvailableFactors:exp.entryQualityAvailableFactors??0,entryQualityDetails:exp.entryQualityDetails??null,
           entryQualityScoreV2:exp.entryQualityScoreV2??null,entryQualityRawV2:exp.entryQualityRawV2??null,
-          entryQualityDetailsV2:exp.entryQualityDetailsV2??null,entryQualityScoreV3:exp.entryQualityScoreV3??null,entryQualityRawV3:exp.entryQualityRawV3??null,entryQualityDetailsV3:exp.entryQualityDetailsV3??null,
+          entryQualityDetailsV2:exp.entryQualityDetailsV2??null,entryQualityScoreV3:exp.entryQualityScoreV3??null,entryQualityRawV3:exp.entryQualityRawV3??null,entryQualityDetailsV3:exp.entryQualityDetailsV3??null,entryTimingScore:exp.entryTimingScore??null,entryTimingRaw:exp.entryTimingRaw??null,entryTimingDetails:exp.entryTimingDetails??null,
           riskLevel:exp.riskLevel??null,stop:Number(exp.stop),stopDistancePct:Math.abs(entry-Number(exp.stop))/entry*100,
           historicalQuoteVolume:commonTicker.quoteVolume,horizons,maePct:full.maePct,mfePct:full.mfePct,
           legacyParity:diffs.length===0,parityDiffs:diffs};
@@ -189,24 +189,24 @@ async function main() {
   }
   const bucketFor = score => score==null ? "UNAVAILABLE" : score<40 ? "LOW_0_39" : score<70 ? "MID_40_69" : "HIGH_70_100";
   const bucketLabels=["LOW_0_39","MID_40_69","HIGH_70_100","UNAVAILABLE"];
-  const byEqsBucket={}, byEqsBucketAndSide={}, byEqsV2Bucket={}, byEqsV2BucketAndSide={}, byEqsV3Bucket={}, byEqsV3BucketAndSide={};
+  const byEqsBucket={}, byEqsBucketAndSide={}, byEqsV2Bucket={}, byEqsV2BucketAndSide={}, byEqsV3Bucket={}, byEqsV3BucketAndSide={}, byTimingBucket={}, byTimingBucketAndSide={};
   for(const label of bucketLabels){
     const xs=records.filter(r=>bucketFor(r.entryQualityScore)===label);
     byEqsBucket[label]={signals:xs.length,...summarize(xs)};
     const v2=records.filter(r=>bucketFor(r.entryQualityScoreV2)===label);
     byEqsV2Bucket[label]={signals:v2.length,...summarize(v2)};
     const v3=records.filter(r=>bucketFor(r.entryQualityScoreV3)===label);
-    byEqsV3Bucket[label]={signals:v3.length,...summarize(v3)};
+    byEqsV3Bucket[label]={signals:v3.length,...summarize(v3)};\n    const timing=records.filter(r=>bucketFor(r.entryTimingScore)===label);\n    byTimingBucket[label]={signals:timing.length,...summarize(timing)};
   }
   for(const side of ["LONG","SHORT"]){
-    byEqsBucketAndSide[side]={}; byEqsV2BucketAndSide[side]={}; byEqsV3BucketAndSide[side]={};
+    byEqsBucketAndSide[side]={}; byEqsV2BucketAndSide[side]={}; byEqsV3BucketAndSide[side]={}; byTimingBucketAndSide[side]={};
     for(const label of bucketLabels){
       const xs=records.filter(r=>r.side===side&&bucketFor(r.entryQualityScore)===label);
       byEqsBucketAndSide[side][label]={signals:xs.length,...summarize(xs)};
       const v2=records.filter(r=>r.side===side&&bucketFor(r.entryQualityScoreV2)===label);
       byEqsV2BucketAndSide[side][label]={signals:v2.length,...summarize(v2)};
       const v3=records.filter(r=>r.side===side&&bucketFor(r.entryQualityScoreV3)===label);
-      byEqsV3BucketAndSide[side][label]={signals:v3.length,...summarize(v3)};
+      byEqsV3BucketAndSide[side][label]={signals:v3.length,...summarize(v3)};\n      const timing=records.filter(r=>r.side===side&&bucketFor(r.entryTimingScore)===label);\n      byTimingBucketAndSide[side][label]={signals:timing.length,...summarize(timing)};
     }
   }
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures public historical OHLC",
@@ -215,12 +215,12 @@ async function main() {
       excursionResolution:"5m OHLC",horizonsMinutes:HORIZONS,mae:"maximum adverse price excursion from entry",
       mfe:"maximum favorable price excursion from entry",legacyParityFields:"signal side, eligibility, entry/stop/targets, score/priority and legacy entry diagnostics",
       ambiguity:"MAE/MFE are range excursions, not simulated stop/target fills",universe:"top current Kraken PF linear perpetuals by current quote volume; current-listing/current-volume survivorship bias applies",
-      costs:"fees, funding, slippage excluded",exitModel:"none; diagnostic MAE/MFE only"},
+      costs:"fees, funding, slippage excluded",exitModel:"none; diagnostic MAE/MFE only",entryTimingScore:"RSI + 1h EMA20 distance + direction-specific pullback + inverse 15m momentum confirmation + 15m EMA9 extension; excludes 4h trend alignment"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:symbolResults.filter(x=>!x.error).length,symbolResults,
     opportunitiesCompared:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0),
     measuredSignals:records.length,legacyParityMismatches:symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0),
     legacyParityMatchRatePct:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0)?(1-symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0)/symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0))*100:null,
-    bySide,byEqsBucket,byEqsBucketAndSide,byEqsV2Bucket,byEqsV2BucketAndSide,byEqsV3Bucket,byEqsV3BucketAndSide,signals:records};
+    bySide,byEqsBucket,byEqsBucketAndSide,byEqsV2Bucket,byEqsV2BucketAndSide,byEqsV3Bucket,byEqsV3BucketAndSide,byTimingBucket,byTimingBucketAndSide,signals:records};
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/eqs-diagnostics.json",JSON.stringify(report,null,2));
   const md=["# EQS 5m diagnostic backtest","",
@@ -256,6 +256,14 @@ async function main() {
     "| Side | Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / avg stop | avg MFE / avg MAE |",
     "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ...["LONG","SHORT"].flatMap(side=>Object.entries(byEqsV3BucketAndSide[side]).map(([bucket,x])=>"| "+side+" | "+bucket+" | "+x.signals+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatio?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatio?.toFixed(3)??"n/a")+" |")),
+    "","## Entry timing score (MAE-oriented; no 4h trend bonus)","",
+    "| Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / avg stop | avg MFE / avg MAE |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ...Object.entries(byTimingBucket).map(([k,x])=>"| "+k+" | "+x.signals+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatio?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatio?.toFixed(3)??"n/a")+" |"),
+    "","## Entry timing score by side","",
+    "| Side | Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / avg stop | avg MFE / avg MAE |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+    ...["LONG","SHORT"].flatMap(side=>Object.entries(byTimingBucketAndSide[side]).map(([bucket,x])=>"| "+side+" | "+bucket+" | "+x.signals+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatio?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatio?.toFixed(3)??"n/a")+" |")),
     "","## Method limitations","",
     "- This is an entry-quality diagnostic, not a PnL/exit backtest.",
     "- EQS buckets are descriptive; thresholds 40/70 are provisional.",
@@ -272,7 +280,7 @@ async function main() {
   console.log(JSON.stringify({ok:report.symbolsTested>0,period:report.period,symbolsTested:report.symbolsTested,
     opportunitiesCompared:report.opportunitiesCompared,measuredSignals:report.measuredSignals,
     legacyParityMismatches:report.legacyParityMismatches,legacyParityMatchRatePct:report.legacyParityMatchRatePct,
-    bySide,byEqsBucket,byEqsBucketAndSide,byEqsV2Bucket,byEqsV2BucketAndSide,byEqsV3Bucket,byEqsV3BucketAndSide,symbolResults},null,2));
+    bySide,byEqsBucket,byEqsBucketAndSide,byEqsV2Bucket,byEqsV2BucketAndSide,byEqsV3Bucket,byEqsV3BucketAndSide,byTimingBucket,byTimingBucketAndSide,symbolResults},null,2));
   if(!report.symbolsTested)process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
