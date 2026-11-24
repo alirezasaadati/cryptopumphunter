@@ -26,6 +26,8 @@ jobs:
         env:
           LIFECYCLE_BACKTEST_DAYS: "30"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
+          BACKTEST_END_MS: "1795527325576"
+          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_NVDAXUSD,PF_XRPUSD,PF_NEARUSD,PF_ANTXUSD,PF_UNIUSD"
         run: node scripts/backtest-futures-lifecycle.mjs
       - name: Upload staged TP report
         if: always()
