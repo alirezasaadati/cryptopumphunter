@@ -146,12 +146,22 @@ const MAIN_MENU = {
   ]
 };
 
-const MAIN_REPLY_KEYBOARD = {
-  keyboard: [[{ text: "📋 منو" }]],
-  resize_keyboard: true,
-  is_persistent: true,
-  input_field_placeholder: "برای دیدن گزینه‌ها، منو را بزن"
-};
+function replyMenuForChat(env, chatId) {
+  const keyboard = MAIN_MENU.inline_keyboard.map(row =>
+    row.map(button => ({ text: button.text }))
+  );
+  if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0,
+    [{ text: "👥 مدیریت اعضا" }],
+    [{ text: "📊 گزارش سیگنال‌های اخیر" }],
+    [{ text: "⚠️ بررسی ارسال‌های نامشخص" }]
+  );
+  return {
+    keyboard,
+    resize_keyboard: true,
+    is_persistent: true,
+    input_field_placeholder: "یکی از گزینه‌های تریدیار را انتخاب کنید"
+  };
+}
 
 export default {
   async scheduled(event, env, ctx) {
@@ -892,9 +902,9 @@ async function changeMemberAccess(env,ownerId,id,allow) {
 }
 
 // ---------------- MAIN MENU ----------------
-function menuForChat() {
-  // Routine replies stay clean. The full menu is shown only on explicit request.
-  return null;
+function menuForChat(env, chatId) {
+  // Keep the complete reply keyboard available after every bot response.
+  return replyMenuForChat(env, chatId);
 }
 async function configureTelegramMenu(env, chatId) {
   const commands = [
@@ -917,19 +927,9 @@ function welcomeSeenKey(chatId) {
   return `welcome-seen:${chatId}`;
 }
 
-function explicitMenuForChat(env, chatId) {
-  const keyboard = MAIN_MENU.inline_keyboard.map(row => row.slice());
-  if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0,
-    [{ text: "👥 مدیریت اعضا", callback_data: "members:0" }],
-    [{ text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }],
-    [{ text: "⚠️ بررسی ارسال‌های نامشخص", callback_data: "outbox:review" }]
-  );
-  return { inline_keyboard: keyboard };
-}
-
 async function showMenu(env, chatId) {
   await configureTelegramMenu(env, chatId);
-  await sendMessage(env, chatId, "📋 گزینه‌های تریدیار:", explicitMenuForChat(env, chatId));
+  await sendMessage(env, chatId, "📋 منوی کامل تریدیار در کیبورد پایین صفحه در دسترس است.", replyMenuForChat(env, chatId));
 }
 
 async function showWelcome(env, chatId, welcome = true) {
@@ -937,18 +937,64 @@ async function showWelcome(env, chatId, welcome = true) {
   await sendMessage(
     env,
     chatId,
-    welcome ? "🤖 خوش آمدید به تریدیار!\nبرای مشاهده امکانات، دکمهٔ «📋 منو» را بزنید." : "برای مشاهده امکانات، دکمهٔ «📋 منو» را بزنید.",
-    MAIN_REPLY_KEYBOARD
+    welcome ? "🤖 خوش آمدید به تریدیار!\nبرای دیدن همه امکانات، کیبورد پایین صفحه را با دکمهٔ مربعی باز کنید." : "برای دیدن امکانات، کیبورد پایین صفحه را باز کنید.",
+    replyMenuForChat(env, chatId)
   );
+}
+
+async function handleReplyMenuAction(action, env, chatId, message) {
+  if (action.startsWith("members:") || action.startsWith("admin:") || action.startsWith("outbox:")) {
+    if (!isOwner(chatId, env)) {
+      await sendMessage(env, chatId, "⛔ این گزینه فقط برای مالک ربات فعال است.", menuForChat(env, chatId));
+      return;
+    }
+    if (action.startsWith("members:")) return showMemberList(env, chatId, Number(action.slice(8)) || 0);
+    if (action === "admin:signals") return showRecentFuturesSignalReport(env, chatId);
+    if (action === "outbox:review") return showUncertainSignalOutbox(env, chatId);
+  }
+  if (action === "invite") {
+    await sendMessage(env, chatId,
+      "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
+      "( برای بررسی دقیق علل سود و زیان هر کاربر ) اقدام کنید .\n\n" +
+      "🔗 لینک : https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
+    return;
+  }
+  if (action === "futures") return runFuturesSignalsForChat(env, chatId);
+  if (action === "issued_signals") return sendArchiveAccessLink(env, chatId);
+  if (action === "capital_guide") {
+    await telegram("sendMessage", env, {
+      chat_id: chatId, text: CAPITAL_MANAGEMENT_TEXT, parse_mode: "HTML",
+      disable_web_page_preview: true, reply_markup: menuForChat(env, chatId)
+    });
+    return;
+  }
+  if (action === "status") return showStatus(env, chatId);
+  if (action === "test") return showConnectionTest(env, chatId);
+  if (action === "about") return sendMessage(env, chatId, ABOUT_TEXT, menuForChat(env, chatId));
 }
 
 async function handleTelegramCommand(command, chatId, env, message) {
   try {
     if (await handleOwnerAccessCommand(command, chatId, env, message)) return;
 
-    if (["📋 منو", "منو"].includes(String(message?.text || "").trim())) {
+    const selectedMenuText = String(message?.text || "").trim();
+    const menuActions = new Map([
+      ...MAIN_MENU.inline_keyboard.flat().map(button => [button.text, button.callback_data]),
+      ["👥 مدیریت اعضا", "members:0"],
+      ["📊 گزارش سیگنال‌های اخیر", "admin:signals"],
+      ["⚠️ بررسی ارسال‌های نامشخص", "outbox:review"]
+    ]);
+    if (selectedMenuText === "📋 منو" || selectedMenuText === "منو" || selectedMenuText === "/menu") {
       if (await isApproved(chatId, env)) await showMenu(env, chatId);
       else await requestMembership(env, chatId, message);
+      return;
+    }
+    if (menuActions.has(selectedMenuText)) {
+      if (!(await isApproved(chatId, env))) {
+        await requestMembership(env, chatId, message);
+        return;
+      }
+      await handleReplyMenuAction(menuActions.get(selectedMenuText), env, chatId, message);
       return;
     }
 
