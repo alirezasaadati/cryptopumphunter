@@ -194,6 +194,7 @@ async function main() {
         const stopDistancePct=Math.abs(entry-Number(exp.stop))/entry*100;
         const entryHeat=measureEntryHeat(exp.side,entry,m5,begin,endIndex,signalClose,0.1);
         const row={symbol:ticker.symbol,side:exp.side,signalTime:signalClose,entry,score:exp.score,
+          priorityScore:Number.isFinite(Number(exp.priorityScore))?Number(exp.priorityScore):null,
           entryQualityScore:exp.entryQualityScore??null,entryQualityRaw:exp.entryQualityRaw??null,
           entryQualityAvailableFactors:exp.entryQualityAvailableFactors??0,entryQualityDetails:exp.entryQualityDetails??null,
           entryQualityScoreV2:exp.entryQualityScoreV2??null,entryQualityRawV2:exp.entryQualityRawV2??null,
@@ -250,18 +251,66 @@ async function main() {
       byTimingRegimeBucketAndSide[side][label]={signals:regime.length,...summarize(regime)};
     }
   }
+  // Shadow ranking only: preserve the live priorityScore and simulate a small
+  // side-specific adjustment for SHORT candidates. LONG candidates are unchanged.
+  // No signal is rejected; this only changes ordering within the same scan timestamp.
+  const clamp=(x,min,max)=>Math.max(min,Math.min(max,x));
+  const shortTimingAdjustment=(score,strength)=>{
+    if(!Number.isFinite(score)) return 0;
+    if(score<40) return -strength*clamp((40-score)/40,0,1);
+    if(score>=70) return strength*clamp((score-70)/30,0,1);
+    return 0;
+  };
+  const rankingGroups=new Map();
+  for(const row of records){
+    if(!Number.isFinite(row.priorityScore)) continue;
+    const key=row.signalTime;
+    if(!rankingGroups.has(key)) rankingGroups.set(key,[]);
+    rankingGroups.get(key).push(row);
+  }
+  const rankingVariants=[];
+  for(const strength of [1.5,3]){
+    for(const topN of [1,3,5]){
+      const baselineSelected=[], shadowSelected=[]; let groupsWithEnough=0, changedGroups=0, changedSelections=0;
+      for(const candidates of rankingGroups.values()){
+        if(candidates.length<topN) continue;
+        groupsWithEnough++;
+        const baseline=[...candidates].sort((a,b)=>b.priorityScore-a.priorityScore||a.symbol.localeCompare(b.symbol)).slice(0,topN);
+        const shadow=[...candidates].sort((a,b)=>{
+          const as=a.priorityScore+(a.side==="SHORT"?shortTimingAdjustment(a.entryTimingRegimeScore,strength):0);
+          const bs=b.priorityScore+(b.side==="SHORT"?shortTimingAdjustment(b.entryTimingRegimeScore,strength):0);
+          return bs-as||a.symbol.localeCompare(b.symbol);
+        }).slice(0,topN);
+        const baselineIds=baseline.map(x=>x.symbol).sort().join("|");
+        const shadowIds=shadow.map(x=>x.symbol).sort().join("|");
+        if(baselineIds!==shadowIds){changedGroups++;changedSelections+=shadow.filter(x=>!baseline.some(y=>y.symbol===x.symbol)).length;}
+        baselineSelected.push(...baseline); shadowSelected.push(...shadow);
+      }
+      const sideStats={};
+      for(const side of ["LONG","SHORT"]){
+        sideStats[side]={baseline:summarize(baselineSelected.filter(x=>x.side===side)),
+          shadow:summarize(shadowSelected.filter(x=>x.side===side))};
+      }
+      rankingVariants.push({strengthPoints:strength,topNPerTimestamp:topN,scanTimestampsWithEnoughCandidates:groupsWithEnough,
+        baselineSelected:baselineSelected.length,shadowSelected:shadowSelected.length,changedGroups,
+        changedSelectionCount:changedSelections,baseline:summarize(baselineSelected),shadow:summarize(shadowSelected),bySide:sideStats});
+    }
+  }
+  const rankingSimulation={mode:"diagnostic_shadow_only",livePriorityScoreModified:false,signalsRejected:0,
+    adjustment:"SHORT only: timing score <40 receives a proportional penalty up to strengthPoints; score >=70 receives a proportional bonus up to strengthPoints; 40-69 unchanged; LONG unchanged",
+    candidateTimestamps:rankingGroups.size,variants:rankingVariants};
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures public historical OHLC",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
     methodology:{sameDataAndTimestamps:true,closedCandlesOnly:true,historicalQuoteVolume:"rolling 24h sum of hourly base volume * close (approximate USD turnover)",signalAt:"closed 1h candle",entry:"next 1h candle open",
       excursionResolution:"5m OHLC",horizonsMinutes:HORIZONS,mae:"maximum adverse price excursion from entry",entryHeat:"maximum adverse excursion until first 5m close at least 0.1% favorable; if not reached, through 60m",
       mfe:"maximum favorable price excursion from entry",legacyParityFields:"signal side, eligibility, entry/stop/targets, score/priority and legacy entry diagnostics",
       ambiguity:"MAE/MFE are range excursions, not simulated stop/target fills",universe:"top current Kraken PF linear perpetuals by current quote volume; current-listing/current-volume survivorship bias applies",
-      costs:"fees, funding, slippage excluded",exitModel:"none; diagnostic MAE/MFE only",entryTimingScore:"RSI + 1h EMA20 distance + direction-specific pullback + inverse 15m momentum confirmation + 15m EMA9 extension; excludes 4h trend alignment"},
+      costs:"fees, funding, slippage excluded",exitModel:"none; diagnostic MAE/MFE only",rankingSimulation:"same-timestamp top-N shadow ranking; no live priorityScore mutation, no signal rejection; SHORT timing-only adjustment tested at +/-1.5 and +/-3 points; LONG unchanged",entryTimingScore:"RSI + 1h EMA20 distance + direction-specific pullback + inverse 15m momentum confirmation + 15m EMA9 extension; excludes 4h trend alignment"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:symbolResults.filter(x=>!x.error).length,symbolResults,
     opportunitiesCompared:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0),
     measuredSignals:records.length,legacyParityMismatches:symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0),
     legacyParityMatchRatePct:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0)?(1-symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0)/symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0))*100:null,
-    bySide,byEqsBucket,byEqsBucketAndSide,byEqsV2Bucket,byEqsV2BucketAndSide,byEqsV3Bucket,byEqsV3BucketAndSide,byTimingBucket,byTimingBucketAndSide,byTimingRegimeBucket,byTimingRegimeBucketAndSide,signals:records};
+    bySide,byEqsBucket,byEqsBucketAndSide,byEqsV2Bucket,byEqsV2BucketAndSide,byEqsV3Bucket,byEqsV3BucketAndSide,byTimingBucket,byTimingBucketAndSide,byTimingRegimeBucket,byTimingRegimeBucketAndSide,rankingSimulation,signals:records};
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/eqs-diagnostics.json",JSON.stringify(report,null,2));
   const md=["# EQS 5m diagnostic backtest","",
@@ -313,6 +362,15 @@ async function main() {
     "| Side | Bucket | Signals | MAE before +0.1% close | 95p heat | Reach rate | Avg time | MAE / avg stop | MFE / MAE |",
     "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ...["LONG","SHORT"].flatMap(side=>Object.entries(byTimingRegimeBucketAndSide[side]).map(([bucket,x])=>"| "+side+" | "+bucket+" | "+x.signals+" | "+(x.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeBeforeFavorableP95Pct?.toFixed(3)??"n/a")+"% | "+(x.favorableCloseRatePct?.toFixed(1)??"n/a")+"% | "+(x.timeToFavorableCloseAvgMin?.toFixed(1)??"n/a")+"m | "+(x.maeToStopRatio?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatio?.toFixed(3)??"n/a")+" |")),
+    "","## Shadow priority ranking simulation (diagnostic only)","",
+    "SHORT-only adjustment; LONG is unchanged. No signals are removed and the live priorityScore is untouched.",
+    "| Strength | Top N / scan | Eligible scan timestamps | Baseline picks | Shadow picks | Changed scans | Replaced picks | Baseline heat | Shadow heat | Baseline MFE/MAE | Shadow MFE/MAE |",
+    "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ...rankingVariants.map(x=>"| "+x.strengthPoints+" | "+x.topNPerTimestamp+" | "+x.scanTimestampsWithEnoughCandidates+" | "+x.baselineSelected+" | "+x.shadowSelected+" | "+x.changedGroups+" | "+x.changedSelectionCount+" | "+(x.baseline.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(x.shadow.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(x.baseline.mfeMaeRatio?.toFixed(3)??"n/a")+" | "+(x.shadow.mfeMaeRatio?.toFixed(3)??"n/a")+" |"),
+    "","### Shadow ranking by side","",
+    "| Strength | Top N | Side | Baseline picks | Shadow picks | Baseline early heat | Shadow early heat | Baseline MFE/MAE | Shadow MFE/MAE |",
+    "|---:|---:|---|---:|---:|---:|---:|---:|---:|",
+    ...rankingVariants.flatMap(x=>["LONG","SHORT"].map(side=>{const y=x.bySide[side];return "| "+x.strengthPoints+" | "+x.topNPerTimestamp+" | "+side+" | "+y.baseline.count+" | "+y.shadow.count+" | "+(y.baseline.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(y.shadow.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(y.baseline.mfeMaeRatio?.toFixed(3)??"n/a")+" | "+(y.shadow.mfeMaeRatio?.toFixed(3)??"n/a")+" |";})),
     "","## Method limitations","",
     "- This is an entry-quality diagnostic, not a PnL/exit backtest.",
     "- EQS buckets are descriptive; thresholds 40/70 are provisional.",
@@ -329,7 +387,7 @@ async function main() {
   console.log(JSON.stringify({ok:report.symbolsTested>0,period:report.period,symbolsTested:report.symbolsTested,
     opportunitiesCompared:report.opportunitiesCompared,measuredSignals:report.measuredSignals,
     legacyParityMismatches:report.legacyParityMismatches,legacyParityMatchRatePct:report.legacyParityMatchRatePct,
-    bySide,byEqsBucket,byEqsBucketAndSide,byEqsV2Bucket,byEqsV2BucketAndSide,byEqsV3Bucket,byEqsV3BucketAndSide,byTimingBucket,byTimingBucketAndSide,byTimingRegimeBucket,byTimingRegimeBucketAndSide,symbolResults},null,2));
+    bySide,byEqsBucket,byEqsBucketAndSide,byEqsV2Bucket,byEqsV2BucketAndSide,byEqsV3Bucket,byEqsV3BucketAndSide,byTimingBucket,byTimingBucketAndSide,byTimingRegimeBucket,byTimingRegimeBucketAndSide,rankingSimulation,symbolResults},null,2));
   if(!report.symbolsTested)process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
