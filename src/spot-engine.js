@@ -306,6 +306,8 @@ function analyze(coin, candles, market, profile = "strict") {
   if (setup === "بدون ستاپ") reasons.push("الگوی ورود مشخصی وجود ندارد");
   if (rewardRisk < minRewardRisk) reasons.push("نسبت سود به ریسک کمتر از حداقل تعیین‌شده است");
   if (score < minScore) reasons.push("امتیاز کمتر از " + minScore + " است");
+  if (!baseline && market.btcTrendUp !== true) reasons.push("روند بیت‌کوین تأیید صعودی نمی‌دهد");
+  if (!baseline && !(Number(market.relativeStrength24Pct) > 0)) reasons.push("قدرت نسبی ارز نسبت به بیت‌کوین مثبت نیست");
 
   return {
     coin, pair: market.pair, quote: market.quote, current, score, rsi: rsiValue,
@@ -416,6 +418,7 @@ export async function runSpotScan() {
     "جفت‌های معاملاتی بررسی‌شده: " + candidatePairs.length + " (USD و USDT)",
     "دارای شرایط ورود و نقدینگی: " + opportunities.length,
     "حداکثر اسپرد: " + CFG.MAX_SPREAD_PCT + "% | حداقل عمق هر سمت دفتر سفارش: " + CFG.MIN_BOOK_DEPTH_USD.toLocaleString("en-US") + " USD",
+    "فیلتر بازار: BTC صعودی و قدرت نسبی ارز در برابر BTC مثبت",
     "",
     opportunities.length ? "فرصت‌های واجد شرایط برای بررسی:" :
       "فعلاً سیگنال اسپات معتبر نداریم؛ هیچ نمادی همه شروط ورود و نقدینگی را هم‌زمان پاس نکرد.",
