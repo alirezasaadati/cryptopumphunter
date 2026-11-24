@@ -12,12 +12,19 @@ test("Spot scanner is isolated from shared futures storage and scheduled futures
   assert.match(engine, /قدرت نسبی ارز نسبت به بیت‌کوین مثبت نیست/);
   assert.match(source, /if \(action === "spot"\) return runSpotMarketScanForChat\(env, chatId\);/);
   assert.match(source, /if \(action\.startsWith\("spotd:"\)\)/);
-  assert.match(source, /const result = await runSpotScan\(\);/);
+  assert.match(source, /const scan\s*=\s*await runSpotScan\(\)/);
+  assert.match(engine, /export async function testSpotDataSources\(\)/);
+  assert.match(engine, /coin\.percent_change_24h = assetChange24Pct/);
+  assert.match(engine, /dataFailures\.length/);
   assert.match(source, /runSpotAssetDetail\(symbol, quote\)/);
   const spotStart = source.indexOf("async function runSpotMarketScanForChat");
   const spotEnd = source.indexOf("async function showStatus", spotStart);
   assert.ok(spotStart >= 0 && spotEnd > spotStart);
-  assert.doesNotMatch(source.slice(spotStart, spotEnd), /APP_KV|SIGNAL_DELIVERY|sendAndArchiveFuturesSignal/);
+  assert.match(source, /global:manual-spot-scan-lock/);
+  assert.match(source, /spot-scan-lock\/acquire/);
+  assert.match(source, /spot-scan-lock\/release/);
+  assert.doesNotMatch(source.slice(spotStart, spotEnd), /global:automatic-futures-scan-lock/);
+  assert.doesNotMatch(source.slice(spotStart, spotEnd), /sendAndArchiveFuturesSignal/);
 });
 
 test("Spot scanner considers both USD and USDT Kraken pairs for the same asset", () => {
