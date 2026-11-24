@@ -917,9 +917,19 @@ function welcomeSeenKey(chatId) {
   return `welcome-seen:${chatId}`;
 }
 
+function explicitMenuForChat(env, chatId) {
+  const keyboard = MAIN_MENU.inline_keyboard.map(row => row.slice());
+  if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0,
+    [{ text: "👥 مدیریت اعضا", callback_data: "members:0" }],
+    [{ text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }],
+    [{ text: "⚠️ بررسی ارسال‌های نامشخص", callback_data: "outbox:review" }]
+  );
+  return { inline_keyboard: keyboard };
+}
+
 async function showMenu(env, chatId) {
   await configureTelegramMenu(env, chatId);
-  await sendMessage(env, chatId, "📋 گزینه‌های تریدیار:", MAIN_MENU);
+  await sendMessage(env, chatId, "📋 گزینه‌های تریدیار:", explicitMenuForChat(env, chatId));
 }
 
 async function showWelcome(env, chatId, welcome = true) {
