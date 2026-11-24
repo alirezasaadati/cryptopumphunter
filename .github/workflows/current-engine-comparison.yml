@@ -1,0 +1,38 @@
+name: Current futures engine comparison backtest
+on:
+  push:
+    branches: [experiment/current-engine-comparison-20261124]
+    paths:
+      - "scripts/backtest-futures-lifecycle.mjs"
+      - ".github/workflows/current-engine-comparison.yml"
+      - "src/index.js"
+      - "src/futures-trade-lifecycle.js"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Syntax and project checks
+        run: |
+          npm run check
+          node --check scripts/backtest-futures-lifecycle.mjs
+      - name: Run 30-day current-engine backtest on identical universe and dates
+        env:
+          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+          BACKTEST_END_MS: "1792935325576"
+          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_NVDAXUSD,PF_XRPUSD,PF_NEARUSD,PF_ANTXUSD,PF_UNIUSD"
+        run: node scripts/backtest-futures-lifecycle.mjs
+      - name: Upload current-engine comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-engine-30d-comparison
+          path: artifacts/
+          if-no-files-found: warn
