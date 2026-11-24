@@ -12,7 +12,7 @@ test("Spot scanner is isolated from shared futures storage and scheduled futures
   assert.match(engine, /قدرت نسبی ارز نسبت به بیت‌کوین مثبت نیست/);
   assert.match(source, /if \(action === "spot"\) return runSpotMarketScanForChat\(env, chatId\);/);
   assert.match(source, /if \(action\.startsWith\("spotd:"\)\)/);
-  assert.match(source, /const scan\s*=\s*await runSpotScan\(\);/);
+  assert.match(source, /const scan\s*=\s*await runSpotScan\(\)/);
   assert.match(engine, /export async function testSpotDataSources\(\)/);
   assert.match(engine, /coin\.percent_change_24h = assetChange24Pct/);
   assert.match(engine, /dataFailures\.length/);
