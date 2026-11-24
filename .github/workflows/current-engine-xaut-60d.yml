@@ -1,4 +1,5 @@
 name: Current futures engine XAUT 60D backtest
+# Re-run trigger after workflow registration on the default branch.
 on:
   push:
     branches:
