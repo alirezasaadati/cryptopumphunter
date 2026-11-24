@@ -93,3 +93,5 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
   };
   return { changed: true, reason, trade: updatedTrade };
 }
+
+// Current bot TP/SL lifecycle retained for the experimental signal-engine validation.
