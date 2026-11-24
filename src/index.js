@@ -1007,10 +1007,7 @@ async function handleReplyMenuAction(action, env, chatId, message) {
   }
   if (action === "futures") return runFuturesSignalsForChat(env, chatId);
   if (action === "spot") return sendMessage(env, chatId, "⚠️ قابلیت سیگنال اسپات غیرفعال شده است.");
-  if (action.startsWith("spotd:")) {
-    const [, symbol, quote] = action.split(":");
-    return showSpotAssetDetailForChat(env, chatId, symbol, quote);
-  }
+  if (action.startsWith("spotd:")) return sendMessage(env, chatId, "⚠️ قابلیت سیگنال اسپات غیرفعال شده است.");
   if (action === "issued_signals") return sendArchiveAccessLink(env, chatId);
   if (action === "capital_guide") {
     await telegram("sendMessage", env, {
@@ -1261,7 +1258,7 @@ async function handleCallback(query, env) {
       await runFuturesSignalsForChat(env, chatId);
       return;
     }
-    if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+    if (action === "spot") return sendMessage(env, chatId, "⚠️ قابلیت سیگنال اسپات غیرفعال شده است.");
     if (action.startsWith("spotd:")) return sendMessage(env, chatId, "⚠️ قابلیت سیگنال اسپات غیرفعال شده است.");
     if (action === "issued_signals" || action === "ledger:archive" || action === "ledger:history") return sendArchiveAccessLink(env,chatId);
     if (action === "capital_guide") {
