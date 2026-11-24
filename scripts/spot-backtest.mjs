@@ -251,6 +251,7 @@ const output={
   assetsSelected:selected.length,
   btcReferencePair:btcSelected.pair.wsname,
   costs:"0.30% round trip assumed (0.10% fee + 0.05% slippage each side)",
+  profiles:"Baseline has no BTC gate; balanced requires positive 24h relative strength vs BTC; strict additionally requires BTC above its 1H/4H EMA50 with EMA20 above EMA50.",
   liquidity:"Historical order-book depth is unavailable in this OHLC test; spread 0.20% and $10,000 depth per side are assumptions, not observed history.",
   universe:"Current CoinLore market-cap/volume screen; survivorship and current-universe bias apply.",
   aggregate:{
