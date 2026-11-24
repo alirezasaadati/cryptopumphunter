@@ -220,7 +220,10 @@ export function formatSpotPrice(value) {
   return number.toExponential(3);
 }
 
-function analyze(coin, candles, market) {
+function analyze(coin, candles, market, profile = "strict") {
+  const baseline = profile === "baseline";
+  const minScore = baseline ? 65 : CFG.MIN_SCORE;
+  const minRewardRisk = baseline ? 1.5 : CFG.MIN_RR;
   if (candles.length < CFG.MIN_CANDLES) throw new Error("تعداد کندل بسته‌شده کافی نیست.");
   const closes = candles.map(c => c.close);
   const last = candles[candles.length - 1], previous = candles[candles.length - 2];
@@ -285,8 +288,8 @@ function analyze(coin, candles, market) {
   const rewardRisk = validRisk ? (target1 - current) / risk : 0;
   if (!validRisk) reasons.push("حد ضرر معتبر محاسبه نشد");
   if (setup === "بدون ستاپ") reasons.push("الگوی ورود مشخصی وجود ندارد");
-  if (rewardRisk < CFG.MIN_RR) reasons.push("نسبت سود به ریسک کمتر از حداقل تعیین‌شده است");
-  if (score < CFG.MIN_SCORE) reasons.push("امتیاز کمتر از " + CFG.MIN_SCORE + " است");
+  if (rewardRisk < minRewardRisk) reasons.push("نسبت سود به ریسک کمتر از حداقل تعیین‌شده است");
+  if (score < minScore) reasons.push("امتیاز کمتر از " + minScore + " است");
 
   return {
     coin, pair: market.pair, quote: market.quote, current, score, rsi: rsiValue,
@@ -294,12 +297,13 @@ function analyze(coin, candles, market) {
     setup, entry: current, stop, target1, target2, target3, rewardRisk,
     spreadPct: market.spreadPct, quoteVolumeUsd: market.quoteVolumeUsd,
     bidDepthUsd: market.bidDepthUsd, askDepthUsd: market.askDepthUsd,
-    eligible: score >= CFG.MIN_SCORE &&
-      ["شکست مقاومت", "پولبک به EMA20"].includes(setup) &&
-      trendUp && above20 && above50 &&
-      rsiValue >= 50 && rsiValue <= 68 &&
-      volumeRatio >= 1.1 && dailyChange >= 0 && dailyChange <= 10 &&
-      validRisk && rewardRisk >= CFG.MIN_RR &&
+    eligible: (baseline
+      ? score >= minScore && setup !== "بدون ستاپ" && volumeRatio >= 0.9 &&
+        validRisk && rewardRisk >= minRewardRisk
+      : score >= minScore && ["شکست مقاومت", "پولبک به EMA20"].includes(setup) &&
+        trendUp && above20 && above50 && rsiValue >= 50 && rsiValue <= 68 &&
+        volumeRatio >= 1.1 && dailyChange >= 0 && dailyChange <= 10 &&
+        validRisk && rewardRisk >= minRewardRisk) &&
       market.spreadPct <= CFG.MAX_SPREAD_PCT &&
       market.bidDepthUsd >= CFG.MIN_BOOK_DEPTH_USD &&
       market.askDepthUsd >= CFG.MIN_BOOK_DEPTH_USD,
@@ -307,8 +311,8 @@ function analyze(coin, candles, market) {
   };
 }
 
-export function analyzeSpotCandles(coin, candles, market) {
-  return analyze(coin, candles, market);
+export function analyzeSpotCandles(coin, candles, market, profile = "strict") {
+  return analyze(coin, candles, market, profile);
 }
 
 function formatCoin(item) {
