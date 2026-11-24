@@ -303,6 +303,54 @@ test("trend-aligned setup with confirmed 15m pullback generates a SHORT",()=>{
 });
 
 
+test("experimental LONG quality profile applies stronger 4h opposition penalty without hard-blocking",()=>{
+  const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
+  const opposingFourHour=makeCandles({slope:-0.04,base:100});
+  const baseline=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
+  const experimental=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute,{
+    longQualityProfile:{name:"four-hour-stronger",additionalFourHourOppositionPenalty:4}
+  });
+  assert.equal(baseline.side,"LONG");
+  assert.equal(experimental.side,"LONG");
+  assert.equal(experimental.fourHourOpposes,true);
+  assert.equal(experimental.longQualityPenalty,4);
+  assert.equal(experimental.score,baseline.score-4);
+});
+
+test("experimental LONG quality profile penalizes missing 15m momentum as score only",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const altered=fifteenMinute.map(c=>({...c}));
+  altered.at(-1).open=altered.at(-1).close+0.5;
+  const baseline=analyzeFuturesSymbol(ticker,oneHour,fourHour,altered);
+  const experimental=analyzeFuturesSymbol(ticker,oneHour,fourHour,altered,{
+    longQualityProfile:{name:"15m-momentum",noMomentumPenalty:6,noMomentumNoPullbackPenalty:10,unavailable15mPenalty:3}
+  });
+  assert.equal(baseline.side,"LONG");
+  assert.equal(experimental.side,"LONG");
+  assert.equal(experimental.longQualityPenalty,6);
+  assert.equal(experimental.score,baseline.score-6);
+});
+
+test("combined experimental LONG quality profile adds both penalties while SHORT remains unchanged",()=>{
+  const long=makeSetup("LONG");
+  const opposingFourHour=makeCandles({slope:-0.04,base:100});
+  const altered15m=long.fifteenMinute.map(c=>({...c}));
+  altered15m.at(-1).open=altered15m.at(-1).close+0.5;
+  const baseline=analyzeFuturesSymbol(long.ticker,long.oneHour,opposingFourHour,altered15m);
+  const combined=analyzeFuturesSymbol(long.ticker,long.oneHour,opposingFourHour,altered15m,{
+    longQualityProfile:{name:"combined",additionalFourHourOppositionPenalty:4,noMomentumPenalty:6,noMomentumNoPullbackPenalty:10,unavailable15mPenalty:3}
+  });
+  assert.equal(combined.longQualityPenalty,10);
+  assert.equal(combined.score,baseline.score-10);
+  const short=makeSetup("SHORT");
+  const shortBaseline=analyzeFuturesSymbol(short.ticker,short.oneHour,short.fourHour,short.fifteenMinute);
+  const shortWithProfile=analyzeFuturesSymbol(short.ticker,short.oneHour,short.fourHour,short.fifteenMinute,{
+    longQualityProfile:{name:"combined",additionalFourHourOppositionPenalty:4,noMomentumPenalty:6}
+  });
+  assert.equal(shortWithProfile.score,shortBaseline.score);
+  assert.equal(shortWithProfile.longQualityPenalty,0);
+});
+
 test("neutral 4h trend does not block a valid LONG and adds no 4h score",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({
