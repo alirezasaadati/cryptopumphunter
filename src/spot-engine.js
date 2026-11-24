@@ -274,12 +274,15 @@ function analyze(coin, candles, market) {
     Math.min(support * 0.99, recentLow * 0.995);
   const risk = current - stop;
   const validRisk = Number.isFinite(risk) && risk > 0;
-  let target1 = resistance;
-  if (setup === "شکست مقاومت") target1 = current + Math.max(resistance - support, current * 0.01);
-  if (validRisk && target1 <= current) target1 = current + risk * 1.5;
+  const structuralTarget = setup === "شکست مقاومت"
+    ? current + Math.max(resistance - support, current * 0.01)
+    : resistance;
+  const target1 = validRisk
+    ? Math.max(current + risk * 1.5, Math.min(structuralTarget, current + risk * 2.5))
+    : 0;
+  const target2 = validRisk ? Math.max(current + risk * 2.5, target1 + risk * 0.5) : 0;
+  const target3 = validRisk ? Math.max(current + risk * 3.5, target2 + risk * 0.5) : 0;
   const rewardRisk = validRisk ? (target1 - current) / risk : 0;
-  const target2 = validRisk ? current + risk * 2.5 : 0;
-  const target3 = validRisk ? current + risk * 3.5 : 0;
   if (!validRisk) reasons.push("حد ضرر معتبر محاسبه نشد");
   if (setup === "بدون ستاپ") reasons.push("الگوی ورود مشخصی وجود ندارد");
   if (rewardRisk < CFG.MIN_RR) reasons.push("نسبت سود به ریسک کمتر از حداقل تعیین‌شده است");
