@@ -61,7 +61,9 @@ for (const trade of cases) {
   const change24h = prev24 && last1h ? (last1h.close/prev24.close-1)*100 : 0;
   const ticker = {
     symbol:trade.symbol,
-    last:last1h?.close,
+    // The recorded fill is the best available historical proxy for the live ticker at entry.
+    // Large cross-market/time mismatches are separately surfaced in the report.
+    last:trade.entry,
     quoteVolume,
     priceChangePercent:change24h,
     premium:{}
@@ -80,8 +82,13 @@ for (const trade of cases) {
         rejected:result.rejected || null,
         fourHourTrend:result.fourHourTrend || null,
         fourHourOpposes:result.fourHourOpposes ?? result.entryDiagnostics?.fourHourOpposes ?? null,
+        fourHourScoreAdjustment:result.fourHourScoreAdjustment ?? null,
         momentumConfirmed:result.entryDiagnostics?.momentumConfirmed ?? null,
         pullbackConfirmed:result.entryDiagnostics?.pullbackConfirmed ?? null,
+        driftPct:result.entryDiagnostics?.driftPct ?? null,
+        emaDistanceAtr:result.entryDiagnostics?.emaDistanceAtr ?? null,
+        volumeRatio:result.volumeRatio ?? null,
+        rsi:result.rsi ?? null,
         longQualityPenalty:result.longQualityPenalty ?? 0,
         scoreBeforeLongQualityPenalty:result.scoreBeforeLongQualityPenalty ?? null
       };
