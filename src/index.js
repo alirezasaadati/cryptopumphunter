@@ -124,71 +124,39 @@ const CAPITAL_MANAGEMENT_TEXT =
   "⚠️ <b>حفظ سرمایه مهم‌تر از کسب سود است.</b>\n" +
   "هیچ‌گاه برای جبران ضرر، حجم معاملات را افزایش ندهید.";
 
-const MAIN_MENU = {
-  inline_keyboard: [
+function mainMenuForChat(env, chatId) {
+  const owner = isOwner(chatId, env);
+  const keyboard = [
     [
       { text: "📈 سیگنال فیوچرز", callback_data: "futures" },
       { text: "📊 سیگنال اسپات", callback_data: "spot" }
     ],
-    [
-      { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" }
-    ],
     [{ text: "🛡️ راهنمای مدیریت سرمایه", callback_data: "capital_guide" }],
-    [{ text: "📡 وضعیت ربات", callback_data: "status" }],
-    [
-      { text: "🔌 تست اتصال", callback_data: "test" }
-    ],
-    [
-      { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
-    ],
-    [
-      { text: "ℹ️ درباره", callback_data: "about" }
-    ]
-  ]
-};
-
-function replyMenuForChat(env, chatId) {
-  const owner = isOwner(chatId, env);
-  const keyboard = [
-    [
-      { text: "📈 سیگنال فیوچرز" },
-      { text: "📊 سیگنال اسپات" }
-    ],
-    [
-      { text: "🛡️ راهنمای مدیریت سرمایه" }
-    ],
     owner
       ? [
-          { text: "🗂 سیگنال‌های صادرشده" },
-          { text: "📊 گزارش سیگنال‌های اخیر" }
+          { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" },
+          { text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }
         ]
       : [
-          { text: "🗂 سیگنال‌های صادرشده" },
-          { text: "🔍 پایش معاملات کاربران" }
+          { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" },
+          { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
         ],
     ...(owner ? [[
-      { text: "👥 مدیریت اعضا" },
-      { text: "🔍 پایش معاملات کاربران" }
+      { text: "👥 مدیریت اعضا", callback_data: "members:0" },
+      { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
     ]] : []),
     [
-      { text: "📡 وضعیت ربات" },
-      { text: "🔌 تست اتصال" }
+      { text: "📡 وضعیت ربات", callback_data: "status" },
+      { text: "🔌 تست اتصال", callback_data: "test" }
     ],
-    owner
-      ? [
-          { text: "⚠️ ارسال‌های نامشخص" },
-          { text: "ℹ️ درباره" }
-        ]
-      : [
-          { text: "ℹ️ درباره" }
-        ]
+    ...(owner ? [[
+      { text: "⚠️ ارسال‌های نامشخص", callback_data: "outbox:review" },
+      { text: "ℹ️ درباره", callback_data: "about" }
+    ]] : [[
+      { text: "ℹ️ درباره", callback_data: "about" }
+    ]])
   ];
-  return {
-    keyboard,
-    resize_keyboard: true,
-    is_persistent: true,
-    input_field_placeholder: "یکی از گزینه‌های تریدیار را انتخاب کنید"
-  };
+  return { inline_keyboard: keyboard };
 }
 
 export default {
@@ -931,8 +899,10 @@ async function changeMemberAccess(env,ownerId,id,allow) {
 
 // ---------------- MAIN MENU ----------------
 function menuForChat(env, chatId) {
-  // Keep the complete reply keyboard available after every bot response.
-  return replyMenuForChat(env, chatId);
+  // Keep only a compact inline shortcut; never attach a persistent Reply Keyboard.
+  return {
+    inline_keyboard: [[{ text: "📋 منوی اصلی", callback_data: "menu" }]]
+  };
 }
 async function configureTelegramMenu(env, chatId) {
   const commands = [
@@ -957,17 +927,34 @@ function welcomeSeenKey(chatId) {
 
 async function showMenu(env, chatId) {
   await configureTelegramMenu(env, chatId);
-  await sendMessage(env, chatId, "📋 منوی کامل تریدیار در کیبورد پایین صفحه در دسترس است.", replyMenuForChat(env, chatId));
+  // Remove any legacy persistent Reply Keyboard already cached by Telegram clients.
+  await telegram("sendMessage", env, {
+    chat_id: chatId,
+    text: "⌨️ کیبورد قدیمی بسته شد.",
+    reply_markup: { remove_keyboard: true }
+  });
+  await telegram("sendMessage", env, {
+    chat_id: chatId,
+    text: "📋 منوی اصلی تریدیار",
+    disable_web_page_preview: true,
+    reply_markup: mainMenuForChat(env, chatId)
+  });
 }
 
 async function showWelcome(env, chatId, welcome = true) {
   await configureTelegramMenu(env, chatId);
-  await sendMessage(
-    env,
-    chatId,
-    welcome ? "🤖 خوش آمدید به تریدیار!\nبرای دیدن همه امکانات، کیبورد پایین صفحه را با دکمهٔ مربعی باز کنید." : "برای دیدن امکانات، کیبورد پایین صفحه را باز کنید.",
-    replyMenuForChat(env, chatId)
-  );
+  // ReplyKeyboardRemove is sent once to clear keyboards left by older bot versions.
+  await telegram("sendMessage", env, {
+    chat_id: chatId,
+    text: "⌨️ کیبورد قدیمی بسته شد.",
+    reply_markup: { remove_keyboard: true }
+  });
+  await telegram("sendMessage", env, {
+    chat_id: chatId,
+    text: welcome ? "🤖 خوش آمدید به تریدیار!\nبرای دسترسی به امکانات، از منوی زیر استفاده کنید." : "منوی اصلی تریدیار:",
+    disable_web_page_preview: true,
+    reply_markup: mainMenuForChat(env, chatId)
+  });
 }
 
 async function handleReplyMenuAction(action, env, chatId, message) {
@@ -1012,7 +999,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     const selectedMenuText = String(message?.text || "").trim();
     const menuActions = new Map([
-      ...MAIN_MENU.inline_keyboard.flat().map(button => [button.text, button.callback_data]),
+      ...mainMenuForChat(env, chatId).inline_keyboard.flat().map(button => [button.text, button.callback_data]),
       ["👥 مدیریت اعضا", "members:0"],
       ["📊 گزارش سیگنال‌های اخیر", "admin:signals"],
       ["⚠️ ارسال‌های نامشخص", "outbox:review"]
