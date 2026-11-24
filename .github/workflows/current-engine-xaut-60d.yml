@@ -1,0 +1,32 @@
+name: Current futures engine XAUT 60D backtest
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/current-engine-xaut-60d.yml"
+  workflow_dispatch:
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run current futures engine on PF_XAUTUSD
+        env:
+          BACKTEST_DAYS: "60"
+          BACKTEST_SYMBOLS: "1"
+          BACKTEST_SYMBOL: "PF_XAUTUSD"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+        run: node scripts/backtest-kraken.mjs
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-engine-xaut-60d
+          path: artifacts/
+          if-no-files-found: warn
