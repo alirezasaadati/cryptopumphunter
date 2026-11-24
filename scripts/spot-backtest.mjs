@@ -21,7 +21,7 @@ async function mapLimit(items, limit, fn) {
       const index = cursor++;
       if (index >= items.length) return;
       try { output[index] = await fn(items[index]); }
-      catch (error) { output[index] = { error: String(error?.message || error) }; }
+      catch (error) { output[index] = { ...(items[index] && typeof items[index] === "object" ? items[index] : {}), error: String(error?.message || error) }; }
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
@@ -121,7 +121,7 @@ function simulate(candles, pair) {
   return trades.filter(t => t.split !== "boundary");
 }
 
-function summarize(trades) {
+function summarize(trades, includeDrawdown = true) {
   const n = trades.length;
   if (!n) return { signals:0, positive24hRatePct:null, averageNet24hPct:null, exitWinRatePct:null, expectancyExitPct:null, targetHitPct:null, stopHitPct:null, averageMaePct:null, averageMfePct:null, maxDrawdownPct:null };
   const avg = key => trades.reduce((sum,t)=>sum+t[key],0)/n;
@@ -149,7 +149,7 @@ function summarize(trades) {
     stopHitPct:+(stops/n*100).toFixed(2),
     averageMaePct:+avg("maePct").toFixed(3),
     averageMfePct:+avg("mfePct").toFixed(3),
-    maxDrawdownPct:+maxDrawdown.toFixed(2)
+    maxDrawdownPct:includeDrawdown ? +maxDrawdown.toFixed(2) : null
   };
 }
 
@@ -184,7 +184,6 @@ for (const item of downloaded) {
     outOfSample:summarize(trades.filter(t=>t.split==="out-of-sample"))
   });
 }
-const all=reports.filter(r=>r.outOfSample).flatMap(r=>[]);
 const allTrades = [];
 // Aggregate from per-market simulations again, preserving the exact same rules.
 for (const item of downloaded) if (item.candles?.length >= MIN_CANDLES+HORIZON+1) allTrades.push(...simulate(item.candles,item));
@@ -194,7 +193,7 @@ const output={
   costs:"0.30% round trip assumed (0.10% fee + 0.05% slippage each side)",
   liquidity:"Historical order-book depth is unavailable in this OHLC test; spread 0.20% and $10,000 depth per side are assumptions, not observed history.",
   universe:"Current CoinLore market-cap/volume screen; survivorship and current-universe bias apply.",
-  aggregate:{inSample:summarize(allTrades.filter(t=>t.split==="in-sample")),outOfSample:summarize(allTrades.filter(t=>t.split==="out-of-sample"))},
+  aggregate:{inSample:summarize(allTrades.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(allTrades.filter(t=>t.split==="out-of-sample"),false)},
   markets:reports,
   elapsedSeconds:+((Date.now()-started)/1000).toFixed(1)
 };
