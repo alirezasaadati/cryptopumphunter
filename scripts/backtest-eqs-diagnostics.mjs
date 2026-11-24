@@ -117,7 +117,7 @@ async function main() {
   const tickerData=await getJson(BASE+"/derivatives/api/v3/tickers");
   if(!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
   const universe=tickerData.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&
-    /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&
+    /^PF_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&
     Number(t.last)>0)
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if(!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
@@ -179,7 +179,7 @@ async function main() {
         measuredSignals:local.length});
     }catch(error){symbolResults.push({symbol:ticker.symbol,error:String(error?.message||error)});}
   }
-  const parityRows=records.filter(r=>r.legacyParity), bySide={}, byEqsBucket={};
+  const parityRows=records.filter(r=>r.legacyParity), bySide={};
   for(const side of ["LONG","SHORT"]){
     const xs=records.filter(r=>r.side===side);
     bySide[side]={signals:xs.length,maeMfe60m:summarize(xs),
@@ -210,7 +210,7 @@ async function main() {
     methodology:{sameDataAndTimestamps:true,closedCandlesOnly:true,historicalQuoteVolume:"rolling 24h sum of hourly base volume * close (approximate USD turnover)",signalAt:"closed 1h candle",entry:"next 1h candle open",
       excursionResolution:"5m OHLC",horizonsMinutes:HORIZONS,mae:"maximum adverse price excursion from entry",
       mfe:"maximum favorable price excursion from entry",legacyParityFields:"signal side, eligibility, entry/stop/targets, score/priority and legacy entry diagnostics",
-      ambiguity:"MAE/MFE are range excursions, not simulated stop/target fills",universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies",
+      ambiguity:"MAE/MFE are range excursions, not simulated stop/target fills",universe:"top current Kraken PF linear perpetuals by current quote volume; current-listing/current-volume survivorship bias applies",
       costs:"fees, funding, slippage excluded",exitModel:"none; diagnostic MAE/MFE only"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:symbolResults.filter(x=>!x.error).length,symbolResults,
     opportunitiesCompared:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0),
@@ -248,7 +248,7 @@ async function main() {
     "- This is an entry-quality diagnostic, not a PnL/exit backtest.",
     "- EQS buckets are descriptive; thresholds 40/70 are provisional.",
     "- 5m OHLC provides range excursions, not intrabar ordering.",
-    "- Universe selection uses current ticker quote volume (survivorship bias); historical eligibility now estimates rolling 24h USD turnover from closed hourly base-volume × close; this removes the use of present-day quoteVolume for historical gates, but it is an approximation and the selected symbol universe still uses current tickers.",
+    "- Universe selection uses current PF listings/current ticker quote volume (survivorship bias); historical eligibility estimates rolling 24h USD turnover from closed hourly base-volume × close. This is an approximation, not an exchange-reported historical quoteVolume series.",
     "- No fees, funding, slippage, liquidation, or execution latency are modeled.",
     "- Parity is required before attributing any MAE/MFE change to EQS.",
     "","## Per-symbol results","",
