@@ -1,0 +1,49 @@
+name: Isolated prior-high and EMA distance shadow backtests
+on:
+  push:
+    branches: [experiment/soft-prior-high-reclaim-20261124]
+    paths:
+      - "src/index.js"
+      - "scripts/backtest-futures-lifecycle.mjs"
+      - ".github/workflows/entry-gate-shadow-backtest.yml"
+permissions:
+  contents: read
+jobs:
+  shadow-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        variant: [baseline, prior_high_soft, ema_242]
+        days: [30, 90, 180]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Syntax check
+        if: matrix.days == 30
+        run: |
+          npm run check
+          node --check scripts/backtest-futures-lifecycle.mjs
+      - name: Run isolated historical backtest
+        env:
+          LIFECYCLE_BACKTEST_DAYS: "${{ matrix.days }}"
+          LIFECYCLE_BACKTEST_SYMBOLS: "11"
+          BACKTEST_END_MS: "1795527325576"
+          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_NVDAXUSD,PF_XRPUSD,PF_NEARUSD,PF_ANTXUSD,PF_UNIUSD,PF_XAGUSD"
+          BACKTEST_SOFT_PRIOR_HIGH_RECLAIM: "${{ matrix.variant == 'prior_high_soft' && '1' || '0' }}"
+          BACKTEST_RECLAIM_SCORE_PENALTY: "8"
+          BACKTEST_HIGH_RISK_EMA_LIMIT: "${{ matrix.variant == 'ema_242' && '2.42' || '2.4' }}"
+        run: node scripts/backtest-futures-lifecycle.mjs
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: entry-gate-shadow-${{ matrix.variant }}-${{ matrix.days }}d
+          path: artifacts/
+          if-no-files-found: warn
