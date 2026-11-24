@@ -1,4 +1,4 @@
-import { runSpotScan, runSpotAssetDetail } from "./spot-engine.js";
+import { runSpotScan, runSpotAssetDetail, testSpotDataSources } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
@@ -183,7 +183,7 @@ export default {
         ok: true,
         service: "Crypto Pump Hunter",
         version: CONFIG.VERSION,
-        mode: "Kraken Derivatives Futures signals only",
+        mode: "Kraken Spot and Derivatives Futures signals",
         kv: Boolean(env.APP_KV),
         membership: true
       });
@@ -1121,6 +1121,10 @@ async function handleTelegramCommand(command, chatId, env, message) {
       await runFuturesSignalsForChat(env, chatId);
       return;
     }
+    if (command === "/scan") {
+      await runSpotMarketScanForChat(env, chatId);
+      return;
+    }
 
     await sendMessage(
       env,
@@ -1258,25 +1262,33 @@ async function handleCallback(query, env) {
 }
 
 async function runSpotMarketScanForChat(env, chatId) {
-  await sendMessage(env, chatId,
-    "🔎 اسکن دستی بازار اسپات شروع شد.\nدر حال بررسی جفت‌های USD و USDT، کندل‌های بسته‌شده و نقدینگی Kraken...");
+  if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) {
+    await sendMessage(env, chatId, "⚠️ قفل مستقل اسکن اسپات در دسترس نیست؛ اسکن برای جلوگیری از اجرای هم‌زمان متوقف شد.", menuForChat(env, chatId));
+    return;
+  }
+  const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:manual-spot-scan-lock"));
+  const headers={"content-type":"application/json","x-signal-delivery-secret":getSignalDeliverySecret(env)};
+  const token=crypto.randomUUID();
+  let acquired=false;
   try {
-    const result = await runSpotScan();
-    const keyboard = result.opportunities.length
-      ? { inline_keyboard: result.opportunities.map(item => [{
-          text: "📊 " + item.coin.symbol + " / " + item.quote,
-          callback_data: "spotd:" + item.coin.symbol + ":" + item.quote
-        }]) }
-      : undefined;
-    await sendMessage(env, chatId, result.report, keyboard || menuForChat(env, chatId));
-    if (!result.opportunities.length) {
-      await sendMessage(env, chatId, "برای پیدا کردن فرصت تازه، هر زمان خواستی دوباره «سیگنال اسپات» را بزن.", menuForChat(env, chatId));
-    }
-  } catch (error) {
-    console.error("Manual spot scan failed:", String(error?.stack || error));
-    await sendMessage(env, chatId,
-      "❌ اجرای اسکن اسپات ناموفق بود:\n" + String(error?.message || error).slice(0, 900),
-      menuForChat(env, chatId));
+    const response=await stub.fetch("https://signal-delivery.internal/spot-scan-lock/acquire",{method:"POST",headers,body:JSON.stringify({token})});
+    const lockResult=await response.json();
+    if(!response.ok||!lockResult?.ok)throw new Error(lockResult?.error||"قفل اسکن اسپات دریافت نشد.");
+    if(!lockResult.acquired){await sendMessage(env,chatId,"⏳ یک اسکن اسپات دیگر در حال اجراست؛ پس از پایان آن دوباره تلاش کن.",menuForChat(env,chatId));return;}
+    acquired=true;
+    await sendMessage(env,chatId,"🔎 اسکن دستی بازار اسپات شروع شد.\nدر حال بررسی جفت‌های USD و USDT، کندل‌های بسته‌شده و نقدینگی Kraken...");
+    const scan=await runSpotScan(), opportunities=Array.isArray(scan.opportunities)?scan.opportunities:[];
+    const keyboard=opportunities.length?{inline_keyboard:opportunities.map(item=>[{text:"📊 "+item.coin.symbol+" / "+item.quote,callback_data:"spotd:"+item.coin.symbol+":"+item.quote}])}:undefined;
+    await sendMessage(env,chatId,scan.report,keyboard||menuForChat(env,chatId));
+    if(!opportunities.length)await sendMessage(env,chatId,"برای پیدا کردن فرصت تازه، هر زمان خواستی دوباره «سیگنال اسپات» را بزن.",menuForChat(env,chatId));
+  } catch(error) {
+    console.error("Manual spot scan failed:",String(error?.stack||error));
+    await sendMessage(env,chatId,"❌ اجرای اسکن اسپات ناموفق بود:\n"+String(error?.message||error).slice(0,900),menuForChat(env,chatId));
+  } finally {
+    if(acquired)try{
+      const response=await stub.fetch("https://signal-delivery.internal/spot-scan-lock/release",{method:"POST",headers,body:JSON.stringify({token})});
+      if(!response.ok)console.error("Could not release manual Spot scan lock:",response.status);
+    }catch(error){console.error("Could not release manual Spot scan lock:",String(error?.message||error));}
   }
 }
 
@@ -1327,14 +1339,15 @@ async function showStatus(env, chatId) {
 
 async function showConnectionTest(env, chatId) {
   await sendMessage(env, chatId, "🔌 در حال بررسی اتصال منابع داده...");
-  const result = await testDataSources();
-  const connectionStatus = result.krakenFutures?.ok ? "متصل" : "قطع";
-  await sendMessage(
-    env,
-    chatId,
-    `${result.krakenFutures?.ok ? "✅" : "❌"} موتور کراکن: ${connectionStatus}\nورژن: V${CONFIG.VERSION}`,
-    menuForChat(env, chatId)
-  );
+  const result=await testDataSources();
+  const lines=[
+    (result.krakenFutures?.ok?"✅":"❌")+" Kraken Futures: "+(result.krakenFutures?.ok?"متصل":"قطع"),
+    (result.krakenSpot?.ok?"✅":"❌")+" Kraken Spot / CoinLore: "+(result.krakenSpot?.ok?"متصل":"قطع"),
+    result.krakenSpot?.error?"خطای Spot: "+result.krakenSpot.error.slice(0,350):"",
+    result.krakenFutures?.error?"خطای Futures: "+result.krakenFutures.error.slice(0,350):"",
+    "ورژن: V"+CONFIG.VERSION
+  ].filter(Boolean);
+  await sendMessage(env,chatId,lines.join("\n"),menuForChat(env,chatId));
 }
 async function registerWebhook(request, env) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) {
@@ -1378,13 +1391,15 @@ async function registerWebhook(request, env) {
 // ---------------- DATA SOURCES ----------------
 
 async function testDataSources() {
-  const result = { version: CONFIG.VERSION, krakenFutures: { ok: false } };
+  const result = { version: CONFIG.VERSION, krakenFutures: { ok: false }, krakenSpot: { ok: false } };
   try {
     const tickers = await getKrakenFuturesUniverse();
     const candles = await getKrakenFuturesCandles(tickers[0].symbol, "1h");
     result.krakenFutures = { ok: candles.length > 0, symbols: tickers.length, sample: tickers[0].symbol, candles: candles.length,
       error: candles.length ? undefined : "Kraken Futures کندل بسته‌شده برنگرداند." };
   } catch (error) { result.krakenFutures = { ok: false, error: error.message }; }
+  try { result.krakenSpot = await testSpotDataSources(); }
+  catch (error) { result.krakenSpot = { ok: false, error: String(error?.message || error) }; }
   return result;
 }
 
@@ -2330,7 +2345,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update","/market-data/candles"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/spot-scan-lock/acquire","/spot-scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update","/market-data/candles"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=getSignalDeliverySecret(this.env);
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!(await verifySignalDeliverySecret(suppliedSecret,expectedSecret)))return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -2507,6 +2522,20 @@ export class SignalDeliveryCoordinator {
             }
           });
           return Response.json({ok:true,signals:fresh,trackedTrades:newTrades.length});
+        }
+        if(url.pathname==="/spot-scan-lock/acquire"){
+          const current=await this.ctx.storage.get("manual-spot-scan-lock"),now=Date.now(),token=String(payload.token||"");
+          if(!token)throw new Error("Spot scan lock token is required.");
+          if(current&&Number(current.expiresAt)>now)return Response.json({ok:true,acquired:false});
+          await this.ctx.storage.put("manual-spot-scan-lock",{token,acquiredAt:now,expiresAt:now+600000});
+          return Response.json({ok:true,acquired:true,expiresAt:now+600000});
+        }
+        if(url.pathname==="/spot-scan-lock/release"){
+          const current=await this.ctx.storage.get("manual-spot-scan-lock");
+          if(!current)return Response.json({ok:true,released:false,reason:"lock not found"});
+          if(!payload.token||payload.token!==current.token)return Response.json({ok:true,released:false,reason:"lock token mismatch"});
+          await this.ctx.storage.delete("manual-spot-scan-lock");
+          return Response.json({ok:true,released:true});
         }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
