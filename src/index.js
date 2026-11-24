@@ -2214,87 +2214,186 @@ async function persistSignalOutboxMirror(env,chatId,signalId,record,label){
   }
 }
 
-async function sendAndArchiveFuturesSignalUnlocked(env,ctx,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
-  if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal is missing a valid id, symbol, or direction.");
-  if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
-  const key="signal-outbox:"+signalOutboxKey(chatId,signal.id);
-  let record=await ctx.storage.get(key);
-  if(record?.status==="SENT"||record?.status==="ARCHIVE_PENDING")return{delivered:true,duplicate:true,archivePending:true};
-  if(record?.status==="ARCHIVED")return{delivered:true,duplicate:true,archivePending:false};
-  if(record?.status==="SENDING"||record?.status==="UNCERTAIN")throw new Error("Signal delivery is uncertain and requires manual reconciliation; automatic resend is blocked.");
-  record={version:2,chatId:String(chatId),signalId:String(signal.id),symbol:signal.symbol,signal,messageText,replyMarkup,parseMode,status:"SENDING",createdAt:record?.createdAt||new Date().toISOString(),attemptedAt:new Date().toISOString()};
-  await ctx.storage.put(key,record);
-  let response;
-  let deliveryError=null;
-  let retryAttempts=0;
-  for(let attempt=1;attempt<=3;attempt++){
-    try{
-      response=await sendMessage(env,chatId,messageText,replyMarkup,parseMode);
-      deliveryError=null;
-      break;
-    }catch(error){
-      deliveryError=error;
-      const status=Number(error?.telegramStatus);
-      const retryAfter=Number(error?.telegramRetryAfter)||0;
-      // Telegram 429 is an explicit rejection. Network/5xx failures stay
-      // UNCERTAIN because retrying them could create duplicate notifications.
-      if(status!==429||attempt>=3||retryAfter>5)break;
-      retryAttempts++;
-      await new Promise(resolve=>setTimeout(resolve,Math.max(1000,retryAfter*1000)));
-    }
-  }
-  if(deliveryError){
-    const uncertain={...record,status:"UNCERTAIN",retryAttempts,error:String(deliveryError?.message||deliveryError).slice(0,500),updatedAt:new Date().toISOString()};
-    await ctx.storage.put(key,uncertain);
-    if(env.APP_KV){
-      try{await env.APP_KV.put(signalOutboxKey(chatId,signal.id),JSON.stringify(uncertain));}
-      catch(kvError){console.error("UNCERTAIN_OUTBOX_KV_PERSIST_FAILED",String(kvError?.message||kvError));}
-    }
-    throw deliveryError;
-  }
-  record={...record,status:"SENT",telegramMessageId:response?.result?.message_id??null,sentAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-  await ctx.storage.put(key,record);
-  await persistSignalOutboxMirror(env,chatId,signal.id,record,"SIGNAL_OUTBOX_SENT_MIRROR_FAILED");
-  try {
-    const archiveResult=await publishSignalToArchive(env,signal,messageText,parseMode);
-    record={...record,status:"ARCHIVED",archivePublished:archiveResult?.published!==false,archiveMessageId:archiveResult?.messageId??null,archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-  } catch(error) {
-    record={...record,status:"ARCHIVE_PENDING",archivePublished:false,archivePublishError:String(error?.message||error).slice(0,500),updatedAt:new Date().toISOString()};
-    console.error("Archive failed; private signal delivery remains successful and archive retry is available:",signal.symbol,String(error?.message||error));
-  }
-  await ctx.storage.put(key,record);
-  await persistSignalOutboxMirror(env,chatId,signal.id,record,"SIGNAL_OUTBOX_FINAL_MIRROR_FAILED");
-  return{delivered:true,duplicate:false,archivePending:record.status==="ARCHIVE_PENDING"};
-}
-
-async function publishSignalToArchive(env,signal,messageText,parseMode="HTML") {
-  const channelId=archiveChannelId(env);if(!channelId)return {skipped:true};
-  if(!env.SIGNAL_DELIVERY||!getSignalDeliverySecret(env))throw new Error("Archive publishing requires SIGNAL_DELIVERY coordination.");
-  const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:signal-archive-publisher"));
-  const response=await stub.fetch("https://signal-delivery.internal/archive-publish",{
-    method:"POST",headers:{"content-type":"application/json","x-signal-delivery-secret":getSignalDeliverySecret(env)},
-    body:JSON.stringify({channelId,signalId:String(signal.id),messageText,parseMode})
-  });
-  const payload=await response.json();
-  if(!response.ok||!payload?.ok)throw new Error(payload?.error||"Archive publishing failed.");
-  return payload.result;
-}
-async function sendAndArchiveFuturesSignal(env,chatId,signal,messageText,replyMarkup=null,parseMode="HTML"){
-  if(!signal?.id)throw new Error("Signal id is required for coordinated delivery.");
-  if(!env.SIGNAL_DELIVERY)throw new Error("SIGNAL_DELIVERY Durable Object binding is required; refusing an uncoordinated send.");
-  const key=signalOutboxKey(chatId,signal.id);
-  const id=env.SIGNAL_DELIVERY.idFromName(key);
-  const stub=env.SIGNAL_DELIVERY.get(id);
-  if(!getSignalDeliverySecret(env))throw new Error("SIGNAL_DELIVERY_AUTH_SECRET is required for authenticated delivery.");
-  const response=await stub.fetch("https://signal-delivery.internal/deliver",{
-    method:"POST",
-    headers:{"content-type":"application/json","x-signal-delivery-secret":getSignalDeliverySecret(env)},
-    body:JSON.stringify({chatId:String(chatId),signal,messageText,replyMarkup,parseMode})
+async function signalDeliveryRequest(env, stub, path, body) {
+  const response = await stub.fetch("https://signal-delivery.internal" + path, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-signal-delivery-secret": getSignalDeliverySecret(env) },
+    body: JSON.stringify(body)
   });
   let payload;
-  try{payload=await response.json()}catch{throw new Error("Signal delivery coordinator returned an unreadable response.");}
-  if(!response.ok||!payload?.ok)throw new Error(payload?.error||"Signal delivery coordinator failed.");
+  try { payload = await response.json(); }
+  catch { throw new Error("Signal delivery coordinator returned an unreadable response."); }
+  if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Signal delivery coordinator failed.");
   return payload.result;
+}
+
+async function publishSignalToArchive(env, signal, messageText, parseMode = "HTML", options = {}) {
+  const channelId = archiveChannelId(env);
+  if (!channelId) return { skipped: true };
+  if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) throw new Error("Archive publishing requires SIGNAL_DELIVERY coordination.");
+
+  const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:signal-archive-publisher"));
+  const reservation = await signalDeliveryRequest(env, stub, "/archive-publish/reserve", {
+    channelId, signalId: String(signal.id), force: options.force === true
+  });
+  if (reservation?.duplicate) {
+    if (reservation.uncertain) throw new Error("Archive delivery is uncertain; inspect the archive before retrying.");
+    return { published: false, duplicate: true, messageId: reservation.messageId ?? null };
+  }
+
+  let sent;
+  try {
+    sent = await telegram("sendMessage", env, {
+      chat_id: channelId,
+      text: messageText,
+      parse_mode: parseMode || "HTML",
+      disable_web_page_preview: true,
+      protect_content: true
+    });
+  } catch (error) {
+    try {
+      await signalDeliveryRequest(env, stub, "/archive-publish/complete", {
+        signalId: String(signal.id),
+        status: "UNCERTAIN",
+        error: String(error?.message || error).slice(0, 500)
+      });
+    } catch (stateError) {
+      console.error("ARCHIVE_UNCERTAIN_STATE_PERSIST_FAILED", String(stateError?.message || stateError));
+    }
+    throw error;
+  }
+
+  const messageId = sent?.result?.message_id ?? null;
+  try {
+    await signalDeliveryRequest(env, stub, "/archive-publish/complete", {
+      signalId: String(signal.id), status: "PUBLISHED", messageId
+    });
+  } catch (stateError) {
+    // The Telegram send succeeded. Leave the DO reservation in place so a
+    // later attempt cannot blindly publish a duplicate archive message.
+    console.error("ARCHIVE_PUBLISHED_STATE_CONFIRMATION_FAILED", String(stateError?.message || stateError));
+  }
+  return { published: true, messageId };
+}
+
+async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, replyMarkup = null, parseMode = "HTML") {
+  if (!signal?.id || !signal?.symbol || !["LONG", "SHORT"].includes(signal?.side)) {
+    throw new Error("Signal is missing a valid id, symbol, or direction.");
+  }
+  if (!isValidFuturesSignalLevels(signal)) {
+    throw new Error("Signal price levels are invalid or not correctly ordered; refusing to publish an untrackable signal.");
+  }
+  if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) {
+    throw new Error("SIGNAL_DELIVERY Durable Object binding and authentication secret are required.");
+  }
+
+  const key = signalOutboxKey(chatId, signal.id);
+  const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
+  const reservation = await signalDeliveryRequest(env, stub, "/deliver/reserve", {
+    chatId: String(chatId), signal, messageText, replyMarkup, parseMode
+  });
+  if (reservation?.duplicate) {
+    return { delivered: true, duplicate: true, archivePending: reservation.archivePending === true };
+  }
+
+  const record = reservation.record;
+  let response;
+  let deliveryError = null;
+  let retryAttempts = 0;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      response = await sendMessage(env, chatId, messageText, replyMarkup, parseMode);
+      deliveryError = null;
+      break;
+    } catch (error) {
+      deliveryError = error;
+      const status = Number(error?.telegramStatus);
+      const retryAfter = Number(error?.telegramRetryAfter) || 0;
+      // Telegram 429 is an explicit rejection. Network/5xx failures stay
+      // UNCERTAIN because retrying them could create duplicate notifications.
+      if (status !== 429 || attempt >= 3 || retryAfter > 5) break;
+      retryAttempts++;
+      await new Promise(resolve => setTimeout(resolve, Math.max(1000, retryAfter * 1000)));
+    }
+  }
+
+  if (deliveryError) {
+    const uncertain = {
+      status: "UNCERTAIN", retryAttempts,
+      error: String(deliveryError?.message || deliveryError).slice(0, 500)
+    };
+    try {
+      await signalDeliveryRequest(env, stub, "/deliver/complete", {
+        chatId: String(chatId), signalId: String(signal.id), ...uncertain
+      });
+    } catch (stateError) {
+      console.error("UNCERTAIN_DELIVERY_STATE_PERSIST_FAILED", String(stateError?.message || stateError));
+    }
+    await persistSignalOutboxMirror(env, chatId, signal.id, {
+      ...record, ...uncertain, updatedAt: new Date().toISOString()
+    }, "UNCERTAIN_OUTBOX_KV_PERSIST_FAILED");
+    throw deliveryError;
+  }
+
+  const sentRecord = {
+    status: "SENT",
+    telegramMessageId: response?.result?.message_id ?? null,
+    sentAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  try {
+    await signalDeliveryRequest(env, stub, "/deliver/complete", {
+      chatId: String(chatId), signalId: String(signal.id), ...sentRecord
+    });
+  } catch (stateError) {
+    const uncertain = {
+      ...record, status: "UNCERTAIN",
+      telegramMessageId: sentRecord.telegramMessageId,
+      error: "Telegram accepted the message but durable delivery state confirmation failed.",
+      updatedAt: new Date().toISOString()
+    };
+    await persistSignalOutboxMirror(env, chatId, signal.id, uncertain, "UNCERTAIN_OUTBOX_KV_PERSIST_FAILED");
+    throw new Error(uncertain.error + " Manual reconciliation is required.");
+  }
+  let currentRecord = { ...record, ...sentRecord };
+  await persistSignalOutboxMirror(env, chatId, signal.id, currentRecord, "SIGNAL_OUTBOX_SENT_MIRROR_FAILED");
+
+  try {
+    const archiveResult = await publishSignalToArchive(env, signal, messageText, parseMode);
+    currentRecord = {
+      ...currentRecord,
+      status: "ARCHIVED",
+      archivePublished: archiveResult?.published !== false,
+      archiveMessageId: archiveResult?.messageId ?? null,
+      archivedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+  } catch (error) {
+    currentRecord = {
+      ...currentRecord,
+      status: "ARCHIVE_PENDING",
+      archivePublished: false,
+      archivePublishError: String(error?.message || error).slice(0, 500),
+      updatedAt: new Date().toISOString()
+    };
+    console.error("Archive failed; private signal delivery remains successful and archive retry is available:", signal.symbol, String(error?.message || error));
+  }
+
+  try {
+    await signalDeliveryRequest(env, stub, "/deliver/complete", {
+      chatId: String(chatId), signalId: String(signal.id),
+      status: currentRecord.status,
+      archivePublished: currentRecord.archivePublished,
+      archiveMessageId: currentRecord.archiveMessageId,
+      archivedAt: currentRecord.archivedAt,
+      archivePublishError: currentRecord.archivePublishError,
+      updatedAt: currentRecord.updatedAt
+    });
+  } catch (stateError) {
+    console.error("SIGNAL_OUTBOX_FINAL_STATE_CONFIRMATION_FAILED", String(stateError?.message || stateError));
+  }
+  await persistSignalOutboxMirror(env, chatId, signal.id, currentRecord, "SIGNAL_OUTBOX_FINAL_MIRROR_FAILED");
+  return { delivered: true, duplicate: false, archivePending: currentRecord.status === "ARCHIVE_PENDING" };
 }
 
 export class SignalDeliveryCoordinator {
