@@ -8,6 +8,7 @@ const DAYS = Math.max(7, Math.min(60, Number(process.env.LIFECYCLE_BACKTEST_DAYS
 const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 15;
 const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
+const EXIT_MODE = process.env.BACKTEST_EXIT_MODE === "staged" ? "staged" : "fixed";
 const LEVERAGE = FUTURES_TRADE_LEVERAGE;
 
 async function getJson(url, attempt = 0) {
@@ -79,6 +80,83 @@ function candleAmbiguous(side, trade, candle) {
   const profitAtOpen = side === "LONG" ? candle.open >= target : candle.open <= target;
   return stopHit && profitHit && !stopAtOpen && !profitAtOpen;
 }
+
+function stagedTargetLevels(trade) {
+  const entry=Number(trade.entry), risk=Math.abs(entry-Number(trade.initialStop));
+  const dir=trade.side==="LONG"?1:-1;
+  return [1.5,2.5,3.5].map(r=>entry+dir*risk*r);
+}
+function evaluateStagedCandle(trade,candle) {
+  if (trade.status!=="OPEN") return {changed:false,trade};
+  const entry=Number(trade.entry), initialStop=Number(trade.initialStop);
+  const dir=trade.side==="LONG"?1:-1, risk=Math.abs(entry-initialStop);
+  const targets=stagedTargetLevels(trade);
+  const open=Number(candle.open), high=Number(candle.high), low=Number(candle.low);
+  const stop=Number(trade.currentStop??initialStop);
+  const stopHit=trade.side==="LONG"?low<=stop:high>=stop;
+  const stopAtOpen=trade.side==="LONG"?open<=stop:open>=stop;
+  let realized=Number(trade.realizedMarginReturnPct||0);
+  let remaining=Number(trade.remainingFraction??1);
+  const tpHits=Array.isArray(trade.tpHits)?[...trade.tpHits]:[];
+  const priceReturn=(exit)=>dir*((exit-entry)/entry)*100*LEVERAGE;
+  if (stopHit) {
+    const exit=stopAtOpen?open:stop;
+    realized+=remaining*priceReturn(exit);
+    return {changed:true,closed:true,reason:"CLOSED_STOP",trade:{
+      ...trade,status:"CLOSED_STOP",closeReason:"CLOSED_STOP",exitPrice:exit,
+      tpHits,remainingFraction:0,realizedMarginReturnPct:realized,
+      marginReturnPercent:realized,closedAt:candle.time??new Date().toISOString(),
+      currentStop:stop,lockReleaseEligible:true
+    }};
+  }
+  let currentStop=stop, breakEvenActivated=trade.breakEvenActivated===true;
+  const oneR=entry+dir*risk;
+  const reachedOneR=trade.side==="LONG"?high>=oneR:low<=oneR;
+  if (!breakEvenActivated && risk>0 && reachedOneR) {
+    const beStop=entry+dir*entry*0.0012;
+    if ((dir===1&&beStop>currentStop)||(dir===-1&&beStop<currentStop)) {
+      currentStop=beStop; breakEvenActivated=true;
+    }
+  }
+  for(let i=0;i<3;i++){
+    const label="TP"+(i+1);
+    if(tpHits.includes(label)) continue;
+    const target=targets[i];
+    const hit=trade.side==="LONG"?high>=target:low<=target;
+    if(!hit) break;
+    const gap=trade.side==="LONG"?open>=target:open<=target;
+    const exit=gap?open:target;
+    const fraction=i<2?Math.min(1/3,remaining):remaining;
+    realized+=fraction*priceReturn(exit);
+    remaining=Math.max(0,remaining-fraction);
+    tpHits.push(label);
+  }
+  const closedAt=candle.time??new Date().toISOString();
+  if(remaining<=1e-9){
+    return {changed:true,closed:true,reason:"CLOSED_PROFIT",trade:{
+      ...trade,status:"CLOSED_PROFIT",closeReason:"CLOSED_PROFIT",
+      exitPrice:targets[2],tpHits,remainingFraction:0,
+      realizedMarginReturnPct:realized,marginReturnPercent:realized,
+      closedAt,currentStop,breakEvenActivated,lockReleaseEligible:true
+    }};
+  }
+  const changed=tpHits.length!==(trade.tpHits||[]).length||currentStop!==stop||
+    breakEvenActivated!==(trade.breakEvenActivated===true);
+  return {changed,closed:false,stopMoved:currentStop!==stop,trade:{
+    ...trade,tpHits,remainingFraction:remaining,realizedMarginReturnPct:realized,
+    currentStop,breakEvenActivated
+  }};
+}
+function stagedCandleAmbiguous(trade,candle){
+  const stop=Number(trade.currentStop??trade.initialStop), targets=stagedTargetLevels(trade);
+  const active=targets.filter((_,i)=>!(trade.tpHits||[]).includes("TP"+(i+1)));
+  const stopHit=trade.side==="LONG"?candle.low<=stop:candle.high>=stop;
+  const targetHit=active.some(t=>trade.side==="LONG"?candle.high>=t:candle.low<=t);
+  const stopAtOpen=trade.side==="LONG"?candle.open<=stop:candle.open>=stop;
+  const targetAtOpen=active.some(t=>trade.side==="LONG"?candle.open>=t:candle.open<=t);
+  return stopHit&&targetHit&&!stopAtOpen&&!targetAtOpen;
+}
+
 function summarize(trades) {
   const closed = trades.filter(t => t.status === "CLOSED_PROFIT" || t.status === "CLOSED_STOP");
   const profits = closed.filter(t => t.status === "CLOSED_PROFIT");
@@ -157,6 +235,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       id: ticker.symbol + ":" + candidate.side + ":" + signalCloseTime,
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
       entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
+      remainingFraction: 1, tpHits: [], realizedMarginReturnPct: 0,
       signalTime: signalBar.time, entryTime: signalCloseTime,
       score: candidate.score, ambiguousCandles: 0
     };
@@ -164,10 +243,12 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     let closed = false;
     for (; candleIndex < fiveMinute.length && fiveMinute[candleIndex].time < toMs; candleIndex++) {
       const bar = fiveMinute[candleIndex];
-      if (candleAmbiguous(candidate.side,trade,bar)) trade.ambiguousCandles++;
-      const evaluated = evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
-      if (evaluated.changed) {
-        Object.assign(trade,evaluated.trade);
+      const evaluated = EXIT_MODE==="staged"
+        ? evaluateStagedCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]})
+        : evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
+      if (EXIT_MODE==="staged" ? stagedCandleAmbiguous(trade,bar) : candleAmbiguous(candidate.side,trade,bar)) trade.ambiguousCandles++;
+      if (evaluated.changed || evaluated.stopMoved) Object.assign(trade,evaluated.trade);
+      if (EXIT_MODE==="staged" ? evaluated.closed : evaluated.changed) {
         trade.closedAtMs = bar.time + INTERVALS["5m"];
         closed = true;
         break;
@@ -176,7 +257,15 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (!closed) {
       trade.status = "OPEN_AT_BACKTEST_END";
       trade.lastMark = fiveMinute.at(-1)?.close ?? null;
-      trade.marginReturnAtMarkPct = trade.lastMark ? (candidate.side==="LONG" ? 1 : -1) * ((trade.lastMark-entry)/entry) * 100 * LEVERAGE : null;
+      if (EXIT_MODE==="staged") {
+        const dir=candidate.side==="LONG"?1:-1;
+        trade.unrealizedRemainingMarginReturnPct=trade.lastMark
+          ? Number(trade.remainingFraction??1)*dir*((trade.lastMark-entry)/entry)*100*LEVERAGE : null;
+        trade.marginReturnAtMarkPct=trade.lastMark
+          ? Number(trade.realizedMarginReturnPct||0)+Number(trade.unrealizedRemainingMarginReturnPct||0) : null;
+      } else {
+        trade.marginReturnAtMarkPct = trade.lastMark ? (candidate.side==="LONG" ? 1 : -1) * ((trade.lastMark-entry)/entry) * 100 * LEVERAGE : null;
+      }
       // Preserve the same-side lock through the sample end for still-open trades.
       lockUntil.set(lockKey,toMs);
     } else {
@@ -254,10 +343,11 @@ async function main() {
   const metrics = summarize(allTrades);
   const portfolio = simulatePortfolio(allTrades,100,10);
   const report = {
-    generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
+    generatedAt:new Date().toISOString(), exitMode:EXIT_MODE, venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
     rules:{leverage:LEVERAGE,targetMarginReturnPct:TARGET,requiredFavorablePriceMovePct:TARGET/LEVERAGE,
-      exit:"close only at +30% margin return or configured stop",tp1Tp2Tp3:"ignored for closing",
+      exit:EXIT_MODE==="staged" ? "one-third at each 1.5R/2.5R/3.5R target; stop protects remaining size; move stop to entry plus 0.12% after +1R" : "close only at +30% margin return or configured stop",
+      exitMode:EXIT_MODE,tp1Tp2Tp3:EXIT_MODE==="staged" ? "one-third at each target" : "ignored for closing",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
@@ -273,7 +363,7 @@ async function main() {
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/futures-lifecycle-backtest.json",JSON.stringify(report,null,2));
   const rows = [
-    "# Futures lifecycle historical backtest","",
+    "# Futures lifecycle historical backtest ("+EXIT_MODE+" exits)","",
     "Period: "+report.period.from+" — "+report.period.to+" ("+DAYS+" days)",
     "Symbols tested: "+report.symbolsTested+"/"+SYMBOL_LIMIT,"",
     "| Metric | Result |","|---|---:|",
@@ -286,7 +376,7 @@ async function main() {
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
-    "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
+    "| Profit closes | "+metrics.profitCloses+" |",
     "| Stop closes | "+metrics.stopCloses+" |",
     "| Open at end | "+metrics.openAtEnd+" |",
     "| LONG / SHORT | "+metrics.longs+" / "+metrics.shorts+" |",
