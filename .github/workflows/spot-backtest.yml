@@ -1,0 +1,18 @@
+name: Spot 24h walk-forward backtest
+on:
+  push:
+    branches:
+      - feat/independent-spot-usd-usdt-20261124
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run Kraken Spot 24h walk-forward backtest
+        run: node scripts/spot-backtest.mjs
+      - name: Smoke-test live Kraken Spot market data
+        run: node scripts/spot-live-smoke.mjs

@@ -1,4 +1,4 @@
-import { runSpotScan } from "./spot-engine.js";
+import { runSpotScan, runSpotAssetDetail } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
@@ -127,7 +127,8 @@ const CAPITAL_MANAGEMENT_TEXT =
 const MAIN_MENU = {
   inline_keyboard: [
     [
-      { text: "📈 سیگنال فیوچرز", callback_data: "futures" }
+      { text: "📈 سیگنال فیوچرز", callback_data: "futures" },
+      { text: "📊 سیگنال اسپات", callback_data: "spot" }
     ],
     [
       { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" }
@@ -146,11 +147,26 @@ const MAIN_MENU = {
   ]
 };
 
-const BACK_MENU = {
-  inline_keyboard: [
-    [{ text: "🏠 منوی اصلی", callback_data: "menu" }]
-  ]
-};
+function replyMenuForChat(env, chatId) {
+  const buttons = MAIN_MENU.inline_keyboard.flat().map(button => ({ text: button.text }));
+  if (isOwner(chatId, env)) {
+    buttons.push(
+      { text: "👥 مدیریت اعضا" },
+      { text: "📊 گزارش سیگنال‌های اخیر" },
+      { text: "⚠️ بررسی ارسال‌های نامشخص" }
+    );
+  }
+  const keyboard = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    keyboard.push(buttons.slice(i, i + 2));
+  }
+  return {
+    keyboard,
+    resize_keyboard: true,
+    is_persistent: true,
+    input_field_placeholder: "یکی از گزینه‌های تریدیار را انتخاب کنید"
+  };
+}
 
 export default {
   async scheduled(event, env, ctx) {
@@ -447,8 +463,8 @@ function archiveChannelId(env) {
 }
 async function sendArchiveAccessLink(env, userId) {
   const channelId = archiveChannelId(env);
-  if (!channelId) return sendMessage(env,userId,"⚠️ اتصال آرشیو هنوز کامل تنظیم نشده است.",BACK_MENU);
-  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ دسترسی شما به آرشیو فعال نیست.",BACK_MENU);
+  if (!channelId) return sendMessage(env,userId,"⚠️ اتصال آرشیو هنوز کامل تنظیم نشده است.");
+  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ دسترسی شما به آرشیو فعال نیست.");
   try {
     const key="signal-archive:join-request-link";
     let link=null;
@@ -467,10 +483,10 @@ async function sendArchiveAccessLink(env, userId) {
         catch(error){ console.error("Archive invite cache write failed:",String(error?.message||error)); }
       }
     }
-    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link,BACK_MENU);
+    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link);
   } catch(error) {
     console.error("Archive invite link failed:",String(error?.message||error));
-    await sendMessage(env,userId,"⚠️ ساخت لینک ورود به آرشیو فعلاً ممکن نشد.",BACK_MENU);
+    await sendMessage(env,userId,"⚠️ ساخت لینک ورود به آرشیو فعلاً ممکن نشد.");
   }
 }
 async function handleArchiveJoinRequest(request,env) {
@@ -892,17 +908,12 @@ async function changeMemberAccess(env,ownerId,id,allow) {
 
 // ---------------- MAIN MENU ----------------
 function menuForChat(env, chatId) {
-  const keyboard = MAIN_MENU.inline_keyboard.map(row => row.slice());
-  if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0,
-    [{ text: "👥 مدیریت اعضا", callback_data: "members:0" }],
-    [{ text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }],
-    [{ text: "⚠️ بررسی ارسال‌های نامشخص", callback_data: "outbox:review" }]
-  );
-  return { inline_keyboard: keyboard };
+  // Keep the complete reply keyboard available after every bot response.
+  return replyMenuForChat(env, chatId);
 }
 async function configureTelegramMenu(env, chatId) {
   const commands = [
-    { command: "start", description: "نمایش منوی اصلی" },
+    { command: "start", description: "شروع و معرفی ربات" },
     { command: "menu", description: "نمایش منوی اصلی" },
     { command: "futures", description: "دریافت سیگنال‌های فیوچرز" },
     { command: "status", description: "وضعیت سرویس" },
@@ -910,7 +921,7 @@ async function configureTelegramMenu(env, chatId) {
   ];
   const tasks = [
     telegram("setMyCommands", env, { commands }),
-    telegram("setChatMenuButton", env, { chat_id: chatId, menu_button: { type: "commands" } }),
+    telegram("setChatMenuButton", env, { chat_id: chatId, menu_button: { type: "default" } }),
   ];
   const results = await Promise.allSettled(tasks);
   const failed = results.filter(x => x.status === "rejected");
@@ -921,17 +932,85 @@ function welcomeSeenKey(chatId) {
   return `welcome-seen:${chatId}`;
 }
 
-async function showMenu(env, chatId, welcome = false) {
+async function showMenu(env, chatId) {
   await configureTelegramMenu(env, chatId);
-  const messageText = welcome
-    ? "🤖 خوش آمدید به تریدیار!"
-    : "📋 منوی اصلی تریدیار";
-  await sendMessage(env, chatId, messageText, menuForChat(env, chatId));
+  await sendMessage(env, chatId, "📋 منوی کامل تریدیار در کیبورد پایین صفحه در دسترس است.", replyMenuForChat(env, chatId));
+}
+
+async function showWelcome(env, chatId, welcome = true) {
+  await configureTelegramMenu(env, chatId);
+  await sendMessage(
+    env,
+    chatId,
+    welcome ? "🤖 خوش آمدید به تریدیار!\nبرای دیدن همه امکانات، کیبورد پایین صفحه را با دکمهٔ مربعی باز کنید." : "برای دیدن امکانات، کیبورد پایین صفحه را باز کنید.",
+    replyMenuForChat(env, chatId)
+  );
+}
+
+async function handleReplyMenuAction(action, env, chatId, message) {
+  if (action.startsWith("members:") || action.startsWith("admin:") || action.startsWith("outbox:")) {
+    if (!isOwner(chatId, env)) {
+      await sendMessage(env, chatId, "⛔ این گزینه فقط برای مالک ربات فعال است.", menuForChat(env, chatId));
+      return;
+    }
+    if (action.startsWith("members:")) return showMemberList(env, chatId, Number(action.slice(8)) || 0);
+    if (action === "admin:signals") return showRecentFuturesSignalReport(env, chatId);
+    if (action === "outbox:review") return showUncertainSignalOutbox(env, chatId);
+  }
+  if (action === "invite") {
+    await sendMessage(env, chatId,
+      "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
+      "( برای بررسی دقیق علل سود و زیان هر کاربر ) اقدام کنید .\n\n" +
+      "🔗 لینک : https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
+    return;
+  }
+  if (action === "futures") return runFuturesSignalsForChat(env, chatId);
+  if (action === "spot" || action.startsWith("spotd:")) {
+    if (!isOwner(chatId, env)) {
+      await sendMessage(env, chatId, "⛔ قابلیت اسپات در مرحله آزمایشی فقط برای مالک ربات فعال است.", menuForChat(env, chatId));
+      return;
+    }
+    if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+    const [, symbol, quote] = action.split(":");
+    return showSpotAssetDetailForChat(env, chatId, symbol, quote);
+  }
+  if (action === "issued_signals") return sendArchiveAccessLink(env, chatId);
+  if (action === "capital_guide") {
+    await telegram("sendMessage", env, {
+      chat_id: chatId, text: CAPITAL_MANAGEMENT_TEXT, parse_mode: "HTML",
+      disable_web_page_preview: true, reply_markup: menuForChat(env, chatId)
+    });
+    return;
+  }
+  if (action === "status") return showStatus(env, chatId);
+  if (action === "test") return showConnectionTest(env, chatId);
+  if (action === "about") return sendMessage(env, chatId, ABOUT_TEXT, menuForChat(env, chatId));
 }
 
 async function handleTelegramCommand(command, chatId, env, message) {
   try {
     if (await handleOwnerAccessCommand(command, chatId, env, message)) return;
+
+    const selectedMenuText = String(message?.text || "").trim();
+    const menuActions = new Map([
+      ...MAIN_MENU.inline_keyboard.flat().map(button => [button.text, button.callback_data]),
+      ["👥 مدیریت اعضا", "members:0"],
+      ["📊 گزارش سیگنال‌های اخیر", "admin:signals"],
+      ["⚠️ بررسی ارسال‌های نامشخص", "outbox:review"]
+    ]);
+    if (selectedMenuText === "📋 منو" || selectedMenuText === "منو" || selectedMenuText === "/menu") {
+      if (await isApproved(chatId, env)) await showMenu(env, chatId);
+      else await requestMembership(env, chatId, message);
+      return;
+    }
+    if (menuActions.has(selectedMenuText)) {
+      if (!(await isApproved(chatId, env))) {
+        await requestMembership(env, chatId, message);
+        return;
+      }
+      await handleReplyMenuAction(menuActions.get(selectedMenuText), env, chatId, message);
+      return;
+    }
 
     if (command === "/start") {
       await configureTelegramMenu(env, chatId);
@@ -944,7 +1023,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
             console.error("Welcome state lookup failed:", error?.message || error);
           }
         }
-        await showMenu(env, chatId, !welcomeAlreadyShown);
+        await showWelcome(env, chatId, !welcomeAlreadyShown);
         if (!welcomeAlreadyShown && env.APP_KV) {
           try {
             await env.APP_KV.put(welcomeSeenKey(chatId), "1");
@@ -1068,6 +1147,19 @@ async function handleTelegramCommand(command, chatId, env, message) {
   }
 }
 
+async function clearInlineMenu(env, message) {
+  if (!message?.chat?.id || !message?.message_id) return;
+  try {
+    await telegram("editMessageReplyMarkup", env, {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      reply_markup: { inline_keyboard: [] }
+    });
+  } catch (error) {
+    console.error("Could not clear selected menu keyboard:", String(error?.message || error));
+  }
+}
+
 async function handleCallback(query, env) {
   const chatId = query.message?.chat?.id;
   const action = query.data || "";
@@ -1110,6 +1202,7 @@ async function handleCallback(query, env) {
   }
 
   await answerCallback(env, query.id);
+  if (action !== "menu") await clearInlineMenu(env, query.message);
 
   try {
     if (action === "menu") {
@@ -1120,12 +1213,21 @@ async function handleCallback(query, env) {
       await sendMessage(env, chatId,
         "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
         "( برای بررسی دقیق علل سود و زیان هر کاربر ) اقدام کنید .\n\n" +
-        "🔗 لینک : https://www.lbk.pub/ref/67XF8", BACK_MENU);
+        "🔗 لینک : https://www.lbk.pub/ref/67XF8");
       return;
     }
     if (action === "futures") {
       await runFuturesSignalsForChat(env, chatId);
       return;
+    }
+    if (action === "spot" || action.startsWith("spotd:")) {
+      if (!isOwner(chatId, env) || String(query.from?.id) !== String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
+        await answerCallback(env, query.id, "⛔ قابلیت اسپات در مرحله آزمایشی فقط برای مالک ربات فعال است.");
+        return;
+      }
+      if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+      const [, symbol, quote] = action.split(":");
+      return showSpotAssetDetailForChat(env, chatId, symbol, quote);
     }
     if (action === "issued_signals" || action === "ledger:archive" || action === "ledger:history") return sendArchiveAccessLink(env,chatId);
     if (action === "capital_guide") {
@@ -1133,8 +1235,7 @@ async function handleCallback(query, env) {
         chat_id: chatId,
         text: CAPITAL_MANAGEMENT_TEXT,
         parse_mode: "HTML",
-        disable_web_page_preview: true,
-        reply_markup: BACK_MENU
+        disable_web_page_preview: true
       });
       return;
     }
@@ -1149,7 +1250,7 @@ async function handleCallback(query, env) {
     }
 
     if (action === "about") {
-      await sendMessage(env, chatId, ABOUT_TEXT, BACK_MENU);
+      await sendMessage(env, chatId, ABOUT_TEXT);
       return;
     }
 
@@ -1165,128 +1266,40 @@ async function handleCallback(query, env) {
 }
 
 async function runSpotMarketScanForChat(env, chatId) {
-  if (!env.APP_KV) {
-    await sendMessage(env, chatId, "⚠️ اتصال ذخیره‌سازی گزارش بازار در دسترس نیست. Binding مربوط به APP_KV را بررسی کن.", menuForChat(env, chatId));
-    return;
-  }
-  await sendMessage(env, chatId, "🔎 اسکن هوشمند بازار اسپات شروع شد...\nدر حال دریافت اطلاعات CoinLore و بررسی کندل‌های Kraken.");
+  await sendMessage(env, chatId,
+    "🔎 اسکن دستی بازار اسپات شروع شد.\nدر حال بررسی جفت‌های USD و USDT، کندل‌های بسته‌شده و نقدینگی Kraken...");
   try {
-    // Invalidate the previous snapshot before starting. If this scan fails or
-    // exits early, the analysis button must not present stale data as current.
-    await env.APP_KV.put("last_scan", JSON.stringify({
-      timestamp: Date.now(),
-      analysis: [],
-      status: "scan_in_progress"
-    }));
-    const result = await runSpotScan(env);
-    await sendLongMessage(env, chatId, result.report);
-    await sendMessage(env, chatId, "✅ عملیات اسکن بازار اسپات به پایان رسید.", menuForChat(env, chatId));
+    const result = await runSpotScan();
+    const keyboard = result.opportunities.length
+      ? { inline_keyboard: result.opportunities.map(item => [{
+          text: "📊 " + item.coin.symbol + " / " + item.quote,
+          callback_data: "spotd:" + item.coin.symbol + ":" + item.quote
+        }]) }
+      : undefined;
+    await sendMessage(env, chatId, result.report, keyboard || menuForChat(env, chatId));
+    if (!result.opportunities.length) {
+      await sendMessage(env, chatId, "برای پیدا کردن فرصت تازه، هر زمان خواستی دوباره «سیگنال اسپات» را بزن.", menuForChat(env, chatId));
+    }
   } catch (error) {
-    console.error("Spot market scan failed:", String(error?.stack || error));
-    await sendMessage(env, chatId, "❌ اجرای اسکن بازار اسپات ناموفق بود:\n" + String(error?.message || error).slice(0, 900), menuForChat(env, chatId));
+    console.error("Manual spot scan failed:", String(error?.stack || error));
+    await sendMessage(env, chatId,
+      "❌ اجرای اسکن اسپات ناموفق بود:\n" + String(error?.message || error).slice(0, 900),
+      menuForChat(env, chatId));
   }
 }
 
-async function showLatestMarketAnalysis(env, chatId) {
-  if (!env.APP_KV) {
-    await sendMessage(env, chatId, "⚠️ ذخیره‌سازی گزارش اسکن بازار اسپات در دسترس نیست.", menuForChat(env, chatId));
-    return;
-  }
-
-  let saved;
+async function showSpotAssetDetailForChat(env, chatId, symbol, quote) {
   try {
-    saved = await env.APP_KV.get("last_scan", "json");
+    const result = await runSpotAssetDetail(symbol, quote);
+    await sendMessage(env, chatId, result.detail, {
+      inline_keyboard: [[{ text: "🔄 اسکن دوباره بازار", callback_data: "spot" }]]
+    });
   } catch (error) {
-    console.error("Could not load latest spot analysis:", String(error?.message || error));
-    await sendMessage(env, chatId, "⚠️ دریافت آخرین تحلیل بازار اسپات ممکن نشد. کمی بعد دوباره تلاش کن.", menuForChat(env, chatId));
-    return;
-  }
-
-  if (!saved?.timestamp) {
-    await sendMessage(env, chatId, "هنوز گزارشی از بازار اسپات ذخیره نشده است. ابتدا «اسکن بازار» را اجرا کن.", menuForChat(env, chatId));
-    return;
-  }
-
-  const rows = Array.isArray(saved.analysis) ? saved.analysis : [];
-  if (!rows.length) {
     await sendMessage(env, chatId,
-      "📊 داده‌های تحلیلی اسکن قبلی در نسخه ذخیره‌شده وجود ندارد.\n\nبرای ساخت گزارش تحلیلی مستقل، یک‌بار «اسکن بازار» را اجرا کن؛ سپس دوباره «تحلیل بازار» را بزن.",
-      menuForChat(env, chatId));
-    return;
+      "⚠️ دریافت جزئیات " + symbol + "/" + quote + " ناموفق بود:\n" +
+      String(error?.message || error).slice(0, 700),
+      { inline_keyboard: [[{ text: "🔄 اسکن دوباره", callback_data: "spot" }]] });
   }
-
-  const scannedAt = new Date(saved.timestamp).toLocaleString("fa-IR", { timeZone: "UTC" }) + " UTC";
-  const count = rows.length;
-  const bullish = rows.filter(x => x.trend === "صعودی").length;
-  const bearish = count - bullish;
-  const averageRsi = rows.reduce((sum, x) => sum + Number(x.rsi || 0), 0) / count;
-  const averageScore = rows.reduce((sum, x) => sum + Number(x.score || 0), 0) / count;
-  const volumeStrong = rows.filter(x => Number(x.volumeRatio) >= 1.5).length;
-  const withSetup = rows.filter(x => x.setup && x.setup !== "بدون ستاپ").length;
-  const eligible = rows.filter(x => x.eligible).sort((a, b) => b.score - a.score);
-  const watch = rows.filter(x => !x.eligible && x.score >= 65 && x.trend === "صعودی" && x.setup !== "بدون ستاپ")
-    .sort((a, b) => b.score - a.score);
-  const caution = rows.filter(x => !x.eligible && (x.trend !== "صعودی" || x.score < 65 || x.setup === "بدون ستاپ" || Number(x.volumeRatio) < 0.9))
-    .sort((a, b) => b.score - a.score);
-
-  let marketTone = "ترکیبی و بدون برتری روشن";
-  if (bullish / count >= 0.65 && averageRsi >= 50 && averageRsi <= 68) marketTone = "تمایل صعودی در بخش عمده نمادهای بررسی‌شده";
-  else if (bullish / count <= 0.35 || averageRsi < 45) marketTone = "ضعیف یا متمایل به نزول";
-  else if (averageRsi > 68) marketTone = "دارای مومنتوم بالا؛ احتمال ورود دیرهنگام را در نظر بگیر";
-
-  const price = value => {
-    const n = Number(value);
-    return Number.isFinite(n) ? "$" + Number(n.toPrecision(7)).toString() : "—";
-  };
-  const describe = (x, index) => {
-    const status = x.eligible
-      ? "✅ واجد شرایط ورود طبق فیلتر اسکن"
-      : "👀 فقط مناسب زیرنظرگرفتن؛ هنوز سیگنال خرید نیست";
-    return (index + 1) + ") " + x.name + " (" + x.symbol + ")\n" +
-      "⭐ امتیاز: " + x.score + "/100 | روند: " + x.trend + "\n" +
-      "📊 RSI: " + Number(x.rsi).toFixed(1) + " | نسبت حجم: " + Number(x.volumeRatio).toFixed(2) + "x\n" +
-      "🧩 الگو: " + (x.setup || "نامشخص") + " | قیمت: " + price(x.current) + "\n" +
-      "🟢 حمایت: " + price(x.support) + " | 🔴 مقاومت: " + price(x.resistance) + "\n" +
-      status + (x.reasons?.length ? "\n⚠️ نکته: " + x.reasons.slice(0, 2).join("، ") : "");
-  };
-
-  let report = "📊 تحلیل مستقل آخرین اسکن بازار اسپات\n" +
-    "🕒 زمان داده‌ها: " + scannedAt + "\n" +
-    "━━━━━━━━━━━━━━━━━━\n\n" +
-    "🌐 تصویر کلی بازارِ بررسی‌شده\n" +
-    "• نمادهای دارای داده معتبر: " + count + "\n" +
-    "• روند صعودی: " + bullish + " | خنثی/نزولی: " + bearish + "\n" +
-    "• میانگین امتیاز: " + averageScore.toFixed(1) + "/100\n" +
-    "• میانگین RSI: " + averageRsi.toFixed(1) + "\n" +
-    "• نمادهای با نسبت حجم حداقل 1.5x: " + volumeStrong + "\n" +
-    "• نمادهای دارای الگوی ورود: " + withSetup + "\n\n" +
-    "🧭 جمع‌بندی: " + marketTone + ".\n" +
-    "این جمع‌بندی فقط بر اساس نمادهای فیلترشده همین اسکن است، نه کل بازار رمزارزها.\n\n";
-
-  report += "🎯 فرصت‌های واجد شرایط\n━━━━━━━━━━━━━━━━━━\n";
-  report += eligible.length
-    ? "\n" + eligible.slice(0, 5).map(describe).join("\n\n") + "\n\n"
-    : "\nدر این اسکن هیچ نمادی تمام شروط ورود را نداشت؛ بنابراین سیگنال خریدی صادر نشده است.\n\n";
-
-  report += "👀 گزینه‌های قابل‌پیگیری\n━━━━━━━━━━━━━━━━━━\n";
-  report += watch.length
-    ? "\n" + watch.slice(0, 5).map(describe).join("\n\n") + "\n\n"
-    : "\nدر داده‌های این اسکن گزینه‌ای با روند صعودی، امتیاز مناسب و الگوی مشخص برای واچ‌لیست پیدا نشد.\n\n";
-
-  report += "⚠️ موارد نیازمند احتیاط\n━━━━━━━━━━━━━━━━━━\n";
-  report += caution.length
-    ? "\n" + caution.slice(0, 5).map(x =>
-        "• " + x.name + " (" + x.symbol + ") | امتیاز " + x.score +
-        " | " + x.trend + " | " + (x.reasons?.slice(0, 2).join("، ") || "شرایط ورود کامل نیست")
-      ).join("\n") + "\n\n"
-    : "\nمورد شاخصی برای هشدار بر اساس داده‌های ذخیره‌شده ثبت نشده است.\n\n";
-
-  report += "━━━━━━━━━━━━━━━━━━\n" +
-    "📌 این گزارش تفسیر داده‌های آخرین اسکن است و اسکن تازه‌ای اجرا نمی‌کند.\n" +
-    "⚠️ تحلیل احتمالی است؛ تضمین سود یا توصیه قطعی خرید نیست.";
-
-  await sendLongMessage(env, chatId, report);
-  await sendMessage(env, chatId, "✅ تحلیل آخرین اسکن بازار آماده شد.", menuForChat(env, chatId));
 }
 
 async function showStatus(env, chatId) {
