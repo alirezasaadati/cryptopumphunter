@@ -1,0 +1,19 @@
+name: EQS experimental branch checks
+
+on:
+  push:
+    branches:
+      - experiment/eqs-diagnostics-20261124
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
