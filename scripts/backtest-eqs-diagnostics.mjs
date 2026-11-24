@@ -170,7 +170,7 @@ async function main() {
     bySide[side]={signals:xs.length,maeMfe60m:summarize(xs),
       mae15mAvgPct:xs.filter(x=>x.horizons[15]).length?xs.filter(x=>x.horizons[15]).reduce((s,x)=>s+x.horizons[15].maePct,0)/xs.filter(x=>x.horizons[15]).length:null,
       mae30mAvgPct:xs.filter(x=>x.horizons[30]).length?xs.filter(x=>x.horizons[30]).reduce((s,x)=>s+x.horizons[30].maePct,0)/xs.filter(x=>x.horizons[30]).length:null,
-      mae60mAvgPct:xs.filter(x=>x.horizons[60]).length?xs.filter(x=>s+x.horizons[60].maePct,0)/xs.filter(x=>x.horizons[60]).length:null};
+      mae60mAvgPct:xs.filter(x=>x.horizons[60]).length?xs.filter(x=>x.horizons[60]).reduce((s,x)=>s+x.horizons[60].maePct,0)/xs.filter(x=>x.horizons[60]).length:null};
   }
   for(const label of ["LOW_0_39","MID_40_69","HIGH_70_100","UNAVAILABLE"]){
     const xs=records.filter(r=>label==="UNAVAILABLE"?r.entryQualityScore==null:
@@ -186,8 +186,8 @@ async function main() {
       costs:"fees, funding, slippage excluded",exitModel:"none; diagnostic MAE/MFE only"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:symbolResults.filter(x=>!x.error).length,symbolResults,
     opportunitiesCompared:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0),
-    measuredSignals:records.length,legacyParityMismatches:records.filter(x=>!x.legacyParity).length,
-    legacyParityMatchRatePct:records.length?parityRows.length/records.length*100:null,
+    measuredSignals:records.length,legacyParityMismatches:symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0),
+    legacyParityMatchRatePct:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0)?(1-symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0)/symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0))*100:null,
     bySide,byEqsBucket,signals:records};
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/eqs-diagnostics.json",JSON.stringify(report,null,2));
