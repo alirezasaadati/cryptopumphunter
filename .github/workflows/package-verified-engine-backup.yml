@@ -1,0 +1,47 @@
+name: Package verified experimental engine backup
+on:
+  push:
+    branches: [backup/downloadable-engine-43usd-2026-11-24]
+    paths:
+      - ".github/workflows/package-verified-engine-backup.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4ac838a34e26ee0b96eaf5d793e649e017e4a610
+      - name: Assemble verified source and original backtest report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p package/source/src package/source/scripts package/source/.github/workflows package/report
+          cp src/index.js src/futures-trade-lifecycle.js package/source/src/
+          cp scripts/backtest-futures-lifecycle.mjs scripts/futures-staged-lifecycle.test.mjs package/source/scripts/
+          cp .github/workflows/final-experimental-signals-current-tp.yml package/source/.github/workflows/
+          gh run download 45412134595 --repo alirezasaadati/cryptopumphunter --name experimental-signals-staged-tp1-tp2-tp3-30d --dir package/report
+          cat > package/IMMUTABLE-BACKUP-MANIFEST.txt <<'EOF'
+          VERIFIED EXPERIMENTAL ENGINE BACKUP
+          Repository: alirezasaadati/cryptopumphunter
+          Exact source commit / original backtest commit: 4ac838a34e26ee0b96eaf5d793e649e017e4a610
+          Original workflow run: 45412134595
+          Original artifact: 14929425173 (experimental-signals-staged-tp1-tp2-tp3-30d)
+          Original result: 44 closed trades; gross realized PnL +43.6689 USD; initial capital 100 USD; final 143.6689 USD.
+          Scope: exact source files and original report artifact from the recorded run.
+          This package is a historical research snapshot, not a production deployment bundle.
+          No Cloudflare deployment is included or performed.
+          Source branch preserved separately: backup/profitable-staged-tp-2026-11-24
+          SHA src/index.js: 9084b880a2e6f6760c957ca9cc4731e0f4cbc051
+          SHA src/futures-trade-lifecycle.js: 5e68501b6bbcc60e9d893955963dfa1cde86cc1
+          SHA scripts/backtest-futures-lifecycle.mjs: 77c392727a778938d67bc45b02e33e8d22860193
+          SHA scripts/futures-staged-lifecycle.test.mjs: 7c009c0f7e4df182f29c0f1b6daaef0dac3dafce
+          EOF
+          (cd package && zip -qr ../verified-experimental-engine-backup.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-experimental-engine-backup
+          path: verified-experimental-engine-backup.zip
+          if-no-files-found: error
