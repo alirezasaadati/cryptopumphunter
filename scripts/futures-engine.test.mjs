@@ -535,6 +535,39 @@ test("Kraken candle loader excludes the currently forming candle",async()=>{
 });
 
 
+test("Kraken candle loader supports exact historical from/to ranges beyond the live 120-candle cap",async()=>{
+  const originalFetch=globalThis.fetch;
+  const now=Date.now();
+  const intervalMs=15*60*1000;
+  const fromMs=now-220*intervalMs;
+  const toMs=now-2*intervalMs;
+  const rows=Array.from({length:200},(_,i)=>{
+    const time=fromMs+i*intervalMs;
+    return {time,open:100+i,high:102+i,low:99+i,close:101+i,volume:20+i};
+  });
+  globalThis.fetch=async url=>{
+    const parsed=new URL(String(url));
+    assert.match(parsed.pathname,/api\/charts\/v1\/trade\/PF_TESTUSD\/15m$/);
+    assert.equal(parsed.searchParams.get("from"),String(Math.floor(fromMs/1000)));
+    assert.equal(parsed.searchParams.get("to"),String(Math.floor(toMs/1000)));
+    assert.equal(parsed.searchParams.get("count"),"5000");
+    return new Response(JSON.stringify({candles:rows}),{status:200});
+  };
+  try{
+    const candles=await getKrakenFuturesCandles("PF_TESTUSD","15m",{from:fromMs,to:toMs});
+    assert.equal(candles.length,200);
+    assert.equal(candles[0].time,fromMs);
+    assert.equal(candles.at(-1).time,fromMs+199*intervalMs);
+  }finally{globalThis.fetch=originalFetch;}
+});
+
+test("Kraken historical candle loader rejects an inverted time range",async()=>{
+  await assert.rejects(
+    getKrakenFuturesCandles("PF_TESTUSD","1h",{from:2000,to:1000}),
+    /زمان پایان باید بعد از زمان شروع باشد/
+  );
+});
+
 test("entry drift filter rejects a stale candle-close entry",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
