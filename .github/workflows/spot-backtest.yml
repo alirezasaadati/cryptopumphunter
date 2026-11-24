@@ -14,3 +14,5 @@ jobs:
           node-version: 22
       - name: Run Kraken Spot 24h walk-forward backtest
         run: node scripts/spot-backtest.mjs
+      - name: Smoke-test live Kraken Spot market data
+        run: node scripts/spot-live-smoke.mjs
