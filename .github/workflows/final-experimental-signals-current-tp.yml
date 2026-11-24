@@ -1,4 +1,4 @@
-name: Final experimental signals with current TP validation
+name: Experimental signals with staged TP1 TP2 TP3 validation
 on:
   push:
     branches: [experiment/final-experimental-signals-current-tp-20261124]
@@ -24,7 +24,7 @@ jobs:
           mapfile -t test_files < <(find scripts -maxdepth 1 -type f -name '*.test.mjs' ! -name 'futures-engine.test.mjs' | sort)
           node --test "${test_files[@]}"
           node --check scripts/backtest-futures-lifecycle.mjs
-      - name: Run matched 30-day backtest with experimental signals and current TP
+      - name: Run matched 30-day backtest with experimental signals and staged TP1 TP2 TP3
         env:
           LIFECYCLE_BACKTEST_DAYS: "30"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
@@ -35,6 +35,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: final-experimental-signals-current-tp-30d
+          name: experimental-signals-staged-tp1-tp2-tp3-30d
           path: artifacts/
           if-no-files-found: warn
