@@ -902,7 +902,7 @@ function menuForChat(env, chatId) {
 }
 async function configureTelegramMenu(env, chatId) {
   const commands = [
-    { command: "start", description: "نمایش منوی اصلی" },
+    { command: "start", description: "شروع و معرفی ربات" },
     { command: "menu", description: "نمایش منوی اصلی" },
     { command: "futures", description: "دریافت سیگنال‌های فیوچرز" },
     { command: "status", description: "وضعیت سرویس" },
