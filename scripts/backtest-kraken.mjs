@@ -266,7 +266,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     baseline:{signals:strategies.baseline.signals,valid:strategies.baseline.valid,risky:strategies.baseline.risky,metrics:summarize(strategies.baseline.trades)},
     current:{signals:strategies.current.signals,valid:strategies.current.valid,risky:strategies.current.risky,rejected:strategies.current.rejected,rejectReasons:strategies.current.rejectReasons,metrics:summarize(strategies.current.trades)},
     currentMargin30:{metrics:summarizeMargin30(strategies.currentMargin30.trades)},
-    trades:{baseline:strategies.baseline.trades,current:strategies.current.trades}
+    trades:{baseline:strategies.baseline.trades,current:strategies.current.trades,currentMargin30:strategies.currentMargin30.trades}
   };
 }
 async function main() {
