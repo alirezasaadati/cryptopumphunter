@@ -146,10 +146,11 @@ const MAIN_MENU = {
   ]
 };
 
-const BACK_MENU = {
-  inline_keyboard: [
-    [{ text: "🏠 منوی اصلی", callback_data: "menu" }]
-  ]
+const MAIN_REPLY_KEYBOARD = {
+  keyboard: [[{ text: "📋 منو" }]],
+  resize_keyboard: true,
+  is_persistent: true,
+  input_field_placeholder: "برای دیدن گزینه‌ها، منو را بزن"
 };
 
 export default {
@@ -447,8 +448,8 @@ function archiveChannelId(env) {
 }
 async function sendArchiveAccessLink(env, userId) {
   const channelId = archiveChannelId(env);
-  if (!channelId) return sendMessage(env,userId,"⚠️ اتصال آرشیو هنوز کامل تنظیم نشده است.",BACK_MENU);
-  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ دسترسی شما به آرشیو فعال نیست.",BACK_MENU);
+  if (!channelId) return sendMessage(env,userId,"⚠️ اتصال آرشیو هنوز کامل تنظیم نشده است.");
+  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ دسترسی شما به آرشیو فعال نیست.");
   try {
     const key="signal-archive:join-request-link";
     let link=null;
@@ -467,10 +468,10 @@ async function sendArchiveAccessLink(env, userId) {
         catch(error){ console.error("Archive invite cache write failed:",String(error?.message||error)); }
       }
     }
-    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link,BACK_MENU);
+    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link);
   } catch(error) {
     console.error("Archive invite link failed:",String(error?.message||error));
-    await sendMessage(env,userId,"⚠️ ساخت لینک ورود به آرشیو فعلاً ممکن نشد.",BACK_MENU);
+    await sendMessage(env,userId,"⚠️ ساخت لینک ورود به آرشیو فعلاً ممکن نشد.");
   }
 }
 async function handleArchiveJoinRequest(request,env) {
@@ -891,14 +892,9 @@ async function changeMemberAccess(env,ownerId,id,allow) {
 }
 
 // ---------------- MAIN MENU ----------------
-function menuForChat(env, chatId) {
-  const keyboard = MAIN_MENU.inline_keyboard.map(row => row.slice());
-  if (isOwner(chatId, env)) keyboard.splice(keyboard.length - 1, 0,
-    [{ text: "👥 مدیریت اعضا", callback_data: "members:0" }],
-    [{ text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }],
-    [{ text: "⚠️ بررسی ارسال‌های نامشخص", callback_data: "outbox:review" }]
-  );
-  return { inline_keyboard: keyboard };
+function menuForChat() {
+  // Routine replies stay clean. The full menu is shown only on explicit request.
+  return null;
 }
 async function configureTelegramMenu(env, chatId) {
   const commands = [
@@ -910,7 +906,7 @@ async function configureTelegramMenu(env, chatId) {
   ];
   const tasks = [
     telegram("setMyCommands", env, { commands }),
-    telegram("setChatMenuButton", env, { chat_id: chatId, menu_button: { type: "commands" } }),
+    telegram("setChatMenuButton", env, { chat_id: chatId, menu_button: { type: "default" } }),
   ];
   const results = await Promise.allSettled(tasks);
   const failed = results.filter(x => x.status === "rejected");
@@ -921,17 +917,30 @@ function welcomeSeenKey(chatId) {
   return `welcome-seen:${chatId}`;
 }
 
-async function showMenu(env, chatId, welcome = false) {
+async function showMenu(env, chatId) {
   await configureTelegramMenu(env, chatId);
-  const messageText = welcome
-    ? "🤖 خوش آمدید به تریدیار!"
-    : "📋 منوی اصلی تریدیار";
-  await sendMessage(env, chatId, messageText, menuForChat(env, chatId));
+  await sendMessage(env, chatId, "📋 گزینه‌های تریدیار:", MAIN_MENU);
+}
+
+async function showWelcome(env, chatId, welcome = true) {
+  await configureTelegramMenu(env, chatId);
+  await sendMessage(
+    env,
+    chatId,
+    welcome ? "🤖 خوش آمدید به تریدیار!\nبرای مشاهده امکانات، دکمهٔ «📋 منو» را بزنید." : "برای مشاهده امکانات، دکمهٔ «📋 منو» را بزنید.",
+    MAIN_REPLY_KEYBOARD
+  );
 }
 
 async function handleTelegramCommand(command, chatId, env, message) {
   try {
     if (await handleOwnerAccessCommand(command, chatId, env, message)) return;
+
+    if (["📋 منو", "منو"].includes(String(message?.text || "").trim())) {
+      if (await isApproved(chatId, env)) await showMenu(env, chatId);
+      else await requestMembership(env, chatId, message);
+      return;
+    }
 
     if (command === "/start") {
       await configureTelegramMenu(env, chatId);
@@ -944,7 +953,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
             console.error("Welcome state lookup failed:", error?.message || error);
           }
         }
-        await showMenu(env, chatId, !welcomeAlreadyShown);
+        await showWelcome(env, chatId, !welcomeAlreadyShown);
         if (!welcomeAlreadyShown && env.APP_KV) {
           try {
             await env.APP_KV.put(welcomeSeenKey(chatId), "1");
@@ -1068,6 +1077,19 @@ async function handleTelegramCommand(command, chatId, env, message) {
   }
 }
 
+async function clearInlineMenu(env, message) {
+  if (!message?.chat?.id || !message?.message_id) return;
+  try {
+    await telegram("editMessageReplyMarkup", env, {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      reply_markup: { inline_keyboard: [] }
+    });
+  } catch (error) {
+    console.error("Could not clear selected menu keyboard:", String(error?.message || error));
+  }
+}
+
 async function handleCallback(query, env) {
   const chatId = query.message?.chat?.id;
   const action = query.data || "";
@@ -1110,6 +1132,7 @@ async function handleCallback(query, env) {
   }
 
   await answerCallback(env, query.id);
+  if (action !== "menu") await clearInlineMenu(env, query.message);
 
   try {
     if (action === "menu") {
@@ -1120,7 +1143,7 @@ async function handleCallback(query, env) {
       await sendMessage(env, chatId,
         "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
         "( برای بررسی دقیق علل سود و زیان هر کاربر ) اقدام کنید .\n\n" +
-        "🔗 لینک : https://www.lbk.pub/ref/67XF8", BACK_MENU);
+        "🔗 لینک : https://www.lbk.pub/ref/67XF8");
       return;
     }
     if (action === "futures") {
@@ -1133,8 +1156,7 @@ async function handleCallback(query, env) {
         chat_id: chatId,
         text: CAPITAL_MANAGEMENT_TEXT,
         parse_mode: "HTML",
-        disable_web_page_preview: true,
-        reply_markup: BACK_MENU
+        disable_web_page_preview: true
       });
       return;
     }
@@ -1149,7 +1171,7 @@ async function handleCallback(query, env) {
     }
 
     if (action === "about") {
-      await sendMessage(env, chatId, ABOUT_TEXT, BACK_MENU);
+      await sendMessage(env, chatId, ABOUT_TEXT);
       return;
     }
 
