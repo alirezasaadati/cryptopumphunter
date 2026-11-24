@@ -103,14 +103,41 @@ function measureExcursion(side, entry, bars, start, end) {
   const favorablePct=side==="LONG" ? (highest-entry)/entry*100 : (entry-lowest)/entry*100;
   return {maePct:Math.max(0,adversePct),mfePct:Math.max(0,favorablePct)};
 }
+function measureEntryHeat(side, entry, bars, start, end, signalClose, thresholdPct=0.1) {
+  let firstFavorableIndex=-1;
+  const threshold=thresholdPct/100;
+  for(let i=start;i<end;i++){
+    const favorableClose=side==="LONG"
+      ? bars[i].close>=entry*(1+threshold)
+      : bars[i].close<=entry*(1-threshold);
+    if(favorableClose){firstFavorableIndex=i;break;}
+  }
+  const lastExclusive=firstFavorableIndex>=0?firstFavorableIndex+1:end;
+  const window=bars.slice(start,lastExclusive);
+  if(!window.length)return null;
+  const highest=Math.max(...window.map(x=>x.high)),lowest=Math.min(...window.map(x=>x.low));
+  const maePct=Math.max(0,side==="LONG"?(entry-lowest)/entry*100:(highest-entry)/entry*100);
+  return {maeBeforeFavorablePct:maePct,reached:firstFavorableIndex>=0,
+    timeToFavorableCloseMinutes:firstFavorableIndex>=0
+      ? (bars[firstFavorableIndex].time+INTERVALS["5m"]-signalClose)/60000 : null};
+}
 function summarize(rows) {
-  const avg=(xs,key)=>xs.length?xs.reduce((s,x)=>s+Number(x[key]||0),0)/xs.length:null;
-  const p=(xs,key)=>xs.length?xs.slice().sort((a,b)=>a[key]-b[key])[Math.floor((xs.length-1)*0.95)][key]:null;
+  const avg=(xs,key)=>{
+    const vals=xs.map(x=>x[key]).filter(Number.isFinite);
+    return vals.length?vals.reduce((s,x)=>s+x,0)/vals.length:null;
+  };
+  const p=(xs,key)=>{const vals=xs.map(x=>x[key]).filter(Number.isFinite).sort((a,b)=>a-b);
+    return vals.length?vals[Math.floor((vals.length-1)*0.95)]:null;};
   const maeAvgPct=avg(rows,"maePct"), mfeAvgPct=avg(rows,"mfePct"), stopAvgPct=avg(rows,"stopDistancePct");
   return {count:rows.length,maeAvgPct,maeP95Pct:p(rows,"maePct"),
     mfeAvgPct,mfeP95Pct:p(rows,"mfePct"),stopDistanceAvgPct:stopAvgPct,
     maeToStopRatio:maeAvgPct!==null&&stopAvgPct>0?maeAvgPct/stopAvgPct:null,
-    mfeMaeRatio:maeAvgPct>0&&mfeAvgPct!==null?mfeAvgPct/maeAvgPct:null};
+    mfeMaeRatio:maeAvgPct>0&&mfeAvgPct!==null?mfeAvgPct/maeAvgPct:null,
+    maeBeforeFavorableAvgPct:avg(rows,"maeBeforeFavorablePct"),
+    maeBeforeFavorableP95Pct:p(rows,"maeBeforeFavorablePct"),
+    maeBeforeFavorableToStopAvg:avg(rows,"maeBeforeFavorableToStopRatio"),
+    favorableCloseRatePct:rows.length?rows.filter(x=>x.reachedFirstFavorableClose).length/rows.length*100:null,
+    timeToFavorableCloseAvgMin:avg(rows,"timeToFirstFavorableCloseMinutes")};
 }
 async function main() {
   const endMs=Date.now(), startMs=endMs-DAYS*86400000, fromMs=startMs-WARMUP_DAYS*86400000;
@@ -164,13 +191,19 @@ async function main() {
         }
         const full=measureExcursion(exp.side,entry,m5,begin,endIndex);
         if(!full)continue;
+        const stopDistancePct=Math.abs(entry-Number(exp.stop))/entry*100;
+        const entryHeat=measureEntryHeat(exp.side,entry,m5,begin,endIndex,signalClose,0.1);
         const row={symbol:ticker.symbol,side:exp.side,signalTime:signalClose,entry,score:exp.score,
           entryQualityScore:exp.entryQualityScore??null,entryQualityRaw:exp.entryQualityRaw??null,
           entryQualityAvailableFactors:exp.entryQualityAvailableFactors??0,entryQualityDetails:exp.entryQualityDetails??null,
           entryQualityScoreV2:exp.entryQualityScoreV2??null,entryQualityRawV2:exp.entryQualityRawV2??null,
           entryQualityDetailsV2:exp.entryQualityDetailsV2??null,entryQualityScoreV3:exp.entryQualityScoreV3??null,entryQualityRawV3:exp.entryQualityRawV3??null,entryQualityDetailsV3:exp.entryQualityDetailsV3??null,entryTimingScore:exp.entryTimingScore??null,entryTimingRaw:exp.entryTimingRaw??null,entryTimingDetails:exp.entryTimingDetails??null,
-          riskLevel:exp.riskLevel??null,stop:Number(exp.stop),stopDistancePct:Math.abs(entry-Number(exp.stop))/entry*100,
+          riskLevel:exp.riskLevel??null,stop:Number(exp.stop),stopDistancePct,
           historicalQuoteVolume:commonTicker.quoteVolume,horizons,maePct:full.maePct,mfePct:full.mfePct,
+          maeBeforeFavorablePct:entryHeat?.maeBeforeFavorablePct??null,
+          maeBeforeFavorableToStopRatio:entryHeat&&stopDistancePct>0?entryHeat.maeBeforeFavorablePct/stopDistancePct:null,
+          reachedFirstFavorableClose:entryHeat?.reached??false,
+          timeToFirstFavorableCloseMinutes:entryHeat?.timeToFavorableCloseMinutes??null,
           legacyParity:diffs.length===0,parityDiffs:diffs};
         local.push(row); records.push(row);
       }
@@ -216,7 +249,7 @@ async function main() {
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures public historical OHLC",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
     methodology:{sameDataAndTimestamps:true,closedCandlesOnly:true,historicalQuoteVolume:"rolling 24h sum of hourly base volume * close (approximate USD turnover)",signalAt:"closed 1h candle",entry:"next 1h candle open",
-      excursionResolution:"5m OHLC",horizonsMinutes:HORIZONS,mae:"maximum adverse price excursion from entry",
+      excursionResolution:"5m OHLC",horizonsMinutes:HORIZONS,mae:"maximum adverse price excursion from entry",entryHeat:"maximum adverse excursion until first 5m close at least 0.1% favorable; if not reached, through 60m",
       mfe:"maximum favorable price excursion from entry",legacyParityFields:"signal side, eligibility, entry/stop/targets, score/priority and legacy entry diagnostics",
       ambiguity:"MAE/MFE are range excursions, not simulated stop/target fills",universe:"top current Kraken PF linear perpetuals by current quote volume; current-listing/current-volume survivorship bias applies",
       costs:"fees, funding, slippage excluded",exitModel:"none; diagnostic MAE/MFE only",entryTimingScore:"RSI + 1h EMA20 distance + direction-specific pullback + inverse 15m momentum confirmation + 15m EMA9 extension; excludes 4h trend alignment"},
