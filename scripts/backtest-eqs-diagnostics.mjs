@@ -194,7 +194,8 @@ async function main() {
     const xs=records.filter(r=>bucketFor(r.entryQualityScore)===label);
     byEqsBucket[label]={signals:xs.length,...summarize(xs)};
     const v2=records.filter(r=>bucketFor(r.entryQualityScoreV2)===label);
-    byEqsV2Bucket[label]={signals:v2.length,...summarize(v2)};\n    const v3=records.filter(r=>bucketFor(r.entryQualityScoreV3)===label);\n    byEqsV3Bucket[label]={signals:v3.length,...summarize(v3)};
+    byEqsV2Bucket[label]={signals:v2.length,...summarize(v2)};
+    const v3=records.filter(r=>bucketFor(r.entryQualityScoreV3)===label);\n    byEqsV3Bucket[label]={signals:v3.length,...summarize(v3)};
   }
   for(const side of ["LONG","SHORT"]){
     byEqsBucketAndSide[side]={}; byEqsV2BucketAndSide[side]={}; byEqsV3BucketAndSide[side]={};
@@ -202,7 +203,8 @@ async function main() {
       const xs=records.filter(r=>r.side===side&&bucketFor(r.entryQualityScore)===label);
       byEqsBucketAndSide[side][label]={signals:xs.length,...summarize(xs)};
       const v2=records.filter(r=>r.side===side&&bucketFor(r.entryQualityScoreV2)===label);
-      byEqsV2BucketAndSide[side][label]={signals:v2.length,...summarize(v2)};\n      const v3=records.filter(r=>r.side===side&&bucketFor(r.entryQualityScoreV3)===label);\n      byEqsV3BucketAndSide[side][label]={signals:v3.length,...summarize(v3)};
+      byEqsV2BucketAndSide[side][label]={signals:v2.length,...summarize(v2)};
+      const v3=records.filter(r=>r.side===side&&bucketFor(r.entryQualityScoreV3)===label);\n      byEqsV3BucketAndSide[side][label]={signals:v3.length,...summarize(v3)};
     }
   }
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures public historical OHLC",
