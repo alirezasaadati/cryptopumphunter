@@ -899,9 +899,10 @@ async function changeMemberAccess(env,ownerId,id,allow) {
 
 // ---------------- MAIN MENU ----------------
 function menuForChat(env, chatId) {
-  // Normal bot replies must not reattach a persistent Reply Keyboard.
-  // The main menu is shown only as an inline keyboard on demand.
-  return undefined;
+  // Keep only a compact inline shortcut; never attach a persistent Reply Keyboard.
+  return {
+    inline_keyboard: [[{ text: "📋 منوی اصلی", callback_data: "menu" }]]
+  };
 }
 async function configureTelegramMenu(env, chatId) {
   const commands = [
