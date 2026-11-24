@@ -12,6 +12,14 @@ const SLIPPAGE_PER_SIDE = Math.max(0, Number(process.env.BACKTEST_SLIPPAGE || 0.
 const MAX_HOLD_HOURS = 72;
 const TARGET_WEIGHTS = [0.40, 0.35, 0.25];
 
+function ema(values, period) {
+  if (!Array.isArray(values) || values.length < period) return NaN;
+  const multiplier = 2 / (period + 1);
+  let value = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < values.length; i++) value = values[i] * multiplier + value * (1 - multiplier);
+  return value;
+}
+
 async function getJson(url) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(25000) });
   const body = await response.text();
