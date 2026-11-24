@@ -380,8 +380,10 @@ async function analyzeCoinOnBestPair(coin, pairs, tickerResult, btcContext) {
   const book = await fetchOrderBook(selected.pair);
   const depth = calculateDepth(book, (selected.bid + selected.ask) / 2);
   const candles = await fetchCandles(selected.pair);
+  if (candles.length < 25) throw new Error("برای محاسبه تغییر ۲۴ ساعته، حداقل ۲۵ کندل لازم است.");
   const assetChange24Pct = (selected.last / candles.at(-25).close - 1) * 100;
-  return analyze(coin, candles, {
+  const normalizedCoin = { ...coin, percent_change_24h: assetChange24Pct };
+  return analyze(normalizedCoin, candles, {
     ...selected, pair: selected.pair.wsname,
     bidDepthUsd: depth.bidUsd, askDepthUsd: depth.askUsd,
     btcTrendUp: btcContext.btcTrendUp,
@@ -389,45 +391,61 @@ async function analyzeCoinOnBestPair(coin, pairs, tickerResult, btcContext) {
   });
 }
 
+export async function testSpotDataSources() {
+  const coinPage=await fetchCoinLore(0),pairs=await getPairs();
+  const btcPairs=findSpotPairs({symbol:"BTC"},pairs);
+  if(!btcPairs.length)throw new Error("جفت BTC/USD یا BTC/USDT در Kraken Spot پیدا نشد.");
+  const tickers=await fetchTickers(btcPairs),selected=selectBestSpotPair(btcPairs,tickers);
+  if(!selected)throw new Error("Ticker جفت مرجع BTC در Kraken Spot قابل استفاده نیست.");
+  const candles=await fetchCandles(selected.pair),btcContext=buildBtcContext(candles,selected.last);
+  return {ok:true,coinLore:{ok:coinPage.length>0,rows:coinPage.length},krakenSpot:{ok:pairs.length>0,onlinePairs:pairs.length},btcReference:selected.pair.wsname,closedCandles:candles.length,btcTrendUp:btcContext.btcTrendUp};
+}
+
 export async function runSpotScan() {
   const started = Date.now();
   const coinResult = await getCoins();
   if (!coinResult.coins.length) {
-    return { report: "❌ دریافت فهرست بازار از CoinLore ناموفق بود.\n" + coinResult.errors.slice(0, 5).join("\n"), opportunities: [], diagnostics: [] };
+    return { report: "❌ دریافت فهرست بازار از CoinLore ناموفق بود.\n" + coinResult.errors.slice(0, 5).join("\n"), opportunities: [], diagnostics: { dataFailures: 0 } };
   }
   const candidates = coinResult.coins.filter(coin => {
     const cap = Number(coin.market_cap_usd), volume = Number(coin.volume24), price = Number(coin.price_usd);
     return Number.isFinite(cap) && Number.isFinite(volume) && Number.isFinite(price) &&
       cap >= CFG.MIN_CAP && cap <= CFG.MAX_CAP && volume >= CFG.MIN_MARKET_VOLUME_USD && price > 0;
   }).sort((a, b) => Number(b.volume24) - Number(a.volume24)).slice(0, CFG.MAX_CANDIDATES);
-  if (!candidates.length) return { report: "⚠️ هیچ ارزی با فیلترهای اولیه ارزش بازار و حجم مطابقت نداشت.", opportunities: [], diagnostics: [] };
+  if (!candidates.length) return { report: "⚠️ هیچ ارزی با فیلترهای اولیه ارزش بازار و حجم مطابقت نداشت.", opportunities: [], diagnostics: { dataFailures: 0 } };
 
   let pairs;
   try { pairs = await getPairs(); }
-  catch (error) { return { report: "❌ دریافت جفت‌ارزهای Kraken ناموفق بود:\n" + String(error.message || error), opportunities: [], diagnostics: [] }; }
+  catch (error) { return { report: "❌ دریافت جفت‌ارزهای Kraken ناموفق بود:\n" + String(error.message || error), opportunities: [], diagnostics: { dataFailures: 0 } }; }
 
   const candidatePairs = candidates.flatMap(coin => findSpotPairs(coin, pairs));
   const btcPairs = findSpotPairs({ symbol: "BTC" }, pairs);
   const allTickerPairs = [...candidatePairs, ...btcPairs];
   let tickerResult;
   try { tickerResult = await fetchTickers(allTickerPairs); }
-  catch (error) { return { report: "❌ دریافت Tickerهای Kraken ناموفق بود:\n" + String(error.message || error), opportunities: [], diagnostics: [] }; }
+  catch (error) { return { report: "❌ دریافت Tickerهای Kraken ناموفق بود:\n" + String(error.message || error), opportunities: [], diagnostics: { dataFailures: 0 } }; }
   const btcSelected = selectBestSpotPair(btcPairs, tickerResult);
-  if (!btcSelected) return { report: "⚠️ جفت BTC/USD یا BTC/USDT برای فیلتر روند بازار در دسترس نیست؛ برای جلوگیری از سیگنال‌های خلاف جهت بازار، اسکن متوقف شد.", opportunities: [], diagnostics: [] };
+  if (!btcSelected) return { report: "⚠️ جفت BTC/USD یا BTC/USDT برای فیلتر روند بازار در دسترس نیست؛ برای جلوگیری از سیگنال‌های خلاف جهت بازار، اسکن متوقف شد.", opportunities: [], diagnostics: { dataFailures: 0 } };
   let btcContext;
   try { btcContext = buildBtcContext(await fetchCandles(btcSelected.pair), btcSelected.last); }
-  catch (error) { return { report: "⚠️ دریافت/تحلیل روند بیت‌کوین ناموفق بود؛ اسکن اسپات بدون فیلتر بازار اجرا نمی‌شود.\n" + String(error.message || error), opportunities: [], diagnostics: [] }; }
+  catch (error) { return { report: "⚠️ دریافت/تحلیل روند بیت‌کوین ناموفق بود؛ اسکن اسپات بدون فیلتر بازار اجرا نمی‌شود.\n" + String(error.message || error), opportunities: [], diagnostics: { dataFailures: 0 } }; }
 
   const analyzed = await mapLimit(candidates, CFG.CONCURRENCY, async coin => analyzeCoinOnBestPair(coin, pairs, tickerResult, btcContext));
-  const opportunities = analyzed.filter(item => item && item.eligible)
-    .sort((a, b) => b.score - a.score || b.rewardRisk - a.rewardRisk)
-    .slice(0, CFG.MAX_RESULTS);
-  const report = [
+  const dataFailures=analyzed.filter(item=>item?.rejected);
+  const evaluated=analyzed.filter(item=>item&&!item.rejected);
+  const ruleRejected=evaluated.filter(item=>!item.eligible);
+  const opportunities=evaluated.filter(item=>item.eligible)
+    .sort((a,b)=>b.score-a.score||b.rewardRisk-a.rewardRisk).slice(0,CFG.MAX_RESULTS);
+  const report=[
     "📊 اسکن دستی بازار اسپات Kraken",
     "━━━━━━━━━━━━━━━━━━",
-    "ارزهای بررسی‌شده: " + candidates.length,
-    "جفت‌های معاملاتی بررسی‌شده: " + candidatePairs.length + " (USD و USDT)",
-    "دارای شرایط ورود و نقدینگی: " + opportunities.length,
+    "ارزهای انتخاب‌شده: "+candidates.length,
+    "ارزهای تحلیل‌شده با موفقیت: "+evaluated.length,
+    "خطاهای دریافت داده/تحلیل: "+dataFailures.length,
+    "ردشده به‌علت شروط فنی/نقدینگی: "+ruleRejected.length,
+    "خطاهای صفحات CoinLore: "+coinResult.errors.length,
+    "جفت‌های معاملاتی بررسی‌شده: "+candidatePairs.length+" (USD و USDT)",
+    "دارای شرایط ورود و نقدینگی: "+opportunities.length,
     "حداکثر اسپرد: " + CFG.MAX_SPREAD_PCT + "% | حداقل عمق هر سمت دفتر سفارش: " + CFG.MIN_BOOK_DEPTH_USD.toLocaleString("en-US") + " USD",
     "فیلتر بازار: BTC صعودی و قدرت نسبی ارز در برابر BTC مثبت",
     "",
@@ -436,10 +454,12 @@ export async function runSpotScan() {
     ...opportunities.map((item, index) => (index + 1) + ". " + item.coin.name + " (" + item.coin.symbol + ") | " +
       item.pair + " | امتیاز " + item.score + " | قیمت " + formatSpotPrice(item.current) + " " + item.quote),
     "",
-    "زمان اسکن: " + Math.round((Date.now() - started) / 1000) + " ثانیه",
+    ...(dataFailures.length?["","خطاهای داده (نمادها): "+dataFailures.slice(0,5).map(item=>item.coin?.symbol||"نامشخص").join("، ")]:[]),
+    ...(coinResult.errors.length?["","هشدار CoinLore: "+coinResult.errors.slice(0,3).join(" | ")]:[]),
+    "زمان اسکن: "+Math.round((Date.now()-started)/1000)+" ثانیه",
     "⚠️ این رتبه‌بندی احتمال‌محور است و تضمین رشد یا سود ۲۴ ساعته نیست."
   ].join("\n");
-  return { report, opportunities };
+  return {report,opportunities,diagnostics:{selected:candidates.length,evaluated:evaluated.length,dataFailures:dataFailures.length,ruleRejected:ruleRejected.length,coinLorePageErrors:coinResult.errors.length,failedAssets:dataFailures.map(item=>({error:item.rejected}))}};
 }
 
 export async function runSpotAssetDetail(symbol, quote) {
@@ -456,14 +476,14 @@ export async function runSpotAssetDetail(symbol, quote) {
   if (!selected) throw new Error("نقدینگی یا اسپرد جفت انتخاب‌شده دیگر قابل قبول نیست.");
   if (!btcSelected) throw new Error("جفت BTC/USD یا BTC/USDT برای فیلتر روند بازار در دسترس نیست.");
   coin.volume24 = selected.quoteVolumeUsd;
-  const dayOpen = Number(selected.ticker.o);
-  coin.percent_change_24h = dayOpen > 0 ? (selected.last / dayOpen - 1) * 100 : 0;
   const [book, candles, btcCandles] = await Promise.all([
     fetchOrderBook(pair), fetchCandles(pair), fetchCandles(btcSelected.pair)
   ]);
   const depth = calculateDepth(book, (selected.bid + selected.ask) / 2);
   const btcContext = buildBtcContext(btcCandles, btcSelected.last);
+  if (candles.length < 25) throw new Error("برای محاسبه تغییر ۲۴ ساعته، حداقل ۲۵ کندل لازم است.");
   const assetChange24Pct = (selected.last / candles.at(-25).close - 1) * 100;
+  coin.percent_change_24h = assetChange24Pct;
   const item = analyze(coin, candles, {
     ...selected, pair: pair.wsname, bidDepthUsd: depth.bidUsd, askDepthUsd: depth.askUsd,
     btcTrendUp: btcContext.btcTrendUp,
