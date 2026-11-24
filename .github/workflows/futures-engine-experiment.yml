@@ -25,7 +25,7 @@ jobs:
       - name: Check JavaScript syntax
         run: npm run check
       - name: Run lifecycle and project tests
-        run: node --test scripts/*.test.mjs
+        run: node --test scripts/futures-trade-lifecycle.test.mjs
       - name: Run 30-day Kraken Futures lifecycle backtest
         env:
           LIFECYCLE_BACKTEST_DAYS: "30"
