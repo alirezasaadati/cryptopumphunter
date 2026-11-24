@@ -6,7 +6,7 @@ import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
 
 const BASE = "https://futures.kraken.com";
 const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
-const DAYS = Math.max(7, Math.min(90, Number(process.env.EQS_BACKTEST_DAYS || 30)));
+const DAYS = Math.max(7, Math.min(180, Number(process.env.EQS_BACKTEST_DAYS || 30)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(15, Number(process.env.EQS_BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 55;
 const HORIZONS = [15, 30, 60];
@@ -121,6 +121,62 @@ function measureEntryHeat(side, entry, bars, start, end, signalClose, thresholdP
     timeToFavorableCloseMinutes:firstFavorableIndex>=0
       ? (bars[firstFavorableIndex].time+INTERVALS["5m"]-signalClose)/60000 : null};
 }
+function simulateTradeLifecycle(side,entry,initialStop,targets,bars,start,end,moveStopToBreakeven=false){
+  const risk=Math.abs(entry-initialStop);
+  if(!(risk>0)||!targets.every(Number.isFinite))return null;
+  const direction=side==="LONG"?1:-1;
+  let remaining=1, realizedR=0, targetHits=0, activeStop=initialStop, exitReason="TIME_EXIT";
+  let barsHeld=0;
+  for(let i=start;i<end&&remaining>1e-9;i++){
+    const bar=bars[i]; if(!bar)break;
+    barsHeld++;
+    const stopTouched=side==="LONG"?bar.low<=activeStop:bar.high>=activeStop;
+    if(stopTouched){
+      realizedR+=remaining*((activeStop-entry)*direction/risk);
+      remaining=0;
+      exitReason=moveStopToBreakeven&&targetHits>0?"BREAKEVEN_STOP":"STOP";
+      break;
+    }
+    const target=targets[targetHits];
+    if(target!==undefined){
+      const targetTouched=side==="LONG"?bar.high>=target:bar.low<=target;
+      if(targetTouched){
+        realizedR+=(1/3)*((target-entry)*direction/risk);
+        remaining-=1/3;
+        targetHits++;
+        if(targetHits===3){remaining=0;exitReason="ALL_TARGETS";}
+        else if(moveStopToBreakeven&&targetHits>=1)activeStop=entry;
+        // At most one target per 5m candle: intrabar ordering is unknown.
+      }
+    }
+  }
+  if(remaining>1e-9){
+    const last=bars[Math.max(start,Math.min(end-1,bars.length-1))];
+    if(!last)return null;
+    realizedR+=remaining*((last.close-entry)*direction/risk);
+  }
+  return {netR:realizedR,targetHits,exitReason,barsHeld,remainingAtHorizon:remaining};
+}
+function summarizeTrades(rows,key){
+  const xs=rows.map(x=>x[key]).filter(Boolean);
+  if(!xs.length)return {trades:0};
+  const rs=xs.map(x=>x.netR).filter(Number.isFinite);
+  const wins=rs.filter(x=>x>0),losses=rs.filter(x=>x<0);
+  const sumWin=wins.reduce((s,x)=>s+x,0),sumLoss=Math.abs(losses.reduce((s,x)=>s+x,0));
+  const sorted=[...rs].sort((a,b)=>a-b);
+  return {trades:rs.length,avgR:rs.reduce((s,x)=>s+x,0)/rs.length,
+    medianR:sorted[Math.floor((sorted.length-1)/2)],
+    winRatePct:wins.length/rs.length*100,lossRatePct:losses.length/rs.length*100,
+    profitFactorR:sumLoss>0?sumWin/sumLoss:null,
+    stopRatePct:xs.filter(x=>x.exitReason==="STOP").length/xs.length*100,
+    breakevenStopRatePct:xs.filter(x=>x.exitReason==="BREAKEVEN_STOP").length/xs.length*100,
+    allTargetsRatePct:xs.filter(x=>x.exitReason==="ALL_TARGETS").length/xs.length*100,
+    timeExitRatePct:xs.filter(x=>x.exitReason==="TIME_EXIT").length/xs.length*100,
+    tp1RatePct:xs.filter(x=>x.targetHits>=1).length/xs.length*100,
+    tp2RatePct:xs.filter(x=>x.targetHits>=2).length/xs.length*100,
+    tp3RatePct:xs.filter(x=>x.targetHits>=3).length/xs.length*100,
+    avgBarsHeld:xs.reduce((s,x)=>s+x.barsHeld,0)/xs.length};
+}
 function summarize(rows) {
   const avg=(xs,key)=>{
     const vals=xs.map(x=>x[key]).filter(Number.isFinite);
@@ -193,13 +249,19 @@ async function main() {
         if(!full)continue;
         const stopDistancePct=Math.abs(entry-Number(exp.stop))/entry*100;
         const entryHeat=measureEntryHeat(exp.side,entry,m5,begin,endIndex,signalClose,0.1);
+        const lifecycleEnd=lowerBound(m5,signalClose+24*60*60000);
+        const lifecycleComplete=lifecycleEnd>begin&&m5[lifecycleEnd-1]?.time+INTERVALS["5m"]>=signalClose+24*60*60000;
+        const targets=[Number(exp.target1),Number(exp.target2),Number(exp.target3)];
+        const tradeFixed=lifecycleComplete?simulateTradeLifecycle(exp.side,entry,Number(exp.stop),targets,m5,begin,lifecycleEnd,false):null;
+        const tradeBreakeven=lifecycleComplete?simulateTradeLifecycle(exp.side,entry,Number(exp.stop),targets,m5,begin,lifecycleEnd,true):null;
         const row={symbol:ticker.symbol,side:exp.side,signalTime:signalClose,entry,score:exp.score,
           priorityScore:Number.isFinite(Number(exp.priorityScore))?Number(exp.priorityScore):null,
           entryQualityScore:exp.entryQualityScore??null,entryQualityRaw:exp.entryQualityRaw??null,
           entryQualityAvailableFactors:exp.entryQualityAvailableFactors??0,entryQualityDetails:exp.entryQualityDetails??null,
           entryQualityScoreV2:exp.entryQualityScoreV2??null,entryQualityRawV2:exp.entryQualityRawV2??null,
           entryQualityDetailsV2:exp.entryQualityDetailsV2??null,entryQualityScoreV3:exp.entryQualityScoreV3??null,entryQualityRawV3:exp.entryQualityRawV3??null,entryQualityDetailsV3:exp.entryQualityDetailsV3??null,entryTimingScore:exp.entryTimingScore??null,entryTimingRaw:exp.entryTimingRaw??null,entryTimingDetails:exp.entryTimingDetails??null,entryTimingRegimeScore:exp.entryTimingRegimeScore??null,entryTimingRegimeAdjustment:exp.entryTimingRegimeAdjustment??null,
-          riskLevel:exp.riskLevel??null,stop:Number(exp.stop),stopDistancePct,
+          riskLevel:exp.riskLevel??null,stop:Number(exp.stop),target1:targets[0],target2:targets[1],target3:targets[2],stopDistancePct,
+          tradeFixed,tradeBreakeven,lifecycleHorizonHours:24,
           historicalQuoteVolume:commonTicker.quoteVolume,horizons,maePct:full.maePct,mfePct:full.mfePct,
           maeBeforeFavorablePct:entryHeat?.maeBeforeFavorablePct??null,
           maeBeforeFavorableToStopRatio:entryHeat&&stopDistancePct>0?entryHeat.maeBeforeFavorablePct/stopDistancePct:null,
@@ -288,16 +350,21 @@ async function main() {
       }
       const sideStats={};
       for(const side of ["LONG","SHORT"]){
-        sideStats[side]={baseline:summarize(baselineSelected.filter(x=>x.side===side)),
-          shadow:summarize(shadowSelected.filter(x=>x.side===side))};
+        const baseSide=baselineSelected.filter(x=>x.side===side),shadowSide=shadowSelected.filter(x=>x.side===side);
+        sideStats[side]={baseline:summarize(baseSide),shadow:summarize(shadowSide),
+          fixedStopBaseline:summarizeTrades(baseSide,"tradeFixed"),fixedStopShadow:summarizeTrades(shadowSide,"tradeFixed"),
+          breakevenBaseline:summarizeTrades(baseSide,"tradeBreakeven"),breakevenShadow:summarizeTrades(shadowSide,"tradeBreakeven")};
       }
       rankingVariants.push({strengthPoints:strength,topNPerTimestamp:topN,scanTimestampsWithEnoughCandidates:groupsWithEnough,
         baselineSelected:baselineSelected.length,shadowSelected:shadowSelected.length,changedGroups,
-        changedSelectionCount:changedSelections,baseline:summarize(baselineSelected),shadow:summarize(shadowSelected),bySide:sideStats});
+        changedSelectionCount:changedSelections,baseline:summarize(baselineSelected),shadow:summarize(shadowSelected),bySide:sideStats,
+        fixedStopBaseline:summarizeTrades(baselineSelected,"tradeFixed"),fixedStopShadow:summarizeTrades(shadowSelected,"tradeFixed"),
+        breakevenBaseline:summarizeTrades(baselineSelected,"tradeBreakeven"),breakevenShadow:summarizeTrades(shadowSelected,"tradeBreakeven")});
     }
   }
   const rankingSimulation={mode:"diagnostic_shadow_only",livePriorityScoreModified:false,signalsRejected:0,
     adjustment:"SHORT only: timing score <40 receives a proportional penalty up to strengthPoints; score >=70 receives a proportional bonus up to strengthPoints; 40-69 unchanged; LONG unchanged",
+    tradeModel:{horizonHours:24,partialTargets:"one third at each of 1.5R, 2.5R, 3.5R",policies:["fixed original stop","move remaining stop to breakeven after TP1"],sameBarAmbiguity:"stop first; at most one target per 5m candle",timeExit:"mark remaining position to final 5m close",costs:"fees, funding, slippage excluded"},
     candidateTimestamps:rankingGroups.size,variants:rankingVariants};
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures public historical OHLC",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
@@ -305,7 +372,7 @@ async function main() {
       excursionResolution:"5m OHLC",horizonsMinutes:HORIZONS,mae:"maximum adverse price excursion from entry",entryHeat:"maximum adverse excursion until first 5m close at least 0.1% favorable; if not reached, through 60m",
       mfe:"maximum favorable price excursion from entry",legacyParityFields:"signal side, eligibility, entry/stop/targets, score/priority and legacy entry diagnostics",
       ambiguity:"MAE/MFE are range excursions, not simulated stop/target fills",universe:"top current Kraken PF linear perpetuals by current quote volume; current-listing/current-volume survivorship bias applies",
-      costs:"fees, funding, slippage excluded",exitModel:"none; diagnostic MAE/MFE only",rankingSimulation:"same-timestamp top-N shadow ranking; no live priorityScore mutation, no signal rejection; SHORT timing-only adjustment tested at +/-1.5 and +/-3 points; LONG unchanged",entryTimingScore:"RSI + 1h EMA20 distance + direction-specific pullback + inverse 15m momentum confirmation + 15m EMA9 extension; excludes 4h trend alignment"},
+      costs:"fees, funding, slippage excluded",exitModel:"24h lifecycle: 1/3 at 1.5R, 1/3 at 2.5R, 1/3 at 3.5R; conservative stop-first same-candle ordering; two stop policies tested",rankingSimulation:"same-timestamp top-N shadow ranking; no live priorityScore mutation, no signal rejection; SHORT timing-only adjustment tested at +/-1.5 and +/-3 points; LONG unchanged",entryTimingScore:"RSI + 1h EMA20 distance + direction-specific pullback + inverse 15m momentum confirmation + 15m EMA9 extension; excludes 4h trend alignment"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:symbolResults.filter(x=>!x.error).length,symbolResults,
     opportunitiesCompared:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0),
     measuredSignals:records.length,legacyParityMismatches:symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0),
@@ -367,10 +434,15 @@ async function main() {
     "| Strength | Top N / scan | Eligible scan timestamps | Baseline picks | Shadow picks | Changed scans | Replaced picks | Baseline heat | Shadow heat | Baseline MFE/MAE | Shadow MFE/MAE |",
     "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...rankingVariants.map(x=>"| "+x.strengthPoints+" | "+x.topNPerTimestamp+" | "+x.scanTimestampsWithEnoughCandidates+" | "+x.baselineSelected+" | "+x.shadowSelected+" | "+x.changedGroups+" | "+x.changedSelectionCount+" | "+(x.baseline.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(x.shadow.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(x.baseline.mfeMaeRatio?.toFixed(3)??"n/a")+" | "+(x.shadow.mfeMaeRatio?.toFixed(3)??"n/a")+" |"),
+    "","### 24h trade lifecycle (1/3 position at each 1.5R / 2.5R / 3.5R target)","",
+    "Conservative OHLC convention: if stop and target are both inside one 5m candle, stop is assumed first; at most one target is credited per candle. Fees/funding/slippage are excluded. Two policies: fixed original stop and move remaining stop to breakeven after TP1.",
+    "| Strength | Top N | Policy | Baseline trades | Shadow trades | Baseline avg R | Shadow avg R | Baseline win% | Shadow win% | Baseline stop% | Shadow stop% | Baseline TP3% | Shadow TP3% |",
+    "|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ...rankingVariants.flatMap(x=>[["Fixed stop","fixedStopBaseline","fixedStopShadow"],["Breakeven after TP1","breakevenBaseline","breakevenShadow"]].map(([label,bk,sk])=>{const a=x[bk],z=x[sk];return "| "+x.strengthPoints+" | "+x.topNPerTimestamp+" | "+label+" | "+(a.trades??0)+" | "+(z.trades??0)+" | "+(a.avgR?.toFixed(3)??"n/a")+" | "+(z.avgR?.toFixed(3)??"n/a")+" | "+(a.winRatePct?.toFixed(1)??"n/a")+"% | "+(z.winRatePct?.toFixed(1)??"n/a")+"% | "+(a.stopRatePct?.toFixed(1)??"n/a")+"% | "+(z.stopRatePct?.toFixed(1)??"n/a")+"% | "+(a.tp3RatePct?.toFixed(1)??"n/a")+"% | "+(z.tp3RatePct?.toFixed(1)??"n/a")+"% |";})),
     "","### Shadow ranking by side","",
-    "| Strength | Top N | Side | Baseline picks | Shadow picks | Baseline early heat | Shadow early heat | Baseline MFE/MAE | Shadow MFE/MAE |",
-    "|---:|---:|---|---:|---:|---:|---:|---:|---:|",
-    ...rankingVariants.flatMap(x=>["LONG","SHORT"].map(side=>{const y=x.bySide[side];return "| "+x.strengthPoints+" | "+x.topNPerTimestamp+" | "+side+" | "+y.baseline.count+" | "+y.shadow.count+" | "+(y.baseline.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(y.shadow.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(y.baseline.mfeMaeRatio?.toFixed(3)??"n/a")+" | "+(y.shadow.mfeMaeRatio?.toFixed(3)??"n/a")+" |";})),
+    "| Strength | Top N | Side | Baseline picks | Shadow picks | Baseline early heat | Shadow early heat | Baseline MFE/MAE | Shadow MFE/MAE | Fixed-stop avg R base/shadow | BE avg R base/shadow |",
+    "|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ...rankingVariants.flatMap(x=>["LONG","SHORT"].map(side=>{const y=x.bySide[side];return "| "+x.strengthPoints+" | "+x.topNPerTimestamp+" | "+side+" | "+y.baseline.count+" | "+y.shadow.count+" | "+(y.baseline.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(y.shadow.maeBeforeFavorableAvgPct?.toFixed(3)??"n/a")+"% | "+(y.baseline.mfeMaeRatio?.toFixed(3)??"n/a")+" | "+(y.shadow.mfeMaeRatio?.toFixed(3)??"n/a")+" | "+(y.fixedStopBaseline.avgR?.toFixed(3)??"n/a")+" / "+(y.fixedStopShadow.avgR?.toFixed(3)??"n/a")+" | "+(y.breakevenBaseline.avgR?.toFixed(3)??"n/a")+" / "+(y.breakevenShadow.avgR?.toFixed(3)??"n/a")+" |";})),
     "","## Method limitations","",
     "- This is an entry-quality diagnostic, not a PnL/exit backtest.",
     "- EQS buckets are descriptive; thresholds 40/70 are provisional.",
