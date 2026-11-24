@@ -303,6 +303,10 @@ function analyze(coin, candles, market) {
   };
 }
 
+export function analyzeSpotCandles(coin, candles, market) {
+  return analyze(coin, candles, market);
+}
+
 function formatCoin(item) {
   return "🪙 " + item.coin.name + " (" + item.coin.symbol + ")\n" +
     "جفت منتخب: " + item.pair + "\n" +
