@@ -64,7 +64,7 @@ async function getCoins() {
   for (const page of pages) {
     if (page.error) errors.push(page.error);
     for (const coin of page.coins) {
-      const id = String(coin.id || coin.symbol || "").toLowerCase();
+      const id = norm(coin.symbol);
       if (id && !seen.has(id)) { seen.add(id); coins.push(coin); }
     }
   }
