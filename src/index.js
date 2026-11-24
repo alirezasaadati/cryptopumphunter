@@ -2810,6 +2810,20 @@ async function runFuturesEntryDiagnostics(env) {
             "Required Kraken candle data is missing.");
         }
         const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute);
+        const closes1h = oneHour.map(c => c.close);
+        const referencePrice = Number(oneHour.at(-1)?.close);
+        const marketPrice = Number(ticker?.last);
+        const ema20Value = ema(closes1h, 20);
+        const atrValue = calculateAtr(oneHour, 14);
+        const rsiValue = rsi(closes1h, 14);
+        const driftPct = Number.isFinite(marketPrice) && Number.isFinite(referencePrice) && referencePrice > 0
+          ? Math.abs(marketPrice - referencePrice) / referencePrice * 100 : null;
+        const emaDistanceAtr = Number.isFinite(marketPrice) && Number.isFinite(ema20Value) &&
+          Number.isFinite(atrValue) && atrValue > 0 ? Math.abs(marketPrice - ema20Value) / atrValue : null;
+        const maxDriftStandard = FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT;
+        const maxDriftHighRisk = FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT;
+        const maxEmaStandard = FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR;
+        const maxEmaHighRisk = FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR;
         return {
           symbol: ticker.symbol,
           stage: result.eligible ? "ELIGIBLE" : result.rejected ? "REJECTED" : "UNKNOWN",
@@ -2819,7 +2833,21 @@ async function runFuturesEntryDiagnostics(env) {
           candleCounts: { "1h": oneHour.length, "4h": fourHour.length, "15m": fifteenMinute.length },
           entry: result.entry ?? null, stop: result.stop ?? null,
           targets: result.eligible ? [result.target1, result.target2, result.target3] : null,
-          metrics: result.entryDiagnostics || null
+          metrics: {
+            rsi1h: Number.isFinite(rsiValue) ? Number(rsiValue.toFixed(2)) : null,
+            trend1h: result.entryDiagnostics?.up1h ? "BULLISH" : result.entryDiagnostics?.down1h ? "BEARISH" : null,
+            trend4h: result.fourHourTrend || null,
+            marketPrice: Number.isFinite(marketPrice) ? marketPrice : null,
+            analyticalPrice: Number.isFinite(referencePrice) ? referencePrice : null,
+            driftPct: Number.isFinite(driftPct) ? Number(driftPct.toFixed(4)) : null,
+            driftLimitStandardPct: maxDriftStandard,
+            driftLimitHighRiskPct: maxDriftHighRisk,
+            ema20: Number.isFinite(ema20Value) ? ema20Value : null,
+            emaDistanceAtr: Number.isFinite(emaDistanceAtr) ? Number(emaDistanceAtr.toFixed(3)) : null,
+            emaLimitStandardAtr: maxEmaStandard,
+            emaLimitHighRiskAtr: maxEmaHighRisk,
+            engineDetails: result.entryDiagnostics || null
+          }
         };
       } catch (error) {
         return { symbol: ticker.symbol, stage: "DATA_OR_ANALYSIS_ERROR",
@@ -2847,7 +2875,7 @@ function formatFuturesEntryDiagnostics(d) {
   ];
   for (const [stage, count] of Object.entries(d.stageCounts || {})) lines.push("• " + stage + ": " + count);
   lines.push("", "جزئیات نمادها:");
-  for (const item of (d.samples || []).slice(0, 15)) {
+  for (const item of (d.samples || []).slice(0, 30)) {
     lines.push("• " + item.symbol + " | " + item.stage +
       " | امتیاز: " + (item.score ?? "—") + " | جهت: " + (item.side || "—"));
     if (item.candleCounts) lines.push("  کندل‌ها: 1h=" + item.candleCounts["1h"] +
@@ -2855,6 +2883,20 @@ function formatFuturesEntryDiagnostics(d) {
     if (item.entry != null) lines.push("  ورود: " + formatPrice(item.entry) +
       " | استاپ: " + formatPrice(item.stop) +
       " | اهداف: " + (item.targets || []).map(formatPrice).join(" / "));
+    if (item.metrics) {
+      const m = item.metrics;
+      lines.push("  RSI 1h: " + (m.rsi1h ?? "—") +
+        " | روند 1h/4h: " + (m.trend1h || "—") + "/" + (m.trend4h || "—"));
+      lines.push("  قیمت بازار/تحلیلی: " + (m.marketPrice ?? "—") + " / " + (m.analyticalPrice ?? "—"));
+      lines.push("  فاصله قیمت: " + (m.driftPct == null ? "—" : m.driftPct + "%") +
+        " | حد عادی/پرریسک: " + m.driftLimitStandardPct + "% / " + m.driftLimitHighRiskPct + "%");
+      lines.push("  فاصله EMA20: " + (m.emaDistanceAtr ?? "—") +
+        " ATR | حد عادی/پرریسک: " + m.emaLimitStandardAtr + " / " + m.emaLimitHighRiskAtr + " ATR");
+      if (m.engineDetails?.up1h != null || m.engineDetails?.down1h != null) {
+        lines.push("  تأیید روند 1h: up=" + Boolean(m.engineDetails.up1h) +
+          " / down=" + Boolean(m.engineDetails.down1h));
+      }
+    }
     if (item.reason) lines.push("  علت: " + item.reason);
   }
   lines.push("", "⛔ این گزارش فقط‌خواندنی است؛ هیچ سیگنالی ثبت، ارسال یا معامله‌ای اجرا نشده است.");
