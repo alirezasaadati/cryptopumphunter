@@ -2787,7 +2787,7 @@ async function runAutomaticFuturesAlertScanInternal(env) {
 
 // Owner-only, read-only diagnostics. This path reads public Kraken market data only;
 // it never registers signals, writes KV/DO state, or delivers trading alerts.
-async function runFuturesEntryDiagnostics(env) {
+async function runFuturesEntryDiagnostics(env, options = {}) {
   const startedAt = new Date().toISOString();
   const universe = await getKrakenFuturesUniverse();
   const analyzed = await mapLimit(
@@ -2795,9 +2795,20 @@ async function runFuturesEntryDiagnostics(env) {
     FUTURES_CONFIG.CONCURRENCY,
     async ticker => {
       try {
-        const marketData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
+        const intervals = [
           FUTURES_CONFIG.INTERVAL, FUTURES_CONFIG.CONFIRM_INTERVAL, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL
-        ]);
+        ];
+        let marketData;
+        if (options.directMarketData === true) {
+          const candles = {}, errors = {};
+          await Promise.all(intervals.map(async interval => {
+            try { candles[interval] = await getKrakenFuturesCandles(ticker.symbol, interval); }
+            catch (error) { errors[interval] = String(error?.message || error); }
+          }));
+          marketData = { candles, errors };
+        } else {
+          marketData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, intervals);
+        }
         const oneHour = marketData.candles[FUTURES_CONFIG.INTERVAL];
         const fourHour = marketData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
         const fifteenMinute = marketData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
@@ -3283,3 +3294,6 @@ export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER
 // Experimental futures signal engine validation branch; Telegram and UI handlers remain from main.
 
 // Re-run the pinned comparison harness after switching to the current TP lifecycle.
+
+
+export { runFuturesEntryDiagnostics };
