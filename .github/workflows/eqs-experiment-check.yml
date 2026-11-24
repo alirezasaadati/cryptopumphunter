@@ -7,13 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       days:
-        description: Historical days (7-90)
+        description: Historical days (7-180)
         required: false
-        default: "90"
+        default: "180"
       symbols:
         description: Maximum Kraken symbols (1-15)
         required: false
-        default: "10"
+        default: "15"
 
 permissions:
   contents: read
@@ -21,7 +21,7 @@ permissions:
 jobs:
   test-and-diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,8 +38,8 @@ jobs:
       - name: Run real Kraken Futures EQS diagnostics
         env:
           EQS_BASELINE_MODULE: /tmp/eqs-baseline/src/index.js
-          EQS_BACKTEST_DAYS: ${{ inputs.days || '90' }}
-          EQS_BACKTEST_SYMBOLS: ${{ inputs.symbols || '10' }}
+          EQS_BACKTEST_DAYS: ${{ inputs.days || '180' }}
+          EQS_BACKTEST_SYMBOLS: ${{ inputs.symbols || '15' }}
         run: node scripts/backtest-eqs-diagnostics.mjs
       - name: Upload diagnostic reports
         if: always()
