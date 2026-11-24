@@ -148,18 +148,41 @@ const MAIN_MENU = {
 };
 
 function replyMenuForChat(env, chatId) {
-  const buttons = MAIN_MENU.inline_keyboard.flat().map(button => ({ text: button.text }));
-  if (isOwner(chatId, env)) {
-    buttons.push(
+  const owner = isOwner(chatId, env);
+  const keyboard = [
+    [
+      { text: "📈 سیگنال فیوچرز" },
+      { text: "📊 سیگنال اسپات" }
+    ],
+    [
+      { text: "🛡️ راهنمای مدیریت سرمایه" }
+    ],
+    owner
+      ? [
+          { text: "🗂 سیگنال‌های صادرشده" },
+          { text: "📊 گزارش سیگنال‌های اخیر" }
+        ]
+      : [
+          { text: "🗂 سیگنال‌های صادرشده" },
+          { text: "🔍 پایش معاملات کاربران" }
+        ],
+    ...(owner ? [[
       { text: "👥 مدیریت اعضا" },
-      { text: "📊 گزارش سیگنال‌های اخیر" },
-      { text: "⚠️ بررسی ارسال‌های نامشخص" }
-    );
-  }
-  const keyboard = [];
-  for (let i = 0; i < buttons.length; i += 2) {
-    keyboard.push(buttons.slice(i, i + 2));
-  }
+      { text: "🔍 پایش معاملات کاربران" }
+    ]] : []),
+    [
+      { text: "📡 وضعیت ربات" },
+      { text: "🔌 تست اتصال" }
+    ],
+    owner
+      ? [
+          { text: "⚠️ ارسال‌های نامشخص" },
+          { text: "ℹ️ درباره" }
+        ]
+      : [
+          { text: "ℹ️ درباره" }
+        ]
+  ];
   return {
     keyboard,
     resize_keyboard: true,
@@ -992,7 +1015,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
       ...MAIN_MENU.inline_keyboard.flat().map(button => [button.text, button.callback_data]),
       ["👥 مدیریت اعضا", "members:0"],
       ["📊 گزارش سیگنال‌های اخیر", "admin:signals"],
-      ["⚠️ بررسی ارسال‌های نامشخص", "outbox:review"]
+      ["⚠️ ارسال‌های نامشخص", "outbox:review"]
     ]);
     if (selectedMenuText === "📋 منو" || selectedMenuText === "منو" || selectedMenuText === "/menu") {
       if (await isApproved(chatId, env)) await showMenu(env, chatId);
