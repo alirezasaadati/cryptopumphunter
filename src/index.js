@@ -1,4 +1,4 @@
-import { runSpotScan } from "./spot-engine.js";
+import { runSpotScan, runSpotAssetDetail } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
@@ -965,6 +965,7 @@ async function handleReplyMenuAction(action, env, chatId, message) {
     return;
   }
   if (action === "futures") return runFuturesSignalsForChat(env, chatId);
+  if (action === "spot") return runSpotMarketScanForChat(env, chatId);
   if (action === "issued_signals") return sendArchiveAccessLink(env, chatId);
   if (action === "capital_guide") {
     await telegram("sendMessage", env, {
@@ -1211,6 +1212,11 @@ async function handleCallback(query, env) {
       await runFuturesSignalsForChat(env, chatId);
       return;
     }
+    if (action === "spot") return runSpotMarketScanForChat(env, chatId);
+    if (action.startsWith("spotd:")) {
+      const [, symbol, quote] = action.split(":");
+      return showSpotAssetDetailForChat(env, chatId, symbol, quote);
+    }
     if (action === "issued_signals" || action === "ledger:archive" || action === "ledger:history") return sendArchiveAccessLink(env,chatId);
     if (action === "capital_guide") {
       await telegram("sendMessage", env, {
@@ -1248,128 +1254,40 @@ async function handleCallback(query, env) {
 }
 
 async function runSpotMarketScanForChat(env, chatId) {
-  if (!env.APP_KV) {
-    await sendMessage(env, chatId, "⚠️ اتصال ذخیره‌سازی گزارش بازار در دسترس نیست. Binding مربوط به APP_KV را بررسی کن.", menuForChat(env, chatId));
-    return;
-  }
-  await sendMessage(env, chatId, "🔎 اسکن هوشمند بازار اسپات شروع شد...\nدر حال دریافت اطلاعات CoinLore و بررسی کندل‌های Kraken.");
+  await sendMessage(env, chatId,
+    "🔎 اسکن دستی بازار اسپات شروع شد.\nدر حال بررسی جفت‌های USD و USDT، کندل‌های بسته‌شده و نقدینگی Kraken...");
   try {
-    // Invalidate the previous snapshot before starting. If this scan fails or
-    // exits early, the analysis button must not present stale data as current.
-    await env.APP_KV.put("last_scan", JSON.stringify({
-      timestamp: Date.now(),
-      analysis: [],
-      status: "scan_in_progress"
-    }));
-    const result = await runSpotScan(env);
-    await sendLongMessage(env, chatId, result.report);
-    await sendMessage(env, chatId, "✅ عملیات اسکن بازار اسپات به پایان رسید.", menuForChat(env, chatId));
+    const result = await runSpotScan();
+    const keyboard = result.opportunities.length
+      ? { inline_keyboard: result.opportunities.map(item => [{
+          text: "📊 " + item.coin.symbol + " / " + item.quote,
+          callback_data: "spotd:" + item.coin.symbol + ":" + item.quote
+        }]) }
+      : undefined;
+    await sendMessage(env, chatId, result.report, keyboard || menuForChat(env, chatId));
+    if (!result.opportunities.length) {
+      await sendMessage(env, chatId, "برای پیدا کردن فرصت تازه، هر زمان خواستی دوباره «سیگنال اسپات» را بزن.", menuForChat(env, chatId));
+    }
   } catch (error) {
-    console.error("Spot market scan failed:", String(error?.stack || error));
-    await sendMessage(env, chatId, "❌ اجرای اسکن بازار اسپات ناموفق بود:\n" + String(error?.message || error).slice(0, 900), menuForChat(env, chatId));
+    console.error("Manual spot scan failed:", String(error?.stack || error));
+    await sendMessage(env, chatId,
+      "❌ اجرای اسکن اسپات ناموفق بود:\n" + String(error?.message || error).slice(0, 900),
+      menuForChat(env, chatId));
   }
 }
 
-async function showLatestMarketAnalysis(env, chatId) {
-  if (!env.APP_KV) {
-    await sendMessage(env, chatId, "⚠️ ذخیره‌سازی گزارش اسکن بازار اسپات در دسترس نیست.", menuForChat(env, chatId));
-    return;
-  }
-
-  let saved;
+async function showSpotAssetDetailForChat(env, chatId, symbol, quote) {
   try {
-    saved = await env.APP_KV.get("last_scan", "json");
+    const result = await runSpotAssetDetail(symbol, quote);
+    await sendMessage(env, chatId, result.detail, {
+      inline_keyboard: [[{ text: "🔄 اسکن دوباره بازار", callback_data: "spot" }]]
+    });
   } catch (error) {
-    console.error("Could not load latest spot analysis:", String(error?.message || error));
-    await sendMessage(env, chatId, "⚠️ دریافت آخرین تحلیل بازار اسپات ممکن نشد. کمی بعد دوباره تلاش کن.", menuForChat(env, chatId));
-    return;
-  }
-
-  if (!saved?.timestamp) {
-    await sendMessage(env, chatId, "هنوز گزارشی از بازار اسپات ذخیره نشده است. ابتدا «اسکن بازار» را اجرا کن.", menuForChat(env, chatId));
-    return;
-  }
-
-  const rows = Array.isArray(saved.analysis) ? saved.analysis : [];
-  if (!rows.length) {
     await sendMessage(env, chatId,
-      "📊 داده‌های تحلیلی اسکن قبلی در نسخه ذخیره‌شده وجود ندارد.\n\nبرای ساخت گزارش تحلیلی مستقل، یک‌بار «اسکن بازار» را اجرا کن؛ سپس دوباره «تحلیل بازار» را بزن.",
-      menuForChat(env, chatId));
-    return;
+      "⚠️ دریافت جزئیات " + symbol + "/" + quote + " ناموفق بود:\n" +
+      String(error?.message || error).slice(0, 700),
+      { inline_keyboard: [[{ text: "🔄 اسکن دوباره", callback_data: "spot" }]] });
   }
-
-  const scannedAt = new Date(saved.timestamp).toLocaleString("fa-IR", { timeZone: "UTC" }) + " UTC";
-  const count = rows.length;
-  const bullish = rows.filter(x => x.trend === "صعودی").length;
-  const bearish = count - bullish;
-  const averageRsi = rows.reduce((sum, x) => sum + Number(x.rsi || 0), 0) / count;
-  const averageScore = rows.reduce((sum, x) => sum + Number(x.score || 0), 0) / count;
-  const volumeStrong = rows.filter(x => Number(x.volumeRatio) >= 1.5).length;
-  const withSetup = rows.filter(x => x.setup && x.setup !== "بدون ستاپ").length;
-  const eligible = rows.filter(x => x.eligible).sort((a, b) => b.score - a.score);
-  const watch = rows.filter(x => !x.eligible && x.score >= 65 && x.trend === "صعودی" && x.setup !== "بدون ستاپ")
-    .sort((a, b) => b.score - a.score);
-  const caution = rows.filter(x => !x.eligible && (x.trend !== "صعودی" || x.score < 65 || x.setup === "بدون ستاپ" || Number(x.volumeRatio) < 0.9))
-    .sort((a, b) => b.score - a.score);
-
-  let marketTone = "ترکیبی و بدون برتری روشن";
-  if (bullish / count >= 0.65 && averageRsi >= 50 && averageRsi <= 68) marketTone = "تمایل صعودی در بخش عمده نمادهای بررسی‌شده";
-  else if (bullish / count <= 0.35 || averageRsi < 45) marketTone = "ضعیف یا متمایل به نزول";
-  else if (averageRsi > 68) marketTone = "دارای مومنتوم بالا؛ احتمال ورود دیرهنگام را در نظر بگیر";
-
-  const price = value => {
-    const n = Number(value);
-    return Number.isFinite(n) ? "$" + Number(n.toPrecision(7)).toString() : "—";
-  };
-  const describe = (x, index) => {
-    const status = x.eligible
-      ? "✅ واجد شرایط ورود طبق فیلتر اسکن"
-      : "👀 فقط مناسب زیرنظرگرفتن؛ هنوز سیگنال خرید نیست";
-    return (index + 1) + ") " + x.name + " (" + x.symbol + ")\n" +
-      "⭐ امتیاز: " + x.score + "/100 | روند: " + x.trend + "\n" +
-      "📊 RSI: " + Number(x.rsi).toFixed(1) + " | نسبت حجم: " + Number(x.volumeRatio).toFixed(2) + "x\n" +
-      "🧩 الگو: " + (x.setup || "نامشخص") + " | قیمت: " + price(x.current) + "\n" +
-      "🟢 حمایت: " + price(x.support) + " | 🔴 مقاومت: " + price(x.resistance) + "\n" +
-      status + (x.reasons?.length ? "\n⚠️ نکته: " + x.reasons.slice(0, 2).join("، ") : "");
-  };
-
-  let report = "📊 تحلیل مستقل آخرین اسکن بازار اسپات\n" +
-    "🕒 زمان داده‌ها: " + scannedAt + "\n" +
-    "━━━━━━━━━━━━━━━━━━\n\n" +
-    "🌐 تصویر کلی بازارِ بررسی‌شده\n" +
-    "• نمادهای دارای داده معتبر: " + count + "\n" +
-    "• روند صعودی: " + bullish + " | خنثی/نزولی: " + bearish + "\n" +
-    "• میانگین امتیاز: " + averageScore.toFixed(1) + "/100\n" +
-    "• میانگین RSI: " + averageRsi.toFixed(1) + "\n" +
-    "• نمادهای با نسبت حجم حداقل 1.5x: " + volumeStrong + "\n" +
-    "• نمادهای دارای الگوی ورود: " + withSetup + "\n\n" +
-    "🧭 جمع‌بندی: " + marketTone + ".\n" +
-    "این جمع‌بندی فقط بر اساس نمادهای فیلترشده همین اسکن است، نه کل بازار رمزارزها.\n\n";
-
-  report += "🎯 فرصت‌های واجد شرایط\n━━━━━━━━━━━━━━━━━━\n";
-  report += eligible.length
-    ? "\n" + eligible.slice(0, 5).map(describe).join("\n\n") + "\n\n"
-    : "\nدر این اسکن هیچ نمادی تمام شروط ورود را نداشت؛ بنابراین سیگنال خریدی صادر نشده است.\n\n";
-
-  report += "👀 گزینه‌های قابل‌پیگیری\n━━━━━━━━━━━━━━━━━━\n";
-  report += watch.length
-    ? "\n" + watch.slice(0, 5).map(describe).join("\n\n") + "\n\n"
-    : "\nدر داده‌های این اسکن گزینه‌ای با روند صعودی، امتیاز مناسب و الگوی مشخص برای واچ‌لیست پیدا نشد.\n\n";
-
-  report += "⚠️ موارد نیازمند احتیاط\n━━━━━━━━━━━━━━━━━━\n";
-  report += caution.length
-    ? "\n" + caution.slice(0, 5).map(x =>
-        "• " + x.name + " (" + x.symbol + ") | امتیاز " + x.score +
-        " | " + x.trend + " | " + (x.reasons?.slice(0, 2).join("، ") || "شرایط ورود کامل نیست")
-      ).join("\n") + "\n\n"
-    : "\nمورد شاخصی برای هشدار بر اساس داده‌های ذخیره‌شده ثبت نشده است.\n\n";
-
-  report += "━━━━━━━━━━━━━━━━━━\n" +
-    "📌 این گزارش تفسیر داده‌های آخرین اسکن است و اسکن تازه‌ای اجرا نمی‌کند.\n" +
-    "⚠️ تحلیل احتمالی است؛ تضمین سود یا توصیه قطعی خرید نیست.";
-
-  await sendLongMessage(env, chatId, report);
-  await sendMessage(env, chatId, "✅ تحلیل آخرین اسکن بازار آماده شد.", menuForChat(env, chatId));
 }
 
 async function showStatus(env, chatId) {
