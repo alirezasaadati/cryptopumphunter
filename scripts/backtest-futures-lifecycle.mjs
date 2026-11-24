@@ -1,13 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
-import { evaluateTradeCandle, FUTURES_TRADE_LEVERAGE, FUTURES_MARGIN_PROFIT_TARGET_PERCENT } from "../src/futures-trade-lifecycle.js";
+import { FUTURES_TRADE_LEVERAGE } from "../src/futures-trade-lifecycle.js";
 
 const BASE = "https://futures.kraken.com";
 const INTERVALS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
 const DAYS = Math.max(7, Math.min(60, Number(process.env.LIFECYCLE_BACKTEST_DAYS || 30)));
 const SYMBOL_LIMIT = Math.max(1, Math.min(12, Number(process.env.LIFECYCLE_BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 15;
-const TARGET = FUTURES_MARGIN_PROFIT_TARGET_PERCENT;
 const LEVERAGE = FUTURES_TRADE_LEVERAGE;
 
 async function getJson(url, attempt = 0) {
@@ -70,14 +69,88 @@ function lowerBound(candles, time) {
   while (lo < hi) { const mid = (lo + hi) >> 1; if (candles[mid].time < time) lo = mid + 1; else hi = mid; }
   return lo;
 }
+function targetLevels(trade) {
+  const entry = Number(trade.entry), risk = Math.abs(entry - Number(trade.initialStop));
+  const dir = trade.side === "LONG" ? 1 : -1;
+  return [1.5, 2.5, 3.5].map(r => entry + dir * risk * r);
+}
 function candleAmbiguous(side, trade, candle) {
-  const entry = Number(trade.entry), stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
-  const target = side === "LONG" ? entry * (1 + TARGET / LEVERAGE / 100) : entry * (1 - TARGET / LEVERAGE / 100);
+  const stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
+  const targets = targetLevels(trade);
   const stopHit = side === "LONG" ? candle.low <= stop : candle.high >= stop;
-  const profitHit = side === "LONG" ? candle.high >= target : candle.low <= target;
+  const hitTargets = targets.filter((t,i) => !(trade.tpHits || []).includes("TP"+(i+1)));
+  const profitHit = hitTargets.some(t => side === "LONG" ? candle.high >= t : candle.low <= t);
   const stopAtOpen = side === "LONG" ? candle.open <= stop : candle.open >= stop;
-  const profitAtOpen = side === "LONG" ? candle.open >= target : candle.open <= target;
+  const profitAtOpen = hitTargets.some(t => side === "LONG" ? candle.open >= t : candle.open <= t);
   return stopHit && profitHit && !stopAtOpen && !profitAtOpen;
+}
+function evaluateStagedCandle(trade, candle) {
+  if (trade.status !== "OPEN") return { changed: false };
+  const entry = Number(trade.entry), initialStop = Number(trade.initialStop);
+  const targets = targetLevels(trade), dir = trade.side === "LONG" ? 1 : -1;
+  const open = Number(candle.open), high = Number(candle.high), low = Number(candle.low);
+  const stop = Number(trade.currentStop ?? initialStop);
+  const stopHit = trade.side === "LONG" ? low <= stop : high >= stop;
+  const stopAtOpen = trade.side === "LONG" ? open <= stop : open >= stop;
+  const risk = Math.abs(entry - initialStop);
+  let realized = Number(trade.realizedMarginReturnPct || 0);
+  let remaining = Number(trade.remainingFraction ?? 1);
+  const tpHits = Array.isArray(trade.tpHits) ? [...trade.tpHits] : [];
+  const pricePct = (exit) => dir * ((exit-entry)/entry) * 100 * LEVERAGE;
+  const closeStop = () => {
+    const exit = stopAtOpen ? open : stop;
+    realized += remaining * pricePct(exit);
+    remaining = 0;
+    return { changed: true, closed: true, reason: "CLOSED_STOP", trade: {
+      ...trade, status: "CLOSED_STOP", closeReason: "CLOSED_STOP", exitPrice: exit,
+      tpHits, remainingFraction: 0, realizedMarginReturnPct: realized,
+      marginReturnPercent: realized, closedAt: candle.time ?? new Date().toISOString(),
+      currentStop: stop, lockReleaseEligible: true
+    }};
+  };
+  // Conservative intrabar ordering: if the active stop and any still-open TP
+  // are both touched in one 5m candle, the stop wins for the remaining size.
+  if (stopHit) return closeStop();
+
+  let currentStop = stop, breakEvenActivated = trade.breakEvenActivated === true;
+  const oneR = entry + dir * risk;
+  const reachedOneR = trade.side === "LONG" ? high >= oneR : low <= oneR;
+  if (!breakEvenActivated && risk > 0 && reachedOneR) {
+    const feeBuffer = entry * 0.0012;
+    const beStop = entry + dir * feeBuffer;
+    if ((dir === 1 && beStop > currentStop) || (dir === -1 && beStop < currentStop)) {
+      currentStop = beStop;
+      breakEvenActivated = true;
+    }
+  }
+  for (let i=0;i<3;i++) {
+    const name = "TP"+(i+1);
+    if (tpHits.includes(name)) continue;
+    const target = targets[i];
+    const hit = trade.side === "LONG" ? high >= target : low <= target;
+    if (!hit) break;
+    const favorableGap = trade.side === "LONG" ? open >= target : open <= target;
+    const exit = favorableGap ? open : target;
+    const fraction = i < 2 ? 1/3 : remaining;
+    realized += fraction * pricePct(exit);
+    remaining = Math.max(0, remaining - fraction);
+    tpHits.push(name);
+  }
+  const closedAt = candle.time ?? new Date().toISOString();
+  if (remaining <= 1e-9) {
+    return { changed: true, closed: true, reason: "CLOSED_PROFIT", trade: {
+      ...trade, status: "CLOSED_PROFIT", closeReason: "CLOSED_PROFIT",
+      exitPrice: targets[2], tpHits, remainingFraction: 0,
+      realizedMarginReturnPct: realized, marginReturnPercent: realized,
+      closedAt, currentStop, breakEvenActivated, lockReleaseEligible: true
+    }};
+  }
+  const changed = tpHits.length !== (trade.tpHits || []).length ||
+    currentStop !== stop || breakEvenActivated !== (trade.breakEvenActivated === true);
+  return { changed, stopMoved: currentStop !== stop, trade: {
+    ...trade, tpHits, remainingFraction: remaining, realizedMarginReturnPct: realized,
+    currentStop, breakEvenActivated
+  }};
 }
 function summarize(trades) {
   const closed = trades.filter(t => t.status === "CLOSED_PROFIT" || t.status === "CLOSED_STOP");
@@ -89,29 +162,42 @@ function summarize(trades) {
     peak = Math.max(peak, equity);
     maxDrawdown = Math.max(maxDrawdown, peak - equity);
   }
+  const sum = xs => xs.reduce((n,t)=>n+Number(t.marginReturnPercent || 0),0);
+  const sideSummary = side => {
+    const started = trades.filter(t => t.side === side);
+    const resolved = started.filter(t => t.status === "CLOSED_PROFIT" || t.status === "CLOSED_STOP");
+    const wins = resolved.filter(t => Number(t.marginReturnPercent) > 0);
+    return { tradesStarted: started.length, closedTrades: resolved.length, profitCloses: resolved.filter(t => t.status === "CLOSED_PROFIT").length,
+      netPositiveClosedTrades: wins.length,
+      netNegativeClosedTrades: resolved.filter(t => Number(t.marginReturnPercent) < 0).length,
+      stopCloses: resolved.filter(t => t.status === "CLOSED_STOP").length,
+      positiveStopCloses: resolved.filter(t => t.status === "CLOSED_STOP" && Number(t.marginReturnPercent) > 0).length,
+      losingStopCloses: resolved.filter(t => t.status === "CLOSED_STOP" && Number(t.marginReturnPercent) < 0).length,
+      openAtEnd: started.length - resolved.length,
+      winRatePct: resolved.length ? wins.length / resolved.length * 100 : 0,
+      netMarginReturnPct: sum(resolved) };
+  };
   const longs = closed.filter(t => t.side === "LONG");
   const shorts = closed.filter(t => t.side === "SHORT");
-  const sum = xs => xs.reduce((n,t)=>n+Number(t.marginReturnPercent || 0),0);
   return {
-    tradesStarted: trades.length,
-    closedTrades: closed.length,
-    profitCloses: profits.length,
-    stopCloses: stops.length,
-    openAtEnd: trades.length - closed.length,
-    longs: longs.length,
-    shorts: shorts.length,
-    winRatePct: closed.length ? profits.length / closed.length * 100 : 0,
-    totalMarginReturnPct: sum(closed),
-    averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
-    maxDrawdownMarginPct: maxDrawdown,
-    ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
-    bySide: {
-      LONG: { trades: longs.length, profitCloses: longs.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: longs.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(longs) },
-      SHORT: { trades: shorts.length, profitCloses: shorts.filter(t=>t.status==="CLOSED_PROFIT").length, stopCloses: shorts.filter(t=>t.status==="CLOSED_STOP").length, marginReturnPct: sum(shorts) }
-    }
+    tradesStarted: trades.length, closedTrades: closed.length, profitCloses: profits.length, stopCloses: stops.length,
+    openAtEnd: trades.length - closed.length, longs: longs.length, shorts: shorts.length,
+    openPartialRealizedMarginReturnPct: trades.filter(t => t.status === "OPEN_AT_BACKTEST_END").reduce((n,t)=>n+Number(t.realizedMarginReturnPct||0),0),
+    openRemainingUnrealizedMarginReturnPct: trades.filter(t => t.status === "OPEN_AT_BACKTEST_END").reduce((n,t)=>n+Number(t.unrealizedRemainingMarginReturnPct||0),0),
+    openCombinedMarkToMarketMarginReturnPct: trades.filter(t => t.status === "OPEN_AT_BACKTEST_END").reduce((n,t)=>n+Number(t.marginReturnAtMarkPct||0),0),
+    openTradesWithTP1: trades.filter(t => t.status === "OPEN_AT_BACKTEST_END" && (t.tpHits||[]).includes("TP1")).length,
+    openTradesWithTP2: trades.filter(t => t.status === "OPEN_AT_BACKTEST_END" && (t.tpHits||[]).includes("TP2")).length,
+    winRatePct: closed.length ? closed.filter(t => Number(t.marginReturnPercent) > 0).length / closed.length * 100 : 0,
+    netPositiveClosedTrades: closed.filter(t => Number(t.marginReturnPercent) > 0).length,
+    netNegativeClosedTrades: closed.filter(t => Number(t.marginReturnPercent) < 0).length,
+    totalMarginReturnPct: sum(closed), averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
+    maxDrawdownMarginPct: maxDrawdown, ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
+    breakEvenMoves: trades.reduce((n,t)=>n+(t.breakEvenMoveCount || 0),0),
+    positiveStopCloses: stops.filter(t => Number(t.marginReturnPercent) > 0).length,
+    losingStopCloses: stops.filter(t => Number(t.marginReturnPercent) < 0).length,
+    bySide: { LONG: sideSummary("LONG"), SHORT: sideSummary("SHORT") }
   };
 }
-
 async function backtestSymbol(ticker, fromMs, toMs) {
   const [oneHour,fourHour,fifteenMinute,fiveMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs),
@@ -157,6 +243,8 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       id: ticker.symbol + ":" + candidate.side + ":" + signalCloseTime,
       symbol: ticker.symbol, side: candidate.side, status: "OPEN",
       entry, initialStop: Number(candidate.stop), stop: Number(candidate.stop),
+      target1: Number(candidate.target1), target2: Number(candidate.target2), target3: Number(candidate.target3),
+      remainingFraction: 1, tpHits: [], realizedMarginReturnPct: 0,
       signalTime: signalBar.time, entryTime: signalCloseTime,
       score: candidate.score, ambiguousCandles: 0
     };
@@ -165,9 +253,10 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     for (; candleIndex < fiveMinute.length && fiveMinute[candleIndex].time < toMs; candleIndex++) {
       const bar = fiveMinute[candleIndex];
       if (candleAmbiguous(candidate.side,trade,bar)) trade.ambiguousCandles++;
-      const evaluated = evaluateTradeCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
-      if (evaluated.changed) {
-        Object.assign(trade,evaluated.trade);
+      const evaluated = evaluateStagedCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
+      if (evaluated.stopMoved) trade.breakEvenMoveCount = (trade.breakEvenMoveCount || 0) + 1;
+      if (evaluated.changed || evaluated.stopMoved || evaluated.trade) Object.assign(trade,evaluated.trade);
+      if (evaluated.closed) {
         trade.closedAtMs = bar.time + INTERVALS["5m"];
         closed = true;
         break;
@@ -176,7 +265,11 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (!closed) {
       trade.status = "OPEN_AT_BACKTEST_END";
       trade.lastMark = fiveMinute.at(-1)?.close ?? null;
-      trade.marginReturnAtMarkPct = trade.lastMark ? (candidate.side==="LONG" ? 1 : -1) * ((trade.lastMark-entry)/entry) * 100 * LEVERAGE : null;
+      const dir = candidate.side === "LONG" ? 1 : -1;
+      trade.unrealizedRemainingMarginReturnPct = trade.lastMark
+        ? Number(trade.remainingFraction ?? 1) * dir * ((trade.lastMark-entry)/entry) * 100 * LEVERAGE : null;
+      trade.marginReturnAtMarkPct = trade.lastMark
+        ? Number(trade.realizedMarginReturnPct || 0) + Number(trade.unrealizedRemainingMarginReturnPct || 0) : null;
       // Preserve the same-side lock through the sample end for still-open trades.
       lockUntil.set(lockKey,toMs);
     } else {
@@ -193,40 +286,54 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   };
 }
 
-
-function simulatePortfolio(trades, initialCapital=100, marginPerTrade=10) {
-  const events=[];
+function simulatePortfolio(trades, initialCapital=100, marginPerTrade=10, endMs=Date.now()) {
+  const events = [];
   for (const trade of trades) {
     events.push({time:Number(trade.entryTime),type:"ENTRY",trade});
     if (trade.status==="CLOSED_PROFIT" || trade.status==="CLOSED_STOP") {
       events.push({time:Number(trade.closedAtMs),type:"EXIT",trade});
     }
   }
+  // Exit events are processed before entries at an identical timestamp.
   events.sort((a,b)=>a.time-b.time || (a.type==="EXIT"?-1:1));
-  let free=initialCapital, used=0, realized=0, peak=initialCapital, maxDD=0, accepted=0, skipped=0, maxConcurrent=0;
-  const active=new Map();
-  for (const e of events) {
-    const t=e.trade;
-    if (e.type==="ENTRY") {
-      if (free+1e-9<marginPerTrade) { skipped++; continue; }
-      free-=marginPerTrade; used+=marginPerTrade; active.set(t.id,t); accepted++;
-      maxConcurrent=Math.max(maxConcurrent,active.size);
+  let freeMargin=initialCapital, usedMargin=0, peakEquity=initialCapital, maxDrawdown=0;
+  let accepted=0, skipped=0, maxConcurrent=0, realizedPnl=0;
+  const active=new Map(), skippedIds=new Set();
+  for (const event of events) {
+    const t=event.trade;
+    if (event.type==="ENTRY") {
+      if (freeMargin + 1e-9 < marginPerTrade) { skipped++; skippedIds.add(t.id); continue; }
+      freeMargin-=marginPerTrade; usedMargin+=marginPerTrade;
+      active.set(t.id,t); accepted++; maxConcurrent=Math.max(maxConcurrent,active.size);
     } else if (active.has(t.id)) {
       const pnl=marginPerTrade*Number(t.marginReturnPercent||0)/100;
-      free+=marginPerTrade+pnl; used-=marginPerTrade; realized+=pnl; active.delete(t.id);
-      const equity=free+used; peak=Math.max(peak,equity); maxDD=Math.max(maxDD,peak-equity);
+      freeMargin+=marginPerTrade+pnl; usedMargin-=marginPerTrade;
+      realizedPnl+=pnl; active.delete(t.id);
+      const equity=freeMargin+usedMargin;
+      peakEquity=Math.max(peakEquity,equity);
+      maxDrawdown=Math.max(maxDrawdown,peakEquity-equity);
     }
   }
-  let unrealized=0;
-  for (const t of active.values()) unrealized+=marginPerTrade*Number(t.marginReturnAtMarkPct||0)/100;
-  const ending=free+used+unrealized;
-  return {initialCapitalUSD:initialCapital,marginPerTradeUSD:marginPerTrade,leverage:LEVERAGE,
-    notionalPerTradeUSD:marginPerTrade*LEVERAGE,acceptedTrades:accepted,skippedForInsufficientFreeMargin:skipped,
-    closedPositions:accepted-active.size,openPositionsAtEnd:active.size,maxConcurrentPositions:maxConcurrent,
-    realizedNetPnlUSD:Number(realized.toFixed(4)),openPositionsMarkToMarketPnlUSD:Number(unrealized.toFixed(4)),
-    endingEquityUSD:Number(ending.toFixed(4)),netReturnPct:Number(((ending/initialCapital-1)*100).toFixed(4)),
-    maxDrawdownFromRealizedEquityUSD:Number(maxDD.toFixed(4)),freeMarginAtEndUSD:Number(free.toFixed(4)),
-    usedMarginAtEndUSD:Number(used.toFixed(4))};
+  let openUnrealizedPnl=0;
+  for (const t of active.values()) {
+    openUnrealizedPnl += marginPerTrade*Number(t.marginReturnAtMarkPct||0)/100;
+  }
+  const endingEquity=freeMargin+usedMargin+openUnrealizedPnl;
+  return {
+    initialCapitalUSD:initialCapital, marginPerTradeUSD:marginPerTrade,
+    leverage:LEVERAGE, notionalPerTradeUSD:marginPerTrade*LEVERAGE,
+    maxConcurrentPositions:maxConcurrent, acceptedTrades:accepted, skippedForInsufficientFreeMargin:skipped,
+    closedPositions:accepted-active.size, openPositionsAtEnd:active.size,
+    realizedNetPnlUSD:Number(realizedPnl.toFixed(4)),
+    openPositionsMarkToMarketPnlUSD:Number(openUnrealizedPnl.toFixed(4)),
+    endingEquityUSD:Number(endingEquity.toFixed(4)),
+    netReturnPct:Number(((endingEquity/initialCapital-1)*100).toFixed(4)),
+    maxDrawdownFromRealizedEquityUSD:Number(maxDrawdown.toFixed(4)),
+    freeMarginAtEndUSD:Number(freeMargin.toFixed(4)),
+    usedMarginAtEndUSD:Number(usedMargin.toFixed(4)),
+    skippedTradeIds:[...skippedIds],
+    accounting:"Fixed $10 initial margin per accepted trade; margin remains reserved until the full position closes. Realized trade PnL is applied at final close; open positions are marked to the final 5m close. No compounding of per-trade margin size."
+  };
 }
 
 async function main() {
@@ -252,12 +359,12 @@ async function main() {
   const successful = results.filter(r=>!r.error);
   const allTrades = successful.flatMap(r=>r.trades).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
   const metrics = summarize(allTrades);
-  const portfolio = simulatePortfolio(allTrades,100,10);
+  const portfolio = simulatePortfolio(allTrades,100,10,endMs);
   const report = {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
-    rules:{leverage:LEVERAGE,targetMarginReturnPct:TARGET,requiredFavorablePriceMovePct:TARGET/LEVERAGE,
-      exit:"close only at +30% margin return or configured stop",tp1Tp2Tp3:"ignored for closing",
+    rules:{leverage:LEVERAGE,targets:"TP1=1.5R, TP2=2.5R, TP3=3.5R; one-third of initial size at TP1 and TP2, remainder at TP3",
+      exit:"partial exits at each target; remaining size closes at active stop; automatic +1R break-even with 0.12% fee buffer",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
@@ -273,24 +380,45 @@ async function main() {
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/futures-lifecycle-backtest.json",JSON.stringify(report,null,2));
   const rows = [
-    "# Futures lifecycle historical backtest","",
+    "# Futures staged TP1/TP2/TP3 historical backtest","",
     "Period: "+report.period.from+" — "+report.period.to+" ("+DAYS+" days)",
     "Symbols tested: "+report.symbolsTested+"/"+SYMBOL_LIMIT,"",
     "| Metric | Result |","|---|---:|",
-    "| Starting equity / fixed margin | $"+portfolio.initialCapitalUSD+" / $"+portfolio.marginPerTradeUSD+" |",
-    "| Leverage / notional per trade | "+portfolio.leverage+"x / $"+portfolio.notionalPerTradeUSD+" |",
-    "| Accepted / skipped for insufficient margin | "+portfolio.acceptedTrades+" / "+portfolio.skippedForInsufficientFreeMargin+" |",
-    "| Realized PnL | $"+portfolio.realizedNetPnlUSD.toFixed(2)+" |",
-    "| Ending equity | $"+portfolio.endingEquityUSD.toFixed(2)+" |",
-    "| Account return | "+portfolio.netReturnPct.toFixed(2)+"% |",
+    "| Starting account equity (USD) | $"+portfolio.initialCapitalUSD.toFixed(2)+" |",
+    "| Fixed margin per trade (USD) | $"+portfolio.marginPerTradeUSD.toFixed(2)+" |",
+    "| Leverage / notional per trade | "+portfolio.leverage+"x / $"+portfolio.notionalPerTradeUSD.toFixed(2)+" |",
+    "| Accepted / skipped for insufficient free margin | "+portfolio.acceptedTrades+" / "+portfolio.skippedForInsufficientFreeMargin+" |",
+    "| Maximum concurrent positions | "+portfolio.maxConcurrentPositions+" |",
+    "| Realized net PnL (USD) | $"+portfolio.realizedNetPnlUSD.toFixed(2)+" |",
+    "| Open-position mark-to-market PnL (USD) | $"+portfolio.openPositionsMarkToMarketPnlUSD.toFixed(2)+" |",
+    "| Ending account equity (USD) | $"+portfolio.endingEquityUSD.toFixed(2)+" |",
+    "| Net account return | "+portfolio.netReturnPct.toFixed(2)+"% |",
+    "| Ending free / used margin (USD) | $"+portfolio.freeMarginAtEndUSD.toFixed(2)+" / $"+portfolio.usedMarginAtEndUSD.toFixed(2)+" |",
+
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
-    "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
-    "| Stop closes | "+metrics.stopCloses+" |",
+    "| Trades reaching TP3 | "+metrics.profitCloses+" |",
+    "| Net profitable closed trades | "+metrics.netPositiveClosedTrades+" |",
+    "| Net losing closed trades | "+metrics.netNegativeClosedTrades+" |",
+    "| Stop closes (including protected BE exits) | "+metrics.stopCloses+" |",
+    "| Positive stop exits after partial TP / BE | "+metrics.positiveStopCloses+" |",
+    "| Losing stop exits | "+metrics.losingStopCloses+" |",
     "| Open at end | "+metrics.openAtEnd+" |",
-    "| LONG / SHORT | "+metrics.longs+" / "+metrics.shorts+" |",
-    "| Win rate | "+metrics.winRatePct.toFixed(2)+"% |",
+    "| Open trades with TP1 / TP2 already hit | "+metrics.openTradesWithTP1+" / "+metrics.openTradesWithTP2+" |",
+    "| Partial TP realized on still-open trades (margin points) | "+metrics.openPartialRealizedMarginReturnPct.toFixed(2)+" |",
+    "| Remaining open PnL at final mark (margin points) | "+metrics.openRemainingUnrealizedMarginReturnPct.toFixed(2)+" |",
+    "| Open positions total mark-to-market (margin points) | "+metrics.openCombinedMarkToMarketMarginReturnPct.toFixed(2)+" |",
+    "| LONG / SHORT closed | "+metrics.longs+" / "+metrics.shorts+" |",
+    "| LONG net-positive rate (resolved only) | "+metrics.bySide.LONG.winRatePct.toFixed(2)+"% |",
+    "| SHORT net-positive rate (resolved only) | "+metrics.bySide.SHORT.winRatePct.toFixed(2)+"% |",
+    "| LONG net margin return | "+metrics.bySide.LONG.netMarginReturnPct.toFixed(2)+"% |",
+    "| SHORT net margin return | "+metrics.bySide.SHORT.netMarginReturnPct.toFixed(2)+"% |",
+    "| Automatic break-even moves | "+metrics.breakEvenMoves+" |",
+    "| TP1 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP1")).length+" |",
+    "| TP2 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP2")).length+" |",
+    "| TP3 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP3")).length+" |",
+    "| Net-positive closed-trade rate | "+metrics.winRatePct.toFixed(2)+"% |",
     "| Sum margin return (not compounded) | "+metrics.totalMarginReturnPct.toFixed(2)+"% |",
     "| Average margin return / trade | "+metrics.averageMarginReturnPct.toFixed(2)+"% |",
     "| Max drawdown (additive margin-return points) | "+metrics.maxDrawdownMarginPct.toFixed(2)+"% |",
