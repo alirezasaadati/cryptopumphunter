@@ -39,7 +39,7 @@ function simulateTrade(signal, candles5m) {
   const risk=side==="LONG"?entry-initialStop:initialStop-entry,riskPct=risk/entry;
   if(!(risk>0)||riskPct<BTC_ENGINE_CONFIG.minRiskPct||riskPct>BTC_ENGINE_CONFIG.maxRiskPct)return null;
   const tp1=entry+dir*risk*BTC_ENGINE_CONFIG.tp1R,tp2=entry+dir*risk*BTC_ENGINE_CONFIG.tp2R;
-  let stop=initialStop,be=false,tp1Done=false,remaining=1,realized=0,exitReason="OPEN_AT_END",closedAt=null,exitPrice=null,stopLock=false;
+  let stop=initialStop,be=false,tp1Done=false,remaining=1,realized=0,exitReason="OPEN_AT_END",closedAt=null,exitPrice=null,stopLock=false,sameCandleStopExits=0;
   const priceReturn=px=>dir*((px-entry)/entry)*100*LEVERAGE;
   for(let i=entryIndex;i<candles5m.length&&candles5m[i].time<END;i++){
     const c=candles5m[i],open=c.open,high=c.high,low=c.low;
@@ -60,7 +60,7 @@ function simulateTrade(signal, candles5m) {
         stopLock=true;
       }
     }
-    const hit2=side==="LONG"?high>=tp2:low<=tp2;
+    // Conservative same-candle resolution: if a newly advanced stop is also touched,\n    // credit TP1 when reached and stop out the remaining size.\n    const advancedStopHit=stopAdvancedThisBar&&(side==="LONG"?low<=stop:high>=stop);\n    if(advancedStopHit){exitPrice=(side==="LONG"?open<=stop:open>=stop)?open:stop;realized+=remaining*priceReturn(exitPrice);remaining=0;exitReason=tp1Done?"STOP_AFTER_TP1_SAME_CANDLE":"BE_SAME_CANDLE";closedAt=c.time+MS["5m"];sameCandleStopExits++;break;}\n    const hit2=side==="LONG"?high>=tp2:low<=tp2;
     if(hit2){
       const fill=side==="LONG"?(open>=tp2?open:tp2):(open<=tp2?open:tp2);
       realized+=remaining*priceReturn(fill);remaining=0;exitPrice=fill;exitReason="TP2";closedAt=c.time+MS["5m"];break;
@@ -68,7 +68,7 @@ function simulateTrade(signal, candles5m) {
   }
   const last=candles5m.filter(c=>c.time<END).at(-1);
   if(remaining>0){exitPrice=last?.close??entry;realized+=remaining*priceReturn(exitPrice);exitReason="MARK_TO_MARKET_END";closedAt=END;}
-  return {id:"BTC:"+signal.candleTime,side,setupType:signal.setupType,score:signal.entryAccuracyScore,regime1h:signal.regime1h,signalTime:signal.candleTime,entryTime:entryBar.time,entry,initialStop,tp1,tp2,exitPrice,exitReason,closedAt,beActivated:be,tp1Done,stopLockedAtHalfR:stopLock,realizedMarginReturnPct:realized,win:realized>0};
+  return {id:"BTC:"+signal.candleTime,side,setupType:signal.setupType,score:signal.entryAccuracyScore,regime1h:signal.regime1h,signalTime:signal.candleTime,entryTime:entryBar.time,entry,initialStop,tp1,tp2,exitPrice,exitReason,closedAt,beActivated:be,tp1Done,stopLockedAtHalfR:stopLock,sameCandleStopExits,realizedMarginReturnPct:realized,win:realized>0};
 }
 function portfolio(trades){
   const events=[];for(const t of trades){events.push({time:t.entryTime,type:"IN",t});events.push({time:t.closedAt,type:"OUT",t});}
@@ -107,7 +107,7 @@ const report={
   selectionMethod:"Causal streaming scan: evaluate each closed 15m candle, then pass only that candidate plus same-day issued signals to the supplied selector; execute at next 5m candle open.",
   lifecycleAssumptions:{entry:"next available 5m candle open after 15m signal close",stop:"initial ATR/swing stop; at +1R move to entry plus 0.12% fee buffer; after TP1 move remaining stop to +0.5R",tp1:"close 1/3 at 1.5R",tp2:"close remaining 2/3 at 2.8R",intrabar:"active stop checked before targets; stop changes apply from following 5m candle",feesAndFunding:"not included beyond 0.12% BE buffer",margin:"$10 per position, 10x, $100 initial capital, max 6 concurrent positions, no compounding"},
   scanStats:{validSetups:candidates.length,selectedSignals:accepted.length,signalsPerDay:accepted.length/DAYS,scoreAverage:+avg(accepted.map(x=>x.entryAccuracyScore)).toFixed(2),standardScoreSignals:accepted.filter(x=>x.entryAccuracyScore>=BTC_ENGINE_CONFIG.minEntryAccuracyScore).length,fallbackSignals:accepted.filter(x=>x.entryAccuracyScore<BTC_ENGINE_CONFIG.minEntryAccuracyScore).length,rejections},
-  tradeStats:{trades:trades.length,wins:wins.length,losses:losses.length,winRatePct:trades.length?+(wins.length/trades.length*100).toFixed(2):0,stopExits:stopTrades.length,stopLossExits:stopTrades.filter(t=>t.realizedMarginReturnPct<0).length,positiveStopExits:stopTrades.filter(t=>t.realizedMarginReturnPct>0).length,tp2Exits:trades.filter(t=>t.exitReason==="TP2").length,markToMarketAtEnd:trades.filter(t=>t.exitReason==="MARK_TO_MARKET_END").length,averageMarginReturnPct:+avg(trades.map(t=>t.realizedMarginReturnPct)).toFixed(2),averageWinMarginPct:+avg(wins.map(t=>t.realizedMarginReturnPct)).toFixed(2),averageLossMarginPct:+avg(losses.map(t=>t.realizedMarginReturnPct)).toFixed(2),grossMarginReturnPct:+trades.reduce((n,t)=>n+t.realizedMarginReturnPct,0).toFixed(2)},
+  tradeStats:{trades:trades.length,wins:wins.length,losses:losses.length,winRatePct:trades.length?+(wins.length/trades.length*100).toFixed(2):0,stopExits:stopTrades.length,stopLossExits:stopTrades.filter(t=>t.realizedMarginReturnPct<0).length,positiveStopExits:stopTrades.filter(t=>t.realizedMarginReturnPct>0).length,tp2Exits:trades.filter(t=>t.exitReason==="TP2").length,markToMarketAtEnd:trades.filter(t=>t.exitReason==="MARK_TO_MARKET_END").length,sameCandleStopExits:trades.reduce((n,t)=>n+t.sameCandleStopExits,0),averageMarginReturnPct:+avg(trades.map(t=>t.realizedMarginReturnPct)).toFixed(2),averageWinMarginPct:+avg(wins.map(t=>t.realizedMarginReturnPct)).toFixed(2),averageLossMarginPct:+avg(losses.map(t=>t.realizedMarginReturnPct)).toFixed(2),grossMarginReturnPct:+trades.reduce((n,t)=>n+t.realizedMarginReturnPct,0).toFixed(2)},
   portfolio:portfolio(trades),trades
 };
 await mkdir("artifacts",{recursive:true});
