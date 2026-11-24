@@ -96,9 +96,11 @@ function measureExcursion(side, entry, bars, start, end) {
   return {maePct:Math.max(0,adversePct),mfePct:Math.max(0,favorablePct)};
 }
 function summarize(rows) {
-  const avg=(xs,key)=>xs.length?xs.reduce((s,x)=>s+x[key],0)/xs.length:null;
+  const avg=(xs,key)=>xs.length?xs.reduce((s,x)=>s+Number(x[key]||0),0)/xs.length:null;
   const p=(xs,key)=>xs.length?xs.slice().sort((a,b)=>a[key]-b[key])[Math.floor((xs.length-1)*0.95)][key]:null;
-  return {count:rows.length,maeAvgPct:avg(rows,"maePct"),maeP95Pct:p(rows,"maePct"),mfeAvgPct:avg(rows,"mfePct"),mfeP95Pct:p(rows,"mfePct")};
+  return {count:rows.length,maeAvgPct:avg(rows,"maePct"),maeP95Pct:p(rows,"maePct"),
+    mfeAvgPct:avg(rows,"mfePct"),mfeP95Pct:p(rows,"mfePct"),
+    maeToStopRatioAvg:avg(rows,"maeToStopRatio"),mfeMaeRatioAvg:avg(rows,"mfeMaeRatio")};
 }
 async function main() {
   const endMs=Date.now(), startMs=endMs-DAYS*86400000, fromMs=startMs-WARMUP_DAYS*86400000;
@@ -156,7 +158,7 @@ async function main() {
           entryQualityScore:exp.entryQualityScore??null,entryQualityRaw:exp.entryQualityRaw??null,
           entryQualityAvailableFactors:exp.entryQualityAvailableFactors??0,
           riskLevel:exp.riskLevel??null,stop:Number(exp.stop),stopDistancePct:Math.abs(entry-Number(exp.stop))/entry*100,
-          horizons,maePct:full.maePct,mfePct:full.mfePct,legacyParity:diffs.length===0,parityDiffs:diffs};
+          horizons,maePct:full.maePct,mfePct:full.mfePct,maeToStopRatio:full.maePct/(Math.abs(entry-Number(exp.stop))/entry*100),mfeMaeRatio:full.maePct>0?full.mfePct/full.maePct:null,legacyParity:diffs.length===0,parityDiffs:diffs};
         local.push(row); records.push(row);
       }
       symbolResults.push({symbol:ticker.symbol,candles:{h1:h1.length,h4:h4.length,m15:m15.length,m5:m5.length},
@@ -172,10 +174,18 @@ async function main() {
       mae30mAvgPct:xs.filter(x=>x.horizons[30]).length?xs.filter(x=>x.horizons[30]).reduce((s,x)=>s+x.horizons[30].maePct,0)/xs.filter(x=>x.horizons[30]).length:null,
       mae60mAvgPct:xs.filter(x=>x.horizons[60]).length?xs.filter(x=>x.horizons[60]).reduce((s,x)=>s+x.horizons[60].maePct,0)/xs.filter(x=>x.horizons[60]).length:null};
   }
+  const bucketFor = score => score==null ? "UNAVAILABLE" : score<40 ? "LOW_0_39" : score<70 ? "MID_40_69" : "HIGH_70_100";
   for(const label of ["LOW_0_39","MID_40_69","HIGH_70_100","UNAVAILABLE"]){
-    const xs=records.filter(r=>label==="UNAVAILABLE"?r.entryQualityScore==null:
-      r.entryQualityScore!=null&&(label==="LOW_0_39"?r.entryQualityScore<40:label==="MID_40_69"?r.entryQualityScore<70:r.entryQualityScore>=70));
+    const xs=records.filter(r=>bucketFor(r.entryQualityScore)===label);
     byEqsBucket[label]={signals:xs.length,...summarize(xs)};
+  }
+  const byEqsBucketAndSide={};
+  for(const side of ["LONG","SHORT"]){
+    byEqsBucketAndSide[side]={};
+    for(const label of ["LOW_0_39","MID_40_69","HIGH_70_100","UNAVAILABLE"]){
+      const xs=records.filter(r=>r.side===side&&bucketFor(r.entryQualityScore)===label);
+      byEqsBucketAndSide[side][label]={signals:xs.length,...summarize(xs)};
+    }
   }
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures public historical OHLC",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
@@ -188,7 +198,7 @@ async function main() {
     opportunitiesCompared:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0),
     measuredSignals:records.length,legacyParityMismatches:symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0),
     legacyParityMatchRatePct:symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0)?(1-symbolResults.reduce((s,x)=>s+(x.legacyParityMismatches||0),0)/symbolResults.reduce((s,x)=>s+(x.evaluatedOpportunities||0),0))*100:null,
-    bySide,byEqsBucket,signals:records};
+    bySide,byEqsBucket,byEqsBucketAndSide,signals:records};
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/eqs-diagnostics.json",JSON.stringify(report,null,2));
   const md=["# EQS 5m diagnostic backtest","",
@@ -201,9 +211,13 @@ async function main() {
     "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...["LONG","SHORT"].map(s=>{const x=bySide[s],m=x.maeMfe60m;return "| "+s+" | "+x.signals+" | "+(m.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(m.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(m.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(m.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mae15mAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mae30mAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mae60mAvgPct?.toFixed(3)??"n/a")+"% |";}),
     "","## EQS buckets","",
-    "| Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 |",
-    "|---|---:|---:|---:|---:|---:|",
-    ...Object.entries(byEqsBucket).map(([k,x])=>"| "+k+" | "+x.count+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% |"),
+    "| Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / stop | MFE / MAE |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ...Object.entries(byEqsBucket).map(([k,x])=>"| "+k+" | "+x.count+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatioAvg?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatioAvg?.toFixed(3)??"n/a")+" |"),
+    "","## EQS buckets by side (do not pool LONG and SHORT)","",
+    "| Side | Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / stop | MFE / MAE |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+    ...["LONG","SHORT"].flatMap(side=>Object.entries(byEqsBucketAndSide[side]).map(([bucket,x])=>"| "+side+" | "+bucket+" | "+x.signals+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatioAvg?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatioAvg?.toFixed(3)??"n/a")+" |")),
     "","## Method limitations","",
     "- This is an entry-quality diagnostic, not a PnL/exit backtest.",
     "- EQS buckets are descriptive; thresholds 40/70 are provisional.",
@@ -220,7 +234,7 @@ async function main() {
   console.log(JSON.stringify({ok:report.symbolsTested>0,period:report.period,symbolsTested:report.symbolsTested,
     opportunitiesCompared:report.opportunitiesCompared,measuredSignals:report.measuredSignals,
     legacyParityMismatches:report.legacyParityMismatches,legacyParityMatchRatePct:report.legacyParityMatchRatePct,
-    bySide,byEqsBucket,symbolResults},null,2));
+    bySide,byEqsBucket,byEqsBucketAndSide,symbolResults},null,2));
   if(!report.symbolsTested)process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
