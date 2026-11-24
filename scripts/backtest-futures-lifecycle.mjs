@@ -78,9 +78,10 @@ function candleAmbiguous(side, trade, candle) {
   const stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
   const targets = targetLevels(trade);
   const stopHit = side === "LONG" ? candle.low <= stop : candle.high >= stop;
-  const profitHit = targets.some(t => side === "LONG" ? candle.high >= t : candle.low <= t);
+  const hitTargets = targets.filter((t,i) => !(trade.tpHits || []).includes("TP"+(i+1)));
+  const profitHit = hitTargets.some(t => side === "LONG" ? candle.high >= t : candle.low <= t);
   const stopAtOpen = side === "LONG" ? candle.open <= stop : candle.open >= stop;
-  const profitAtOpen = targets.some(t => side === "LONG" ? candle.open >= t : candle.open <= t);
+  const profitAtOpen = hitTargets.some(t => side === "LONG" ? candle.open >= t : candle.open <= t);
   return stopHit && profitHit && !stopAtOpen && !profitAtOpen;
 }
 function evaluateStagedCandle(trade, candle) {
@@ -165,8 +166,10 @@ function summarize(trades) {
   const sideSummary = side => {
     const started = trades.filter(t => t.side === side);
     const resolved = started.filter(t => t.status === "CLOSED_PROFIT" || t.status === "CLOSED_STOP");
-    const wins = resolved.filter(t => t.status === "CLOSED_PROFIT");
-    return { tradesStarted: started.length, closedTrades: resolved.length, profitCloses: wins.length,
+    const wins = resolved.filter(t => Number(t.marginReturnPercent) > 0);
+    return { tradesStarted: started.length, closedTrades: resolved.length, profitCloses: resolved.filter(t => t.status === "CLOSED_PROFIT").length,
+      netPositiveClosedTrades: wins.length,
+      netNegativeClosedTrades: resolved.filter(t => Number(t.marginReturnPercent) < 0).length,
       stopCloses: resolved.length - wins.length,
       positiveStopCloses: resolved.filter(t => t.status === "CLOSED_STOP" && Number(t.marginReturnPercent) > 0).length,
       losingStopCloses: resolved.filter(t => t.status === "CLOSED_STOP" && Number(t.marginReturnPercent) < 0).length,
@@ -179,7 +182,9 @@ function summarize(trades) {
   return {
     tradesStarted: trades.length, closedTrades: closed.length, profitCloses: profits.length, stopCloses: stops.length,
     openAtEnd: trades.length - closed.length, longs: longs.length, shorts: shorts.length,
-    winRatePct: closed.length ? profits.length / closed.length * 100 : 0,
+    winRatePct: closed.length ? closed.filter(t => Number(t.marginReturnPercent) > 0).length / closed.length * 100 : 0,
+    netPositiveClosedTrades: closed.filter(t => Number(t.marginReturnPercent) > 0).length,
+    netNegativeClosedTrades: closed.filter(t => Number(t.marginReturnPercent) < 0).length,
     totalMarginReturnPct: sum(closed), averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
     maxDrawdownMarginPct: maxDrawdown, ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
     breakEvenMoves: trades.reduce((n,t)=>n+(t.breakEvenMoveCount || 0),0),
@@ -325,15 +330,15 @@ async function main() {
     "| Losing stop exits | "+metrics.losingStopCloses+" |",
     "| Open at end | "+metrics.openAtEnd+" |",
     "| LONG / SHORT closed | "+metrics.longs+" / "+metrics.shorts+" |",
-    "| LONG win rate (resolved only) | "+metrics.bySide.LONG.winRatePct.toFixed(2)+"% |",
-    "| SHORT win rate (resolved only) | "+metrics.bySide.SHORT.winRatePct.toFixed(2)+"% |",
+    "| LONG net-positive rate (resolved only) | "+metrics.bySide.LONG.winRatePct.toFixed(2)+"% |",
+    "| SHORT net-positive rate (resolved only) | "+metrics.bySide.SHORT.winRatePct.toFixed(2)+"% |",
     "| LONG net margin return | "+metrics.bySide.LONG.netMarginReturnPct.toFixed(2)+"% |",
     "| SHORT net margin return | "+metrics.bySide.SHORT.netMarginReturnPct.toFixed(2)+"% |",
     "| Automatic break-even moves | "+metrics.breakEvenMoves+" |",
     "| TP1 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP1")).length+" |",
     "| TP2 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP2")).length+" |",
     "| TP3 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP3")).length+" |",
-    "| Win rate | "+metrics.winRatePct.toFixed(2)+"% |",
+    "| Net-positive closed-trade rate | "+metrics.winRatePct.toFixed(2)+"% |",
     "| Sum margin return (not compounded) | "+metrics.totalMarginReturnPct.toFixed(2)+"% |",
     "| Average margin return / trade | "+metrics.averageMarginReturnPct.toFixed(2)+"% |",
     "| Max drawdown (additive margin-return points) | "+metrics.maxDrawdownMarginPct.toFixed(2)+"% |",
