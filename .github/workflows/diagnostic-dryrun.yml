@@ -1,0 +1,35 @@
+name: Diagnostic branch dry-run build
+
+on:
+  pull_request:
+    paths:
+      - "src/index.js"
+      - "wrangler.toml"
+      - "wrangler.json"
+      - "wrangler.jsonc"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/diagnostic-dryrun.yml"
+  push:
+    branches:
+      - diagnostic/read-only-entry-metrics-20261124
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Syntax check
+        run: npm run check
+      - name: Cloudflare Worker dry-run build only
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-dry-run
