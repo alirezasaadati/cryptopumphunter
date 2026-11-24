@@ -251,10 +251,12 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
       trade.entryModel=mode === "baseline" ? "last_1h_close" : "next_1h_open";
       state.trades.push(trade);
-      const margin30Trade=simulateMargin30Trade({side:candidate.side,entry,stop:candidate.stop,candles:tradeCandles,startIndex:0,
-        fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS,marginUsd:10,leverage:10,targetMarginPct:30});
-      margin30Trade.symbol=ticker.symbol; margin30Trade.score=candidate.score; margin30Trade.signalTime=signalBar.time;
-      strategies.currentMargin30.trades.push(margin30Trade);
+      if (mode === "current") {
+        const margin30Trade=simulateMargin30Trade({side:candidate.side,entry,stop,candles:tradeCandles,startIndex:0,
+          fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS,marginUsd:10,leverage:10,targetMarginPct:30});
+        margin30Trade.symbol=ticker.symbol; margin30Trade.score=candidate.score; margin30Trade.signalTime=signalBar.time;
+        strategies.currentMargin30.trades.push(margin30Trade);
+      }
       const exitIndex=oneHour.findIndex(c=>c.time===trade.exitTime);
       nextAvailable[mode]=Math.max(i+1,exitIndex+1);
     }
