@@ -47,20 +47,34 @@ function simulateTrade(signal, candles5m) {
     if(stopHit){
       exitPrice=stopAtOpen?open:stop;realized+=remaining*priceReturn(exitPrice);remaining=0;exitReason=tp1Done?"STOP_AFTER_TP1":"STOP";closedAt=c.time+MS["5m"];break;
     }
+    let stopAdvancedThisBar=false;
     const oneR=entry+dir*risk;
     const hitOneR=side==="LONG"?high>=oneR:low<=oneR;
-    if(!be&&hitOneR){const beStop=entry+dir*entry*0.0012;if((dir===1&&beStop>stop)||(dir===-1&&beStop<stop))stop=beStop;be=true;}
+    if(!be&&hitOneR){
+      const beStop=entry+dir*entry*0.0012;
+      if((dir===1&&beStop>stop)||(dir===-1&&beStop<stop)){stop=beStop;stopAdvancedThisBar=true;}
+      be=true;
+    }
     if(!tp1Done){
       const hit1=side==="LONG"?high>=tp1:low<=tp1;
       if(hit1){
         const fill=side==="LONG"?(open>=tp1?open:tp1):(open<=tp1?open:tp1);
         realized+=(1/3)*priceReturn(fill);remaining-=1/3;tp1Done=true;
         const lock=entry+dir*risk*0.5;
-        if((dir===1&&lock>stop)||(dir===-1&&lock<stop))stop=lock;
+        if((dir===1&&lock>stop)||(dir===-1&&lock<stop)){stop=lock;stopAdvancedThisBar=true;}
         stopLock=true;
       }
     }
-    // Conservative same-candle resolution: if a newly advanced stop is also touched,\n    // credit TP1 when reached and stop out the remaining size.\n    const advancedStopHit=stopAdvancedThisBar&&(side==="LONG"?low<=stop:high>=stop);\n    if(advancedStopHit){exitPrice=(side==="LONG"?open<=stop:open>=stop)?open:stop;realized+=remaining*priceReturn(exitPrice);remaining=0;exitReason=tp1Done?"STOP_AFTER_TP1_SAME_CANDLE":"BE_SAME_CANDLE";closedAt=c.time+MS["5m"];sameCandleStopExits++;break;}\n    const hit2=side==="LONG"?high>=tp2:low<=tp2;
+    // Conservative same-candle resolution: credit TP1 if reached, then stop the remainder
+    // if the newly activated stop is also crossed within this same 5m candle.
+    const advancedStopHit=stopAdvancedThisBar&&(side==="LONG"?low<=stop:high>=stop);
+    if(advancedStopHit){
+      exitPrice=(side==="LONG"?open<=stop:open>=stop)?open:stop;
+      realized+=remaining*priceReturn(exitPrice);remaining=0;
+      exitReason=tp1Done?"STOP_AFTER_TP1_SAME_CANDLE":"BE_SAME_CANDLE";
+      closedAt=c.time+MS["5m"];sameCandleStopExits++;break;
+    }
+    const hit2=side==="LONG"?high>=tp2:low<=tp2;
     if(hit2){
       const fill=side==="LONG"?(open>=tp2?open:tp2):(open<=tp2?open:tp2);
       realized+=remaining*priceReturn(fill);remaining=0;exitPrice=fill;exitReason="TP2";closedAt=c.time+MS["5m"];break;
