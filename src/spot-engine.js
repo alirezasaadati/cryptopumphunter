@@ -438,6 +438,14 @@ export async function runSpotScan() {
   const ruleRejected=evaluated.filter(item=>!item.eligible);
   const opportunities=evaluated.filter(item=>item.eligible)
     .sort((a,b)=>b.score-a.score||b.rewardRisk-a.rewardRisk).slice(0,CFG.MAX_RESULTS);
+  if (!opportunities.length) {
+    return {
+      report: "📊 گزارش اسکن بازار اسپات\n\n━━━━━━━━━━━━━━━━━━\n\n🔎 در حال حاضر فرصت سرمایه‌گذاری مناسبی شناسایی نشد.\n\nبرای بررسی فرصت‌های جدید، لطفاً در زمان دیگری مجدداً از همین بخش اقدام کنید.",
+      opportunities,
+      diagnostics: { selected:candidates.length, evaluated:evaluated.length, dataFailures:dataFailures.length, ruleRejected:ruleRejected.length, coinLorePageErrors:coinResult.errors.length, failedAssets:dataFailures.map(item=>({symbol:item.coin?.symbol||null,error:item.rejected})) }
+    };
+  }
+
   const report=[
     "📊 اسکن دستی بازار اسپات Kraken",
     "━━━━━━━━━━━━━━━━━━",
