@@ -2814,8 +2814,20 @@ async function runFuturesEntryDiagnostics(env) {
         const referencePrice = Number(oneHour.at(-1)?.close);
         const marketPrice = Number(ticker?.last);
         const ema20Value = ema(closes1h, 20);
+        const prevEma20Value = ema(closes1h.slice(0, -1), 20);
+        const ema50Value = ema(closes1h, 50);
+        const ema20FourHour = ema(fourHour.map(c => c.close), 20);
+        const ema50FourHour = ema(fourHour.map(c => c.close), 50);
         const atrValue = calculateAtr(oneHour, 14);
         const rsiValue = rsi(closes1h, 14);
+        const last1h = oneHour.at(-1), prev1h = oneHour.at(-2);
+        const trend1hUp = ema20Value > ema50Value && ema20Value > prevEma20Value &&
+          referencePrice > ema20Value && last1h.close >= prev1h.low;
+        const trend1hDown = ema20Value < ema50Value && ema20Value < prevEma20Value &&
+          referencePrice < ema20Value && last1h.close <= prev1h.high;
+        const trend4h = ema20FourHour > ema50FourHour && fourHour.at(-1).close > ema20FourHour
+          ? "BULLISH" : ema20FourHour < ema50FourHour && fourHour.at(-1).close < ema20FourHour
+          ? "BEARISH" : "NEUTRAL";
         const driftPct = Number.isFinite(marketPrice) && Number.isFinite(referencePrice) && referencePrice > 0
           ? Math.abs(marketPrice - referencePrice) / referencePrice * 100 : null;
         const emaDistanceAtr = Number.isFinite(marketPrice) && Number.isFinite(ema20Value) &&
@@ -2835,8 +2847,8 @@ async function runFuturesEntryDiagnostics(env) {
           targets: result.eligible ? [result.target1, result.target2, result.target3] : null,
           metrics: {
             rsi1h: Number.isFinite(rsiValue) ? Number(rsiValue.toFixed(2)) : null,
-            trend1h: result.entryDiagnostics?.up1h ? "BULLISH" : result.entryDiagnostics?.down1h ? "BEARISH" : null,
-            trend4h: result.fourHourTrend || null,
+            trend1h: trend1hUp ? "BULLISH" : trend1hDown ? "BEARISH" : "NOT_CONFIRMED",
+            trend4h,
             marketPrice: Number.isFinite(marketPrice) ? marketPrice : null,
             analyticalPrice: Number.isFinite(referencePrice) ? referencePrice : null,
             driftPct: Number.isFinite(driftPct) ? Number(driftPct.toFixed(4)) : null,
@@ -2892,10 +2904,7 @@ function formatFuturesEntryDiagnostics(d) {
         " | حد عادی/پرریسک: " + m.driftLimitStandardPct + "% / " + m.driftLimitHighRiskPct + "%");
       lines.push("  فاصله EMA20: " + (m.emaDistanceAtr ?? "—") +
         " ATR | حد عادی/پرریسک: " + m.emaLimitStandardAtr + " / " + m.emaLimitHighRiskAtr + " ATR");
-      if (m.engineDetails?.up1h != null || m.engineDetails?.down1h != null) {
-        lines.push("  تأیید روند 1h: up=" + Boolean(m.engineDetails.up1h) +
-          " / down=" + Boolean(m.engineDetails.down1h));
-      }
+      lines.push("  وضعیت تأیید روند 1h: " + m.trend1h);
     }
     if (item.reason) lines.push("  علت: " + item.reason);
   }
