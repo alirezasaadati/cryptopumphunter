@@ -2254,6 +2254,11 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     momentumState: entryFilters.eqsMomentumStateV2 || "UNAVAILABLE",
     reclaimExtensionAtr: entryFilters.reclaimExtensionAtr
   });
+  // Regime-adjusted timing candidate: 4h bearish context showed lower entry heat
+  // for both LONG reversal attempts and SHORT continuation setups in the 90d sample.
+  const timingRegimeAdjustment = fourHourTrend === "BEARISH" ? 10
+    : fourHourTrend === "BULLISH" ? -10 : 0;
+  const timingRegimeScore = Math.max(0, Math.min(100, timingScore.normalized + timingRegimeAdjustment));
 
   const direction = side === "LONG" ? 1 : -1;
   const target1 = entry + direction * risk * 1.5;
@@ -2304,6 +2309,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     entryTimingRaw: timingScore.raw,
     entryTimingDetails: timingScore.details,
     entryTimingAvailableFactors: timingScore.availableFactorCount,
+    entryTimingRegimeScore: timingRegimeScore,
+    entryTimingRegimeAdjustment: timingRegimeAdjustment,
     ema20: e20,
     ema50: e50,
     atr,
