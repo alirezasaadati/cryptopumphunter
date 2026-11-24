@@ -2363,7 +2363,7 @@ async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, rep
     currentRecord = {
       ...currentRecord,
       status: "ARCHIVED",
-      archivePublished: archiveResult?.published !== false,
+      archivePublished: archiveResult?.published !== false || archiveResult?.duplicate === true,
       archiveMessageId: archiveResult?.messageId ?? null,
       archivedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -2850,7 +2850,7 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
       const archivedAt = new Date().toISOString();
       const archived = {
         ...record, status: "ARCHIVED",
-        archivePublished: archiveResult?.published !== false,
+        archivePublished: archiveResult?.published !== false || archiveResult?.duplicate === true,
         archiveMessageId: archiveResult?.messageId ?? null,
         archivedAt, updatedAt: archivedAt, archiveRetryAt: archivedAt
       };
