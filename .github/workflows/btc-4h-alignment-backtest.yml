@@ -1,4 +1,4 @@
-name: Mandatory BTC 4h alignment historical backtest
+name: BTC alignment plus 15m confirmation cohort backtest
 on:
   push:
     branches:
