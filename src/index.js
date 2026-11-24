@@ -1548,9 +1548,29 @@ async function getKrakenFuturesUniverse() {
     }));
 }
 
-async function getKrakenFuturesCandles(symbol, interval) {
-  const url = `${FUTURES_CONFIG.CHARTS_URL}/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}?count=${FUTURES_CONFIG.KLINE_LIMIT}`;
-  const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
+async function getKrakenFuturesCandles(symbol, interval, options = {}) {
+  const normalizeEpochSeconds = value => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) throw new Error("بازه زمانی کندل‌های Kraken معتبر نیست.");
+    return Math.floor(numeric > 1e12 ? numeric / 1000 : numeric);
+  };
+  const from = options.from == null ? null : normalizeEpochSeconds(options.from);
+  const to = options.to == null ? null : normalizeEpochSeconds(options.to);
+  if (from != null && to != null && to <= from) {
+    throw new Error("زمان پایان باید بعد از زمان شروع باشد.");
+  }
+  const requestedCount = options.count == null
+    ? (from != null || to != null ? 5000 : FUTURES_CONFIG.KLINE_LIMIT)
+    : Math.floor(Number(options.count));
+  if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 5000) {
+    throw new Error("تعداد کندل درخواستی باید بین ۱ تا ۵۰۰۰ باشد.");
+  }
+
+  const query = new URLSearchParams({ count: String(requestedCount) });
+  if (from != null) query.set("from", String(from));
+  if (to != null) query.set("to", String(to));
+  const path = `/trade/${encodeURIComponent(symbol)}/${encodeURIComponent(interval)}?${query.toString()}`;
+  const data = await krakenFuturesJson(path,
     `Kraken ${symbol} ${interval}`, FUTURES_CONFIG.CHARTS_URL);
   if (!Array.isArray(data?.candles)) {
     throw new Error(`ساختار کندل‌های Kraken برای ${symbol} معتبر نیست.`);
@@ -1572,11 +1592,14 @@ async function getKrakenFuturesCandles(symbol, interval) {
   const intervalMsMap={"1m":60000,"5m":300000,"15m":900000,"30m":1800000,"1h":3600000,"4h":14400000,"12h":43200000,"1d":86400000,"1w":604800000};
   const intervalMs=intervalMsMap[interval]||3600000;
   const now = Date.now();
-  // Exclude the currently forming candle, then enforce the configured local cap
-  // even if the upstream API returns more candles than requested.
+  // Live scans retain their original 120-candle cap. Explicit historical requests
+  // keep the requested range (up to Kraken's documented 5,000-candle limit).
+  const localLimit = options.count == null && from == null && to == null
+    ? FUTURES_CONFIG.KLINE_LIMIT
+    : requestedCount;
   return candles
     .filter(c => c.time + intervalMs <= now)
-    .slice(-FUTURES_CONFIG.KLINE_LIMIT);
+    .slice(-localLimit);
 }
 
 async function getKrakenFuturesCandlesViaCoordinator(env, symbol, intervals) {
