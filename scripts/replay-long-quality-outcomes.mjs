@@ -97,6 +97,9 @@ for (const trade of cases) {
   const is = trade.stop == null ? null : firstIndex(after,c=>c.low<=trade.stop);
   const maxHigh = after.length ? Math.max(...after.map(c=>c.high)) : null;
   const minLow = after.length ? Math.min(...after.map(c=>c.low)) : null;
+  const tradePath = is == null ? after : after.slice(0,is+1);
+  const maxHighUntilExit = tradePath.length ? Math.max(...tradePath.map(c=>c.high)) : null;
+  const minLowUntilExit = tradePath.length ? Math.min(...tradePath.map(c=>c.low)) : null;
   const exactEntryBar = all15.find(c=>c.time===t) || all15.filter(c=>c.time<t).at(-1) || null;
   const priceVsBarOpenPct = exactEntryBar ? pct(trade.entry,exactEntryBar.open) : null;
   const first2 = i2 == null ? null : after[i2];
@@ -104,6 +107,8 @@ for (const trade of cases) {
   const stopBar = is == null ? null : after[is];
   const stopBefore2 = is != null && (i2 == null || is < i2);
   const stopBefore3 = is != null && (i3 == null || is < i3);
+  const target2SameBarAsStop = is != null && i2 === is;
+  const target3SameBarAsStop = is != null && i3 === is;
   report.trades.push({
     ...trade,
     entryTimeUtc:trade.time,
@@ -114,11 +119,16 @@ for (const trade of cases) {
       coverageHours:Number((after.length*0.25).toFixed(2)),
       mfePct:maxHigh==null?null:Number(pct(maxHigh,trade.entry).toFixed(3)),
       maePct:minLow==null?null:Number(pct(minLow,trade.entry).toFixed(3)),
+      mfeUntilStopPct:maxHighUntilExit==null?null:Number(pct(maxHighUntilExit,trade.entry).toFixed(3)),
+      maeUntilStopPct:minLowUntilExit==null?null:Number(pct(minLowUntilExit,trade.entry).toFixed(3)),
+      barsUntilStop:is==null?null:is+1,
       first2PctTargetUtc:first2?utc(first2.time):null,
       first3PctTargetUtc:first3?utc(first3.time):null,
       stopTouchUtc:stopBar?utc(stopBar.time):null,
       stopBefore2Pct:stopBefore2,
       stopBefore3Pct:stopBefore3,
+      target2SameBarAsStop,
+      target3SameBarAsStop,
       entryPriceVsKraken15mBarOpenPct:priceVsBarOpenPct==null?null:Number(priceVsBarOpenPct.toFixed(3))
     }
   });
