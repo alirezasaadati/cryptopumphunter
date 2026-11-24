@@ -12,7 +12,10 @@ test("Spot scanner is isolated from shared futures storage and scheduled futures
   assert.match(source, /if \(action\.startsWith\("spotd:"\)\)/);
   assert.match(source, /const result = await runSpotScan\(\);/);
   assert.match(source, /runSpotAssetDetail\(symbol, quote\)/);
-  assert.doesNotMatch(source, /async function runSpotMarketScanForChat[\s\S]*?APP_KV/);
+  const spotStart = source.indexOf("async function runSpotMarketScanForChat");
+  const spotEnd = source.indexOf("async function showStatus", spotStart);
+  assert.ok(spotStart >= 0 && spotEnd > spotStart);
+  assert.doesNotMatch(source.slice(spotStart, spotEnd), /APP_KV|SIGNAL_DELIVERY|sendAndArchiveFuturesSignal/);
 });
 
 test("Spot scanner considers both USD and USDT Kraken pairs for the same asset", () => {
