@@ -182,6 +182,11 @@ function summarize(trades) {
   return {
     tradesStarted: trades.length, closedTrades: closed.length, profitCloses: profits.length, stopCloses: stops.length,
     openAtEnd: trades.length - closed.length, longs: longs.length, shorts: shorts.length,
+    openPartialRealizedMarginReturnPct: trades.filter(t => t.status === "OPEN_AT_BACKTEST_END").reduce((n,t)=>n+Number(t.realizedMarginReturnPct||0),0),
+    openRemainingUnrealizedMarginReturnPct: trades.filter(t => t.status === "OPEN_AT_BACKTEST_END").reduce((n,t)=>n+Number(t.unrealizedRemainingMarginReturnPct||0),0),
+    openCombinedMarkToMarketMarginReturnPct: trades.filter(t => t.status === "OPEN_AT_BACKTEST_END").reduce((n,t)=>n+Number(t.marginReturnAtMarkPct||0),0),
+    openTradesWithTP1: trades.filter(t => t.status === "OPEN_AT_BACKTEST_END" && (t.tpHits||[]).includes("TP1")).length,
+    openTradesWithTP2: trades.filter(t => t.status === "OPEN_AT_BACKTEST_END" && (t.tpHits||[]).includes("TP2")).length,
     winRatePct: closed.length ? closed.filter(t => Number(t.marginReturnPercent) > 0).length / closed.length * 100 : 0,
     netPositiveClosedTrades: closed.filter(t => Number(t.marginReturnPercent) > 0).length,
     netNegativeClosedTrades: closed.filter(t => Number(t.marginReturnPercent) < 0).length,
@@ -260,7 +265,11 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (!closed) {
       trade.status = "OPEN_AT_BACKTEST_END";
       trade.lastMark = fiveMinute.at(-1)?.close ?? null;
-      trade.marginReturnAtMarkPct = trade.lastMark ? (candidate.side==="LONG" ? 1 : -1) * ((trade.lastMark-entry)/entry) * 100 * LEVERAGE : null;
+      const dir = candidate.side === "LONG" ? 1 : -1;
+      trade.unrealizedRemainingMarginReturnPct = trade.lastMark
+        ? Number(trade.remainingFraction ?? 1) * dir * ((trade.lastMark-entry)/entry) * 100 * LEVERAGE : null;
+      trade.marginReturnAtMarkPct = trade.lastMark
+        ? Number(trade.realizedMarginReturnPct || 0) + Number(trade.unrealizedRemainingMarginReturnPct || 0) : null;
       // Preserve the same-side lock through the sample end for still-open trades.
       lockUntil.set(lockKey,toMs);
     } else {
@@ -331,6 +340,10 @@ async function main() {
     "| Positive stop exits after partial TP / BE | "+metrics.positiveStopCloses+" |",
     "| Losing stop exits | "+metrics.losingStopCloses+" |",
     "| Open at end | "+metrics.openAtEnd+" |",
+    "| Open trades with TP1 / TP2 already hit | "+metrics.openTradesWithTP1+" / "+metrics.openTradesWithTP2+" |",
+    "| Partial TP realized on still-open trades (margin points) | "+metrics.openPartialRealizedMarginReturnPct.toFixed(2)+" |",
+    "| Remaining open PnL at final mark (margin points) | "+metrics.openRemainingUnrealizedMarginReturnPct.toFixed(2)+" |",
+    "| Open positions total mark-to-market (margin points) | "+metrics.openCombinedMarkToMarketMarginReturnPct.toFixed(2)+" |",
     "| LONG / SHORT closed | "+metrics.longs+" / "+metrics.shorts+" |",
     "| LONG net-positive rate (resolved only) | "+metrics.bySide.LONG.winRatePct.toFixed(2)+"% |",
     "| SHORT net-positive rate (resolved only) | "+metrics.bySide.SHORT.winRatePct.toFixed(2)+"% |",
