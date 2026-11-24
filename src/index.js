@@ -2,7 +2,7 @@ import { runSpotScan, runSpotAssetDetail, testSpotDataSources } from "./spot-eng
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
-import { evaluateTradeCandle } from "./futures-trade-lifecycle.js";
+import { evaluateStagedTradeCandle } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
   VERSION: "11.2.0",
@@ -2072,7 +2072,7 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
         const freshCandles = getNewClosedFuturesCandles(candles, trade.lastCheckedCandleTime);
         if (!freshCandles.length) continue;
         for (const candle of freshCandles) {
-          const result = evaluateTradeCandle(trade, { ...candle, time: Number(candle.time) + 300000 });
+          const result = evaluateStagedTradeCandle(trade, { ...candle, time: Number(candle.time) + 300000 });
           trade = {
             ...trade,
             lastPrice: candle.close,
@@ -2081,12 +2081,14 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
             lastMonitorError: null
           };
           checked++;
-          if (result.changed) {
+          if (result.changed || result.closed) {
             trade = {
               ...result.trade, lastPrice: candle.close, lastCheckedAt: timestamp,
               lastCheckedCandleTime: Number(candle.time), lastMonitorAttemptAt: timestamp,
               lastMonitorError: null
             };
+          }
+          if (result.closed) {
             closed++;
             break;
           }
@@ -2315,7 +2317,12 @@ export class SignalDeliveryCoordinator {
               monitorErrorAt:candidate.monitorErrorAt||existing.monitorErrorAt,
               monitorErrorHistory:Array.isArray(candidate.monitorErrorHistory)
                 ? candidate.monitorErrorHistory.slice(-5)
-                : (existing.monitorErrorHistory||[])
+                : (existing.monitorErrorHistory||[]),
+              tpHits:Array.isArray(candidate.tpHits)?candidate.tpHits:existing.tpHits,
+              remainingFraction:Number.isFinite(Number(candidate.remainingFraction))?Number(candidate.remainingFraction):existing.remainingFraction,
+              realizedMarginReturnPct:Number.isFinite(Number(candidate.realizedMarginReturnPct))?Number(candidate.realizedMarginReturnPct):existing.realizedMarginReturnPct,
+              currentStop:Number.isFinite(Number(candidate.currentStop))?Number(candidate.currentStop):existing.currentStop,
+              breakEvenActivated:candidate.breakEvenActivated===true||existing.breakEvenActivated===true
             };
             if(["CLOSED_PROFIT","CLOSED_STOP","CLOSED_MANUAL"].includes(candidate.status)){
               next.status=candidate.status;
@@ -2323,6 +2330,10 @@ export class SignalDeliveryCoordinator {
               next.exitPrice=Number(candidate.exitPrice);
               next.closePriceChangePercent=Number(candidate.closePriceChangePercent);
               next.marginReturnPercent=Number(candidate.marginReturnPercent);
+              next.realizedMarginReturnPct=Number(candidate.realizedMarginReturnPct??candidate.marginReturnPercent);
+              next.remainingFraction=0;
+              next.tpHits=Array.isArray(candidate.tpHits)?candidate.tpHits:next.tpHits;
+              next.currentStop=Number(candidate.currentStop)||next.currentStop;
               next.closedAt=candidate.closedAt||new Date().toISOString();
               next.lockReleaseEligible=true;
               releasedSignalIds.add(String(existing.signalId));
