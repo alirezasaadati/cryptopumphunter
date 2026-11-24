@@ -33,3 +33,5 @@ Required Worker secrets:
 KV binding: `APP_KV`
 
 The bot is analytical only. It never submits, modifies or cancels exchange orders.
+
+<!-- CI baseline validation: documentation-only change; no runtime code changes. -->
