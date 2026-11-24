@@ -1,0 +1,33 @@
+name: Mandatory BTC 4h alignment historical backtest
+on:
+  push:
+    branches:
+      - experiment/btc-4h-alignment-backtest-20261124
+    paths:
+      - "scripts/backtest-btc-4h-alignment.mjs"
+      - ".github/workflows/btc-4h-alignment-backtest.yml"
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run 90-day Kraken Futures comparison
+        env:
+          BACKTEST_DAYS: "90"
+          BACKTEST_SYMBOLS: "10"
+          BACKTEST_FEE: "0.0005"
+          BACKTEST_SLIPPAGE: "0.0003"
+        run: node scripts/backtest-btc-4h-alignment.mjs
+      - name: Upload comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-4h-alignment-backtest
+          path: artifacts/
+          if-no-files-found: error
