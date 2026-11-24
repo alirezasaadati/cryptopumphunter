@@ -12,6 +12,11 @@ jobs:
   validate-and-backtest:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        days: [30, 60, 90, 180]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,14 +25,15 @@ jobs:
       - name: Install dependencies
         run: npm install
       - name: Syntax and unaffected regression tests
+        if: matrix.days == 30
         run: |
           npm run check
           mapfile -t test_files < <(find scripts -maxdepth 1 -type f -name '*.test.mjs' ! -name 'futures-engine.test.mjs' | sort)
           node --test "${test_files[@]}"
           node --check scripts/backtest-futures-lifecycle.mjs
-      - name: Run matched 30-day backtest with experimental signals and staged TP1 TP2 TP3
+      - name: Run historical backtest with staged TP1 TP2 TP3
         env:
-          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_DAYS: "${{ matrix.days }}"
           LIFECYCLE_BACKTEST_SYMBOLS: "10"
           BACKTEST_END_MS: "1795527325576"
           BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_NVDAXUSD,PF_XRPUSD,PF_NEARUSD,PF_ANTXUSD,PF_UNIUSD"
@@ -36,6 +42,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: experimental-signals-staged-tp1-tp2-tp3-30d
+          name: experimental-signals-staged-tp1-tp2-tp3-${{ matrix.days }}d
           path: artifacts/
           if-no-files-found: warn
