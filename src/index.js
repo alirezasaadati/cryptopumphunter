@@ -1703,6 +1703,53 @@ function calculateAtr(candles, period = 14) {
   return recent.length === period ? average(recent) : null;
 }
 
+function calculateEntryQualityScore({ side, rsi: rsiValue, rsiSlope, emaDistanceAtr, pullbackState, momentumState, fourHourTrend }) {
+  let rawScore = 0;
+  const details = { rsi: null, ema: null, pullback: null, momentum: null, trend4h: null };
+
+  if (Number.isFinite(rsiValue) && Number.isFinite(rsiSlope)) {
+    if (side === "LONG") {
+      if (rsiValue >= 30 && rsiValue <= 45 && rsiSlope > 0) { rawScore += 20; details.rsi = 20; }
+      else if (rsiValue > 45 && rsiValue <= 55 && rsiSlope > 0) { rawScore += 10; details.rsi = 10; }
+      else if (rsiValue > 70) { rawScore -= 15; details.rsi = -15; }
+      else if (rsiValue < 30 && rsiSlope <= 0) { rawScore -= 10; details.rsi = -10; }
+      else details.rsi = 0;
+    } else if (side === "SHORT") {
+      if (rsiValue >= 55 && rsiValue <= 70 && rsiSlope < 0) { rawScore += 20; details.rsi = 20; }
+      else if (rsiValue >= 45 && rsiValue < 55 && rsiSlope < 0) { rawScore += 10; details.rsi = 10; }
+      else if (rsiValue < 30) { rawScore -= 15; details.rsi = -15; }
+      else if (rsiValue > 70 && rsiSlope >= 0) { rawScore -= 10; details.rsi = -10; }
+      else details.rsi = 0;
+    }
+  }
+
+  if (Number.isFinite(emaDistanceAtr)) {
+    if (emaDistanceAtr <= 1) { rawScore += 20; details.ema = 20; }
+    else if (emaDistanceAtr <= 2) { rawScore += 10; details.ema = 10; }
+    else if (emaDistanceAtr <= 3) details.ema = 0;
+    else if (emaDistanceAtr <= 4) { rawScore -= 20; details.ema = -20; }
+  }
+
+  if (pullbackState === "CONFIRMED_REVERSAL") { rawScore += 25; details.pullback = 25; }
+  else if (pullbackState === "TOUCHED_ZONE") { rawScore += 10; details.pullback = 10; }
+  else if (pullbackState === "NONE") { rawScore -= 15; details.pullback = -15; }
+
+  if (momentumState === "CONFIRMED") { rawScore += 10; details.momentum = 10; }
+  else if (momentumState === "NOT_CONFIRMED") { rawScore -= 5; details.momentum = -5; }
+
+  const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
+  if (fourHourTrend === expectedTrend) { rawScore += 10; details.trend4h = 10; }
+  else if (fourHourTrend === "NEUTRAL") details.trend4h = 0;
+  else if (fourHourTrend === "BULLISH" || fourHourTrend === "BEARISH") {
+    rawScore -= 15;
+    details.trend4h = -15;
+  }
+
+  const normalized = Math.max(0, Math.min(100, Math.round(((rawScore + 70) / 155) * 100)));
+  const availableFactorCount = Object.values(details).filter(value => value !== null).length;
+  return { raw: rawScore, normalized, details, availableFactorCount };
+}
+
 function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr }) {
   const marketPrice = Number(ticker?.last);
   if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
@@ -1720,7 +1767,8 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
 
   const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
   if (!has15mData) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true,
+      eqsMomentumState: "UNAVAILABLE", eqsPullbackState: "UNAVAILABLE" };
   }
   const closes15m = candles15m.map(c => c.close);
   const ema9_15m = ema(closes15m, 9);
@@ -1729,7 +1777,8 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
   const last15m = candles15m[candles15m.length - 1];
   const recentPullback = candles15m.slice(-9, -1);
   if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true,
+      eqsMomentumState: "UNAVAILABLE", eqsPullbackState: "UNAVAILABLE" };
   }
 
   const aligned = side === "LONG"
@@ -1738,6 +1787,13 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
   const touchedPullbackZone = side === "LONG"
     ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR)
     : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
+  const eqsIsReversal = side === "LONG"
+    ? last15m.close > last15m.open && last15m.close > ema9_15m
+    : last15m.close < last15m.open && last15m.close < ema9_15m;
+  const eqsMomentumState = aligned ? "CONFIRMED" : "NOT_CONFIRMED";
+  const eqsPullbackState = touchedPullbackZone
+    ? (eqsIsReversal ? "CONFIRMED_REVERSAL" : "TOUCHED_ZONE")
+    : "NONE";
 
   const reclaimExtensionAtr = side === "LONG"
     ? (last15m.close - ema9_15m) / atr15m
@@ -1747,7 +1803,8 @@ function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, refe
   }
 
   return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
-    momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
+    momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone,
+    eqsMomentumState, eqsPullbackState };
 }
 
 function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
@@ -1780,7 +1837,8 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
 
   const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
   if (!has15mData) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes,
+      eqsMomentumState: "UNAVAILABLE", eqsPullbackState: "UNAVAILABLE" };
   }
 
   const closes15m = candles15m.map(c => c.close);
@@ -1789,7 +1847,8 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
   const atr15m = calculateAtr(candles15m, 14);
   const last15m = candles15m[candles15m.length - 1];
   if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes };
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes,
+      eqsMomentumState: "UNAVAILABLE", eqsPullbackState: "UNAVAILABLE" };
   }
 
   const momentumConfirmed = side === "LONG"
@@ -1802,10 +1861,18 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
   const reclaimExtensionAtr = side === "LONG"
     ? (last15m.close - ema9_15m) / atr15m
     : (ema9_15m - last15m.close) / atr15m;
+  const eqsIsReversal = side === "LONG"
+    ? last15m.close > last15m.open && last15m.close > ema9_15m
+    : last15m.close < last15m.open && last15m.close < ema9_15m;
+  const eqsMomentumState = momentumConfirmed ? "CONFIRMED" : "NOT_CONFIRMED";
+  const eqsPullbackState = touchedPullbackZone
+    ? (eqsIsReversal ? "CONFIRMED_REVERSAL" : "TOUCHED_ZONE")
+    : "NONE";
   // Momentum and pullback are confirmations for ranking, never hard eligibility gates.
   // Drift and EMA/ATR distance remain hard safety limits.
   return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
-    momentumConfirmed, pullbackConfirmed: touchedPullbackZone, fourHourOpposes };
+    momentumConfirmed, pullbackConfirmed: touchedPullbackZone, fourHourOpposes,
+    eqsMomentumState, eqsPullbackState };
 }
 
 function calculateFourHourTrend(candles4h) {
@@ -1830,6 +1897,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const e20_4h = ema(closes4h, 20);
   const e50_4h = ema(closes4h, 50);
   const rsiValue = rsi(closes1h, 14);
+  const previousRsi = rsi(closes1h.slice(0, -3), 14);
+  const rsiSlope = Number.isFinite(previousRsi) && Number.isFinite(rsiValue)
+    ? rsiValue - previousRsi
+    : null;
   const atr = calculateAtr(candles1h, 14);
   if ([e20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) {
     throw new Error("محاسبه اندیکاتورها معتبر نیست.");
@@ -2056,6 +2127,16 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     return { symbol: ticker.symbol, fourHourTrend, rejected: "فاصله حد ضرر غیرمنطقی است؛ سیگنال صادر نشد" };
   }
 
+  const eqs = calculateEntryQualityScore({
+    side,
+    rsi: rsiValue,
+    rsiSlope,
+    emaDistanceAtr: entryFilters.emaDistanceAtr,
+    pullbackState: entryFilters.eqsPullbackState || "UNAVAILABLE",
+    momentumState: entryFilters.eqsMomentumState || "UNAVAILABLE",
+    fourHourTrend
+  });
+
   const direction = side === "LONG" ? 1 : -1;
   const target1 = entry + direction * risk * 1.5;
   const target2 = entry + direction * risk * 2.5;
@@ -2089,6 +2170,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     target3,
     rewardRisk: 1.5,
     rsi: rsiValue,
+    entryQualityScore: eqs.normalized,
+    entryQualityRaw: eqs.raw,
+    entryQualityDetails: eqs.details,
+    entryQualityAvailableFactors: eqs.availableFactorCount,
     ema20: e20,
     ema50: e50,
     atr,
