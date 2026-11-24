@@ -68,7 +68,8 @@ async function kvWriteGate(env, action, error = null) {
       const result = await response.json();
       if (typeof result?.allowed !== "boolean") throw new Error("KV quota gate returned an invalid response.");
       if (action === "allow") {
-        const ttl = result.allowed ? KV_WRITE_GATE_CACHE_MS : Math.max(1000, Date.now() + 24 * 60 * 60 * 1000 - Date.now());
+        const nextUtcDay = Date.parse(today + "T00:00:00.000Z") + 24 * 60 * 60 * 1000;
+        const ttl = result.allowed ? KV_WRITE_GATE_CACHE_MS : Math.max(1000, nextUtcDay - Date.now());
         kvWriteGateCache.set(today, { expiresAt: Date.now() + ttl, promise: Promise.resolve(result) });
       }
       return result;
