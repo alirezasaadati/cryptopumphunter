@@ -5,7 +5,7 @@ const CFG = Object.freeze({
   MIN_PAIR_VOLUME_USD: 50_000,
   MIN_BOOK_DEPTH_USD: 5_000,
   MAX_SPREAD_PCT: 0.8,
-  MAX_CANDIDATES: 25,
+  MAX_CANDIDATES: 15,
   MAX_RESULTS: 8,
   CONCURRENCY: 3,
   MIN_SCORE: 65,
@@ -390,6 +390,9 @@ export async function runSpotAssetDetail(symbol, quote) {
   const tickerResult = await fetchTickers([pair]);
   const selected = selectBestSpotPair([pair], tickerResult);
   if (!selected) throw new Error("نقدینگی یا اسپرد جفت انتخاب‌شده دیگر قابل قبول نیست.");
+  coin.volume24 = selected.quoteVolumeUsd;
+  const dayOpen = Number(selected.ticker.o);
+  coin.percent_change_24h = dayOpen > 0 ? (selected.last / dayOpen - 1) * 100 : 0;
   const book = await fetchOrderBook(pair);
   const depth = calculateDepth(book, (selected.bid + selected.ask) / 2);
   const candles = await fetchCandles(pair);
