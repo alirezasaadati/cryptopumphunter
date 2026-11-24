@@ -1299,11 +1299,9 @@ async function runSpotMarketScanForChat(env, chatId) {
     if(!response.ok||!lockResult?.ok)throw new Error(lockResult?.error||"قفل اسکن اسپات دریافت نشد.");
     if(!lockResult.acquired){await sendMessage(env,chatId,"⏳ یک اسکن اسپات دیگر در حال اجراست؛ پس از پایان آن دوباره تلاش کن.",menuForChat(env,chatId));return;}
     acquired=true;
-    await sendMessage(env,chatId,"🔎 اسکن دستی بازار اسپات شروع شد.\nدر حال بررسی جفت‌های USD و USDT، کندل‌های بسته‌شده و نقدینگی Kraken...");
     const scan=await runSpotScan(), opportunities=Array.isArray(scan.opportunities)?scan.opportunities:[];
     const keyboard=opportunities.length?{inline_keyboard:opportunities.map(item=>[{text:"📊 "+item.coin.symbol+" / "+item.quote,callback_data:"spotd:"+item.coin.symbol+":"+item.quote}])}:undefined;
     await sendMessage(env,chatId,scan.report,keyboard||menuForChat(env,chatId));
-    if(!opportunities.length)await sendMessage(env,chatId,"برای پیدا کردن فرصت تازه، هر زمان خواستی دوباره «سیگنال اسپات» را بزن.",menuForChat(env,chatId));
   } catch(error) {
     console.error("Manual spot scan failed:",String(error?.stack||error));
     await sendMessage(env,chatId,"❌ اجرای اسکن اسپات ناموفق بود:\n"+String(error?.message||error).slice(0,900),menuForChat(env,chatId));
