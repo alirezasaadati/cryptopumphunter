@@ -50,6 +50,19 @@ function summarize(rows){
   const gross=wins*3-lossUsd;
   return {signals:rows.length,filled:filled.length,missed:rows.length-filled.length,fillRatePct:rows.length?100*filled.length/rows.length:0,wins,losses,timeouts,winRatePct:filled.length?100*wins/filled.length:0,lossRatePct:filled.length?100*losses/filled.length:0,timeoutRatePct:filled.length?100*timeouts/filled.length:0,grossPnlUsd:gross,avgGrossPnlPerOriginalSignalUsd:rows.length?gross/rows.length:0,avgBarsHeld:filled.length?filled.reduce((s,x)=>s+(x.result.barsHeld||0),0)/filled.length:null};
 }
+function diagnosticBreakdown(rows, field, bucketFn=(v)=>String(v??"UNKNOWN")){
+ const groups=new Map();
+ for(const r of rows){const v=bucketFn(r.signalMeta?.[field]);const k=r.side+" | "+v;if(!groups.has(k))groups.set(k,[]);groups.get(k).push(r);}
+ return Object.fromEntries([...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([k,v])=>[k,summarize(v)]));
+}
+function stopRiskBreakdown(rows){
+ const groups={"<1.5%":[],"1.5-3%":[],"3-5%":[],"5-8%":[]};
+ for(const r of rows){if(!r.fill?.filled||!Number.isFinite(r.fill.entry)||!Number.isFinite(r.stop))continue;
+  const p=Math.abs(r.fill.entry-r.stop)/r.fill.entry*100;
+  const k=p<1.5?"<1.5%":p<3?"1.5-3%":p<5?"3-5%":"5-8%";groups[k].push(r);
+ }
+ return Object.fromEntries(Object.entries(groups).map(([k,v])=>[k,summarize(v)]));
+}
 async function main(){
  const now=Date.now(),from=now-(DAYS+60)*86400000,to=now;
  const tick=await get(BASE+"/derivatives/api/v3/tickers");
@@ -67,18 +80,29 @@ async function main(){
    count++;const base=h1[i+1].open;
    for(const method of methods){const fill=entryAt(sig.side,method,close,m15,m5,base);let result=null;
     if(fill.filled){if(method==="baseline")fill.entry=base;result=simulate(sig.side,fill.entry,+sig.stop,m5,fill.index);if(result.outcome==="invalid_stop")fill.filled=false;}
-    rows[method].push({symbol:t.symbol,side:sig.side,signalTime:new Date(close).toISOString(),stop:+sig.stop,fill,result,method});
+    rows[method].push({symbol:t.symbol,side:sig.side,signalTime:new Date(close).toISOString(),stop:+sig.stop,fill,result,method,signalMeta:{fourHourTrend:sig.fourHourTrend||"UNKNOWN",riskLevel:sig.riskLevel||"UNKNOWN",score:Number(sig.score),baseScore:Number(sig.baseScore),priorityScore:Number(sig.priorityScore),entryTimingScore:Number(sig.entryTimingScore),entryTimingRegimeScore:Number(sig.entryTimingRegimeScore),fourHourScoreAdjustment:Number(sig.fourHourScoreAdjustment),confirmationCount:Number(sig.confirmationCount),rsi:Number(sig.rsi),volumeRatio:Number(sig.volumeRatio)}});
    }
   }
   symbolStats.push({symbol:t.symbol,signals:count,candles:{h1:h1.length,h4:h4.length,m15:m15.length,m5:m5.length}});
  }catch(e){symbolStats.push({symbol:t.symbol,error:String(e.message||e)});}}
  const summary=Object.fromEntries(methods.map(m=>[m,summarize(rows[m])]));
+ const baseRows=rows.baseline;
+ const diagnosticBreakdowns={
+  byFourHourTrend:diagnosticBreakdown(baseRows,"fourHourTrend"),
+  byRiskLevel:diagnosticBreakdown(baseRows,"riskLevel"),
+  byScoreBand:diagnosticBreakdown(baseRows,"score",v=>!Number.isFinite(v)?"UNKNOWN":v<50?"<50":v<60?"50-59":v<70?"60-69":"70+"),
+  byTimingScoreBand:diagnosticBreakdown(baseRows,"entryTimingScore",v=>!Number.isFinite(v)?"UNKNOWN":v<40?"<40":v<55?"40-54":v<70?"55-69":"70+"),
+  byConfirmationCount:diagnosticBreakdown(baseRows,"confirmationCount",v=>Number.isFinite(v)?String(v):"UNKNOWN"),
+  stopDistance:stopRiskBreakdown(baseRows)
+ };
  const bySide={};for(const side of ["LONG","SHORT"]){bySide[side]=Object.fromEntries(methods.map(m=>[m,summarize(rows[m].filter(x=>x.side===side))]));}
- const report={generatedAt:new Date().toISOString(),periodDays:DAYS,universe:universe.map(x=>x.symbol),rules:{marginUsd:MARGIN,leverage:LEVERAGE,notionalUsd:MARGIN*LEVERAGE,targetMarginRoiPct:30,underlyingMovePct:TARGET_MOVE*100,holdHours:24,stopFirstOnSame5mBar:true,originalSignalStopPreserved:true,feesFundingExcluded:true},summary,bySide,symbolStats,records:rows};
+ const report={generatedAt:new Date().toISOString(),periodDays:DAYS,universe:universe.map(x=>x.symbol),diagnosticBreakdowns,rules:{marginUsd:MARGIN,leverage:LEVERAGE,notionalUsd:MARGIN*LEVERAGE,targetMarginRoiPct:30,underlyingMovePct:TARGET_MOVE*100,holdHours:24,stopFirstOnSame5mBar:true,originalSignalStopPreserved:true,feesFundingExcluded:true},summary,bySide,symbolStats,records:rows};
  await mkdir("artifacts",{recursive:true});await writeFile("artifacts/entry-execution-report.json",JSON.stringify(report,null,2));
- const lines=["# Entry execution optimization","",`Period: ${DAYS} days | Kraken Futures | 10 USD margin × 10 leverage | target +30% margin ROI (±3% underlying)`,"","Stop is the original signal stop. Same 5m bar touching stop and target is a loss. 24h unresolved trades are timeouts. Fees/funding/slippage excluded.","","| Method | Signals | Filled | Missed | Fill % | Wins | Losses | Timeout | Win % of filled | Gross P/L USD | Avg P/L per original signal |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",...methods.map(m=>{const x=summary[m];return `| ${m} | ${x.signals} | ${x.filled} | ${x.missed} | ${x.fillRatePct.toFixed(1)}% | ${x.wins} | ${x.losses} | ${x.timeouts} | ${x.winRatePct.toFixed(1)}% | ${x.grossPnlUsd.toFixed(2)} | ${x.avgGrossPnlPerOriginalSignalUsd.toFixed(3)} |`; }),"","## By side","",...["LONG","SHORT"].flatMap(s=>["","### "+s,"","| Method | Filled | Missed | Win % | Gross P/L |","|---|---:|---:|---:|---:|",...methods.map(m=>{const x=bySide[s][m];return `| ${m} | ${x.filled} | ${x.missed} | ${x.winRatePct.toFixed(1)}% | ${x.grossPnlUsd.toFixed(2)} |`})]),"","## Per-symbol coverage","", "| Symbol | Signals | H1 | H4 | 15m | 5m | Error |","|---|---:|---:|---:|---:|---:|---|",...symbolStats.map(x=>`| ${x.symbol} | ${x.signals||0} | ${x.candles?.h1||"—"} | ${x.candles?.h4||"—"} | ${x.candles?.m15||"—"} | ${x.candles?.m5||"—"} | ${x.error||""} |`),"","## Limitations","- Top symbols selected from current Kraken ticker volume: survivorship/universe bias.","- OHLC 5m data cannot resolve intrabar sequence; stop-first convention is conservative.","- Retest methods use EMA calculated from the last fully closed 15m candle at signal time; no future EMA leakage.","- Baseline uses next 1h open. Retest limit fills use the first 5m candle that touches the fixed EMA level; reclaim fills at the next 5m open.","- Fees, funding, spread, slippage, liquidation and portfolio concurrency are not included.","- Timeout means neither target nor stop within 24h; not counted as win or loss."];
+ const lines=["# Entry execution optimization","",`Period: ${DAYS} days | Kraken Futures | 10 USD margin × 10 leverage | target +30% margin ROI (±3% underlying)`,"","Stop is the original signal stop. Same 5m bar touching stop and target is a loss. 24h unresolved trades are timeouts. Fees/funding/slippage excluded.","","| Method | Signals | Filled | Missed | Fill % | Wins | Losses | Timeout | Win % of filled | Gross P/L USD | Avg P/L per original signal |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",...methods.map(m=>{const x=summary[m];return `| ${m} | ${x.signals} | ${x.filled} | ${x.missed} | ${x.fillRatePct.toFixed(1)}% | ${x.wins} | ${x.losses} | ${x.timeouts} | ${x.winRatePct.toFixed(1)}% | ${x.grossPnlUsd.toFixed(2)} | ${x.avgGrossPnlPerOriginalSignalUsd.toFixed(3)} |`; }),"","## By side","",...["LONG","SHORT"].flatMap(s=>["","### "+s,"","| Method | Filled | Missed | Win % | Gross P/L |","|---|---:|---:|---:|---:|",...methods.map(m=>{const x=bySide[s][m];return `| ${m} | ${x.filled} | ${x.missed} | ${x.winRatePct.toFixed(1)}% | ${x.grossPnlUsd.toFixed(2)} |`})]),"","## Diagnostic breakdown (baseline, by side)","",
+ ...Object.entries(diagnosticBreakdowns).flatMap(([name,groups])=>["### "+name,"","| Group | Filled | Wins | Losses | Timeouts | Win % of filled | Gross P/L USD |","|---|---:|---:|---:|---:|---:|---:|",...Object.entries(groups).map(([k,x])=>`| ${k} | ${x.filled} | ${x.wins} | ${x.losses} | ${x.timeouts} | ${x.winRatePct.toFixed(1)}% | ${x.grossPnlUsd.toFixed(2)} |`),""]),
+ "## Per-symbol coverage","", "| Symbol | Signals | H1 | H4 | 15m | 5m | Error |","|---|---:|---:|---:|---:|---:|---|",...symbolStats.map(x=>`| ${x.symbol} | ${x.signals||0} | ${x.candles?.h1||"—"} | ${x.candles?.h4||"—"} | ${x.candles?.m15||"—"} | ${x.candles?.m5||"—"} | ${x.error||""} |`),"","## Limitations","- Top symbols selected from current Kraken ticker volume: survivorship/universe bias.","- OHLC 5m data cannot resolve intrabar sequence; stop-first convention is conservative.","- Retest methods use EMA calculated from the last fully closed 15m candle at signal time; no future EMA leakage.","- Baseline uses next 1h open. Retest limit fills use the first 5m candle that touches the fixed EMA level; reclaim fills at the next 5m open.","- Fees, funding, spread, slippage, liquidation and portfolio concurrency are not included.","- Timeout means neither target nor stop within 24h; not counted as win or loss."];
  await writeFile("artifacts/entry-execution-report.md",lines.join("\n"));
- console.log(JSON.stringify({ok:symbolStats.some(x=>x.signals>0),periodDays:DAYS,summary,bySide,symbolStats},null,2));
+ console.log(JSON.stringify({ok:symbolStats.some(x=>x.signals>0),periodDays:DAYS,summary,bySide,diagnosticBreakdowns,symbolStats},null,2));
  if(!symbolStats.some(x=>x.signals>0))process.exitCode=1;
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
