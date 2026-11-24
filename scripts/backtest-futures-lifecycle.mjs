@@ -95,7 +95,10 @@ function summarize(trades) {
     const resolved = started.filter(t => t.status === "CLOSED_PROFIT" || t.status === "CLOSED_STOP");
     const wins = resolved.filter(t => t.status === "CLOSED_PROFIT");
     return { tradesStarted: started.length, closedTrades: resolved.length, profitCloses: wins.length,
-      stopCloses: resolved.length - wins.length, openAtEnd: started.length - resolved.length,
+      stopCloses: resolved.length - wins.length,
+      positiveStopCloses: resolved.filter(t => t.status === "CLOSED_STOP" && Number(t.marginReturnPercent) > 0).length,
+      losingStopCloses: resolved.filter(t => t.status === "CLOSED_STOP" && Number(t.marginReturnPercent) < 0).length,
+      openAtEnd: started.length - resolved.length,
       winRatePct: resolved.length ? wins.length / resolved.length * 100 : 0,
       netMarginReturnPct: sum(resolved) };
   };
@@ -108,6 +111,8 @@ function summarize(trades) {
     totalMarginReturnPct: sum(closed), averageMarginReturnPct: closed.length ? sum(closed) / closed.length : 0,
     maxDrawdownMarginPct: maxDrawdown, ambiguous5mCandles: trades.reduce((n,t)=>n+(t.ambiguousCandles || 0),0),
     breakEvenMoves: trades.reduce((n,t)=>n+(t.breakEvenMoveCount || 0),0),
+    positiveStopCloses: stops.filter(t => Number(t.marginReturnPercent) > 0).length,
+    losingStopCloses: stops.filter(t => Number(t.marginReturnPercent) < 0).length,
     bySide: { LONG: sideSummary("LONG"), SHORT: sideSummary("SHORT") }
   };
 }
@@ -244,7 +249,9 @@ async function main() {
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
     "| Profit closes (+30% margin) | "+metrics.profitCloses+" |",
-    "| Stop closes | "+metrics.stopCloses+" |",
+    "| Stop closes (including protected BE exits) | "+metrics.stopCloses+" |",
+    "| Positive break-even stop exits | "+metrics.positiveStopCloses+" |",
+    "| Losing stop exits | "+metrics.losingStopCloses+" |",
     "| Open at end | "+metrics.openAtEnd+" |",
     "| LONG / SHORT closed | "+metrics.longs+" / "+metrics.shorts+" |",
     "| LONG win rate (resolved only) | "+metrics.bySide.LONG.winRatePct.toFixed(2)+"% |",
