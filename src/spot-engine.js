@@ -220,6 +220,21 @@ export function formatSpotPrice(value) {
   return number.toExponential(3);
 }
 
+function buildBtcContext(candles, currentPrice) {
+  if (!Array.isArray(candles) || candles.length < 55) throw new Error("داده کندلی کافی برای تشخیص روند بیت‌کوین وجود ندارد.");
+  const closes = candles.map(candle => candle.close);
+  const ema20 = ema(closes, 20), ema50 = ema(closes, 50);
+  const current = Number(currentPrice || candles.at(-1).close);
+  const previousDayClose = candles.at(-25)?.close;
+  if (![ema20, ema50, current, previousDayClose].every(Number.isFinite) || previousDayClose <= 0) {
+    throw new Error("محاسبه وضعیت بازار بیت‌کوین ناموفق بود.");
+  }
+  return {
+    btcTrendUp: ema20 > ema50 && current > ema50,
+    btcChange24Pct: (current / previousDayClose - 1) * 100
+  };
+}
+
 function analyze(coin, candles, market, profile = "strict") {
   const baseline = profile === "baseline";
   const strict = profile === "strict";
@@ -303,10 +318,12 @@ function analyze(coin, candles, market, profile = "strict") {
         validRisk && rewardRisk >= minRewardRisk
       : strict
         ? score >= minScore && ["شکست مقاومت", "پولبک به EMA20"].includes(setup) &&
-          trendUp && above20 && above50 && rsiValue >= 50 && rsiValue <= 68 &&
+          trendUp && above20 && above50 && market.btcTrendUp === true &&
+          Number(market.relativeStrength24Pct) > 0 && rsiValue >= 50 && rsiValue <= 68 &&
           volumeRatio >= 1.1 && dailyChange >= 0 && dailyChange <= 10 &&
           validRisk && rewardRisk >= minRewardRisk
         : score >= minScore && setup !== "بدون ستاپ" && trendUp && above20 &&
+          market.btcTrendUp === true && Number(market.relativeStrength24Pct) > 0 &&
           rsiValue >= 45 && rsiValue <= 68 && volumeRatio >= 1.0 &&
           dailyChange >= 0 && dailyChange <= 12 && validRisk &&
           rewardRisk >= minRewardRisk) &&
@@ -342,7 +359,7 @@ function formatCoin(item) {
     "⚖️ نسبت سود به ریسک: " + item.rewardRisk.toFixed(2) + "R";
 }
 
-async function analyzeCoinOnBestPair(coin, pairs, tickerResult) {
+async function analyzeCoinOnBestPair(coin, pairs, tickerResult, btcContext) {
   const matching = findSpotPairs(coin, pairs);
   if (!matching.length) throw new Error("جفت USD یا USDT در Kraken پیدا نشد.");
   const selected = selectBestSpotPair(matching, tickerResult);
@@ -350,9 +367,12 @@ async function analyzeCoinOnBestPair(coin, pairs, tickerResult) {
   const book = await fetchOrderBook(selected.pair);
   const depth = calculateDepth(book, (selected.bid + selected.ask) / 2);
   const candles = await fetchCandles(selected.pair);
+  const assetChange24Pct = (selected.last / candles.at(-25).close - 1) * 100;
   return analyze(coin, candles, {
     ...selected, pair: selected.pair.wsname,
-    bidDepthUsd: depth.bidUsd, askDepthUsd: depth.askUsd
+    bidDepthUsd: depth.bidUsd, askDepthUsd: depth.askUsd,
+    btcTrendUp: btcContext.btcTrendUp,
+    relativeStrength24Pct: assetChange24Pct - btcContext.btcChange24Pct
   });
 }
 
@@ -374,11 +394,18 @@ export async function runSpotScan() {
   catch (error) { return { report: "❌ دریافت جفت‌ارزهای Kraken ناموفق بود:\n" + String(error.message || error), opportunities: [], diagnostics: [] }; }
 
   const candidatePairs = candidates.flatMap(coin => findSpotPairs(coin, pairs));
+  const btcPairs = findSpotPairs({ symbol: "BTC" }, pairs);
+  const allTickerPairs = [...candidatePairs, ...btcPairs];
   let tickerResult;
-  try { tickerResult = await fetchTickers(candidatePairs); }
+  try { tickerResult = await fetchTickers(allTickerPairs); }
   catch (error) { return { report: "❌ دریافت Tickerهای Kraken ناموفق بود:\n" + String(error.message || error), opportunities: [], diagnostics: [] }; }
+  const btcSelected = selectBestSpotPair(btcPairs, tickerResult);
+  if (!btcSelected) return { report: "⚠️ جفت BTC/USD یا BTC/USDT برای فیلتر روند بازار در دسترس نیست؛ برای جلوگیری از سیگنال‌های خلاف جهت بازار، اسکن متوقف شد.", opportunities: [], diagnostics: [] };
+  let btcContext;
+  try { btcContext = buildBtcContext(await fetchCandles(btcSelected.pair), btcSelected.last); }
+  catch (error) { return { report: "⚠️ دریافت/تحلیل روند بیت‌کوین ناموفق بود؛ اسکن اسپات بدون فیلتر بازار اجرا نمی‌شود.\n" + String(error.message || error), opportunities: [], diagnostics: [] }; }
 
-  const analyzed = await mapLimit(candidates, CFG.CONCURRENCY, async coin => analyzeCoinOnBestPair(coin, pairs, tickerResult));
+  const analyzed = await mapLimit(candidates, CFG.CONCURRENCY, async coin => analyzeCoinOnBestPair(coin, pairs, tickerResult, btcContext));
   const opportunities = analyzed.filter(item => item && item.eligible)
     .sort((a, b) => b.score - a.score || b.rewardRisk - a.rewardRisk)
     .slice(0, CFG.MAX_RESULTS);
@@ -408,17 +435,25 @@ export async function runSpotAssetDetail(symbol, quote) {
   const coin = { symbol: normalizedSymbol, name: normalizedSymbol, volume24: 0, percent_change_24h: 0 };
   const pair = pairs.find(item => pairMatchesCoin(item, coin) && pairQuote(item) === normalizedQuote);
   if (!pair) throw new Error("جفت انتخاب‌شده دیگر در Kraken در دسترس نیست.");
-  const tickerResult = await fetchTickers([pair]);
+  const btcPairs = findSpotPairs({ symbol: "BTC" }, pairs);
+  const tickerResult = await fetchTickers([pair, ...btcPairs]);
   const selected = selectBestSpotPair([pair], tickerResult);
+  const btcSelected = selectBestSpotPair(btcPairs, tickerResult);
   if (!selected) throw new Error("نقدینگی یا اسپرد جفت انتخاب‌شده دیگر قابل قبول نیست.");
+  if (!btcSelected) throw new Error("جفت BTC/USD یا BTC/USDT برای فیلتر روند بازار در دسترس نیست.");
   coin.volume24 = selected.quoteVolumeUsd;
   const dayOpen = Number(selected.ticker.o);
   coin.percent_change_24h = dayOpen > 0 ? (selected.last / dayOpen - 1) * 100 : 0;
-  const book = await fetchOrderBook(pair);
+  const [book, candles, btcCandles] = await Promise.all([
+    fetchOrderBook(pair), fetchCandles(pair), fetchCandles(btcSelected.pair)
+  ]);
   const depth = calculateDepth(book, (selected.bid + selected.ask) / 2);
-  const candles = await fetchCandles(pair);
+  const btcContext = buildBtcContext(btcCandles, btcSelected.last);
+  const assetChange24Pct = (selected.last / candles.at(-25).close - 1) * 100;
   const item = analyze(coin, candles, {
-    ...selected, pair: pair.wsname, bidDepthUsd: depth.bidUsd, askDepthUsd: depth.askUsd
+    ...selected, pair: pair.wsname, bidDepthUsd: depth.bidUsd, askDepthUsd: depth.askUsd,
+    btcTrendUp: btcContext.btcTrendUp,
+    relativeStrength24Pct: assetChange24Pct - btcContext.btcChange24Pct
   });
   const detail = formatCoin(item) + "\n\n" +
     (item.eligible ? "✅ شرایط فنی و نقدینگی در زمان بررسی برقرار است." :
