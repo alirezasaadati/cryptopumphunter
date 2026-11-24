@@ -8,6 +8,8 @@ const engine = await readFile(new URL("../src/spot-engine.js", import.meta.url),
 
 test("Spot scanner is isolated from shared futures storage and scheduled futures delivery", () => {
   assert.doesNotMatch(engine, /APP_KV|SIGNAL_DELIVERY|sendAndArchiveFuturesSignal|global:automatic-futures-scan-lock/);
+  assert.match(engine, /روند بیت‌کوین تأیید صعودی نمی‌دهد/);
+  assert.match(engine, /قدرت نسبی ارز نسبت به بیت‌کوین مثبت نیست/);
   assert.match(source, /if \(action === "spot"\) return runSpotMarketScanForChat\(env, chatId\);/);
   assert.match(source, /if \(action\.startsWith\("spotd:"\)\)/);
   assert.match(source, /const result = await runSpotScan\(\);/);
