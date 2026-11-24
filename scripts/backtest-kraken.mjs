@@ -165,8 +165,10 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   };
   const nextAvailable = { baseline: 60, current: 60 };
   let fifteenIndex = 0;
+  const testStart = toMs - DAYS * 24 * HOUR;
   for (let i=60;i<oneHour.length-1;i++) {
     const signalBar=oneHour[i], signalCloseTime=signalBar.time+HOUR;
+    if (signalCloseTime < testStart) continue;
     const closed4h=fourHour.filter(c=>c.time+FOUR_HOURS<=signalCloseTime);
     if (closed4h.length<FUTURES_CONFIG.MIN_CANDLES) continue;
     while (fifteenIndex < fifteenMinute.length && fifteenMinute[fifteenIndex].time + FIFTEEN_MINUTES <= signalCloseTime) fifteenIndex++;
