@@ -984,7 +984,7 @@ async function showWelcome(env, chatId, welcome = true) {
     env,
     chatId,
     welcome
-      ? "🤖 خوش آمدید به تریدیار!\\nبرای باز کردن منو، دکمه کیبورد کنار کادر پیام را بزنید."
+      ? "🤖 خوش آمدید به تریدیار!\nبرای باز کردن منو، دکمه کیبورد کنار کادر پیام را بزنید."
       : "منوی اصلی تریدیار:",
     replyMenuForChat(env, chatId)
   );
