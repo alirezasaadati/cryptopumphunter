@@ -1,0 +1,27 @@
+name: BTC swing signal engine 30d backtest
+on:
+  workflow_dispatch:
+  push:
+    branches: [experiment/btc-swing-engine-backtest-30d-20261125]
+    paths:
+      - "src/btc-swing-signal-engine.js"
+      - "scripts/backtest-btc-swing-engine.mjs"
+      - ".github/workflows/btc-swing-engine-backtest.yml"
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run BTC swing engine historical backtest
+        run: node scripts/backtest-btc-swing-engine.mjs
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-swing-engine-30d-report
+          path: artifacts/
+          if-no-files-found: warn
