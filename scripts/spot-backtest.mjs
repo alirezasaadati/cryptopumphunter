@@ -39,7 +39,7 @@ async function getCoinUniverse() {
       if (!symbol || seen.has(symbol)) continue;
       seen.add(symbol);
       const cap = Number(coin.market_cap_usd), volume = Number(coin.volume24), price = Number(coin.price_usd);
-      if (cap >= 1_000_000 && cap <= 500_000_000 && volume >= 250_000 && price > 0) coins.push(coin);
+      if (cap >= 1_000_000 && cap <= 5_000_000_000 && volume >= 250_000 && price > 0) coins.push(coin);
     }
   }
   return coins.sort((a,b) => Number(b.volume24)-Number(a.volume24)).slice(0, MAX_ASSETS);
