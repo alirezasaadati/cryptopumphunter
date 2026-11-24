@@ -1,6 +1,7 @@
 import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
 import { mkdir, writeFile } from "node:fs/promises";
 
+// Cohort reporting is isolated to this historical experiment; production files are untouched.
 const BASE = "https://futures.kraken.com";
 const HOUR = 60 * 60 * 1000;
 const FOUR_HOURS = 4 * HOUR;
