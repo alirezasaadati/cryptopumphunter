@@ -56,7 +56,7 @@ function candleRows(result) {
     c.open>0 && c.low>0 && c.close>0 && c.high>=Math.max(c.open,c.close) && c.low<=Math.min(c.open,c.close));
 }
 
-function simulate(candles, pair, barsPerDay) {
+function simulate(candles, pair, barsPerDay, profile) {
   const horizon = barsPerDay;
   const split = Math.floor(candles.length * 0.7);
   const trades = [];
@@ -83,7 +83,7 @@ function simulate(candles, pair, barsPerDay) {
       quoteVolumeUsd:quoteVolume24,
       bidDepthUsd:10_000,
       askDepthUsd:10_000
-    });
+    }, profile);
     if (!signal.eligible) continue;
 
     const future = candles.slice(i,i+horizon);
@@ -177,26 +177,36 @@ const downloaded = await mapLimit(selected,3,async item=>{
   return {...item,candles1h:candleRows(oneHourPayload),candles4h:candleRows(fourHourPayload)};
 });
 const reports=[];
-const allTrades1h=[], allTrades4h=[];
+const aggregate={baseline:{oneHour:[],fourHour:[]},strict:{oneHour:[],fourHour:[]}};
 for (const item of downloaded) {
   if (item.error || !item.candles1h || item.candles1h.length < MIN_CANDLES+HORIZON_1H+1 ||
       !item.candles4h || item.candles4h.length < MIN_CANDLES+HORIZON_4H+1) {
     reports.push({symbol:item.coin?.symbol,pair:item.pair?.wsname,error:item.error||"Not enough historical candles"});
     continue;
   }
-  const trades1h=simulate(item.candles1h,item,HORIZON_1H);
-  const trades4h=simulate(item.candles4h,item,HORIZON_4H);
-  allTrades1h.push(...trades1h);
-  allTrades4h.push(...trades4h);
+  const base1=simulate(item.candles1h,item,HORIZON_1H,"baseline");
+  const strict1=simulate(item.candles1h,item,HORIZON_1H,"strict");
+  const base4=simulate(item.candles4h,item,HORIZON_4H,"baseline");
+  const strict4=simulate(item.candles4h,item,HORIZON_4H,"strict");
+  aggregate.baseline.oneHour.push(...base1);
+  aggregate.strict.oneHour.push(...strict1);
+  aggregate.baseline.fourHour.push(...base4);
+  aggregate.strict.fourHour.push(...strict4);
+  const metrics=trades=>({
+    inSample:summarize(trades.filter(t=>t.split==="in-sample")),
+    outOfSample:summarize(trades.filter(t=>t.split==="out-of-sample"))
+  });
   reports.push({
     symbol:item.coin.symbol,
     pair:item.pair.wsname,
-    oneHour:{candles:item.candles1h.length,historyDays:+(item.candles1h.length/24).toFixed(1),
-      inSample:summarize(trades1h.filter(t=>t.split==="in-sample")),
-      outOfSample:summarize(trades1h.filter(t=>t.split==="out-of-sample"))},
-    fourHour:{candles:item.candles4h.length,historyDays:+(item.candles4h.length*4/24).toFixed(1),
-      inSample:summarize(trades4h.filter(t=>t.split==="in-sample")),
-      outOfSample:summarize(trades4h.filter(t=>t.split==="out-of-sample"))}
+    baseline:{
+      oneHour:{candles:item.candles1h.length,historyDays:+(item.candles1h.length/24).toFixed(1),...metrics(base1)},
+      fourHour:{candles:item.candles4h.length,historyDays:+(item.candles4h.length*4/24).toFixed(1),...metrics(base4)}
+    },
+    strict:{
+      oneHour:{candles:item.candles1h.length,historyDays:+(item.candles1h.length/24).toFixed(1),...metrics(strict1)},
+      fourHour:{candles:item.candles4h.length,historyDays:+(item.candles4h.length*4/24).toFixed(1),...metrics(strict4)}
+    }
   });
 }
 const output={
@@ -206,8 +216,14 @@ const output={
   liquidity:"Historical order-book depth is unavailable in this OHLC test; spread 0.20% and $10,000 depth per side are assumptions, not observed history.",
   universe:"Current CoinLore market-cap/volume screen; survivorship and current-universe bias apply.",
   aggregate:{
-    oneHour:{inSample:summarize(allTrades1h.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(allTrades1h.filter(t=>t.split==="out-of-sample"),false)},
-    fourHour:{inSample:summarize(allTrades4h.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(allTrades4h.filter(t=>t.split==="out-of-sample"),false)}
+    baseline:{
+      oneHour:{inSample:summarize(aggregate.baseline.oneHour.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(aggregate.baseline.oneHour.filter(t=>t.split==="out-of-sample"),false)},
+      fourHour:{inSample:summarize(aggregate.baseline.fourHour.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(aggregate.baseline.fourHour.filter(t=>t.split==="out-of-sample"),false)}
+    },
+    strict:{
+      oneHour:{inSample:summarize(aggregate.strict.oneHour.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(aggregate.strict.oneHour.filter(t=>t.split==="out-of-sample"),false)},
+      fourHour:{inSample:summarize(aggregate.strict.fourHour.filter(t=>t.split==="in-sample"),false),outOfSample:summarize(aggregate.strict.fourHour.filter(t=>t.split==="out-of-sample"),false)}
+    }
   },
   markets:reports,
   elapsedSeconds:+((Date.now()-started)/1000).toFixed(1)
