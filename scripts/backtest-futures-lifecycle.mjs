@@ -353,7 +353,7 @@ async function main() {
   const tickerData = await getJson(BASE + "/derivatives/api/v3/tickers");
   if (!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
   const requestedSymbols = String(process.env.BACKTEST_SYMBOLS || "").split(",").map(s=>s.trim()).filter(Boolean);
-  const eligibleTickers = tickerData.tickers.filter(t => t?.tag==="perpetual" && t.suspended!==true &&
+  const eligibleTickers = tickerData.tickers.filter(t => (requestedSymbols.includes(t.symbol) || t?.tag==="perpetual") && t.suspended!==true &&
     /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||"")) &&
     (requestedSymbols.includes(t.symbol) || Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME) && Number(t.last)>0);
   const universe = requestedSymbols.length
