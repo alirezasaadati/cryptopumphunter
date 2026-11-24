@@ -219,7 +219,7 @@ async function main() {
     "","## EQS buckets by side (do not pool LONG and SHORT)","",
     "| Side | Bucket | Signals | MAE avg | MAE P95 | MFE avg | MFE P95 | MAE / avg stop | avg MFE / avg MAE |",
     "|---|---|---:|---:|---:|---:|---:|---:|---:|",
-    ...["LONG","SHORT"].flatMap(side=>Object.entries(byEqsBucketAndSide[side]).map(([bucket,x])=>"| "+side+" | "+bucket+" | "+x.signals+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatioAvg?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatioAvg?.toFixed(3)??"n/a")+" |")),
+    ...["LONG","SHORT"].flatMap(side=>Object.entries(byEqsBucketAndSide[side]).map(([bucket,x])=>"| "+side+" | "+bucket+" | "+x.signals+" | "+(x.maeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.maeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.mfeAvgPct?.toFixed(3)??"n/a")+"% | "+(x.mfeP95Pct?.toFixed(3)??"n/a")+"% | "+(x.maeToStopRatio?.toFixed(3)??"n/a")+" | "+(x.mfeMaeRatio?.toFixed(3)??"n/a")+" |")),
     "","## Method limitations","",
     "- This is an entry-quality diagnostic, not a PnL/exit backtest.",
     "- EQS buckets are descriptive; thresholds 40/70 are provisional.",
