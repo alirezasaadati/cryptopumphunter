@@ -123,17 +123,9 @@ function evaluateStagedCandle(trade, candle) {
   // are both touched in one 5m candle, the stop wins for the remaining size.
   if (stopHit) return closeStop();
 
+  // Experimental rule: do not move the stop at +1R. After TP1 (1.5R)
+  // is actually booked, move the remaining position's stop to exact entry.
   let currentStop = stop, breakEvenActivated = trade.breakEvenActivated === true;
-  const oneR = entry + dir * risk;
-  const reachedOneR = trade.side === "LONG" ? high >= oneR : low <= oneR;
-  if (!breakEvenActivated && risk > 0 && reachedOneR) {
-    const feeBuffer = entry * 0.0012;
-    const beStop = entry + dir * feeBuffer;
-    if ((dir === 1 && beStop > currentStop) || (dir === -1 && beStop < currentStop)) {
-      currentStop = beStop;
-      breakEvenActivated = true;
-    }
-  }
   for (let i=0;i<3;i++) {
     const name = "TP"+(i+1);
     if (tpHits.includes(name)) continue;
@@ -146,6 +138,13 @@ function evaluateStagedCandle(trade, candle) {
     realized += fraction * pricePct(exit);
     remaining = Math.max(0, remaining - fraction);
     tpHits.push(name);
+    if (name === "TP1" && remaining > 0) {
+      const entryStop = entry;
+      if ((dir === 1 && entryStop > currentStop) || (dir === -1 && entryStop < currentStop)) {
+        currentStop = entryStop;
+        breakEvenActivated = true;
+      }
+    }
   }
   const closedAt = candle.time ?? new Date().toISOString();
   if (remaining <= 1e-9) {
@@ -375,7 +374,7 @@ async function main() {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
     rules:{leverage:LEVERAGE,targets:"TP1=1.5R, TP2=2.5R, TP3=3.5R; one-third of initial size at TP1 and TP2, remainder at TP3",
-      exit:"partial exits at each target; remaining size closes at active stop; automatic +1R break-even with 0.12% fee buffer",
+      exit:"partial exits at TP1=1.5R and TP2=2.5R; no +1R stop move; after TP1 is booked, remaining size stop moves to exact entry; remaining size closes at active stop or TP3",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
@@ -425,7 +424,7 @@ async function main() {
     "| SHORT net-positive rate (resolved only) | "+metrics.bySide.SHORT.winRatePct.toFixed(2)+"% |",
     "| LONG net margin return | "+metrics.bySide.LONG.netMarginReturnPct.toFixed(2)+"% |",
     "| SHORT net margin return | "+metrics.bySide.SHORT.netMarginReturnPct.toFixed(2)+"% |",
-    "| Automatic break-even moves | "+metrics.breakEvenMoves+" |",
+    "| TP1-triggered exact-entry stop moves | "+metrics.breakEvenMoves+" |",
     "| TP1 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP1")).length+" |",
     "| TP2 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP2")).length+" |",
     "| TP3 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP3")).length+" |",
