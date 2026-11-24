@@ -21,17 +21,17 @@ test("main inline menu keeps the approved button order and row layout", () => {
 
 test("reply menu keeps the original layout but hides after selection and is not reattached to every response", () => {
   const start = source.indexOf("function replyMenuForChat(env, chatId) {");
-  const end = source.indexOf("\\n}\\n", start) + 2;
+  const end = source.indexOf("\n}\n", start) + 2;
   assert.ok(start >= 0 && end > start, "replyMenuForChat must exist");
   const menu = source.slice(start, end);
-  assert.match(menu, /resize_keyboard:\\s*true/);
-  assert.match(menu, /one_time_keyboard:\\s*true/);
-  assert.doesNotMatch(menu, /is_persistent:\\s*true/);
+  assert.match(menu, /resize_keyboard:\s*true/);
+  assert.match(menu, /one_time_keyboard:\s*true/);
+  assert.doesNotMatch(menu, /is_persistent:\s*true/);
   assert.match(menu, /"📈 سیگنال فیوچرز"/);
   assert.match(menu, /"📊 سیگنال اسپات"/);
   assert.match(menu, /"🛡️ راهنمای مدیریت سرمایه"/);
   assert.match(menu, /"👥 مدیریت اعضا"/);
-  assert.match(source, /function menuForChat\\(env, chatId\\)\\s*\\{\\s*return null;/);
-  assert.doesNotMatch(source, /remove_keyboard:\\s*true/);
-  assert.match(source, /replyMenuForChat\\(env, chatId\\)/);
+  assert.match(source, /function menuForChat\(env, chatId\)\s*\{\s*return null;/);
+  assert.doesNotMatch(source, /remove_keyboard:\s*true/);
+  assert.match(source, /replyMenuForChat\(env, chatId\)/);
 });
