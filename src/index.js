@@ -1848,9 +1848,9 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   } else {
     reasons.push("داده فاندینگ در دسترس نبود");
   }
-  // Qualification uses the base score only; volume bonus affects ranking only.
-  const priorityBaseScore = score;
-
+  // Qualification starts from the unmodified engine score. Experimental LONG
+  // quality profiles apply only after entry diagnostics are available, and only
+  // on an isolated test branch. The default profile preserves production behavior.
   const fourHourOpposes = side === "LONG" ? down4h : up4h;
   const standardThresholdMet = strictSetup &&
     Number(ticker.quoteVolume) >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
@@ -1897,6 +1897,33 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
       entryDiagnostics: entryFilters
     };
   }
+  const scoreBeforeLongQualityPenalty = score;
+  const longQualityProfile = side === "LONG" && options.longQualityProfile &&
+    typeof options.longQualityProfile === "object" ? options.longQualityProfile : null;
+  let longQualityPenalty = 0;
+  if (longQualityProfile) {
+    if (fourHourOpposes) {
+      longQualityPenalty += Math.max(0, Number(longQualityProfile.additionalFourHourOppositionPenalty) || 0);
+    }
+    if (entryFilters.momentumConfirmed !== true) {
+      if (entryFilters.confirmationUnavailable) {
+        longQualityPenalty += Math.max(0, Number(longQualityProfile.unavailable15mPenalty) || 0);
+      } else if (entryFilters.pullbackConfirmed === false) {
+        longQualityPenalty += Math.max(0, Number(longQualityProfile.noMomentumNoPullbackPenalty) || 0);
+      } else {
+        longQualityPenalty += Math.max(0, Number(longQualityProfile.noMomentumPenalty) || 0);
+      }
+    }
+    score = Math.max(0, score - longQualityPenalty);
+    // A profile may demote a STANDARD candidate to HIGH_RISK, but never
+    // hard-blocks a side. The existing HIGH_RISK score/volume safeguards apply.
+    if (standardEntryPassed && score < FUTURES_CONFIG.MIN_SCORE) standardEntryPassed = false;
+    if (longQualityPenalty > 0) reasons.push("جریمه آزمایشی کیفیت لانگ: " + longQualityPenalty + " امتیاز");
+  }
+  // Qualification uses the adjusted base score; volume and 15m confirmations
+  // continue to affect priority independently.
+  const priorityBaseScore = score;
+
   // HIGH_RISK uses a lower absolute quote-volume safety floor, while STANDARD
   // retains the existing 5M USD universe threshold and 0.75x relative-volume gate.
   const quoteVolume = Number(ticker.quoteVolume) || 0;
@@ -1984,6 +2011,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     fourHourScoreAdjustment,
     confirmationPriorityBonus,
     confirmationCount,
+    longQualityProfile: longQualityProfile?.name || "baseline",
+    scoreBeforeLongQualityPenalty: Math.round(scoreBeforeLongQualityPenalty),
+    longQualityPenalty,
+    fourHourOpposes,
     riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
     price: entry,
     entry,
@@ -2937,7 +2968,18 @@ async function runFuturesSignalScan(env, options = {}) {
 
   const entryDiagnostics = analyzed
     .filter(item => item?.entryDiagnostics)
-    .map(item => ({ symbol: item.symbol, ...item.entryDiagnostics }));
+    .map(item => ({
+      symbol: item.symbol,
+      side: item.side ?? null,
+      score: item.score ?? null,
+      baseScore: item.baseScore ?? null,
+      priorityScore: item.priorityScore ?? null,
+      riskLevel: item.riskLevel ?? null,
+      fourHourTrend: item.fourHourTrend ?? null,
+      fourHourScoreAdjustment: item.fourHourScoreAdjustment ?? null,
+      longQualityPenalty: item.longQualityPenalty ?? 0,
+      ...item.entryDiagnostics
+    }));
   if (entryDiagnostics.length) {
     console.log("AUTOMATIC_FUTURES_ENTRY_DIAGNOSTICS", JSON.stringify({
       timestamp: new Date().toISOString(), version: CONFIG.VERSION, engine: "Kraken Futures 3.8.2",
