@@ -3240,3 +3240,5 @@ export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER
 // Experimental futures signal engine validation branch; Telegram and UI handlers remain from main.
 
 // Re-run the pinned comparison harness after switching to the current TP lifecycle.
+
+// Keep staged TP lifecycle regression coverage active in this experiment branch.
