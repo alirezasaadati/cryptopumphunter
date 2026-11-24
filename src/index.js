@@ -2404,7 +2404,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver","/reconcile","/archive-publish","/scan-lock/acquire","/scan-lock/release","/spot-scan-lock/acquire","/spot-scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver/reserve","/deliver/complete","/reconcile","/archive-publish/reserve","/archive-publish/complete","/scan-lock/acquire","/scan-lock/release","/spot-scan-lock/acquire","/spot-scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=getSignalDeliverySecret(this.env);
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!(await verifySignalDeliverySecret(suppliedSecret,expectedSecret)))return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -2602,20 +2602,69 @@ export class SignalDeliveryCoordinator {
           await this.ctx.storage.delete("automatic-futures-scan-lock");
           return Response.json({ok:true,released:true});
         }
-        if(url.pathname==="/archive-publish"){
-          const key="published-signal:"+String(payload.signalId||"");
+        if(url.pathname==="/deliver/reserve"){
+          const chatId=String(payload.chatId||"");
+          const signal=payload.signal;
+          if(!chatId||!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side))throw new Error("Signal delivery payload is invalid.");
+          if(!isValidFuturesSignalLevels(signal))throw new Error("Signal price levels are invalid or not correctly ordered.");
+          const key="signal-outbox:"+signalOutboxKey(chatId,signal.id);
           const old=await this.ctx.storage.get(key);
-          if(old)return Response.json({ok:true,result:{published:false,duplicate:true,messageId:old.messageId}});
-          if(!archiveChannelId(this.env)||String(payload.channelId)!==archiveChannelId(this.env))throw new Error("Archive channel ID mismatch.");
-          if(!payload.signalId||typeof payload.messageText!=="string")throw new Error("Invalid archive payload.");
-          const sent=await telegram("sendMessage",this.env,{chat_id:payload.channelId,text:payload.messageText,parse_mode:payload.parseMode||"HTML",disable_web_page_preview:true,protect_content:true});
-          const messageId=sent?.result?.message_id??null;
-          await this.ctx.storage.put(key,{messageId,publishedAt:new Date().toISOString()});
-          return Response.json({ok:true,result:{published:true,messageId}});
+          if(old?.status==="SENT"||old?.status==="ARCHIVE_PENDING")return Response.json({ok:true,result:{duplicate:true,archivePending:true}});
+          if(old?.status==="ARCHIVED")return Response.json({ok:true,result:{duplicate:true,archivePending:false}});
+          if(old?.status==="SENDING"||old?.status==="UNCERTAIN")throw new Error("Signal delivery is uncertain and requires manual reconciliation; automatic resend is blocked.");
+          const record={
+            version:2,chatId,signalId:String(signal.id),symbol:signal.symbol,signal,
+            messageText:String(payload.messageText||""),replyMarkup:payload.replyMarkup??null,
+            parseMode:payload.parseMode??"HTML",status:"SENDING",
+            createdAt:old?.createdAt||new Date().toISOString(),attemptedAt:new Date().toISOString()
+          };
+          await this.ctx.storage.put(key,record);
+          return Response.json({ok:true,result:{reserved:true,record}});
         }
-        if(url.pathname==="/deliver"){
-          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,this.ctx,payload.chatId,payload.signal,payload.messageText,payload.replyMarkup??null,payload.parseMode??"HTML");
-          return Response.json({ok:true,result});
+        if(url.pathname==="/deliver/complete"){
+          const chatId=String(payload.chatId||""),signalId=String(payload.signalId||"");
+          const key="signal-outbox:"+signalOutboxKey(chatId,signalId);
+          const old=await this.ctx.storage.get(key);
+          if(!old)throw new Error("Signal delivery reservation was not found.");
+          const allowedStatuses=["SENT","UNCERTAIN","ARCHIVED","ARCHIVE_PENDING","QUEUED"];
+          if(!allowedStatuses.includes(payload.status))throw new Error("Signal delivery completion status is invalid.");
+          const next={...old,status:payload.status,updatedAt:payload.updatedAt||new Date().toISOString()};
+          for(const field of ["telegramMessageId","sentAt","retryAttempts","error","archivePublished","archiveMessageId","archivedAt","archivePublishError","retryAuthorizedAt"]){
+            if(Object.prototype.hasOwnProperty.call(payload,field))next[field]=payload[field];
+          }
+          await this.ctx.storage.put(key,next);
+          return Response.json({ok:true,result:{record:next}});
+        }
+        if(url.pathname==="/archive-publish/reserve"){
+          const signalId=String(payload.signalId||"");
+          if(!signalId||!archiveChannelId(this.env)||String(payload.channelId)!==archiveChannelId(this.env))throw new Error("Archive channel or signal ID is invalid.");
+          const key="published-signal:"+signalId;
+          const old=await this.ctx.storage.get(key);
+          if(old?.status==="PUBLISHED"||old?.publishedAt||old?.messageId){
+            return Response.json({ok:true,result:{duplicate:true,published:true,messageId:old.messageId??null}});
+          }
+          if(old&&!payload.force){
+            return Response.json({ok:true,result:{duplicate:true,uncertain:true,messageId:old.messageId??null}});
+          }
+          await this.ctx.storage.put(key,{status:"PUBLISHING",startedAt:new Date().toISOString()});
+          return Response.json({ok:true,result:{reserved:true}});
+        }
+        if(url.pathname==="/archive-publish/complete"){
+          const signalId=String(payload.signalId||"");
+          const key="published-signal:"+signalId;
+          const old=await this.ctx.storage.get(key);
+          if(!old||old.status!=="PUBLISHING")throw new Error("Archive publishing reservation was not found.");
+          if(payload.status==="PUBLISHED"){
+            const record={status:"PUBLISHED",messageId:payload.messageId??null,publishedAt:new Date().toISOString()};
+            await this.ctx.storage.put(key,record);
+            return Response.json({ok:true,result:{published:true,messageId:record.messageId}});
+          }
+          if(payload.status==="UNCERTAIN"){
+            const record={...old,status:"UNCERTAIN",error:String(payload.error||"Archive delivery outcome is uncertain").slice(0,500),updatedAt:new Date().toISOString()};
+            await this.ctx.storage.put(key,record);
+            return Response.json({ok:true,result:{published:false,uncertain:true}});
+          }
+          throw new Error("Archive publishing completion status is invalid.");
         }
         if(!this.env.APP_KV)throw new Error("APP_KV is required for reconciliation.");
         const chatId=String(payload.chatId), signalId=String(payload.signalId);
@@ -2628,26 +2677,21 @@ export class SignalDeliveryCoordinator {
           if(!record.signal)throw new Error("This older outbox record has no signal snapshot; it cannot be safely archived automatically.");
           const confirmed={...record,status:"ARCHIVED",archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),manualConfirmedAt:new Date().toISOString()};
           await this.env.APP_KV.put(key,JSON.stringify(confirmed));
+          await this.ctx.storage.put("signal-outbox:"+key,confirmed);
           return Response.json({ok:true,result:{confirmed:true}});
         }
-              if(payload.action==="retry_archive"){
+        if(payload.action==="retry_archive"){
           if(!["SENT","ARCHIVE_PENDING"].includes(record.status))throw new Error("Only privately delivered signals awaiting archive can be retried.");
           if(!record.signal||typeof record.messageText!=="string")throw new Error("This outbox record has no archive payload.");
-          const archiveResult=await publishSignalToArchive(this.env,record.signal,record.messageText,record.parseMode??"HTML");
-          const archived={...record,status:"ARCHIVED",archivePublished:archiveResult?.published!==false,archiveMessageId:archiveResult?.messageId??null,archivedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),archiveRetryAt:new Date().toISOString()};
-          await this.ctx.storage.put("signal-outbox:"+key,archived);
-          await this.env.APP_KV.put(key,JSON.stringify(archived));
-          return Response.json({ok:true,result:{archived:true,archiveResult}});
+          return Response.json({ok:true,result:{retryArchive:true,record}});
         }
         if(payload.action==="retry"){
           if(!["SENDING","UNCERTAIN"].includes(record.status))throw new Error("Only SENDING or UNCERTAIN records can be retried.");
           if(!record.signal||typeof record.messageText!=="string")throw new Error("This older outbox record has no retry payload.");
-          await this.env.APP_KV.put(key,JSON.stringify({...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}));
-          await this.ctx.storage.put("signal-outbox:"+key,{...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString()});
-          const result=await sendAndArchiveFuturesSignalUnlocked(this.env,this.ctx,chatId,record.signal,record.messageText,record.replyMarkup??null,record.parseMode??"HTML");
-          const finalRecord=await this.ctx.storage.get("signal-outbox:"+key);
-          if(finalRecord)await this.env.APP_KV.put(key,JSON.stringify(finalRecord));
-          return Response.json({ok:true,result});
+          const queued={...record,status:"QUEUED",retryAuthorizedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+          await this.env.APP_KV.put(key,JSON.stringify(queued));
+          await this.ctx.storage.put("signal-outbox:"+key,queued);
+          return Response.json({ok:true,result:{retry:true,record:queued}});
         }
         throw new Error("Unknown reconciliation action.");
       }catch(error){
