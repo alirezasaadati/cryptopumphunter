@@ -2630,7 +2630,7 @@ export class SignalDeliveryCoordinator {
           const allowedStatuses=["SENT","UNCERTAIN","ARCHIVED","ARCHIVE_PENDING","QUEUED"];
           if(!allowedStatuses.includes(payload.status))throw new Error("Signal delivery completion status is invalid.");
           const next={...(old||seed),status:payload.status,updatedAt:payload.updatedAt||new Date().toISOString()};
-          for(const field of ["telegramMessageId","sentAt","retryAttempts","error","archivePublished","archiveMessageId","archivedAt","archivePublishError","retryAuthorizedAt"]){
+          for(const field of ["telegramMessageId","sentAt","retryAttempts","error","archivePublished","archiveMessageId","archivedAt","archivePublishError","retryAuthorizedAt","manualConfirmedAt","archiveRetryAt"]){
             if(Object.prototype.hasOwnProperty.call(payload,field))next[field]=payload[field];
           }
           await this.ctx.storage.put(key,next);
@@ -2801,32 +2801,48 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
     return;
   }
 
-  let payload;
-  try {
-    const response = await stub.fetch("https://signal-delivery.internal/reconcile", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-signal-delivery-secret": getSignalDeliverySecret(env) },
-      body: JSON.stringify({ ...selection, action })
-    });
-    payload = await response.json();
-    if (!response.ok || !payload?.ok) throw new Error(payload?.error || "خطای نامشخص");
-  } catch (error) {
-    await sendMessage(env, ownerId, "❌ تعیین تکلیف انجام نشد: " + String(error?.message || error));
+  let record;
+  try { record = await env.APP_KV.get(key, "json"); }
+  catch (error) {
+    await sendMessage(env, ownerId, "❌ خواندن وضعیت ارسال ممکن نشد: " + String(error?.message || error));
+    return;
+  }
+  if (!record) {
+    await sendMessage(env, ownerId, "این رکورد دیگر در آرشیو ارسال‌ها وجود ندارد.");
     return;
   }
 
-  const record = payload.result?.record;
-  if (action === "retry" && payload.result?.retry) {
-    try {
-      await sendAndArchiveFuturesSignal(
-        env, selection.chatId, record.signal, record.messageText,
-        record.replyMarkup ?? null, record.parseMode ?? "HTML"
-      );
-      await sendMessage(env, ownerId, "🔁 تلاش مجدد ارسال انجام شد.");
-    } catch (error) {
-      await sendMessage(env, ownerId, "❌ تلاش مجدد ارسال کامل نشد: " + String(error?.message || error));
+  if (action === "confirm_delivered") {
+    if (record.status === "ARCHIVED") {
+      await sendMessage(env, ownerId, "این سیگنال قبلاً به‌عنوان ارسال‌شده ثبت شده است.");
+      return;
     }
-  } else if (action === "retry_archive" && payload.result?.retryArchive) {
+    if (!["SENDING", "UNCERTAIN", "SENT"].includes(record.status) || !record.signal) {
+      await sendMessage(env, ownerId, "❌ این رکورد برای تأیید دستی اطلاعات کافی ندارد.");
+      return;
+    }
+    const confirmedAt = new Date().toISOString();
+    const confirmed = {
+      ...record, status: "ARCHIVED", archivedAt: confirmedAt,
+      updatedAt: confirmedAt, manualConfirmedAt: confirmedAt
+    };
+    try {
+      await signalDeliveryRequest(env, stub, "/deliver/complete", {
+        chatId: String(selection.chatId), signalId: String(selection.signalId),
+        status: "ARCHIVED", seed: confirmed, archivedAt: confirmedAt,
+        updatedAt: confirmedAt, manualConfirmedAt: confirmedAt
+      });
+      await env.APP_KV.put(key, JSON.stringify(confirmed));
+      await sendMessage(env, ownerId, "✅ سیگنال به‌عنوان ارسال‌شده ثبت شد.");
+    } catch (error) {
+      await sendMessage(env, ownerId, "❌ ثبت تأیید دستی کامل نشد: " + String(error?.message || error));
+      return;
+    }
+  } else if (action === "retry_archive") {
+    if (!["SENT", "ARCHIVE_PENDING"].includes(record.status) || !record.signal || typeof record.messageText !== "string") {
+      await sendMessage(env, ownerId, "❌ این رکورد برای تلاش مجدد آرشیو آماده نیست.");
+      return;
+    }
     try {
       const archiveResult = await publishSignalToArchive(
         env, record.signal, record.messageText, record.parseMode ?? "HTML", { force: true }
@@ -2840,10 +2856,12 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
       };
       await signalDeliveryRequest(env, stub, "/deliver/complete", {
         chatId: String(selection.chatId), signalId: String(selection.signalId),
-        status: "ARCHIVED", archivePublished: archived.archivePublished,
-        archiveMessageId: archived.archiveMessageId, archivedAt, updatedAt: archivedAt
+        status: "ARCHIVED", seed: archived,
+        archivePublished: archived.archivePublished,
+        archiveMessageId: archived.archiveMessageId,
+        archivedAt, archiveRetryAt: archivedAt, updatedAt: archivedAt
       });
-      await persistSignalOutboxMirror(env, selection.chatId, selection.signalId, archived, "SIGNAL_OUTBOX_ARCHIVE_RETRY_MIRROR_FAILED");
+      await env.APP_KV.put(key, JSON.stringify(archived));
       await sendMessage(env, ownerId, "📚 انتشار سیگنال در آرشیو دوباره انجام شد.");
     } catch (error) {
       const failedAt = new Date().toISOString();
@@ -2856,20 +2874,40 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
       try {
         await signalDeliveryRequest(env, stub, "/deliver/complete", {
           chatId: String(selection.chatId), signalId: String(selection.signalId),
-          status: "ARCHIVE_PENDING", archivePublished: false,
+          status: "ARCHIVE_PENDING", seed: pending, archivePublished: false,
           archivePublishError: pending.archivePublishError, updatedAt: failedAt
         });
+        await env.APP_KV.put(key, JSON.stringify(pending));
       } catch (stateError) {
         console.error("ARCHIVE_RETRY_FAILURE_STATE_PERSIST_FAILED", String(stateError?.message || stateError));
       }
-      await persistSignalOutboxMirror(env, selection.chatId, selection.signalId, pending, "SIGNAL_OUTBOX_ARCHIVE_RETRY_MIRROR_FAILED");
       await sendMessage(env, ownerId, "❌ انتشار آرشیو انجام نشد: " + String(error?.message || error));
     }
-  } else if (action === "confirm_delivered") {
-    await sendMessage(env, ownerId, "✅ سیگنال به‌عنوان ارسال‌شده ثبت شد.");
+  } else if (action === "retry") {
+    if (!["SENDING", "UNCERTAIN"].includes(record.status) || !record.signal || typeof record.messageText !== "string") {
+      await sendMessage(env, ownerId, "❌ این رکورد برای تلاش مجدد ارسال آماده نیست.");
+      return;
+    }
+    const queuedAt = new Date().toISOString();
+    const queued = { ...record, status: "QUEUED", retryAuthorizedAt: queuedAt, updatedAt: queuedAt };
+    try {
+      await signalDeliveryRequest(env, stub, "/deliver/complete", {
+        chatId: String(selection.chatId), signalId: String(selection.signalId),
+        status: "QUEUED", seed: queued, retryAuthorizedAt: queuedAt, updatedAt: queuedAt
+      });
+      await env.APP_KV.put(key, JSON.stringify(queued));
+      await sendAndArchiveFuturesSignal(
+        env, selection.chatId, queued.signal, queued.messageText,
+        queued.replyMarkup ?? null, queued.parseMode ?? "HTML"
+      );
+      await sendMessage(env, ownerId, "🔁 تلاش مجدد ارسال انجام شد.");
+    } catch (error) {
+      await sendMessage(env, ownerId, "❌ تلاش مجدد ارسال کامل نشد: " + String(error?.message || error));
+    }
   } else {
     await sendMessage(env, ownerId, "❌ عملیات در وضعیت فعلی قابل اجرا نیست.");
   }
+
   await showUncertainSignalOutbox(env, ownerId);
 }
 async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت و پیگیری نتایج معاملات در این نسخه غیرفعال است.")}
