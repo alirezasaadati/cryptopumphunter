@@ -204,7 +204,10 @@ function deliveryEnvironment({ failComplete = 0, archive = false, kv = null } = 
         storages.set(key, storage);
         coordinators.set(key, new SignalDeliveryCoordinator(
           { storage },
-          { SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET }
+          {
+            SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET,
+            ...(archive ? { SIGNAL_ARCHIVE_CHANNEL_ID: "-1001234567890" } : {})
+          }
         ));
       }
       const coordinator = coordinators.get(key);
