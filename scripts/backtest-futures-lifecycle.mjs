@@ -101,7 +101,7 @@ function evaluateStagedCandle(trade, candle) {
     const exit = stopAtOpen ? open : stop;
     realized += remaining * pricePct(exit);
     remaining = 0;
-    return { changed: true, reason: "CLOSED_STOP", trade: {
+    return { changed: true, closed: true, reason: "CLOSED_STOP", trade: {
       ...trade, status: "CLOSED_STOP", closeReason: "CLOSED_STOP", exitPrice: exit,
       tpHits, remainingFraction: 0, realizedMarginReturnPct: realized,
       marginReturnPercent: realized, closedAt: candle.time ?? new Date().toISOString(),
@@ -138,7 +138,7 @@ function evaluateStagedCandle(trade, candle) {
   }
   const closedAt = candle.time ?? new Date().toISOString();
   if (remaining <= 1e-9) {
-    return { changed: true, reason: "CLOSED_PROFIT", trade: {
+    return { changed: true, closed: true, reason: "CLOSED_PROFIT", trade: {
       ...trade, status: "CLOSED_PROFIT", closeReason: "CLOSED_PROFIT",
       exitPrice: targets[2], tpHits, remainingFraction: 0,
       realizedMarginReturnPct: realized, marginReturnPercent: realized,
@@ -256,7 +256,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       const evaluated = evaluateStagedCandle(trade,{...bar,time:bar.time+INTERVALS["5m"]});
       if (evaluated.stopMoved) trade.breakEvenMoveCount = (trade.breakEvenMoveCount || 0) + 1;
       if (evaluated.changed || evaluated.stopMoved || evaluated.trade) Object.assign(trade,evaluated.trade);
-      if (evaluated.changed) {
+      if (evaluated.closed) {
         trade.closedAtMs = bar.time + INTERVALS["5m"];
         closed = true;
         break;
