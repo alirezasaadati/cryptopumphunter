@@ -28,7 +28,7 @@ test("market-data cache is in-memory, isolated by symbol/interval, and expires a
   const end = source.indexOf("\n\nfunction normalizeKrakenFuturesUnderlying", start);
   const adapter = source.slice(start, end);
   assert.match(source, /const FUTURES_MARKET_DATA_MEMORY_CACHE = new Map\(\)/);
-  assert.match(adapter, /normalizedSymbol \+ "\\|" \+ interval/);
+  assert.ok(adapter.includes('normalizedSymbol + "|" + interval'));
   assert.match(adapter, /Math\.floor\(now \/ intervalMsMap\[interval\]\)/);
   assert.match(adapter, /FUTURES_MARKET_DATA_MEMORY_CACHE\.get\(cacheKey\)/);
   assert.match(adapter, /FUTURES_MARKET_DATA_MEMORY_CACHE\.set\(cacheKey/);
