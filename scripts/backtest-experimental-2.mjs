@@ -98,7 +98,7 @@ async function main(){
   const report={name:"experimental-2",venue:"Kraken Futures public OHLC candles",period:{from:new Date(START).toISOString(),to:new Date(END).toISOString(),days:DAYS,warmupDays:15},
     rules:{timeframe:"15m",signals:"EMA9/EMA21 crossover; LONG close>EMA50 and RSI 50-70; SHORT close<EMA50 and RSI 30-50",
       stop:"1.5x ATR",target:"3.0x ATR (2R)",entry:"signal candle close",exitCandles:"5m OHLC, stop-first on same-candle ambiguity",
-      leverage:LEVERAGE,marginPerTradeUSD:MARGIN,fees:"excluded",funding:"excluded",sameSymbolOverlap:"blocked until prior trade closes"},
+      leverage:LEVERAGE,marginPerTradeUSD:MARGIN,fees:"excluded",funding:"excluded",sameSymbolOverlap:"not blocked; every crossover emits a signal, and the $100 portfolio margin cap controls concurrent trades"},
     portfolio:portfolioResult,metrics:{signals:good.reduce((n,x)=>n+x.signalCount,0),tradesStarted:executed.length,closedTrades:closed.length,
       targetCloses:closed.filter(t=>t.closeReason==="TARGET").length,stopCloses:stops.length,losingStops:stops.filter(t=>t.marginReturnPct<0).length,
       positiveStopCloses:stops.filter(t=>t.marginReturnPct>0).length,netPositiveClosedTrades:wins.length,
