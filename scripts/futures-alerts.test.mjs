@@ -108,5 +108,5 @@ test("numeric candle timestamps in seconds and milliseconds produce the same ide
 
 test("manual Futures signal formatter passes direction into the display-only entry adjustment", async () => {
   const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
-  assert.match(source, /displayEntryPrice\\(item\\.entry,\\s*item\\.side\\)/);
+  assert.match(source, /displayEntryPrice\(item\.entry,\s*item\.side\)/);
 });
