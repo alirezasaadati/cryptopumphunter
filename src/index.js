@@ -2240,7 +2240,7 @@ async function publishSignalToArchive(env, signal, messageText, parseMode = "HTM
   if (reservation?.duplicate) {
     if (reservation.pending) return { published: false, duplicate: true, pending: true, messageId: null };
     if (reservation.uncertain) throw new Error("Archive delivery is uncertain; inspect the archive before retrying.");
-    return { published: false, duplicate: true, published: reservation.published === true, messageId: reservation.messageId ?? null };
+    return { published: reservation.published === true, duplicate: true, messageId: reservation.messageId ?? null };
   }
 
   let sent;
