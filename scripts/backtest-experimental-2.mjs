@@ -36,16 +36,14 @@ async function candles(symbol,tf) {
 function indicators(a){
   const ema=(period)=>{let v=a[0].close,alpha=2/(period+1),out=[];for(let i=0;i<a.length;i++){v=i===0?a[i].close:a[i].close*alpha+v*(1-alpha);out.push(v);}return out;};
   const e9=ema(9),e21=ema(21),e50=ema(50),rsi=[],atr=[];
-  let ag=0,al=0,at=0;
+  let ag=0,al=0,avgCount=0,at=0,trCount=0;
   for(let i=0;i<a.length;i++){
-    const d=i?a[i].close-a[i-1].close:0,g=Math.max(0,d),l=Math.max(0,-d);
-    if(i===14){ag=0;al=0;for(let k=1;k<=14;k++){const z=a[k].close-a[k-1].close;ag+=Math.max(0,z)/14;al+=Math.max(0,-z)/14;}}
-    else if(i>14){ag=(ag*13+g)/14;al=(al*13+l)/14;}
-    rsi.push(i<14||al===0?NaN:100-100/(1+ag/al));
+    const d=i?a[i].close-a[i-1].close:NaN,g=Math.max(0,d),l=Math.max(0,-d);
+    if(i>0){if(avgCount===0){ag=g;al=l;}else{ag=(1/14)*g+(13/14)*ag;al=(1/14)*l+(13/14)*al;}avgCount++;}
+    rsi.push(avgCount<14||al===0?NaN:100-100/(1+ag/al));
     const tr=i===0?a[i].high-a[i].low:Math.max(a[i].high-a[i].low,Math.abs(a[i].high-a[i-1].close),Math.abs(a[i].low-a[i-1].close));
-    if(i===14){at=0;for(let k=1;k<=14;k++){const p=a[k-1].close;at+=Math.max(a[k].high-a[k].low,Math.abs(a[k].high-p),Math.abs(a[k].low-p))/14;}}
-    else if(i>14)at=(at*13+tr)/14;
-    atr.push(i<14?NaN:at);
+    if(trCount===0)at=tr;else at=(1/14)*tr+(13/14)*at;
+    trCount++;atr.push(trCount<14?NaN:at);
   }
   return a.map((c,i)=>({...c,ema9:e9[i],ema21:e21[i],ema50:e50[i],rsi:rsi[i],atr:atr[i]}));
 }
