@@ -145,13 +145,17 @@ const CAPITAL_MANAGEMENT_TEXT =
   "🔹 هرگز با سرمایه موردنیاز زندگی وارد معاملات نشوید.\n\n\n" +
   "🔹 در صورت نداشتن دانش و تجربه کافی، از ورود به معاملات خودداری کنید.\n\n\n" +
   "🔹 هیچ سیگنالی قطعی یا بدون ریسک نیست؛ احتمال ضرر وجود دارد.\n\n\n" +
-  "<b>3️⃣ اهرم و نحوه انجام معامله</b>\n\n\n" +
+  "<b>3️⃣ ورود پله‌ای به معامله</b>\n\n\n" +
+  "🔹 برای کاهش ریسک ورود در یک قیمت نامناسب، بهتر است سرمایه اختصاص‌یافته به هر معامله را بین دو نقطه ورود تقسیم کنید.\n\n\n" +
+  "🔹 برای مثال، اگر ۱۰ دلار سرمایه برای یک معامله با اهرم ۱۰ در نظر گرفته‌اید، ۵ دلار را در نقطه ورود اول و ۵ دلار باقی‌مانده را در نقطه ورود دوم وارد کنید. با این روش، تمام سرمایه در یک نقطه وارد بازار نمی‌شود و میانگین قیمت ورود می‌تواند بهبود پیدا کند.\n\n\n" +
+  "⚠️ ورود پله‌ای به معنی جلوگیری قطعی از ضرر نیست و با ورود مرحله دوم، حجم و میزان ریسک معامله افزایش پیدا می‌کند. بنابراین رعایت حد ضرر و مدیریت حجم معامله ضروری است.\n\n\n" +
+  "<b>4️⃣ اهرم و نحوه انجام معامله</b>\n\n\n" +
   "🔹 از اهرم متناسب با ریسک و فاصله حد ضرر استفاده کنید.\n\n\n" +
   "🔹 حالت <b>Isolated</b> و اهرم پایین‌تر معمولاً ریسک لیکویید شدن را کاهش می‌دهد.\n\n\n" +
   "🔹 استفاده از اهرم ۱۰ به‌معنای جلوگیری از لیکویید شدن نیست ، حتما از حد ضرر تعیین شده در سیگنال صادر شده استفاده کنید\n\n\n" +
-  "<b>4️⃣ ورود بعد از تارگت اول</b>\n\n\n" +
+  "<b>5️⃣ ورود بعد از تارگت اول</b>\n\n\n" +
   "🔹 اگر قیمت به تارگت اول رسیده است، از ورود دیرهنگام به همان سیگنال خودداری کنید.\n\n\n" +
-  "<b>5️⃣ سیو سود و مدیریت حد ضرر</b>\n\n\n" +
+  "<b>6️⃣ سیو سود و مدیریت حد ضرر</b>\n\n\n" +
   "🔹 در تارگت‌ها بخشی از حجم معامله را ببندید و سود را ذخیره کنید.\n\n\n" +
   "🔹 برای تارگت اول، می‌توانید بخش قابل‌توجهی از حجم را خارج کنید و باقی‌مانده را برای تارگت‌های بعدی نگه دارید.\n\n\n" +
   "🔹 پس از حرکت قیمت در جهت معامله، حد ضرر را متناسب با شرایط به نقطه ورود یا محدوده‌ای محافظت‌شده منتقل کنید.\n\n\n" +
@@ -163,8 +167,7 @@ function mainMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 سیگنال فیوچرز", callback_data: "futures" },
-      { text: "📊 سیگنال اسپات", callback_data: "spot" }
+      { text: "📈 سیگنال فیوچرز", callback_data: "futures" }
     ],
     [{ text: "🛡️ راهنمای مدیریت سرمایه", callback_data: "capital_guide" }],
     owner
@@ -379,6 +382,10 @@ async function sendMessage(env, chatId, text, replyMarkup = null, parseMode = nu
   if (parseMode) body.parse_mode = parseMode;
 
   return telegram("sendMessage", env, body);
+}
+
+async function sendCapitalManagementGuide(env, chatId) {
+  return sendMessage(env, chatId, CAPITAL_MANAGEMENT_TEXT, null, "HTML");
 }
 
 async function sendLongMessage(env, chatId, text) {
@@ -937,8 +944,7 @@ function replyMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 سیگنال فیوچرز" },
-      { text: "📊 سیگنال اسپات" }
+      { text: "📈 سیگنال فیوچرز" }
     ],
     [
       { text: "🛡️ راهنمای مدیریت سرمایه" }
@@ -1050,10 +1056,7 @@ async function handleReplyMenuAction(action, env, chatId, message) {
   }
   if (action === "issued_signals") return sendArchiveAccessLink(env, chatId);
   if (action === "capital_guide") {
-    await telegram("sendMessage", env, {
-      chat_id: chatId, text: CAPITAL_MANAGEMENT_TEXT, parse_mode: "HTML",
-      disable_web_page_preview: true, reply_markup: menuForChat(env, chatId)
-    });
+    await sendCapitalManagementGuide(env, chatId);
     return;
   }
   if (action === "status") return showStatus(env, chatId);
@@ -1305,12 +1308,7 @@ async function handleCallback(query, env) {
     }
     if (action === "issued_signals" || action === "ledger:archive" || action === "ledger:history") return sendArchiveAccessLink(env,chatId);
     if (action === "capital_guide") {
-      await telegram("sendMessage", env, {
-        chat_id: chatId,
-        text: CAPITAL_MANAGEMENT_TEXT,
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
+      await sendCapitalManagementGuide(env, chatId);
       return;
     }
     if (action === "status") {
