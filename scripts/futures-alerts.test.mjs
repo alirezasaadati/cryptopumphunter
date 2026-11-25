@@ -1,4 +1,5 @@
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import {
   futuresSignalFingerprint,
@@ -102,4 +103,10 @@ test("numeric candle timestamps in seconds and milliseconds produce the same ide
     futuresSignalFingerprint({...base, candleTime: seconds}),
     futuresSignalFingerprint({...base, candleTime: milliseconds})
   );
+});
+
+
+test("manual Futures signal formatter passes direction into the display-only entry adjustment", async () => {
+  const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(source, /displayEntryPrice\\(item\\.entry,\\s*item\\.side\\)/);
 });
