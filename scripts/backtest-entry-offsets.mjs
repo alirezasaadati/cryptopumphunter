@@ -184,7 +184,7 @@ async function backtestSymbol(ticker, fromMs, toMs, btcFourHour) {
     fetchHistoricalCandles(ticker.symbol,"15m",fromMs,toMs),fetchHistoricalCandles(ticker.symbol,"5m",fromMs,toMs)
   ]);
   if(oneHour.length<100||fourHour.length<FUTURES_CONFIG.MIN_CANDLES||fifteenMinute.length<120||fiveMinute.length<1000)throw new Error("insufficient candles");
-  const modes=[{id:"base",offset:0},{id:"offset_1pct",offset:0.01},{id:"offset_1_2pct",offset:0.012}];
+  const modes=[{id:"base",offset:0},{id:"offset_0_5pct",offset:0.005},{id:"offset_0_75pct",offset:0.0075},{id:"offset_1pct",offset:0.01},{id:"offset_1_2pct",offset:0.012}];
   const byMode=Object.fromEntries(modes.map(m=>[m.id,[]])),locks=Object.fromEntries(modes.map(m=>[m.id,new Map()]));
   let fourIndex=0,fifteenIndex=0,btcFourIndex=0,acceptedSignals=0,rejectedSignals=0;
   const testStart=toMs-DAYS*86400000;
@@ -303,7 +303,7 @@ async function main() {
   if(!universe.length)throw new Error("No eligible Kraken perpetual contracts found");
   const btcFourHour=await fetchHistoricalCandles("PF_XBTUSD","4h",fromMs,endMs),results=[];
   for(const ticker of universe){try{results.push(await backtestSymbol(ticker,fromMs,endMs,btcFourHour));}catch(e){results.push({symbol:ticker.symbol,error:String(e?.message||e)});}}
-  const modes=["base","offset_1pct","offset_1_2pct"],reports={};
+  const modes=["base","offset_0_5pct","offset_0_75pct","offset_1pct","offset_1_2pct"],reports={};
   for(const mode of modes){
     const all=results.filter(r=>!r.error).flatMap(r=>r.byMode[mode]),trades=all.filter(t=>t.filled);
     const closed=trades.filter(t=>t.status==="CLOSED_PROFIT"||t.status==="CLOSED_STOP"),wins=closed.filter(t=>t.marginReturnPercent>0),stops=closed.filter(t=>t.status==="CLOSED_STOP");
