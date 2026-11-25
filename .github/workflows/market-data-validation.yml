@@ -24,3 +24,5 @@ jobs:
 # Validation-only workflow; it never deploys the Worker.
 
 # Updated validation fixture coverage.
+
+# High-risk assertion follows the engine's eligible contract.
