@@ -1664,9 +1664,12 @@ async function getKrakenFuturesCandles(symbol, interval) {
     .slice(-FUTURES_CONFIG.KLINE_LIMIT);
 }
 
+// Per-isolate cache avoids Cache API subrequests; entries expire at the next candle close.
+const FUTURES_MARKET_DATA_MEMORY_CACHE = new Map();
+
 async function getKrakenFuturesCandlesViaCoordinator(env, symbol, intervals) {
-  // Market data is fetched by the stateless Worker, never while a Durable Object
-  // is active. The strategy receives the same closed-candle arrays and shape.
+  // Stateless Worker performs all exchange I/O. The strategy receives the same
+  // closed-candle arrays and response shape, without consuming Cache API quota.
   const normalizedSymbol = String(symbol || "").trim().toUpperCase();
   const requestedIntervals = [...new Set(Array.isArray(intervals) ? intervals : [])];
   const intervalMsMap = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
@@ -1678,29 +1681,27 @@ async function getKrakenFuturesCandlesViaCoordinator(env, symbol, intervals) {
     throw new Error("Invalid Kraken candle interval request.");
   }
 
-  const cache = globalThis.caches?.default || null;
   const now = Date.now();
   const results = await Promise.all(requestedIntervals.map(async interval => {
-    const cacheUrl = "https://market-data-cache.internal/kraken-futures/" +
-      encodeURIComponent(normalizedSymbol) + "/" + encodeURIComponent(interval);
-    const cacheRequest = new Request(cacheUrl, { method: "GET" });
+    const cacheKey = normalizedSymbol + "|" + interval;
     try {
-      if (cache) {
-        const cached = await cache.match(cacheRequest);
-        if (cached) return { interval, candles: await cached.json(), cache: "HIT" };
+      const cached = FUTURES_MARKET_DATA_MEMORY_CACHE.get(cacheKey);
+      if (cached && cached.expiresAt > now) {
+        return { interval, candles: cached.candles, cache: "HIT" };
       }
+      if (cached) FUTURES_MARKET_DATA_MEMORY_CACHE.delete(cacheKey);
 
       const candles = await getKrakenFuturesCandles(normalizedSymbol, interval);
-      if (cache) {
-        const nextClose = (Math.floor(now / intervalMsMap[interval]) + 1) * intervalMsMap[interval];
-        const ttlSeconds = Math.max(1, Math.ceil((nextClose - now + 1500) / 1000));
-        const response = new Response(JSON.stringify(candles), {
-          headers: { "content-type": "application/json", "cache-control": "public, max-age=" + ttlSeconds }
-        });
-        try { await cache.put(cacheRequest, response); }
-        catch (cacheError) {
-          console.warn("FUTURES_MARKET_DATA_CACHE_WRITE_FAILED", normalizedSymbol, interval,
-            String(cacheError?.message || cacheError).slice(0, 180));
+      const nextClose = (Math.floor(now / intervalMsMap[interval]) + 1) * intervalMsMap[interval];
+      const expiresAt = nextClose + 1500;
+      FUTURES_MARKET_DATA_MEMORY_CACHE.set(cacheKey, { candles, expiresAt });
+      // Keep the opportunistic isolate cache bounded.
+      if (FUTURES_MARKET_DATA_MEMORY_CACHE.size > 256) {
+        for (const [key, value] of FUTURES_MARKET_DATA_MEMORY_CACHE) {
+          if (value.expiresAt <= now || FUTURES_MARKET_DATA_MEMORY_CACHE.size > 192) {
+            FUTURES_MARKET_DATA_MEMORY_CACHE.delete(key);
+          }
+          if (FUTURES_MARKET_DATA_MEMORY_CACHE.size <= 192) break;
         }
       }
       return { interval, candles, cache: "MISS" };
@@ -3168,24 +3169,42 @@ async function runFuturesSignalScan(env, options = {}) {
   let fifteenMinuteDataErrorCount = 0;
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
-      const marketData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
-        FUTURES_CONFIG.INTERVAL, FUTURES_CONFIG.CONFIRM_INTERVAL, FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL
+      // Stage 1: fetch only the 1h/4h inputs and run the unchanged engine with
+      // entry filters skipped. This is a conservative preflight: any symbol
+      // that can become eligible in the full analysis must pass this stage.
+      const baseData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
+        FUTURES_CONFIG.INTERVAL, FUTURES_CONFIG.CONFIRM_INTERVAL
       ]);
-      const oneHour = marketData.candles[FUTURES_CONFIG.INTERVAL];
-      const fourHour = marketData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
-      let fifteenMinute = marketData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
-      if (marketData.errors?.[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]) {
-        fifteenMinuteDataErrorCount++;
-        console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol, marketData.errors[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]);
-      }
+      const oneHour = baseData.candles[FUTURES_CONFIG.INTERVAL];
+      const fourHour = baseData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
       if (!Array.isArray(oneHour) || !Array.isArray(fourHour)) {
-        throw new Error(marketData.errors?.[FUTURES_CONFIG.INTERVAL] ||
-          marketData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
+        throw new Error(baseData.errors?.[FUTURES_CONFIG.INTERVAL] ||
+          baseData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
           "Required Kraken candle data is missing.");
       }
-      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, {
+
+      const analysisOptions = {
         ...options, btcFourHourTrend, requireBtcFourHourAlignment: true
+      };
+      const preflight = analyzeFuturesSymbol(ticker, oneHour, fourHour, [], {
+        ...analysisOptions, skipEntryFilters: true
       });
+      if (preflight?.eligible !== true && preflight?.highRiskEligible !== true) {
+        return preflight;
+      }
+
+      // Stage 2: only symbols surviving every 1h/4h/BTC/volume/score/risk
+      // prerequisite request 15m candles. Final qualification still runs the
+      // original, unchanged entry-filter implementation on the real 15m data.
+      const entryData = await getKrakenFuturesCandlesViaCoordinator(
+        env, ticker.symbol, [FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]
+      );
+      const fifteenMinute = entryData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
+      if (entryData.errors?.[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]) {
+        fifteenMinuteDataErrorCount++;
+        console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol, entryData.errors[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]);
+      }
+      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, analysisOptions);
     } catch (error) {
       analysisErrorCount++;
       return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticType: "data_or_analysis_error" };
