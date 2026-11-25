@@ -160,6 +160,14 @@ async function main() {
           h1.length < FUTURES_CONFIG.MIN_CANDLES || h4.length < FUTURES_CONFIG.MIN_CANDLES) {
         throw new Error("insufficient candles 5m="+m5.length+" 15m="+m15.length+" 1h="+h1.length+" 4h="+h4.length);
       }
+      const coverage = [
+        [m5,FIVE_MIN,"5m"], [m15,FIFTEEN_MIN,"15m"],
+        [h1,HOUR,"1h"], [h4,FOUR_HOURS,"4h"]
+      ];
+      const incomplete = coverage.find(([candles,interval]) => candles[0].time > dataStart + interval * 2);
+      if (incomplete) {
+        throw new Error("incomplete 45-day history for "+incomplete[2]+"; earliest candle="+new Date(incomplete[0][0].time).toISOString());
+      }
       market.set(symbol,{ticker,m5,m15,h1,h4});
       console.log("Loaded",symbol,{m5:m5.length,m15:m15.length,h1:h1.length,h4:h4.length});
     } catch (error) {
