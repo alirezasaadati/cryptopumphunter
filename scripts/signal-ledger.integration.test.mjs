@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals } from "../src/signal-ledger.js";
 import { signalOutboxAction } from "../src/signal-outbox.js";
 import { createSerialExecutor } from "../src/serial-executor.js";
-import { SignalDeliveryCoordinator, sendAndArchiveFuturesSignal } from "../src/index.js";
+import { SignalDeliveryCoordinator, sendAndArchiveFuturesSignal, deliverFuturesSignalAlerts } from "../src/index.js";
 
 const TEST_DELIVERY_SECRET = "unit-test-delivery-secret";
 
@@ -431,4 +431,62 @@ test("legacy DO delivery and reconciliation routes are no longer exposed", async
     }));
     assert.equal(response.status, 404);
   }
+});
+
+
+test("automated fan-out publishes each signal to the archive exactly once", async () => {
+  const { env, storages } = deliveryEnvironment({ archive: true });
+  for (const chatId of ["921", "922", "923"]) {
+    await env.APP_KV.put("member:" + chatId, JSON.stringify({ approved: true }));
+  }
+  const telegramChats = [];
+  await withTelegramFetch(async (_url, options) => {
+    const body = JSON.parse(options.body);
+    telegramChats.push(String(body.chat_id));
+    await new Promise(resolve => setTimeout(resolve, 2));
+    return Response.json({ ok: true, result: { message_id: 1200 + telegramChats.length } });
+  }, async () => {
+    const pending = signal("fanout-archive-once", "ETH-PERP");
+    const result = await deliverFuturesSignalAlerts(env, [pending]);
+    assert.equal(result.recipients, 3);
+    assert.equal(result.delivered, 3);
+    assert.equal(result.failed, 0);
+    assert.equal(telegramChats.filter(id => id === "-1001234567890").length, 1);
+    assert.equal(telegramChats.filter(id => ["921", "922", "923"].includes(id)).length, 3);
+    for (const chatId of ["921", "922", "923"]) {
+      const key = "futures:signal-outbox:v1:" + chatId + ":fanout-archive-once";
+      const storage = storages.get(key);
+      const record = await storage.get("signal-outbox:" + key);
+      assert.equal(record.status, "ARCHIVED");
+      assert.equal(record.archivePublished, true);
+    }
+    const archiveStorage = storages.get("global:signal-archive-publisher");
+    assert.equal((await archiveStorage.get("published-signal:fanout-archive-once")).status, "PUBLISHED");
+  });
+});
+
+test("a concurrent archive reservation is reported as in-progress, not uncertain", async () => {
+  const storage = memoryStorage();
+  const coordinator = new SignalDeliveryCoordinator({ storage }, {
+    SIGNAL_DELIVERY_AUTH_SECRET: TEST_DELIVERY_SECRET,
+    SIGNAL_ARCHIVE_CHANNEL_ID: "-1001234567890"
+  });
+  const post = async (path, payload) => {
+    const response = await coordinator.fetch(new Request("https://signal-delivery.internal" + path, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-signal-delivery-secret": TEST_DELIVERY_SECRET },
+      body: JSON.stringify(payload)
+    }));
+    return response.json();
+  };
+  const first = await post("/archive-publish/reserve", {
+    channelId: "-1001234567890", signalId: "archive-reservation-race"
+  });
+  assert.equal(first.result.reserved, true);
+  const second = await post("/archive-publish/reserve", {
+    channelId: "-1001234567890", signalId: "archive-reservation-race"
+  });
+  assert.equal(second.result.duplicate, true);
+  assert.equal(second.result.pending, true);
+  assert.equal(second.result.uncertain, undefined);
 });
