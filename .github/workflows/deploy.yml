@@ -22,7 +22,8 @@ jobs:
         run: npm run check
       - name: Test Telegram futures alert formatting
         run: node --test scripts/futures-alerts.test.mjs
-      # The full suite remains visible as a diagnostic, but unrelated existing failures
+      # Production APP_KV binding is aligned with the Worker account's existing namespace.
+# The full suite remains visible as a diagnostic, but unrelated existing failures
       # must not block this isolated message-format-only deployment.
       - name: Run full test suite (diagnostic)
         run: npm test
