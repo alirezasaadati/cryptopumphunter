@@ -1,4 +1,3 @@
-import { runSpotScan, runSpotAssetDetail, testSpotDataSources } from "./spot-engine.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, displayEntryPrice, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
@@ -145,13 +144,17 @@ const CAPITAL_MANAGEMENT_TEXT =
   "🔹 هرگز با سرمایه موردنیاز زندگی وارد معاملات نشوید.\n\n\n" +
   "🔹 در صورت نداشتن دانش و تجربه کافی، از ورود به معاملات خودداری کنید.\n\n\n" +
   "🔹 هیچ سیگنالی قطعی یا بدون ریسک نیست؛ احتمال ضرر وجود دارد.\n\n\n" +
-  "<b>3️⃣ اهرم و نحوه انجام معامله</b>\n\n\n" +
+  "<b>3️⃣ ورود پله‌ای به معامله</b>\n\n\n" +
+  "🔹 برای کاهش ریسک ورود در یک قیمت نامناسب، بهتر است سرمایه اختصاص‌یافته به هر معامله را بین دو نقطه ورود تقسیم کنید.\n\n\n" +
+  "🔹 برای مثال، اگر ۱۰ دلار سرمایه برای یک معامله با اهرم ۱۰ در نظر گرفته‌اید، ۵ دلار را در نقطه ورود اول و ۵ دلار باقی‌مانده را در نقطه ورود دوم وارد کنید. با این روش، تمام سرمایه در یک نقطه وارد بازار نمی‌شود و میانگین قیمت ورود می‌تواند بهبود پیدا کند.\n\n\n" +
+  "⚠️ ورود پله‌ای به معنی جلوگیری قطعی از ضرر نیست و با ورود مرحله دوم، حجم و میزان ریسک معامله افزایش پیدا می‌کند. بنابراین رعایت حد ضرر و مدیریت حجم معامله ضروری است.\n\n\n" +
+  "<b>4️⃣ اهرم و نحوه انجام معامله</b>\n\n\n" +
   "🔹 از اهرم متناسب با ریسک و فاصله حد ضرر استفاده کنید.\n\n\n" +
   "🔹 حالت <b>Isolated</b> و اهرم پایین‌تر معمولاً ریسک لیکویید شدن را کاهش می‌دهد.\n\n\n" +
   "🔹 استفاده از اهرم ۱۰ به‌معنای جلوگیری از لیکویید شدن نیست ، حتما از حد ضرر تعیین شده در سیگنال صادر شده استفاده کنید\n\n\n" +
-  "<b>4️⃣ ورود بعد از تارگت اول</b>\n\n\n" +
+  "<b>5️⃣ ورود بعد از تارگت اول</b>\n\n\n" +
   "🔹 اگر قیمت به تارگت اول رسیده است، از ورود دیرهنگام به همان سیگنال خودداری کنید.\n\n\n" +
-  "<b>5️⃣ سیو سود و مدیریت حد ضرر</b>\n\n\n" +
+  "<b>6️⃣ سیو سود و مدیریت حد ضرر</b>\n\n\n" +
   "🔹 در تارگت‌ها بخشی از حجم معامله را ببندید و سود را ذخیره کنید.\n\n\n" +
   "🔹 برای تارگت اول، می‌توانید بخش قابل‌توجهی از حجم را خارج کنید و باقی‌مانده را برای تارگت‌های بعدی نگه دارید.\n\n\n" +
   "🔹 پس از حرکت قیمت در جهت معامله، حد ضرر را متناسب با شرایط به نقطه ورود یا محدوده‌ای محافظت‌شده منتقل کنید.\n\n\n" +
@@ -163,8 +166,7 @@ function mainMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 سیگنال فیوچرز", callback_data: "futures" },
-      { text: "📊 سیگنال اسپات", callback_data: "spot" }
+      { text: "📈 سیگنال فیوچرز", callback_data: "futures" }
     ],
     [{ text: "🛡️ راهنمای مدیریت سرمایه", callback_data: "capital_guide" }],
     owner
@@ -209,7 +211,7 @@ export default {
         ok: true,
         service: "Crypto Pump Hunter",
         version: CONFIG.VERSION,
-        mode: "Kraken Spot and Derivatives Futures signals",
+        mode: "Kraken Derivatives Futures signals",
         kv: Boolean(env.APP_KV),
         membership: true
       });
@@ -379,6 +381,10 @@ async function sendMessage(env, chatId, text, replyMarkup = null, parseMode = nu
   if (parseMode) body.parse_mode = parseMode;
 
   return telegram("sendMessage", env, body);
+}
+
+async function sendCapitalManagementGuide(env, chatId) {
+  return sendMessage(env, chatId, CAPITAL_MANAGEMENT_TEXT, null, "HTML");
 }
 
 async function sendLongMessage(env, chatId, text) {
@@ -937,8 +943,7 @@ function replyMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 سیگنال فیوچرز" },
-      { text: "📊 سیگنال اسپات" }
+      { text: "📈 سیگنال فیوچرز" }
     ],
     [
       { text: "🛡️ راهنمای مدیریت سرمایه" }
@@ -1043,17 +1048,9 @@ async function handleReplyMenuAction(action, env, chatId, message) {
     return;
   }
   if (action === "futures") return runFuturesSignalsForChat(env, chatId);
-  if (action === "spot") return runSpotMarketScanForChat(env, chatId);
-  if (action.startsWith("spotd:")) {
-    const [, symbol, quote] = action.split(":");
-    return showSpotAssetDetailForChat(env, chatId, symbol, quote);
-  }
   if (action === "issued_signals") return sendArchiveAccessLink(env, chatId);
   if (action === "capital_guide") {
-    await telegram("sendMessage", env, {
-      chat_id: chatId, text: CAPITAL_MANAGEMENT_TEXT, parse_mode: "HTML",
-      disable_web_page_preview: true, reply_markup: menuForChat(env, chatId)
-    });
+    await sendCapitalManagementGuide(env, chatId);
     return;
   }
   if (action === "status") return showStatus(env, chatId);
@@ -1199,11 +1196,6 @@ async function handleTelegramCommand(command, chatId, env, message) {
       await runFuturesSignalsForChat(env, chatId);
       return;
     }
-    if (command === "/scan") {
-      await runSpotMarketScanForChat(env, chatId);
-      return;
-    }
-
     await sendMessage(
       env,
       chatId,
@@ -1298,19 +1290,9 @@ async function handleCallback(query, env) {
       await runFuturesSignalsForChat(env, chatId);
       return;
     }
-    if (action === "spot") return runSpotMarketScanForChat(env, chatId);
-    if (action.startsWith("spotd:")) {
-      const [, symbol, quote] = action.split(":");
-      return showSpotAssetDetailForChat(env, chatId, symbol, quote);
-    }
     if (action === "issued_signals" || action === "ledger:archive" || action === "ledger:history") return sendArchiveAccessLink(env,chatId);
     if (action === "capital_guide") {
-      await telegram("sendMessage", env, {
-        chat_id: chatId,
-        text: CAPITAL_MANAGEMENT_TEXT,
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
+      await sendCapitalManagementGuide(env, chatId);
       return;
     }
     if (action === "status") {
@@ -1336,49 +1318,6 @@ async function handleCallback(query, env) {
       "❌ خطا:\n" + String(error.message || "Unknown error").slice(0, 1000),
       menuForChat(env, chatId)
     );
-  }
-}
-
-async function runSpotMarketScanForChat(env, chatId) {
-  if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) {
-    await sendMessage(env, chatId, "⚠️ قفل مستقل اسکن اسپات در دسترس نیست؛ اسکن برای جلوگیری از اجرای هم‌زمان متوقف شد.", menuForChat(env, chatId));
-    return;
-  }
-  const stub=env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:manual-spot-scan-lock"));
-  const headers={"content-type":"application/json","x-signal-delivery-secret":getSignalDeliverySecret(env)};
-  const token=crypto.randomUUID();
-  let acquired=false;
-  try {
-    const response=await stub.fetch("https://signal-delivery.internal/spot-scan-lock/acquire",{method:"POST",headers,body:JSON.stringify({token})});
-    const lockResult=await response.json();
-    if(!response.ok||!lockResult?.ok)throw new Error(lockResult?.error||"قفل اسکن اسپات دریافت نشد.");
-    if(!lockResult.acquired){await sendMessage(env,chatId,"⏳ یک اسکن اسپات دیگر در حال اجراست؛ پس از پایان آن دوباره تلاش کن.",menuForChat(env,chatId));return;}
-    acquired=true;
-    const scan=await runSpotScan(), opportunities=Array.isArray(scan.opportunities)?scan.opportunities:[];
-    const keyboard=opportunities.length?{inline_keyboard:opportunities.map(item=>[{text:"📊 "+item.coin.symbol+" / "+item.quote,callback_data:"spotd:"+item.coin.symbol+":"+item.quote}])}:undefined;
-    await sendMessage(env,chatId,scan.report,keyboard||menuForChat(env,chatId));
-  } catch(error) {
-    console.error("Manual spot scan failed:",String(error?.stack||error));
-    await sendMessage(env,chatId,"❌ اجرای اسکن اسپات ناموفق بود:\n"+String(error?.message||error).slice(0,900),menuForChat(env,chatId));
-  } finally {
-    if(acquired)try{
-      const response=await stub.fetch("https://signal-delivery.internal/spot-scan-lock/release",{method:"POST",headers,body:JSON.stringify({token})});
-      if(!response.ok)console.error("Could not release manual Spot scan lock:",response.status);
-    }catch(error){console.error("Could not release manual Spot scan lock:",String(error?.message||error));}
-  }
-}
-
-async function showSpotAssetDetailForChat(env, chatId, symbol, quote) {
-  try {
-    const result = await runSpotAssetDetail(symbol, quote);
-    await sendMessage(env, chatId, result.detail, {
-      inline_keyboard: [[{ text: "🔄 اسکن دوباره بازار", callback_data: "spot" }]]
-    });
-  } catch (error) {
-    await sendMessage(env, chatId,
-      "⚠️ دریافت جزئیات " + symbol + "/" + quote + " ناموفق بود:\n" +
-      String(error?.message || error).slice(0, 700),
-      { inline_keyboard: [[{ text: "🔄 اسکن دوباره", callback_data: "spot" }]] });
   }
 }
 
@@ -1418,8 +1357,6 @@ async function showConnectionTest(env, chatId) {
   const result=await testDataSources();
   const lines=[
     (result.krakenFutures?.ok?"✅":"❌")+" Kraken Futures: "+(result.krakenFutures?.ok?"متصل":"قطع"),
-    (result.krakenSpot?.ok?"✅":"❌")+" Kraken Spot / CoinLore: "+(result.krakenSpot?.ok?"متصل":"قطع"),
-    result.krakenSpot?.error?"خطای Spot: "+result.krakenSpot.error.slice(0,350):"",
     result.krakenFutures?.error?"خطای Futures: "+result.krakenFutures.error.slice(0,350):"",
     "ورژن: V"+CONFIG.VERSION
   ].filter(Boolean);
@@ -1467,15 +1404,13 @@ async function registerWebhook(request, env) {
 // ---------------- DATA SOURCES ----------------
 
 async function testDataSources() {
-  const result = { version: CONFIG.VERSION, krakenFutures: { ok: false }, krakenSpot: { ok: false } };
+  const result = { version: CONFIG.VERSION, krakenFutures: { ok: false } };
   try {
     const tickers = await getKrakenFuturesUniverse();
     const candles = await getKrakenFuturesCandles(tickers[0].symbol, "1h");
     result.krakenFutures = { ok: candles.length > 0, symbols: tickers.length, sample: tickers[0].symbol, candles: candles.length,
       error: candles.length ? undefined : "Kraken Futures کندل بسته‌شده برنگرداند." };
   } catch (error) { result.krakenFutures = { ok: false, error: error.message }; }
-  try { result.krakenSpot = await testSpotDataSources(); }
-  catch (error) { result.krakenSpot = { ok: false, error: String(error?.message || error) }; }
   return result;
 }
 
@@ -2414,7 +2349,7 @@ export class SignalDeliveryCoordinator {
   }
   async fetch(request){
     const url=new URL(request.url);
-    if(request.method!=="POST"||!["/deliver/reserve","/deliver/complete","/archive-publish/reserve","/archive-publish/complete","/scan-lock/acquire","/scan-lock/release","/spot-scan-lock/acquire","/spot-scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
+    if(request.method!=="POST"||!["/deliver/reserve","/deliver/complete","/archive-publish/reserve","/archive-publish/complete","/scan-lock/acquire","/scan-lock/release","/kv-write/allow","/kv-write/pause","/signals/register","/signals/list","/trades/list","/trades/update"].includes(url.pathname))return new Response("Not found",{status:404});
     const expectedSecret=getSignalDeliverySecret(this.env);
     const suppliedSecret=request.headers.get("x-signal-delivery-secret");
     if(!(await verifySignalDeliverySecret(suppliedSecret,expectedSecret)))return Response.json({ok:false,error:"Unauthorized."},{status:401});
@@ -2581,20 +2516,6 @@ export class SignalDeliveryCoordinator {
             }
           });
           return Response.json({ok:true,signals:fresh,trackedTrades:newTrades.length});
-        }
-        if(url.pathname==="/spot-scan-lock/acquire"){
-          const current=await this.ctx.storage.get("manual-spot-scan-lock"),now=Date.now(),token=String(payload.token||"");
-          if(!token)throw new Error("Spot scan lock token is required.");
-          if(current&&Number(current.expiresAt)>now)return Response.json({ok:true,acquired:false});
-          await this.ctx.storage.put("manual-spot-scan-lock",{token,acquiredAt:now,expiresAt:now+600000});
-          return Response.json({ok:true,acquired:true,expiresAt:now+600000});
-        }
-        if(url.pathname==="/spot-scan-lock/release"){
-          const current=await this.ctx.storage.get("manual-spot-scan-lock");
-          if(!current)return Response.json({ok:true,released:false,reason:"lock not found"});
-          if(!payload.token||payload.token!==current.token)return Response.json({ok:true,released:false,reason:"lock token mismatch"});
-          await this.ctx.storage.delete("manual-spot-scan-lock");
-          return Response.json({ok:true,released:true});
         }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
