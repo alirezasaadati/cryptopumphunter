@@ -1,0 +1,30 @@
+name: Validate Futures Market Data Budget
+on:
+  push:
+    branches:
+      - fix/market-data-subrequest-budget
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Syntax check
+        run: npm run check
+      - name: Market-data acquisition tests
+        run: node --test scripts/market-data-coordinator.test.mjs
+      - name: Staged preflight signal-equivalence tests
+        run: node --test --test-name-pattern="staged 15m preflight" scripts/futures-engine.test.mjs
+
+# Validation-only workflow; it never deploys the Worker.
+
+# Updated validation fixture coverage.
+
+# High-risk assertion follows the engine's eligible contract.
+
+# Refresh checks after updating the architecture assertion.
