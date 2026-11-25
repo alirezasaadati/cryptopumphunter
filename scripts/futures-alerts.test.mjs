@@ -77,7 +77,7 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   assert.match(long, /^⚪ سیگنال معتبر/);
   assert.match(long, /نماد: <b>ETH<\/b>/);
   assert.match(long, /جهت معامله: 🟢 لانگ \/ Long/);
-  assert.match(long, /قیمت ورود: <b>64,350\\.00<\\/b>/);
+  assert.match(long, /قیمت ورود: <b>64,350\.00<\/b>/);
   const highRiskShort = formatFuturesSignalAlert({...signal, riskLevel:"HIGH_RISK"});
   const highRiskLong = formatFuturesSignalAlert({...signal, side:"LONG", riskLevel:"HIGH_RISK"});
   assert.match(highRiskShort, /^⚠️ سیگنال پر ریسک/);
