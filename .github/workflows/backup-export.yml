@@ -1,0 +1,39 @@
+name: Export deployed source backup
+on:
+  push:
+    branches:
+      - backup/export-deployed-2026-11-25
+permissions:
+  contents: read
+  actions: write
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8fa7b3a8d61dc68eda47263d2a333ecbceebe441
+      - name: Build source archive
+        run: |
+          mkdir -p dist
+          cat > dist/BACKUP-INFO.txt <<'EOF'
+          Project: Kraken Signal Engine / cryptopumphunter
+          Repository: alirezasaadati/cryptopumphunter
+          Branch: main
+          Deployed source commit: 8fa7b3a8d61dc68eda47263d2a333ecbceebe441
+          Deployed Worker version: e473fd73-d551-414b-ba21-7065a93e14e0
+          Snapshot date: 2026-11-25
+          This archive contains source code, menus, presentation/editing, futures signal engine,
+          configuration templates, tests, scripts and GitHub workflows.
+          Secrets and environment files are intentionally excluded.
+          Temporary backup-export workflow is excluded.
+          EOF
+          zip -r dist/Kraken-Signal-Engine-Backup-2026-11-25.zip . \
+            -x '.git/*' 'node_modules/*' '.wrangler/*' '.dev.vars' '.env' '.env.*' \
+               'dist/*' '.github/workflows/backup-export.yml'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kraken-Signal-Engine-Backup-2026-11-25
+          path: dist/Kraken-Signal-Engine-Backup-2026-11-25.zip
+          if-no-files-found: error
+          retention-days: 30
