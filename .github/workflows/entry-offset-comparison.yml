@@ -1,0 +1,54 @@
+name: Entry Offset Comparison — Base vs 1% vs 1.2%
+on:
+  push:
+    branches:
+      - experiment/entry-offset-1pct-vs-1-2pct-20261125
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: current-production-engine
+            engine_ref: maintenance/remove-spot-button-20261124
+          - label: experimental-1-flexible-high-risk
+            engine_ref: experiment/current-engine-comparison-20261124
+    steps:
+      - name: Checkout isolated experiment harness
+        uses: actions/checkout@v4
+        with:
+          ref: experiment/entry-offset-1pct-vs-1-2pct-20261125
+          path: harness
+      - name: Checkout engine under test
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ matrix.engine_ref }}
+          path: engine
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install engine dependencies
+        working-directory: engine
+        run: npm install
+      - name: Install entry-offset harness
+        run: cp harness/scripts/backtest-entry-offsets.mjs engine/scripts/backtest-entry-offsets.mjs
+      - name: Run 30-day entry offset comparison
+        working-directory: engine
+        env:
+          BACKTEST_END_MS: "1795587600000"
+          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_NVDAXUSD,PF_XRPUSD,PF_NEARUSD,PF_ANTXUSD,PF_UNIUSD"
+        run: node scripts/backtest-entry-offsets.mjs
+      - name: Upload backtest results
+        uses: actions/upload-artifact@v4
+        with:
+          name: entry-offset-\${{ matrix.label }}
+          path: engine/artifacts/entry-offset-backtest.*
+          if-no-files-found: error
+          retention-days: 14
