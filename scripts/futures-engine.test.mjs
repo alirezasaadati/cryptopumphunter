@@ -440,7 +440,7 @@ test("volume priority bonus tiers are 0, 5, and 10 without changing qualificatio
     ticker.priceChangePercent=0;
     return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   };
-  const low=evaluate(0.7), medium=evaluate(0.9), high=evaluate(1.3);
+  const low=evaluate(0.75), medium=evaluate(0.9), high=evaluate(1.3);
   assert.equal(low.volumePriorityBonus,0);
   assert.equal(medium.volumePriorityBonus,5);
   assert.equal(high.volumePriorityBonus,10);
@@ -541,12 +541,9 @@ test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=
   assert.match(result.rejected,/ماشه مومنتوم ۱۵ دقیقه‌ای/);
 });
 
-test("missing 15m pullback is diagnostic and does not suppress a candidate",()=>{
+test("missing 15m pullback is rejected after a valid momentum trigger",()=>{
   const {ticker,oneHour}=makeSetup("LONG");
   const altered=makeCandles({count:120,slope:0.1,base:100}).map(c=>({...c,low:c.close-0.001}));
-  const priorEma9=testEma(altered.slice(0,-1).map(c=>c.close),9);
-  altered.at(-1).close=priorEma9+0.05;
-  altered.at(-1).open=priorEma9+0.02;
   const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
   const atr=calculateAtr(oneHour,14);
   const result=evaluateFuturesEntryFilters({
