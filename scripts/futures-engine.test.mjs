@@ -156,7 +156,8 @@ test("flat 1h and 4h conditions expose indicator-level rejection diagnostics",()
   assert.equal(result.eligible,undefined);
   assert.equal(result.entryDiagnostics.stage,"trend_rsi");
   assert.equal(result.entryDiagnostics.up1h,false);
-  assert.equal(result.entryDiagnostics.up4h,false);
+  assert.equal(result.entryDiagnostics.down1h,false);
+  assert.equal(result.fourHourTrend,"NEUTRAL");
   assert.match(result.rejected,/روند/);
 });
 
@@ -170,20 +171,21 @@ test("admin signal listing endpoint rejects requests without the Durable Object 
   assert.equal(response.status,401);
 });
 
-test("v3.8.2 configuration is preserved",()=>{
+test("live Kraken Futures configuration is preserved",()=>{
   assert.equal("MAX_SYMBOLS" in FUTURES_CONFIG,false);
   assert.equal(FUTURES_CONFIG.CONCURRENCY,5);
   assert.equal(FUTURES_CONFIG.MAX_SCAN_DURATION_MS,180000);
   assert.equal(FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS,45000);
   assert.equal(FUTURES_CONFIG.REQUEST_TIMEOUT_MS,12000);
-  assert.equal(FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN,20);
+  assert.equal(FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN,6);
   assert.equal(FUTURES_CONFIG.MIN_QUOTE_VOLUME,5_000_000);
-  assert.equal(FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME,1_000_000);
+  assert.equal(FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME,2_500_000);
   assert.equal(FUTURES_CONFIG.MIN_CANDLES,60);
-  assert.equal(FUTURES_CONFIG.MIN_SCORE,65);
-  assert.equal(FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO,0.3);
-  assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_TIER_1,0.5);
-  assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_TIER_2,1.0);
+  assert.equal(FUTURES_CONFIG.MIN_SCORE,70);
+  assert.equal(FUTURES_CONFIG.HIGH_RISK_MIN_SCORE,62);
+  assert.equal(FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO,0.65);
+  assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_TIER_1,0.8);
+  assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_TIER_2,1.3);
   assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_1,5);
   assert.equal(FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_2,10);
   assert.equal(FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_ONE,7);
@@ -191,8 +193,10 @@ test("v3.8.2 configuration is preserved",()=>{
   assert.equal(FUTURES_CONFIG.INTERVAL,"1h");
   assert.equal(FUTURES_CONFIG.CONFIRM_INTERVAL,"4h");
   assert.equal(FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL,"15m");
-  assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.7);
-  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,4.0);
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT,0.45);
+  assert.equal(FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR,2.0);
+  assert.equal(FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT,0.6);
+  assert.equal(FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR,2.4);
   assert.equal("ENTRY_INTERVAL" in FUTURES_CONFIG,false);
 });
 
@@ -230,8 +234,8 @@ test("Kraken perpetual filter accepts only liquid PI/PF USD perpetuals",()=>{
   assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:8_000_000,last:50_000}),true);
   assert.equal(isKrakenPerpetualTicker({tag:"month",symbol:"PF_XBTUSD",volumeQuote:8_000_000,last:50_000}),false);
   assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"BTC/USD",volumeQuote:8_000_000,last:50_000}),false);
-  assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:1_000_000,last:50_000}),true);
-  assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:999_999,last:50_000}),false);
+  assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:2_500_000,last:50_000}),true);
+  assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:2_499_999,last:50_000}),false);
 });
 
 test("ATR rejects insufficient candles and calculates positive volatility",()=>{
@@ -239,42 +243,16 @@ test("ATR rejects insufficient candles and calculates positive volatility",()=>{
   assert.ok(calculateAtr(makeCandles(),14)>0);
 });
 
-test("momentum and pullback provide 0/7/15 priority bonuses without changing qualification score",()=>{
-  const evaluate=mode=>{
-    const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
-    const last=fifteenMinute.at(-1);
-    if(mode==="pullback_only") {
-      last.open=last.close+0.05;
-    } else if(mode==="momentum_only" || mode==="neither") {
-      const current=oneHour.at(-1).close;
-      const count=120, slope=0.02, base=current-slope*(count-1);
-      const rebuilt=Array.from({length:count},(_,i)=>{
-        const close=base+i*slope;
-        return {time:Date.now()-(count-i)*15*60*1000,open:close-0.005,high:close+0.02,low:close-0.02,close,volume:100};
-      });
-      fifteenMinute.splice(0,fifteenMinute.length,...rebuilt);
-      if(mode==="neither") fifteenMinute.at(-1).open=fifteenMinute.at(-1).close+0.005;
-      const closes=fifteenMinute.map(c=>c.close);
-      const ema21=testEma(closes,21);
-      const atr15=calculateAtr(fifteenMinute,14);
-      assert.ok(fifteenMinute.slice(-9,-1).every(c=>c.low>ema21+atr15*0.35),
-        JSON.stringify({ema21,atr15,recent:fifteenMinute.slice(-9,-1).map(c=>({low:c.low,close:c.close}))}));
-    }
-    return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
-  };
-  const both=evaluate("both"), one=evaluate("pullback_only"), none=evaluate("neither");
-  assert.equal(both.confirmationCount,2,JSON.stringify(both.entryDiagnostics));
-  assert.equal(both.confirmationPriorityBonus,15);
-  assert.equal(one.confirmationCount,1,JSON.stringify(one.entryDiagnostics));
-  assert.equal(one.confirmationPriorityBonus,7);
-  assert.equal(none.confirmationCount,0,JSON.stringify(none.entryDiagnostics));
-  assert.equal(none.confirmationPriorityBonus,0);
-  assert.equal(both.score,both.baseScore);
-  assert.equal(one.score,one.baseScore);
-  assert.equal(none.score,none.baseScore);
-  assert.equal(both.priorityScore,both.baseScore+both.volumePriorityBonus+15);
-  assert.equal(one.priorityScore,one.baseScore+one.volumePriorityBonus+7);
-  assert.equal(none.priorityScore,none.baseScore+none.volumePriorityBonus);
+test("eligible Kraken signals expose fixed confirmation priority separately from qualification score",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.momentumConfirmed,true);
+  assert.equal(result.pullbackConfirmed,true);
+  assert.equal(result.confirmationCount,2);
+  assert.equal(result.confirmationPriorityBonus,FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_BOTH);
+  assert.equal(result.score,result.baseScore);
+  assert.equal(result.priorityScore,result.baseScore+result.volumePriorityBonus+result.confirmationPriorityBonus);
 });
 
 test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
@@ -310,9 +288,8 @@ test("mandatory BTC 4h alignment blocks LONG when BTC 4h is bearish",()=>{
   });
   assert.equal(result.eligible,undefined);
   assert.equal(result.side,"LONG");
-  assert.equal(result.entryDiagnostics.stage,"btc_4h_alignment");
-  assert.equal(result.entryDiagnostics.passed,false);
   assert.match(result.rejected,/بیت‌کوین/);
+  assert.equal(result.entryDiagnostics,undefined);
 });
 
 test("mandatory BTC and symbol 4h trends must both match the signal direction",()=>{
@@ -334,64 +311,60 @@ test("mandatory BTC and symbol 4h trends must both match the signal direction",(
     requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
   });
   assert.equal(mismatch.eligible,undefined);
-  assert.equal(mismatch.entryDiagnostics.stage,"btc_4h_alignment");
+  assert.match(mismatch.rejected,/روند ۴ساعته نماد هم‌جهت/);
+  assert.equal(mismatch.entryDiagnostics,undefined);
 });
 
-test("15m momentum and pullback remain optional under mandatory BTC alignment",()=>{
+test("strict Kraken entry requires the 15m momentum trigger even when BTC 4h is aligned",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const altered=fifteenMinute.map(c=>({...c}));
   altered.at(-1).open=altered.at(-1).close+0.5;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,altered,{
     requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
   });
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.momentumConfirmed,false);
-  assert.equal(result.pullbackConfirmed,true);
-  assert.equal(result.confirmationCount,1);
+  assert.equal(result.eligible,undefined);
+  assert.match(result.rejected,/ماشه مومنتوم ۱۵ دقیقه‌ای/);
 });
 
-test("neutral 4h trend does not block a valid LONG and adds no 4h score",()=>{
+test("neutral 4h symbol trend blocks a directional signal in the live Kraken engine",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({
     time:Date.now()-(120-i)*4*60*60*1000,
     open:100,high:100.1,low:99.9,close:100,volume:100
   }));
   const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
-  assert.equal(result.side,"LONG",JSON.stringify(result));
-  assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.side,"LONG");
+  assert.equal(result.eligible,undefined);
   assert.equal(result.fourHourTrend,"NEUTRAL");
-  assert.equal(result.fourHourScoreAdjustment,0);
+  assert.match(result.rejected,/روند ۴ساعته نماد هم‌جهت/);
 });
 
-test("opposing 4h trend reduces SHORT score but does not block even HIGH_RISK",()=>{
+test("opposing 4h symbol trend blocks SHORT rather than being bypassed by HIGH_RISK",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
-  fifteenMinute.at(-1).open=fifteenMinute.at(-1).close-0.05;
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
-  assert.equal(result.side,"SHORT",JSON.stringify(result));
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.equal(result.side,"SHORT");
+  assert.equal(result.eligible,undefined);
   assert.equal(result.fourHourTrend,"BULLISH");
-  assert.equal(result.fourHourScoreAdjustment,-8);
+  assert.match(result.rejected,/روند ۴ساعته نماد هم‌جهت/);
 });
 
-test("opposing 4h trend does not block HIGH_RISK when 15m data is unavailable",()=>{
+test("opposing 4h symbol trend blocks SHORT even when 15m data is unavailable",()=>{
   const {ticker,oneHour}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,[]);
-  assert.equal(result.side,"SHORT",JSON.stringify(result));
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.riskLevel,"HIGH_RISK");
-  assert.equal(result.fourHourScoreAdjustment,-8);
+  assert.equal(result.side,"SHORT");
+  assert.equal(result.eligible,undefined);
+  assert.match(result.rejected,/روند ۴ساعته نماد هم‌جهت/);
 });
 
 
 test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
-  oneHour.at(-1).volume=avg*0.6;
+  oneHour.at(-1).volume=avg*0.7;
   ticker.priceChangePercent=0;
-  ticker.quoteVolume=2_000_000;
+  ticker.quoteVolume=2_500_000;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.side,"LONG");
   assert.equal(result.eligible,true,JSON.stringify(result));
@@ -399,39 +372,35 @@ test("strict LONG setup below standard score/volume falls back to HIGH_RISK",()=
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.ok(result.score>=FUTURES_CONFIG.HIGH_RISK_MIN_SCORE);
   assert.ok(result.volumeRatio>=FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO);
-  assert.equal(result.quoteVolume,2_000_000);
+  assert.equal(result.quoteVolume,2_500_000);
 });
 
-test("HIGH_RISK accepts quote volume exactly at the 1M USD floor when relative volume passes",()=>{
+test("HIGH_RISK rejects quote volume below the live 2.5M USD safety floor",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   ticker.quoteVolume=1_000_000;
   const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
-  oneHour.at(-1).volume=avg*0.6;
-  ticker.priceChangePercent=0;
-  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.highRiskEligible,true);
-  assert.equal(result.riskLevel,"HIGH_RISK");
-  assert.equal(result.quoteVolume,1_000_000);
-  assert.ok(result.volumeRatio>=0.5);
-});
-
-test("HIGH_RISK rejects quote volume below the 1M USD safety floor",()=>{
-  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
-  ticker.quoteVolume=999_999;
-  oneHour.at(-1).volume=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  oneHour.at(-1).volume=avg*0.8;
   ticker.priceChangePercent=0;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.eligible,undefined);
-  assert.match(result.rejected,/کف ایمنی مسیر پرریسک/);
-  assert.equal(result.entryDiagnostics.minimumHighRiskQuoteVolume,1_000_000);
+  assert.match(result.rejected,/حجم ۲۴ساعته کمتر از کف ایمنی/);
+});
+
+test("HIGH_RISK rejects quote volume just below the live 2.5M USD safety floor",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  ticker.quoteVolume=2_499_999;
+  oneHour.at(-1).volume=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0);
+  ticker.priceChangePercent=0;
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,undefined);
+  assert.match(result.rejected,/حجم ۲۴ساعته کمتر از کف ایمنی/);
 });
 
 test("Kraken universe includes symbols above 1M USD for HIGH_RISK evaluation",async()=>{
   const originalFetch=globalThis.fetch;
   const tickers=[
-    {tag:"perpetual",symbol:"PF_TESTLOWUSD",volumeQuote:2_000_000,last:10,suspended:false},
-    {tag:"perpetual",symbol:"PF_TESTDEADUSD",volumeQuote:999_999,last:10,suspended:false}
+    {tag:"perpetual",symbol:"PF_TESTLOWUSD",volumeQuote:2_500_000,last:10,suspended:false},
+    {tag:"perpetual",symbol:"PF_TESTDEADUSD",volumeQuote:2_499_999,last:10,suspended:false}
   ];
   globalThis.fetch=async()=>new Response(JSON.stringify({tickers}),{status:200});
   try {
@@ -440,23 +409,21 @@ test("Kraken universe includes symbols above 1M USD for HIGH_RISK evaluation",as
   } finally { globalThis.fetch=originalFetch; }
 });
 
-test("HIGH_RISK rejects relative volume below 0.3x",()=>{
+test("LONG setup rejects relative volume below its live 0.7x precondition",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
-  oneHour.at(-1).volume=avg*0.299;
+  oneHour.at(-1).volume=avg*0.699;
   ticker.priceChangePercent=0;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.eligible,undefined);
-  assert.match(result.rejected,/کمتر از حداقل مسیر پرریسک/);
-  assert.equal(result.entryDiagnostics.minimumHighRiskVolumeRatio,0.3);
-  assert.ok(result.entryDiagnostics.volumeRatio<0.3);
+  assert.match(result.rejected,/حجم نسبی برای تأیید لانگ کافی نیست/);
 });
 
-test("HIGH_RISK accepts relative volume exactly at the 0.3x floor without a priority bonus",()=>{
+test("HIGH_RISK accepts LONG relative volume exactly at the live 0.7x precondition",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
-  oneHour.at(-1).volume=avg*0.3;
-  ticker.quoteVolume=2_000_000;
+  oneHour.at(-1).volume=avg*0.7;
+  ticker.quoteVolume=2_500_000;
   ticker.priceChangePercent=0;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.eligible,true,JSON.stringify(result));
@@ -473,7 +440,7 @@ test("volume priority bonus tiers are 0, 5, and 10 without changing qualificatio
     ticker.priceChangePercent=0;
     return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   };
-  const low=evaluate(0.4), medium=evaluate(0.75), high=evaluate(1.0);
+  const low=evaluate(0.7), medium=evaluate(0.9), high=evaluate(1.3);
   assert.equal(low.volumePriorityBonus,0);
   assert.equal(medium.volumePriorityBonus,5);
   assert.equal(high.volumePriorityBonus,10);
@@ -493,7 +460,8 @@ test("volume priority bonus tiers are 0, 5, and 10 without changing qualificatio
 test("strict SHORT setup below standard score/volume falls back to HIGH_RISK",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("SHORT");
   const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
-  oneHour.at(-1).volume=avg*0.6;
+  oneHour.at(-1).volume=avg*0.65;
+  ticker.quoteVolume=2_500_000;
   ticker.priceChangePercent=0;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.side,"SHORT");
@@ -568,8 +536,9 @@ test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=
     ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
     referencePrice:oneHour.at(-1).close,ema20,atr
   });
-  assert.equal(result.ok,true);
-  assert.equal(result.momentumConfirmed,false);
+  assert.equal(result.ok,false);
+  assert.equal(result.momentumConfirmed,undefined);
+  assert.match(result.rejected,/ماشه مومنتوم ۱۵ دقیقه‌ای/);
 });
 
 test("missing 15m pullback is diagnostic and does not suppress a candidate",()=>{
@@ -584,6 +553,7 @@ test("missing 15m pullback is diagnostic and does not suppress a candidate",()=>
     ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
     referencePrice:oneHour.at(-1).close,ema20,atr
   });
-  assert.equal(result.ok,true);
-  assert.equal(result.pullbackConfirmed,false);
+  assert.equal(result.ok,false);
+  assert.equal(result.pullbackConfirmed,undefined);
+  assert.match(result.rejected,/پولبک به محدوده EMA21/);
 });
