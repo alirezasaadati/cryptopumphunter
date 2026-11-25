@@ -1,5 +1,6 @@
 name: Entry Offset Comparison — Base vs 1% vs 1.2%
 on:
+  workflow_dispatch:
   push:
     branches:
       - experiment/entry-offset-1pct-vs-1-2pct-20261125
