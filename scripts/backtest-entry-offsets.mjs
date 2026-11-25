@@ -88,10 +88,10 @@ function lowerBound(candles, time) {
   return lo;
 }
 function targetLevels(trade) {
-  const entry = Number(trade.entry);
-  const dir = trade.side === "LONG" ? 1 : -1;
-  // 30% gross return on $10 margin at 10x = 3% favorable underlying move.
-  return [entry * (1 + dir * 0.03)];
+  // Preserve the signal's original absolute TP1 for every entry mode.
+  // Do not derive a new target from the adjusted fill price.
+  const target = Number(trade.target1);
+  return Number.isFinite(target) && target > 0 ? [target] : [];
 }
 function candleAmbiguous(side, trade, candle) {
   const stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
