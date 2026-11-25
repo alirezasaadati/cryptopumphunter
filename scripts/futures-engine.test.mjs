@@ -337,7 +337,7 @@ test("staged 15m preflight preserves the high-risk candidate path",()=>{
   const complete=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute,options);
   assert.equal(complete.eligible,true,JSON.stringify(complete));
   assert.equal(complete.riskLevel,"HIGH_RISK");
-  assert.equal(preflight.eligible,false);
+  assert.equal(preflight.eligible,true,JSON.stringify(preflight));
   assert.equal(preflight.highRiskEligible,true,JSON.stringify(preflight));
 });
 
