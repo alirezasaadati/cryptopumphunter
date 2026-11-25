@@ -15,11 +15,11 @@ const base = {
   candleTime: "2026-11-17T09:15:00.000Z"
 };
 
-test("display entry price is 1% higher for SHORT and 1% lower for LONG", () => {
+test("display entry price is 1% higher for SHORT and 1.5% lower for LONG", () => {
   assert.equal(displayEntryPrice(65000, "SHORT"), 65650);
-  assert.equal(displayEntryPrice(65000, "LONG"), 64350);
+  assert.equal(displayEntryPrice(65000, "LONG"), 64025);
   assert.equal(displayEntryPrice(0.5, "SHORT"), 0.505);
-  assert.equal(displayEntryPrice(0.5, "LONG"), 0.495);
+  assert.equal(displayEntryPrice(0.5, "LONG"), 0.4925);
   assert.ok(Number.isNaN(displayEntryPrice(undefined, "LONG")));
   assert.ok(Number.isNaN(displayEntryPrice(65000, "UNKNOWN")));
 });
@@ -77,13 +77,13 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   assert.match(long, /^⚪ سیگنال معتبر/);
   assert.match(long, /نماد: <b>ETH<\/b>/);
   assert.match(long, /جهت معامله: 🟢 لانگ \/ Long/);
-  assert.match(long, /قیمت ورود: <b>64,350\.00<\/b>/);
+  assert.match(long, /قیمت ورود: <b>64,025\.00<\/b>/);
   const highRiskShort = formatFuturesSignalAlert({...signal, riskLevel:"HIGH_RISK"});
   const highRiskLong = formatFuturesSignalAlert({...signal, side:"LONG", riskLevel:"HIGH_RISK"});
   assert.match(highRiskShort, /^⚠️ سیگنال پر ریسک/);
   assert.match(highRiskLong, /^⚠️ سیگنال پر ریسک/);
   assert.match(highRiskShort, /قیمت ورود: <b>65,650\.00<\/b>/);
-  assert.match(highRiskLong, /قیمت ورود: <b>64,350\.00<\/b>/);
+  assert.match(highRiskLong, /قیمت ورود: <b>64,025\.00<\/b>/);
   const formerlyRisky = formatFuturesSignalAlert({...signal, tier:"EXPERIMENTAL"}, 3);
   assert.match(formerlyRisky, /^⚪ سیگنال معتبر/);
   assert.match(formerlyRisky, /⛔ حد ضرر:/);
