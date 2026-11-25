@@ -63,8 +63,8 @@ test("capital guide is delivered through one shared HTML-safe path from both men
   assert.match(source, /6️⃣ سیو سود و مدیریت حد ضرر/);
 });
 
-test("spot scan internals remain available without exposing a spot menu button", () => {
-  assert.match(source, /action === "spot"\) return runSpotMarketScanForChat/);
-  assert.match(source, /action\.startsWith\("spotd:"\)/);
-  assert.doesNotMatch(source.slice(source.indexOf("function mainMenuForChat"), source.indexOf("export default")), /سیگنال اسپات/);
+
+test("all user-facing Spot scan entry points are removed from the Worker", () => {
+  assert.doesNotMatch(source, /runSpotScan|runSpotAssetDetail|testSpotDataSources|runSpotMarketScanForChat|showSpotAssetDetailForChat|spotd:|spot-scan-lock|command === "\/scan"/i);
+  assert.doesNotMatch(source, /krakenSpot|Kraken Spot|سیگنال اسپات/);
 });

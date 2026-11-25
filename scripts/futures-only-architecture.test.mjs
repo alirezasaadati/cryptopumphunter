@@ -5,20 +5,13 @@ import { readFile } from "node:fs/promises";
 const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 const researchEngine = await readFile(new URL("../src/price-action-engine.js", import.meta.url), "utf8");
 
-test("bot exposes separate Kraken Spot and Futures signal engines", () => {
-  assert.match(source, /mode: "Kraken Spot and Derivatives Futures signals"/);
-  assert.match(source, /import \{ runSpotScan, runSpotAssetDetail, testSpotDataSources \} from "\.\/spot-engine\.js"/);
-  assert.match(source, /if \(command === "\/scan"\)/);
-  assert.match(source, /async function runSpotMarketScanForChat/);
+test("bot exposes the Kraken Futures signal engine only", () => {
   assert.match(source, /async function runFuturesSignalScan/);
   assert.match(source, /function analyzeFuturesSymbol\(/);
-  assert.match(source, /testSpotDataSources\(\)/);
   assert.match(source, /testDataSources\(\)/);
-  assert.match(source, /global:manual-spot-scan-lock/);
-  assert.match(source, /spot-scan-lock\/acquire/);
-  assert.match(source, /spot-scan-lock\/release/);
   assert.doesNotMatch(source, /callback_data: "analysis"/);
   assert.doesNotMatch(source, /callback_data: "watchlist"/);
+  assert.doesNotMatch(source, /spot-engine|runSpotScan|runSpotAssetDetail|testSpotDataSources|spot-scan-lock|spotd:|command === "\/scan"/i);
 });
 
 test("manual and scheduled Futures alerts both use the same Futures scan", () => {
