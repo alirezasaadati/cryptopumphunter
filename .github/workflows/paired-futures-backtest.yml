@@ -1,0 +1,58 @@
+name: Paired Current vs Experimental Futures Backtest
+
+on:
+  push:
+    branches:
+      - audit/futures-backtest-20261125
+
+permissions:
+  contents: read
+
+jobs:
+  paired-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: current-production
+            engine_ref: maintenance/remove-spot-button-20261124
+          - label: experimental-flexible-high-risk
+            engine_ref: experiment/current-engine-comparison-20261124
+    steps:
+      - name: Check out isolated backtest harness
+        uses: actions/checkout@v4
+        with:
+          ref: audit/futures-backtest-20261125
+          path: harness
+      - name: Check out engine under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.engine_ref }}
+          path: engine
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install engine dependencies
+        working-directory: engine
+        run: npm install
+      - name: Install pinned harness script
+        run: cp harness/scripts/backtest-futures-lifecycle.mjs engine/scripts/backtest-futures-lifecycle.mjs
+      - name: Run identical pinned 30-day lifecycle backtest
+        working-directory: engine
+        env:
+          BACKTEST_END_MS: "1795527325576"
+          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_NVDAXUSD,PF_XRPUSD,PF_NEARUSD,PF_ANTXUSD,PF_UNIUSD"
+          BACKTEST_LABEL: ${{ matrix.label }}
+        run: node scripts/backtest-futures-lifecycle.mjs
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: paired-backtest-${{ matrix.label }}
+          path: engine/artifacts/futures-lifecycle-backtest.*
+          if-no-files-found: error
+          retention-days: 14
