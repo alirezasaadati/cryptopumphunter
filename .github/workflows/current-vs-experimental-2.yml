@@ -1,0 +1,54 @@
+name: Current Engine vs Experimental 2 (same 30d BTC ETH)
+on:
+  push:
+    branches:
+      - audit/strategy-2-backtest-20261125
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout isolated audit harness
+        uses: actions/checkout@v4
+        with:
+          ref: audit/strategy-2-backtest-20261125
+          path: harness
+      - name: Checkout current engine
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/remove-spot-button-20261124
+          path: engine
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install current engine dependencies
+        working-directory: engine
+        run: npm install
+      - name: Run current engine on BTC and ETH
+        working-directory: engine
+        env:
+          BACKTEST_END_MS: "1795527325576"
+          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_SYMBOLS: "2"
+          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD"
+          BACKTEST_LABEL: "current-engine-btc-eth"
+        run: node scripts/backtest-futures-lifecycle.mjs
+      - name: Run Experimental 2 on same BTC and ETH data
+        working-directory: harness
+        env:
+          BACKTEST_END_MS: "1795527325576"
+          BACKTEST_DAYS: "30"
+          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD"
+        run: node scripts/backtest-experimental-2.mjs
+      - name: Upload comparison artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-vs-experimental-2-btc-eth-30d
+          path: |
+            engine/artifacts/futures-lifecycle-backtest.*
+            harness/artifacts/experimental-2-backtest.*
+          if-no-files-found: error
+          retention-days: 14
