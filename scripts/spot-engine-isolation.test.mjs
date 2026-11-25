@@ -10,13 +10,14 @@ test("Spot scanner is isolated from shared futures storage and scheduled futures
   assert.doesNotMatch(engine, /APP_KV|SIGNAL_DELIVERY|sendAndArchiveFuturesSignal|global:automatic-futures-scan-lock/);
   assert.match(engine, /روند بیت‌کوین تأیید صعودی نمی‌دهد/);
   assert.match(engine, /قدرت نسبی ارز نسبت به بیت‌کوین مثبت نیست/);
-  assert.match(source, /if \(action === "spot"\) return runSpotMarketScanForChat\(env, chatId\);/);
-  assert.match(source, /if \(action\.startsWith\("spotd:"\)\)/);
+  assert.match(source, /if \(action === "spot"\) return sendMessage\(env, chatId, "⚠️ قابلیت سیگنال اسپات غیرفعال شده است\."\);/);
+  assert.match(source, /if \(action\.startsWith\("spotd:"\)\) return sendMessage\(env, chatId, "⚠️ قابلیت سیگنال اسپات غیرفعال شده است\."\);/);
   assert.match(source, /const scan\s*=\s*await runSpotScan\(\)/);
   assert.match(engine, /export async function testSpotDataSources\(\)/);
   assert.match(engine, /coin\.percent_change_24h = assetChange24Pct/);
   assert.match(engine, /dataFailures\.length/);
   assert.match(source, /runSpotAssetDetail\(symbol, quote\)/);
+  assert.match(source, /if \(command === "\/scan"\)\s*\{\s*await runSpotMarketScanForChat\(env, chatId\);/);
   const spotStart = source.indexOf("async function runSpotMarketScanForChat");
   const spotEnd = source.indexOf("async function showStatus", spotStart);
   assert.ok(spotStart >= 0 && spotEnd > spotStart);
