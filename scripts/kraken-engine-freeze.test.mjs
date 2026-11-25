@@ -17,7 +17,7 @@ function fingerprint(value) {
 function extract(source, start, end) {
   const from = source.indexOf(start);
   assert.notEqual(from, -1, `Missing engine section: ${start}`);
-  const to = end === "\\n};"
+  const to = end === "\n};"
     ? source.indexOf(end, from) + end.length
     : source.indexOf(end, from);
   assert.ok(to > from, `Could not locate end of engine section: ${end}`);
@@ -27,7 +27,7 @@ function extract(source, start, end) {
 test("live Kraken engine configuration and signal logic remain unchanged", async () => {
   const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
   const frozen = [
-    [ "FUTURES_CONFIG", extract(source, "const FUTURES_CONFIG = {", "\\n};"), "fca782b0ea13c5a4" ],
+    [ "FUTURES_CONFIG", extract(source, "const FUTURES_CONFIG = {", "\n};"), "fca782b0ea13c5a4" ],
     [ "entry filters", extract(source, "function evaluateFuturesEntryFilters(", "function analyzeFuturesSymbol("), "7aa415766e056238" ],
     [ "signal analysis", extract(source, "function analyzeFuturesSymbol(", "function formatPrice("), "ccea59307f5d4a03" ],
     [ "Kraken scan pipeline", extract(source, "async function runFuturesSignalScan(", "async function runFuturesSignalsForChat("), "ceda8e6251d2bfe4" ]
