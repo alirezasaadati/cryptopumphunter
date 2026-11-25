@@ -315,6 +315,32 @@ test("mandatory BTC 4h alignment blocks LONG when BTC 4h is bearish",()=>{
   assert.match(result.rejected,/بیت‌کوین/);
 });
 
+test("staged 15m preflight is a superset of standard and high-risk eligible signals",()=>{
+  for(const side of ["LONG","SHORT"]){
+    const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup(side);
+    const options={requireBtcFourHourAlignment:true,btcFourHourTrend:side==="LONG"?"BULLISH":"BEARISH"};
+    const preflight=analyzeFuturesSymbol(ticker,oneHour,fourHour,[],{...options,skipEntryFilters:true});
+    const complete=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute,options);
+    assert.equal(complete.eligible,true,JSON.stringify(complete));
+    assert.ok(preflight.eligible===true||preflight.highRiskEligible===true,JSON.stringify(preflight));
+  }
+});
+
+test("staged 15m preflight preserves the high-risk candidate path",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const averageVolume=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
+  oneHour.at(-1).volume=averageVolume*0.6;
+  ticker.priceChangePercent=0;
+  ticker.quoteVolume=2_000_000;
+  const options={requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"};
+  const preflight=analyzeFuturesSymbol(ticker,oneHour,fourHour,[],{...options,skipEntryFilters:true});
+  const complete=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute,options);
+  assert.equal(complete.eligible,true,JSON.stringify(complete));
+  assert.equal(complete.riskLevel,"HIGH_RISK");
+  assert.equal(preflight.eligible,false);
+  assert.equal(preflight.highRiskEligible,true,JSON.stringify(preflight));
+});
+
 test("mandatory BTC and symbol 4h trends must both match the signal direction",()=>{
   const long=makeSetup("LONG");
   const longOk=analyzeFuturesSymbol(long.ticker,long.oneHour,long.fourHour,long.fifteenMinute,{
