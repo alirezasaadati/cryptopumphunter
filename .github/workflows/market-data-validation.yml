@@ -20,3 +20,5 @@ jobs:
         run: node --test scripts/market-data-coordinator.test.mjs
       - name: Staged preflight signal-equivalence tests
         run: node --test --test-name-pattern="staged 15m preflight" scripts/futures-engine.test.mjs
+
+# Validation-only workflow; it never deploys the Worker.
