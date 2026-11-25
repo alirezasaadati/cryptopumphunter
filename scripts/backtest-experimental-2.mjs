@@ -63,9 +63,9 @@ function portfolio(trades){
 async function run(symbol){
   const [raw15,raw5]=await Promise.all([candles(symbol,"15m"),candles(symbol,"5m")]);
   if(raw15.length<150||raw5.length<1000)throw new Error("not enough data: 15m="+raw15.length+" 5m="+raw5.length);
-  const bars=indicators(raw15),trades=[];let signalCount=0;
+  const bars=raw15,trades=[];let signalCount=0;
   for(let i=60;i<bars.length-1;i++){
-    const c=bars[i],p=bars[i-1],closeTime=c.time+INTERVAL["15m"];
+    const window=indicators(raw15.slice(Math.max(0,i-249),i+1)),c=window.at(-1),p=window.at(-2),closeTime=c.time+INTERVAL["15m"];
     if(closeTime<START||closeTime>=END)continue;
     const up=p.ema9<=p.ema21&&c.ema9>c.ema21,down=p.ema9>=p.ema21&&c.ema9<c.ema21;
     let side=null;if(up&&c.close>c.ema50&&c.rsi>=50&&c.rsi<=70)side="LONG";
