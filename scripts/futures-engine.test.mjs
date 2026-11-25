@@ -436,7 +436,7 @@ test("volume priority bonus tiers are 0, 5, and 10 without changing qualificatio
     const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
     const avg=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
     oneHour.at(-1).volume=avg*ratio;
-    ticker.quoteVolume=2_000_000;
+    ticker.quoteVolume=2_500_000;
     ticker.priceChangePercent=0;
     return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   };
@@ -541,7 +541,7 @@ test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=
   assert.match(result.rejected,/ماشه مومنتوم ۱۵ دقیقه‌ای/);
 });
 
-test("missing 15m pullback is rejected after a valid momentum trigger",()=>{
+test("15m filter rejects an overextended confirmation candle",()=>{
   const {ticker,oneHour}=makeSetup("LONG");
   const altered=makeCandles({count:120,slope:0.1,base:100}).map(c=>({...c,low:c.close-0.001}));
   const ema20=oneHour.slice(-20).reduce((a,c)=>a+c.close,0)/20;
@@ -552,5 +552,5 @@ test("missing 15m pullback is rejected after a valid momentum trigger",()=>{
   });
   assert.equal(result.ok,false);
   assert.equal(result.pullbackConfirmed,undefined);
-  assert.match(result.rejected,/پولبک به محدوده EMA21/);
+  assert.match(result.rejected,/کندل تأیید ۱۵ دقیقه‌ای بیش از حد کشیده شده است/);
 });
