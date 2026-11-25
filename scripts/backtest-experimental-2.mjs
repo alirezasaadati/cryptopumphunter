@@ -51,22 +51,22 @@ function lowerBound(a,t){let l=0,h=a.length;while(l<h){let m=(l+h)>>1;if(a[m].ti
 function portfolio(trades){
   const events=[];for(const t of trades){events.push({time:t.entryTime,type:0,t});if(t.closedAt)events.push({time:t.closedAt,type:1,t});}
   events.sort((a,b)=>a.time-b.time||b.type-a.type);
-  let free=INITIAL,used=0,realized=0,peak=INITIAL,dd=0,active=new Map(),accepted=0,skipped=0,maxOpen=0;
-  for(const e of events){const t=e.t;if(e.type===0){if(free<MARGIN){skipped++;continue;}free-=MARGIN;used+=MARGIN;active.set(t.id,t);accepted++;maxOpen=Math.max(maxOpen,active.size);}
+  let free=INITIAL,used=0,realized=0,peak=INITIAL,dd=0,active=new Map(),accepted=0,skipped=0,maxOpen=0;const acceptedIds=[],skippedIds=[];
+  for(const e of events){const t=e.t;if(e.type===0){if(free<MARGIN){skipped++;skippedIds.push(t.id);continue;}free-=MARGIN;used+=MARGIN;active.set(t.id,t);accepted++;acceptedIds.push(t.id);maxOpen=Math.max(maxOpen,active.size);}
     else if(active.has(t.id)){const pnl=MARGIN*t.marginReturnPct/100;free+=MARGIN+pnl;used-=MARGIN;realized+=pnl;active.delete(t.id);const eq=free+used;peak=Math.max(peak,eq);dd=Math.max(dd,peak-eq);}}
   let floating=0;for(const t of active.values())floating+=MARGIN*(t.markReturnPct||0)/100;
   return {initialCapitalUSD:INITIAL,marginPerTradeUSD:MARGIN,leverage:LEVERAGE,acceptedTrades:accepted,skippedForInsufficientFreeMargin:skipped,
     closedPositions:accepted-active.size,openPositionsAtEnd:active.size,realizedNetPnlUSD:+realized.toFixed(4),
     openPositionsMarkToMarketPnlUSD:+floating.toFixed(4),endingEquityUSD:+(free+used+floating).toFixed(4),
-    netReturnPct:+((free+used+floating)/INITIAL*100-100).toFixed(4),maxDrawdownFromRealizedEquityUSD:+dd.toFixed(4),maxConcurrentPositions:maxOpen};
+    netReturnPct:+((free+used+floating)/INITIAL*100-100).toFixed(4),maxDrawdownFromRealizedEquityUSD:+dd.toFixed(4),maxConcurrentPositions:maxOpen,acceptedTradeIds:acceptedIds,skippedTradeIds:skippedIds};
 }
 async function run(symbol){
   const [raw15,raw5]=await Promise.all([candles(symbol,"15m"),candles(symbol,"5m")]);
   if(raw15.length<150||raw5.length<1000)throw new Error("not enough data: 15m="+raw15.length+" 5m="+raw5.length);
-  const bars=indicators(raw15),trades=[];let busyUntil=0,signalCount=0;
+  const bars=indicators(raw15),trades=[];let signalCount=0;
   for(let i=60;i<bars.length-1;i++){
     const c=bars[i],p=bars[i-1],closeTime=c.time+INTERVAL["15m"];
-    if(closeTime<START||closeTime>=END||closeTime<=busyUntil)continue;
+    if(closeTime<START||closeTime>=END)continue;
     const up=p.ema9<=p.ema21&&c.ema9>c.ema21,down=p.ema9>=p.ema21&&c.ema9<c.ema21;
     let side=null;if(up&&c.close>c.ema50&&c.rsi>=50&&c.rsi<=70)side="LONG";
     else if(down&&c.close<c.ema50&&c.rsi>=30&&c.rsi<=50)side="SHORT";
@@ -85,7 +85,7 @@ async function run(symbol){
       }
     }
     if(!closed){t.status="OPEN_AT_END";t.mark=raw5.at(-1).close;t.markReturnPct=dir*((t.mark-entry)/entry)*100*LEVERAGE;}
-    trades.push(t);busyUntil=closed?t.closedAt:END;
+    trades.push(t);
   }
   return {symbol,candles15m:raw15.length,candles5m:raw5.length,signalCount,trades};
 }
@@ -93,20 +93,20 @@ async function main(){
   const symbols=String(process.env.BACKTEST_SYMBOLS||"PF_XBTUSD,PF_ETHUSD").split(",").filter(Boolean);
   const results=[];for(const s of symbols){try{results.push(await run(s));}catch(e){results.push({symbol:s,error:String(e)});}}
   const good=results.filter(x=>!x.error),trades=good.flatMap(x=>x.trades).sort((a,b)=>(a.closedAt||END+1)-(b.closedAt||END+1));
-  const closed=trades.filter(t=>t.status==="CLOSED"),wins=closed.filter(t=>t.marginReturnPct>0),stops=closed.filter(t=>t.closeReason==="STOP");
-  const portfolioResult=portfolio(trades);
+  const portfolioResult=portfolio(trades),executedIds=new Set(portfolioResult.acceptedTradeIds),executed=trades.filter(t=>executedIds.has(t.id));
+  const closed=executed.filter(t=>t.status==="CLOSED"),wins=closed.filter(t=>t.marginReturnPct>0),stops=closed.filter(t=>t.closeReason==="STOP");
   const report={name:"experimental-2",venue:"Kraken Futures public OHLC candles",period:{from:new Date(START).toISOString(),to:new Date(END).toISOString(),days:DAYS,warmupDays:15},
     rules:{timeframe:"15m",signals:"EMA9/EMA21 crossover; LONG close>EMA50 and RSI 50-70; SHORT close<EMA50 and RSI 30-50",
       stop:"1.5x ATR",target:"3.0x ATR (2R)",entry:"signal candle close",exitCandles:"5m OHLC, stop-first on same-candle ambiguity",
       leverage:LEVERAGE,marginPerTradeUSD:MARGIN,fees:"excluded",funding:"excluded",sameSymbolOverlap:"blocked until prior trade closes"},
-    portfolio:portfolioResult,metrics:{signals:good.reduce((n,x)=>n+x.signalCount,0),tradesStarted:trades.length,closedTrades:closed.length,
+    portfolio:portfolioResult,metrics:{signals:good.reduce((n,x)=>n+x.signalCount,0),tradesStarted:executed.length,closedTrades:closed.length,
       targetCloses:closed.filter(t=>t.closeReason==="TARGET").length,stopCloses:stops.length,losingStops:stops.filter(t=>t.marginReturnPct<0).length,
       positiveStopCloses:stops.filter(t=>t.marginReturnPct>0).length,netPositiveClosedTrades:wins.length,
       netNegativeClosedTrades:closed.filter(t=>t.marginReturnPct<0).length,winRatePct:closed.length?100*wins.length/closed.length:0,
-      totalMarginReturnPct:closed.reduce((n,t)=>n+t.marginReturnPct,0),openAtEnd:trades.length-closed.length},
-    bySymbol:good.map(x=>({symbol:x.symbol,signals:x.signalCount,trades:x.trades.length,closed:x.trades.filter(t=>t.status==="CLOSED").length,
-      wins:x.trades.filter(t=>t.status==="CLOSED"&&t.marginReturnPct>0).length,stops:x.trades.filter(t=>t.closeReason==="STOP").length,
-      netMarginReturnPct:x.trades.filter(t=>t.status==="CLOSED").reduce((n,t)=>n+t.marginReturnPct,0)})),
+      totalMarginReturnPct:closed.reduce((n,t)=>n+t.marginReturnPct,0),openAtEnd:executed.length-closed.length,skippedForInsufficientFreeMargin:portfolioResult.skippedForInsufficientFreeMargin},
+    bySymbol:good.map(x=>{const ts=x.trades.filter(t=>executedIds.has(t.id));return {symbol:x.symbol,signals:x.signalCount,trades:ts.length,closed:ts.filter(t=>t.status==="CLOSED").length,
+      wins:ts.filter(t=>t.status==="CLOSED"&&t.marginReturnPct>0).length,stops:ts.filter(t=>t.closeReason==="STOP").length,
+      netMarginReturnPct:ts.filter(t=>t.status==="CLOSED").reduce((n,t)=>n+t.marginReturnPct,0)};}),
     symbolErrors:results.filter(x=>x.error),trades};
   await mkdir("artifacts",{recursive:true});await writeFile("artifacts/experimental-2-backtest.json",JSON.stringify(report,null,2));
   await writeFile("artifacts/experimental-2-backtest.md",["# Experimental 2 backtest","",JSON.stringify({period:report.period,portfolio:report.portfolio,metrics:report.metrics,bySymbol:report.bySymbol,symbolErrors:report.symbolErrors},null,2)].join("\n"));
