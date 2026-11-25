@@ -88,87 +88,49 @@ function lowerBound(candles, time) {
   return lo;
 }
 function targetLevels(trade) {
-  const entry = Number(trade.entry), risk = Math.abs(entry - Number(trade.initialStop));
+  const entry = Number(trade.entry);
   const dir = trade.side === "LONG" ? 1 : -1;
-  return [1.5, 2.5, 3.5].map(r => entry + dir * risk * r);
+  // 30% gross return on $10 margin at 10x = 3% favorable underlying move.
+  return [entry * (1 + dir * 0.03)];
 }
 function candleAmbiguous(side, trade, candle) {
   const stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
-  const targets = targetLevels(trade);
+  const target = targetLevels(trade)[0];
   const stopHit = side === "LONG" ? candle.low <= stop : candle.high >= stop;
-  const hitTargets = targets.filter((t,i) => !(trade.tpHits || []).includes("TP"+(i+1)));
-  const profitHit = hitTargets.some(t => side === "LONG" ? candle.high >= t : candle.low <= t);
+  const targetHit = side === "LONG" ? candle.high >= target : candle.low <= target;
   const stopAtOpen = side === "LONG" ? candle.open <= stop : candle.open >= stop;
-  const profitAtOpen = hitTargets.some(t => side === "LONG" ? candle.open >= t : candle.open <= t);
-  return stopHit && profitHit && !stopAtOpen && !profitAtOpen;
+  const targetAtOpen = side === "LONG" ? candle.open >= target : candle.open <= target;
+  return stopHit && targetHit && !stopAtOpen && !targetAtOpen;
 }
 function evaluateStagedCandle(trade, candle) {
   if (trade.status !== "OPEN") return { changed: false };
-  const entry = Number(trade.entry), initialStop = Number(trade.initialStop);
-  const targets = targetLevels(trade), dir = trade.side === "LONG" ? 1 : -1;
+  const entry = Number(trade.entry), stop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
+  const target = targetLevels(trade)[0], dir = trade.side === "LONG" ? 1 : -1;
   const open = Number(candle.open), high = Number(candle.high), low = Number(candle.low);
-  const stop = Number(trade.currentStop ?? initialStop);
   const stopHit = trade.side === "LONG" ? low <= stop : high >= stop;
+  const targetHit = trade.side === "LONG" ? high >= target : low <= target;
   const stopAtOpen = trade.side === "LONG" ? open <= stop : open >= stop;
-  const risk = Math.abs(entry - initialStop);
-  let realized = Number(trade.realizedMarginReturnPct || 0);
-  let remaining = Number(trade.remainingFraction ?? 1);
-  const tpHits = Array.isArray(trade.tpHits) ? [...trade.tpHits] : [];
-  const pricePct = (exit) => dir * ((exit-entry)/entry) * 100 * LEVERAGE;
-  const closeStop = () => {
+  const targetAtOpen = trade.side === "LONG" ? open >= target : open <= target;
+  // If both stop and TP are touched in the same 5m candle, stop wins.
+  if (stopHit) {
     const exit = stopAtOpen ? open : stop;
-    realized += remaining * pricePct(exit);
-    remaining = 0;
-    return { changed: true, closed: true, reason: "CLOSED_STOP", trade: {
-      ...trade, status: "CLOSED_STOP", closeReason: "CLOSED_STOP", exitPrice: exit,
-      tpHits, remainingFraction: 0, realizedMarginReturnPct: realized,
-      marginReturnPercent: realized, closedAt: candle.time ?? new Date().toISOString(),
-      currentStop: stop, lockReleaseEligible: true
-    }};
-  };
-  // Conservative intrabar ordering: if the active stop and any still-open TP
-  // are both touched in one 5m candle, the stop wins for the remaining size.
-  if (stopHit) return closeStop();
-
-  let currentStop = stop, breakEvenActivated = trade.breakEvenActivated === true;
-  const oneR = entry + dir * risk;
-  const reachedOneR = trade.side === "LONG" ? high >= oneR : low <= oneR;
-  if (!breakEvenActivated && risk > 0 && reachedOneR) {
-    const feeBuffer = entry * 0.0012;
-    const beStop = entry + dir * feeBuffer;
-    if ((dir === 1 && beStop > currentStop) || (dir === -1 && beStop < currentStop)) {
-      currentStop = beStop;
-      breakEvenActivated = true;
-    }
-  }
-  for (let i=0;i<3;i++) {
-    const name = "TP"+(i+1);
-    if (tpHits.includes(name)) continue;
-    const target = targets[i];
-    const hit = trade.side === "LONG" ? high >= target : low <= target;
-    if (!hit) break;
-    const favorableGap = trade.side === "LONG" ? open >= target : open <= target;
-    const exit = favorableGap ? open : target;
-    const fraction = i < 2 ? 1/3 : remaining;
-    realized += fraction * pricePct(exit);
-    remaining = Math.max(0, remaining - fraction);
-    tpHits.push(name);
-  }
-  const closedAt = candle.time ?? new Date().toISOString();
-  if (remaining <= 1e-9) {
-    return { changed: true, closed: true, reason: "CLOSED_PROFIT", trade: {
-      ...trade, status: "CLOSED_PROFIT", closeReason: "CLOSED_PROFIT",
-      exitPrice: targets[2], tpHits, remainingFraction: 0,
-      realizedMarginReturnPct: realized, marginReturnPercent: realized,
-      closedAt, currentStop, breakEvenActivated, lockReleaseEligible: true
+    const pnl = dir * ((exit-entry)/entry) * 100 * LEVERAGE;
+    return { changed:true, closed:true, reason:"CLOSED_STOP", trade:{
+      ...trade,status:"CLOSED_STOP",closeReason:"CLOSED_STOP",exitPrice:exit,
+      tpHits:[],remainingFraction:0,realizedMarginReturnPct:pnl,marginReturnPercent:pnl,
+      closedAt:candle.time ?? new Date().toISOString(),currentStop:stop,lockReleaseEligible:true
     }};
   }
-  const changed = tpHits.length !== (trade.tpHits || []).length ||
-    currentStop !== stop || breakEvenActivated !== (trade.breakEvenActivated === true);
-  return { changed, stopMoved: currentStop !== stop, trade: {
-    ...trade, tpHits, remainingFraction: remaining, realizedMarginReturnPct: realized,
-    currentStop, breakEvenActivated
-  }};
+  if (targetHit) {
+    const exit = targetAtOpen ? open : target;
+    const pnl = dir * ((exit-entry)/entry) * 100 * LEVERAGE;
+    return { changed:true,closed:true,reason:"CLOSED_PROFIT",trade:{
+      ...trade,status:"CLOSED_PROFIT",closeReason:"CLOSED_PROFIT",exitPrice:exit,
+      tpHits:["TP30"],remainingFraction:0,realizedMarginReturnPct:pnl,marginReturnPercent:pnl,
+      closedAt:candle.time ?? new Date().toISOString(),currentStop:stop,lockReleaseEligible:true
+    }};
+  }
+  return { changed:false,trade };
 }
 function summarize(trades) {
   const closed = trades.filter(t => t.status === "CLOSED_PROFIT" || t.status === "CLOSED_STOP");
@@ -387,8 +349,8 @@ async function main() {
   const report = {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
-    rules:{leverage:LEVERAGE,targets:"TP1=1.5R, TP2=2.5R, TP3=3.5R; one-third of initial size at TP1 and TP2, remainder at TP3",
-      exit:"partial exits at each target; remaining size closes at active stop; automatic +1R break-even with 0.12% fee buffer",
+    rules:{leverage:LEVERAGE,targets:"single TP at +30% gross return on margin (3% favorable price move at 10x); no partial exits",
+      exit:"full position closes at +30% margin TP or initial stop, whichever occurs first; no break-even move",
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
@@ -405,7 +367,7 @@ async function main() {
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/futures-lifecycle-backtest.json",JSON.stringify(report,null,2));
   const rows = [
-    "# Futures staged TP1/TP2/TP3 historical backtest","",
+    "# Futures fixed +30% margin TP historical backtest","",
     "Period: "+report.period.from+" — "+report.period.to+" ("+DAYS+" days)",
     "Symbols tested: "+report.symbolsTested+"/"+SYMBOL_LIMIT,"",
     "| Metric | Result |","|---|---:|",
