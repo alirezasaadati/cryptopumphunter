@@ -2037,7 +2037,8 @@ function formatFuturesSignal(item, index = 1) {
   return `${label}\n\n` +
     `نماد: <b>${symbol}</b>\n\n` +
     `جهت معامله: ${sideLabel}\n\n` +
-    `قیمت ورود: <b>${formatSignalPrice(displayEntryPrice(item.entry, item.side))}</b>\n\n` +
+    `نقطه ورود یک: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
+    `نقطه ورود دو: <b>${formatSignalPrice(displayEntryPrice(item.entry, item.side))}</b>\n\n` +
     `🎯 تارگت اول (1.5R): <b>${formatSignalPrice(item.target1)}</b>\n\n` +
     `🎯 تارگت دوم (2.5R): <b>${formatSignalPrice(item.target2)}</b>\n\n` +
     `🎯 تارگت سوم (3.5R): <b>${formatSignalPrice(item.target3)}</b>\n\n` +
