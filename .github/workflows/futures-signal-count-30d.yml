@@ -1,0 +1,28 @@
+name: Isolated 30-day Futures signal count backtest
+on:
+  push:
+    branches:
+      - backtest/futures-signal-count-30d
+    paths:
+      - "scripts/backtest-futures-signal-count-30d.mjs"
+      - ".github/workflows/futures-signal-count-30d.yml"
+permissions:
+  contents: read
+jobs:
+  count-signals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Replay live signal engine on Kraken history
+        run: node scripts/backtest-futures-signal-count-30d.mjs
+      - name: Upload count report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-signal-count-30d
+          path: artifacts/
+          if-no-files-found: warn
