@@ -28,9 +28,12 @@ export function futuresAlertStorageKey(chatId, fingerprint) {
   return `futures-alert:v1:${String(chatId)}:${encodeURIComponent(fingerprint)}`;
 }
 
-export function displayEntryPrice(value) {
+export function displayEntryPrice(value, side) {
   const price = Number(value);
-  return Number.isFinite(price) ? price * 1.01 : NaN;
+  if (!Number.isFinite(price)) return NaN;
+  if (side === "LONG") return price * 0.99;
+  if (side === "SHORT") return price * 1.01;
+  return NaN;
 }
 
 export function formatFuturesSignalAlert(signal, index = 1) {
@@ -43,7 +46,7 @@ export function formatFuturesSignalAlert(signal, index = 1) {
   return `${label}\n\n${scoreLine}` +
     `نماد: <b>${escapeTelegramHtml(formatFuturesSymbol(signal?.symbol))}</b>\n\n` +
     `جهت معامله: ${side}\n\n` +
-    `قیمت ورود: <b>${formatSignalPrice(displayEntryPrice(signal?.entry))}</b>\n\n` +
+    `قیمت ورود: <b>${formatSignalPrice(displayEntryPrice(signal?.entry, signal?.side))}</b>\n\n` +
     `🎯 تارگت اول (1.5R): <b>${formatSignalPrice(signal?.target1)}</b>\n\n` +
     `🎯 تارگت دوم (2.5R): <b>${formatSignalPrice(signal?.target2)}</b>\n\n` +
     `🎯 تارگت سوم (3.5R): <b>${formatSignalPrice(signal?.target3)}</b>\n\n` +
