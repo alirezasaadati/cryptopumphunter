@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { saveIssuedSignal, updateIssuedSignal, listIssuedSignals } from "../src/signal-ledger.js";
 import { signalOutboxAction } from "../src/signal-outbox.js";
 import { createSerialExecutor } from "../src/serial-executor.js";
-import { SignalDeliveryCoordinator, sendAndArchiveFuturesSignal, deliverFuturesSignalAlerts } from "../src/index.js";
+import { SignalDeliveryCoordinator, sendAndArchiveFuturesSignal, deliverFuturesSignalAlerts, canManuallyConfirmOutboxDelivery } from "../src/index.js";
 
 const TEST_DELIVERY_SECRET = "unit-test-delivery-secret";
 
@@ -92,6 +92,15 @@ test("archive keeps closed outcomes and open signals independently queryable", a
   assert.equal(closed.status, "CLOSED_STOP");
   assert.deepEqual(closed.tpHits, ["TP1", "TP2"]);
   assert.equal(closed.outcomeR, 0.42);
+});
+
+test("manual confirmation is available for archive-pending records without triggering a resend", () => {
+  const signalPayload = signal("manual-archive-confirm");
+  for (const status of ["SENDING", "UNCERTAIN", "SENT", "ARCHIVE_PENDING"]) {
+    assert.equal(canManuallyConfirmOutboxDelivery({ status, signal: signalPayload }), true, status);
+  }
+  assert.equal(canManuallyConfirmOutboxDelivery({ status: "ARCHIVED", signal: signalPayload }), false);
+  assert.equal(canManuallyConfirmOutboxDelivery({ status: "ARCHIVE_PENDING" }), false);
 });
 
 test("outbox recovery policy distinguishes safe resume from ambiguous delivery", () => {
