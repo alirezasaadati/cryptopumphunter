@@ -1,0 +1,23 @@
+name: Validate manual Futures display entry
+on:
+  push:
+    branches:
+      - fix/manual-futures-display-entry
+    paths:
+      - "src/index.js"
+      - "src/futures-alerts.js"
+      - "scripts/futures-alerts.test.mjs"
+      - ".github/workflows/manual-display-validation.yml"
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check src/index.js
+      - run: node --test scripts/futures-alerts.test.mjs
+      - run: npx wrangler deploy --dry-run --outdir /tmp/worker-dry-run
