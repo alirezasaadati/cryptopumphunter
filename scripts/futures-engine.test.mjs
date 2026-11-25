@@ -438,7 +438,7 @@ test("volume priority bonus tiers are 0, 5, and 10 without changing qualificatio
     oneHour.at(-1).volume=avg*ratio;
     ticker.quoteVolume=2_500_000;
     ticker.priceChangePercent=0;
-    return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+    return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute,{skipEntryFilters:true});
   };
   const low=evaluate(0.75), medium=evaluate(0.9), high=evaluate(1.3);
   assert.equal(low.volumePriorityBonus,0);
