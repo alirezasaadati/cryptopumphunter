@@ -50,7 +50,7 @@ function normalizeCandles(rows, intervalMs, endMs) {
 }
 
 async function fetchCandles(symbol, resolution, fromMs, toMs, intervalMs) {
-  const chunkMs = intervalMs * 1800;
+  const chunkMs = Math.min(intervalMs * 1800, 200 * HOUR);
   const combined = [];
   for (let start = fromMs; start < toMs; start += chunkMs) {
     const end = Math.min(toMs, start + chunkMs);
