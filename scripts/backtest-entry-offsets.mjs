@@ -236,7 +236,7 @@ async function backtestSymbol(ticker, fromMs, toMs, btcFourHour) {
       if(!done){if(!trade.filled){trade.status="MISSED_EXPIRED";trade.missReason="limit entry not reached within 24h";}
         else{trade.status="OPEN_AT_BACKTEST_END";trade.lastMark=fiveMinute.at(-1)?.close??null;
           trade.marginReturnPercent=trade.lastMark?dir*((trade.lastMark-entry)/entry)*100*LEVERAGE:0;}}
-      if(trade.filled)locks[mode.id].set(lockKey,trade.closedAtMs||toMs);
+      locks[mode.id].set(lockKey,trade.closedAtMs||expiry);
       byMode[mode.id].push(trade);
     }
   }
