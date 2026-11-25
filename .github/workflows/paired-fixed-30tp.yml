@@ -1,0 +1,55 @@
+name: Paired Current vs Experimental 1 — Fixed 30% Margin TP
+on:
+  push:
+    branches:
+      - audit/current-vs-exp1-fixed30tp-20261125
+permissions:
+  contents: read
+jobs:
+  paired-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: current-production
+            engine_ref: maintenance/remove-spot-button-20261124
+          - label: experimental-1-flexible-high-risk
+            engine_ref: experiment/current-engine-comparison-20261124
+    steps:
+      - name: Checkout isolated backtest harness
+        uses: actions/checkout@v4
+        with:
+          ref: audit/current-vs-exp1-fixed30tp-20261125
+          path: harness
+      - name: Checkout engine under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.engine_ref }}
+          path: engine
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install engine dependencies
+        working-directory: engine
+        run: npm install
+      - name: Install fixed-TP harness
+        run: cp harness/scripts/backtest-futures-lifecycle.mjs engine/scripts/backtest-futures-lifecycle.mjs
+      - name: Run same 30-day backtest with fixed +30% margin TP
+        working-directory: engine
+        env:
+          BACKTEST_END_MS: "1795527325576"
+          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_NVDAXUSD,PF_XRPUSD,PF_NEARUSD,PF_ANTXUSD,PF_UNIUSD"
+          BACKTEST_LABEL: ${{ matrix.label }}
+        run: node scripts/backtest-futures-lifecycle.mjs
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixed30tp-${{ matrix.label }}
+          path: engine/artifacts/futures-lifecycle-backtest.*
+          if-no-files-found: error
+          retention-days: 14
