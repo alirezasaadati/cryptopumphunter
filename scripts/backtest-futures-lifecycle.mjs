@@ -344,8 +344,10 @@ async function main() {
   }
   const successful = results.filter(r=>!r.error);
   const allTrades = successful.flatMap(r=>r.trades).sort((a,b)=>(a.closedAtMs||Number.MAX_SAFE_INTEGER)-(b.closedAtMs||Number.MAX_SAFE_INTEGER));
-  const metrics = summarize(allTrades);
   const portfolio = simulatePortfolio(allTrades,100,10,endMs);
+  const skippedIds = new Set(portfolio.skippedTradeIds);
+  const executedTrades = allTrades.filter(t=>!skippedIds.has(t.id));
+  const metrics = summarize(executedTrades);
   const report = {
     generatedAt:new Date().toISOString(), venue:"Kraken Futures public historical OHLC candles",
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
@@ -359,10 +361,10 @@ async function main() {
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
     portfolio,metrics,eligibleSignalOpportunities:successful.reduce((n,r)=>n+r.signalsAccepted,0),
-    bySymbol:successful.map(({trades,...r})=>({...r,metrics:r.metrics})),
+    bySymbol:successful.map(({trades,...r})=>{const accepted=trades.filter(t=>!skippedIds.has(t.id));return {...r,metrics:summarize(accepted)};}),
     lockSkips:successful.reduce((n,r)=>n+r.skippedBySameSideLock,0),
     rejectedSignals:successful.reduce((n,r)=>n+r.rejectedSignals,0),
-    trades:allTrades
+    trades:executedTrades
   };
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/futures-lifecycle-backtest.json",JSON.stringify(report,null,2));
@@ -385,15 +387,15 @@ async function main() {
     "| Eligible signal opportunities | "+report.eligibleSignalOpportunities+" |",
     "| Trades started after same-side lock | "+metrics.tradesStarted+" |",
     "| Closed trades | "+metrics.closedTrades+" |",
-    "| Trades reaching TP3 | "+metrics.profitCloses+" |",
+    "| Trades reaching +30% margin TP | "+metrics.profitCloses+" |",
     "| Net profitable closed trades | "+metrics.netPositiveClosedTrades+" |",
     "| Net losing closed trades | "+metrics.netNegativeClosedTrades+" |",
-    "| Stop closes (including protected BE exits) | "+metrics.stopCloses+" |",
-    "| Positive stop exits after partial TP / BE | "+metrics.positiveStopCloses+" |",
+    "| Stop closes | "+metrics.stopCloses+" |",
+    "| Positive stop exits | "+metrics.positiveStopCloses+" |",
     "| Losing stop exits | "+metrics.losingStopCloses+" |",
     "| Open at end | "+metrics.openAtEnd+" |",
-    "| Open trades with TP1 / TP2 already hit | "+metrics.openTradesWithTP1+" / "+metrics.openTradesWithTP2+" |",
-    "| Partial TP realized on still-open trades (margin points) | "+metrics.openPartialRealizedMarginReturnPct.toFixed(2)+" |",
+    "| Open trades with +30% TP already hit | 0 |",
+    ,
     "| Remaining open PnL at final mark (margin points) | "+metrics.openRemainingUnrealizedMarginReturnPct.toFixed(2)+" |",
     "| Open positions total mark-to-market (margin points) | "+metrics.openCombinedMarkToMarketMarginReturnPct.toFixed(2)+" |",
     "| LONG / SHORT closed | "+metrics.longs+" / "+metrics.shorts+" |",
@@ -401,10 +403,10 @@ async function main() {
     "| SHORT net-positive rate (resolved only) | "+metrics.bySide.SHORT.winRatePct.toFixed(2)+"% |",
     "| LONG net margin return | "+metrics.bySide.LONG.netMarginReturnPct.toFixed(2)+"% |",
     "| SHORT net margin return | "+metrics.bySide.SHORT.netMarginReturnPct.toFixed(2)+"% |",
-    "| Automatic break-even moves | "+metrics.breakEvenMoves+" |",
-    "| TP1 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP1")).length+" |",
-    "| TP2 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP2")).length+" |",
-    "| TP3 hits | "+allTrades.filter(t=>(t.tpHits||[]).includes("TP3")).length+" |",
+    ,
+    "| +30% margin TP hits | "+executedTrades.filter(t=>(t.tpHits||[]).includes("TP30")).length+" |",
+    ,
+    ,
     "| Net-positive closed-trade rate | "+metrics.winRatePct.toFixed(2)+"% |",
     "| Sum margin return (not compounded) | "+metrics.totalMarginReturnPct.toFixed(2)+"% |",
     "| Average margin return / trade | "+metrics.averageMarginReturnPct.toFixed(2)+"% |",
