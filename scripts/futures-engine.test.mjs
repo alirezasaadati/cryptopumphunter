@@ -329,7 +329,7 @@ test("staged 15m preflight is a superset of standard and high-risk eligible sign
 test("staged 15m preflight preserves the high-risk candidate path",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const averageVolume=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
-  oneHour.at(-1).volume=averageVolume*0.6;
+  oneHour.at(-1).volume=averageVolume*0.8;
   ticker.priceChangePercent=0;
   ticker.quoteVolume=2_000_000;
   const options={requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"};
