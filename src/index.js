@@ -161,6 +161,11 @@ function mainMenuForChat(env, chatId) {
 export default {
   async scheduled(event, env, ctx) {
     env = withQuotaAwareKV(env);
+    console.log("AUTOMATIC_FUTURES_SCAN_TRIGGER", JSON.stringify({
+      cron: event?.cron || null,
+      scheduledTime: event?.scheduledTime || null,
+      receivedAt: new Date().toISOString()
+    }));
     ctx.waitUntil(runAutomaticFuturesAlertScan(env));
   },
 
@@ -1010,10 +1015,8 @@ async function handleReplyMenuAction(action, env, chatId, message) {
   if (action.startsWith("spotd:")) return sendMessage(env, chatId, "⚠️ قابلیت سیگنال اسپات غیرفعال شده است.");
   if (action === "issued_signals") return sendArchiveAccessLink(env, chatId);
   if (action === "capital_guide") {
-    await telegram("sendMessage", env, {
-      chat_id: chatId, text: CAPITAL_MANAGEMENT_TEXT, parse_mode: "HTML",
-      disable_web_page_preview: true, reply_markup: menuForChat(env, chatId)
-    });
+    // menuForChat() intentionally returns null; omit reply_markup entirely.
+    await sendMessage(env, chatId, CAPITAL_MANAGEMENT_TEXT, null, "HTML");
     return;
   }
   if (action === "status") return showStatus(env, chatId);

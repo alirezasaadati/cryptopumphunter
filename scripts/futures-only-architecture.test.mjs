@@ -23,7 +23,8 @@ test("bot exposes separate Kraken Spot and Futures signal engines", () => {
 
 test("manual and scheduled Futures alerts both use the same Futures scan", () => {
   assert.match(source, /const result = await runFuturesSignalScan\(env\);/);
-  assert.match(source, /async scheduled\(event, env, ctx\)\s*\{\s*env = withQuotaAwareKV\(env\);\s*ctx\.waitUntil\(runAutomaticFuturesAlertScan\(env\)\);/);
+  assert.match(source, /async scheduled\(event, env, ctx\)\s*\{\s*env = withQuotaAwareKV\(env\);\s*console\.log\("AUTOMATIC_FUTURES_SCAN_TRIGGER"/);
+  assert.match(source, /ctx\.waitUntil\(runAutomaticFuturesAlertScan\(env\)\);/);
 });
 
 test("the live Futures scan is routed through the Kraken Futures analyzer", () => {

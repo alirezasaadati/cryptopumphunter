@@ -7,7 +7,7 @@ SIGNAL_ARCHIVE_CHANNEL_ID = "-1004299421807"
 
 [[kv_namespaces]]
 binding = "APP_KV"
-id = "dab441cdffc0460faeb497cee6edd314"
+id = "d4c16773401b4c119d59f995142c1aa7"
 
 [triggers]
 crons = ["*/5 * * * *"]
