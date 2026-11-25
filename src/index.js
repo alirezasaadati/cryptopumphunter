@@ -2039,9 +2039,9 @@ function formatFuturesSignal(item, index = 1) {
     `جهت معامله: ${sideLabel}\n\n` +
     `نقطه ورود یک: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
     `نقطه ورود دو: <b>${formatSignalPrice(displayEntryPrice(item.entry, item.side))}</b>\n\n` +
-    `🎯 تارگت اول (1.5R): <b>${formatSignalPrice(item.target1)}</b>\n\n` +
-    `🎯 تارگت دوم (2.5R): <b>${formatSignalPrice(item.target2)}</b>\n\n` +
-    `🎯 تارگت سوم (3.5R): <b>${formatSignalPrice(item.target3)}</b>\n\n` +
+    `🎯 تارگت اول: <b>${formatSignalPrice(item.target1)}</b>\n\n` +
+    `🎯 تارگت دوم: <b>${formatSignalPrice(item.target2)}</b>\n\n` +
+    `🎯 تارگت سوم: <b>${formatSignalPrice(item.target3)}</b>\n\n` +
     `⛔ حد ضرر: <b>${formatSignalPrice(item.stop)}</b>`;
 }
 
@@ -2733,7 +2733,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
         (i+1)+") "+formatFuturesSymbol(s.symbol)+" | "+side,
         "امتیاز: "+fmt(s.score)+" از 100",
         "ورود: "+fmt(s.entry)+" | حد ضرر: "+fmt(s.stop),
-        "تارگت اول (1.5R): "+fmt(s.target1)+" | تارگت دوم (2.5R): "+fmt(s.target2)+" | تارگت سوم (3.5R): "+fmt(s.target3),
+        "تارگت اول: "+fmt(s.target1)+" | تارگت دوم: "+fmt(s.target2)+" | تارگت سوم: "+fmt(s.target3),
         "RSI: "+fmt(s.rsi)+" | نسبت حجم: "+fmt(s.volumeRatio)+" | تغییر ۲۴ساعته: "+fmt(s.change24h)+"٪",
         "حجم مظنه: "+fmt(s.quoteVolume)+" USD | فاندینگ: "+fmt(s.funding),
         "زمان ایجاد: "+createdText
