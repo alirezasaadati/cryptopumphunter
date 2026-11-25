@@ -23,7 +23,7 @@ test("main inline menu keeps the approved button order and row layout", () => {
     const isRouted = action === "members:0"
       ? callbackHandler.includes('action.startsWith("members:")')
       : action === "admin:signals"
-        ? callbackHandler.includes('action === "admin:signals"')
+        ? callbackHandler.includes('action==="admin:signals"') || callbackHandler.includes('action === "admin:signals"')
         : action === "outbox:review"
           ? callbackHandler.includes('action === "outbox:review"')
           : callbackHandler.includes(`action === "${action}"`);
