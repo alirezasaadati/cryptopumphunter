@@ -2366,7 +2366,7 @@ async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, rep
 
   try {
     const archiveResult = await publishSignalToArchive(env, signal, messageText, parseMode);
-    const archiveComplete = archiveResult?.published === true ||
+    const archiveComplete = archiveResult?.skipped === true || archiveResult?.published === true ||
       (archiveResult?.duplicate === true && archiveResult?.pending !== true);
     currentRecord = {
       ...currentRecord,
@@ -3501,7 +3501,7 @@ async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
     let archiveState;
     try {
       const result = await publishSignalToArchive(env, signal, messageText, "HTML");
-      const complete = result?.published === true ||
+      const complete = result?.skipped === true || result?.published === true ||
         (result?.duplicate === true && result?.pending !== true);
       archiveState = {
         status: complete ? "ARCHIVED" : "ARCHIVE_PENDING",
