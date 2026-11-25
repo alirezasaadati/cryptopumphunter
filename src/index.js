@@ -1,5 +1,5 @@
 import { runSpotScan, runSpotAssetDetail, testSpotDataSources } from "./spot-engine.js";
-import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, ALERT_TTL_SECONDS } from "./futures-alerts.js";
+import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, displayEntryPrice, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
 import { evaluateStagedTradeCandle } from "./futures-trade-lifecycle.js";
@@ -2036,7 +2036,7 @@ function formatFuturesSignal(item, index = 1) {
   return `${label}\n\n` +
     `نماد: <b>${symbol}</b>\n\n` +
     `جهت معامله: ${sideLabel}\n\n` +
-    `قیمت ورود: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
+    `قیمت ورود: <b>${formatSignalPrice(displayEntryPrice(item.entry))}</b>\n\n` +
     `🎯 تارگت اول (1.5R): <b>${formatSignalPrice(item.target1)}</b>\n\n` +
     `🎯 تارگت دوم (2.5R): <b>${formatSignalPrice(item.target2)}</b>\n\n` +
     `🎯 تارگت سوم (3.5R): <b>${formatSignalPrice(item.target3)}</b>\n\n` +
