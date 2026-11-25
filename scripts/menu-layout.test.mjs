@@ -37,18 +37,20 @@ test("reply menu keeps the approved Futures-only layout and is not reattached to
   assert.match(source, /replyMenuForChat\(env, chatId\)/);
 });
 
-test("capital guide callback sends a message without an invalid null reply_markup", () => {
-  const callbackStart = source.indexOf('if (action === "capital_guide") {');
-  const callbackEnd = source.indexOf('\n    }', callbackStart) + 6;
-  assert.ok(callbackStart >= 0 && callbackEnd > callbackStart);
-  const callback = source.slice(callbackStart, callbackEnd);
-  assert.match(callback, /telegram\("sendMessage", env, \{/);
-  assert.match(callback, /text: CAPITAL_MANAGEMENT_TEXT/);
-  assert.doesNotMatch(callback, /reply_markup/);
+test("capital guide callback and reply-menu action omit null reply_markup", () => {
+  const marker = 'if (action === "capital_guide") {';
+  const firstStart = source.indexOf(marker);
+  const secondStart = source.indexOf(marker, firstStart + marker.length);
+  assert.ok(firstStart >= 0 && secondStart > firstStart);
 
-  const replyStart = source.indexOf('if (action === "capital_guide") {', callbackEnd);
-  const replyEnd = source.indexOf('\n  }', replyStart) + 4;
-  assert.ok(replyStart >= 0 && replyEnd > replyStart);
-  const reply = source.slice(replyStart, replyEnd);
-  assert.match(reply, /sendMessage\(env, chatId, CAPITAL_MANAGEMENT_TEXT, null, "HTML"\)/);
+  const firstEnd = source.indexOf('\n    return;\n  }', firstStart) + '\n    return;\n  }'.length;
+  const first = source.slice(firstStart, firstEnd);
+  assert.match(first, /sendMessage\(env, chatId, CAPITAL_MANAGEMENT_TEXT, null, "HTML"\)/);
+  assert.doesNotMatch(first, /reply_markup/);
+
+  const secondEnd = source.indexOf('\n    }', secondStart) + 6;
+  const second = source.slice(secondStart, secondEnd);
+  assert.match(second, /telegram\("sendMessage", env, \{/);
+  assert.match(second, /text: CAPITAL_MANAGEMENT_TEXT/);
+  assert.doesNotMatch(second, /reply_markup/);
 });
