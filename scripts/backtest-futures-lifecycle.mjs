@@ -64,6 +64,24 @@ function historicalChange(candles, index) {
   const old = candles[index - 24], now = candles[index];
   return !old || old.close <= 0 ? 0 : ((now.close / old.close) - 1) * 100;
 }
+
+// Mirror the live engine's closed-candle BTC 4h trend gate for historical tests.
+function ema(values, period) {
+  if (values.length < period) return null;
+  const multiplier = 2 / (period + 1);
+  let value = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < values.length; i++) value = values[i] * multiplier + value * (1 - multiplier);
+  return value;
+}
+function historicalBtcFourHourTrend(candles) {
+  if (!Array.isArray(candles) || candles.length < FUTURES_CONFIG.MIN_CANDLES) return null;
+  const closes = candles.map(c => c.close), lastClose = closes[closes.length - 1];
+  const fast = ema(closes, 20), prevFast = ema(closes.slice(0, -1), 20), slow = ema(closes, 50);
+  if (![fast, prevFast, slow, lastClose].every(Number.isFinite)) return null;
+  if (fast > slow && lastClose > fast && fast >= prevFast) return "BULLISH";
+  if (fast < slow && lastClose < fast && fast <= prevFast) return "BEARISH";
+  return "NEUTRAL";
+}
 function lowerBound(candles, time) {
   let lo = 0, hi = candles.length;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (candles[mid].time < time) lo = mid + 1; else hi = mid; }
@@ -198,7 +216,7 @@ function summarize(trades) {
     bySide: { LONG: sideSummary("LONG"), SHORT: sideSummary("SHORT") }
   };
 }
-async function backtestSymbol(ticker, fromMs, toMs) {
+async function backtestSymbol(ticker, fromMs, toMs, btcFourHour) {
   const [oneHour,fourHour,fifteenMinute,fiveMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs),
     fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs),
@@ -211,7 +229,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
 
   const trades = [];
   const lockUntil = new Map();
-  let fourIndex = 0, fifteenIndex = 0;
+  let fourIndex = 0, fifteenIndex = 0, btcFourIndex = 0;
   let acceptedSignals = 0, skippedByLock = 0, rejectedSignals = 0;
   const testStart = toMs - DAYS * 86400000;
 
@@ -221,8 +239,12 @@ async function backtestSymbol(ticker, fromMs, toMs) {
     if (signalCloseTime < testStart || signalCloseTime >= toMs) continue;
     while (fourIndex < fourHour.length && fourHour[fourIndex].time + INTERVALS["4h"] <= signalCloseTime) fourIndex++;
     while (fifteenIndex < fifteenMinute.length && fifteenMinute[fifteenIndex].time + INTERVALS["15m"] <= signalCloseTime) fifteenIndex++;
+    while (btcFourIndex < btcFourHour.length && btcFourHour[btcFourIndex].time + INTERVALS["4h"] <= signalCloseTime) btcFourIndex++;
     const closed4h = fourHour.slice(0,fourIndex);
     const closed15m = fifteenMinute.slice(Math.max(0,fifteenIndex-120),fifteenIndex);
+    const closedBtc4h = btcFourHour.slice(0,btcFourIndex);
+    const btcFourHourTrend = historicalBtcFourHourTrend(closedBtc4h);
+    if (!btcFourHourTrend) { rejectedSignals++; continue; }
     if (closed4h.length < FUTURES_CONFIG.MIN_CANDLES || closed15m.length < 40) continue;
 
     const nextBar = oneHour[i+1];
@@ -231,7 +253,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       priceChangePercent: historicalChange(oneHour,i), premium: { lastFundingRate: null }
     };
     let candidate;
-    try { candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m); }
+    try { candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m,{btcFourHourTrend,requireBtcFourHourAlignment:true}); }
     catch { rejectedSignals++; continue; }
     if (!candidate || candidate.eligible !== true || !["LONG","SHORT"].includes(candidate.side)) { rejectedSignals++; continue; }
     acceptedSignals++;
@@ -351,9 +373,11 @@ async function main() {
     : eligibleTickers.sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found");
 
+  // One shared historical BTC 4h series, evaluated only on candles closed at each signal time.
+  const btcFourHour = await fetchHistoricalCandles("PF_XBTUSD","4h",fromMs,endMs);
   const results = [];
   for (const ticker of universe) {
-    try { results.push(await backtestSymbol(ticker,fromMs,endMs)); }
+    try { results.push(await backtestSymbol(ticker,fromMs,endMs,btcFourHour)); }
     catch (error) { results.push({symbol:ticker.symbol,error:String(error?.message||error)}); }
   }
   const successful = results.filter(r=>!r.error);
@@ -368,6 +392,7 @@ async function main() {
       candleResolution:"5m",sameCandleAmbiguity:"stop-first unless a gap at candle open proves one level was reached first",
       fees:"excluded by user-defined gross price-move × leverage model",funding:"excluded",
       execution:"signal generated from closed 1h/4h/15m candles; entry at next 1h open; exits evaluated on subsequent 5m OHLC",
+      btcFilter:"mandatory historical BTC 4h alignment; trend computed only from BTC 4h candles closed by each signal time",
       lock:"independent symbol+side lock until close; opposite side may overlap",
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies"},
     symbolsRequested:SYMBOL_LIMIT,symbolsTested:successful.length,symbolErrors:results.filter(r=>r.error),
