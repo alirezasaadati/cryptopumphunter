@@ -1,0 +1,43 @@
+name: Export Kraken Signal Engine snapshot
+on:
+  push:
+    branches:
+      - export/kraken-signal-engine-snapshot
+    paths:
+      - ".github/workflows/export-engine-snapshot.yml"
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact snapshot
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Package complete repository snapshot
+        run: |
+          cat > SNAPSHOT-INFO.txt <<'EOF'
+          Kraken Signal Engine — source snapshot
+          Source repository: alirezasaadati/cryptopumphunter
+          Source branch: main
+          Source commit: 593214bf7528e441a3d6b0e15e366891ebcc41c6
+          Snapshot generated from the exact main commit above.
+          
+          Includes application source, signal engines, configuration files,
+          Telegram message formatting and menus/buttons, tests, scripts,
+          and GitHub Actions workflows present in that commit.
+          
+          Secrets and live credentials are not included. Configure them
+          separately in the deployment environment. .env.example is included
+          only as a template.
+          EOF
+          zip -r /tmp/kraken-signal-engine-snapshot.zip . \
+            -x ".git/*" "node_modules/*" ".wrangler/*" ".dev.vars" ".env" ".env.*.local"
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: kraken-signal-engine-snapshot
+          path: /tmp/kraken-signal-engine-snapshot.zip
+          if-no-files-found: error
+          retention-days: 30
