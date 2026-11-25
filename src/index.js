@@ -2238,8 +2238,9 @@ async function publishSignalToArchive(env, signal, messageText, parseMode = "HTM
     channelId, signalId: String(signal.id), force: options.force === true
   });
   if (reservation?.duplicate) {
+    if (reservation.pending) return { published: false, duplicate: true, pending: true, messageId: null };
     if (reservation.uncertain) throw new Error("Archive delivery is uncertain; inspect the archive before retrying.");
-    return { published: false, duplicate: true, messageId: reservation.messageId ?? null };
+    return { published: false, duplicate: true, published: reservation.published === true, messageId: reservation.messageId ?? null };
   }
 
   let sent;
@@ -2277,7 +2278,7 @@ async function publishSignalToArchive(env, signal, messageText, parseMode = "HTM
   return { published: true, messageId };
 }
 
-async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, replyMarkup = null, parseMode = "HTML") {
+async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, replyMarkup = null, parseMode = "HTML", options = {}) {
   if (!signal?.id || !signal?.symbol || !["LONG", "SHORT"].includes(signal?.side)) {
     throw new Error("Signal is missing a valid id, symbol, or direction.");
   }
@@ -2359,14 +2360,22 @@ async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, rep
   let currentRecord = { ...record, ...sentRecord };
   await persistSignalOutboxMirror(env, chatId, signal.id, currentRecord, "SIGNAL_OUTBOX_SENT_MIRROR_FAILED");
 
+  if (options.archive === false) {
+    return { delivered: true, duplicate: false, archivePending: false, archiveDeferred: true };
+  }
+
   try {
     const archiveResult = await publishSignalToArchive(env, signal, messageText, parseMode);
+    const archiveComplete = archiveResult?.published === true ||
+      (archiveResult?.duplicate === true && archiveResult?.pending !== true);
     currentRecord = {
       ...currentRecord,
-      status: "ARCHIVED",
-      archivePublished: archiveResult?.published !== false || archiveResult?.duplicate === true,
+      status: archiveComplete ? "ARCHIVED" : "ARCHIVE_PENDING",
+      archivePublished: archiveComplete,
       archiveMessageId: archiveResult?.messageId ?? null,
-      archivedAt: new Date().toISOString(),
+      ...(archiveComplete ? { archivedAt: new Date().toISOString() } : {
+        archivePublishError: archiveResult?.pending ? "Archive publication is already in progress for this signal." : "Archive publication is pending."
+      }),
       updatedAt: new Date().toISOString()
     };
   } catch (error) {
@@ -2644,6 +2653,9 @@ export class SignalDeliveryCoordinator {
           const old=await this.ctx.storage.get(key);
           if(old?.status==="PUBLISHED"||old?.publishedAt||old?.messageId){
             return Response.json({ok:true,result:{duplicate:true,published:true,messageId:old.messageId??null}});
+          }
+          if(old?.status==="PUBLISHING"&&!payload.force){
+            return Response.json({ok:true,result:{duplicate:true,pending:true,messageId:null}});
           }
           if(old&&!payload.force){
             return Response.json({ok:true,result:{duplicate:true,uncertain:true,messageId:old.messageId??null}});
@@ -3468,17 +3480,60 @@ async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
   }
   const targets = [...recipients].filter(id => excludeChatId == null || String(id) !== String(excludeChatId));
   let delivered = 0, failed = 0;
-  await mapLimit(targets, 4, async chatId => {
-    for (let i = 0; i < signals.length; i++) {
+
+  // Process one signal at a time: private notifications fan out in parallel,
+  // while the public archive receives exactly one publish attempt per signal.
+  for (let i = 0; i < signals.length; i++) {
+    const signal = signals[i];
+    const messageText = formatFuturesSignalAlert(signal, i + 1);
+    const deliveredChats = [];
+    await mapLimit(targets, 4, async chatId => {
       try {
-        await sendAndArchiveFuturesSignal(env, chatId, signals[i], formatFuturesSignalAlert(signals[i], i + 1));
+        await sendAndArchiveFuturesSignal(env, chatId, signal, messageText, null, "HTML", { archive: false });
+        deliveredChats.push(String(chatId));
         delivered++;
       } catch (error) {
         failed++;
-        console.error("Immediate futures alert delivery failed", chatId, signals[i].symbol, String(error?.message || error));
+        console.error("Immediate futures alert delivery failed", chatId, signal.symbol, String(error?.message || error));
       }
+    });
+
+    let archiveState;
+    try {
+      const result = await publishSignalToArchive(env, signal, messageText, "HTML");
+      const complete = result?.published === true ||
+        (result?.duplicate === true && result?.pending !== true);
+      archiveState = {
+        status: complete ? "ARCHIVED" : "ARCHIVE_PENDING",
+        archivePublished: complete,
+        archiveMessageId: result?.messageId ?? null,
+        ...(complete ? { archivedAt: new Date().toISOString() } : {
+          archivePublishError: result?.pending ? "Archive publication is already in progress for this signal." : "Archive publication is pending."
+        })
+      };
+    } catch (error) {
+      archiveState = {
+        status: "ARCHIVE_PENDING",
+        archivePublished: false,
+        archivePublishError: String(error?.message || error).slice(0, 500)
+      };
+      console.error("Single archive publish failed; private deliveries remain successful:", signal.symbol, String(error?.message || error));
     }
-  });
+
+    await mapLimit(deliveredChats, 4, async chatId => {
+      const key = signalOutboxKey(chatId, signal.id);
+      const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
+      try {
+        const result = await signalDeliveryRequest(env, stub, "/deliver/complete", {
+          chatId, signalId: String(signal.id), ...archiveState, updatedAt: new Date().toISOString()
+        });
+        await persistSignalOutboxMirror(env, chatId, signal.id, result.record,
+          "SIGNAL_OUTBOX_ARCHIVE_STATE_MIRROR_FAILED");
+      } catch (error) {
+        console.error("Could not synchronize archive status to recipient outbox:", chatId, signal.symbol, String(error?.message || error));
+      }
+    });
+  }
   return { newSignals: signals.length, recipients: targets.length, delivered, failed };
 }
 
@@ -3517,7 +3572,7 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels, sendAndArchiveFuturesSignal, publishSignalToArchive };
+export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels, sendAndArchiveFuturesSignal, publishSignalToArchive, deliverFuturesSignalAlerts };
 // Experimental futures signal engine validation branch; Telegram and UI handlers remain from main.
 
 // Re-run the pinned comparison harness after switching to the current TP lifecycle.
