@@ -38,19 +38,8 @@ test("reply menu keeps the approved Futures-only layout and is not reattached to
 });
 
 test("capital guide callback and reply-menu action omit null reply_markup", () => {
-  const marker = 'if (action === "capital_guide") {';
-  const firstStart = source.indexOf(marker);
-  const secondStart = source.indexOf(marker, firstStart + marker.length);
-  assert.ok(firstStart >= 0 && secondStart > firstStart);
-
-  const firstEnd = source.indexOf('\n    return;\n  }', firstStart) + '\n    return;\n  }'.length;
-  const first = source.slice(firstStart, firstEnd);
-  assert.match(first, /sendMessage\(env, chatId, CAPITAL_MANAGEMENT_TEXT, null, "HTML"\)/);
-  assert.doesNotMatch(first, /reply_markup/);
-
-  const secondEnd = source.indexOf('\n    }', secondStart) + 6;
-  const second = source.slice(secondStart, secondEnd);
-  assert.match(second, /telegram\("sendMessage", env, \{/);
-  assert.match(second, /text: CAPITAL_MANAGEMENT_TEXT/);
-  assert.doesNotMatch(second, /reply_markup/);
+  const callbackBlock = /if \(action === "capital_guide"\) \{\s*\/\/ menuForChat\(\) intentionally returns null; omit reply_markup entirely\.\s*await sendMessage\(env, chatId, CAPITAL_MANAGEMENT_TEXT, null, "HTML"\);\s*return;\s*\}/;
+  const replyBlock = /if \(action === "capital_guide"\) \{\s*await telegram\("sendMessage", env, \{\s*chat_id: chatId,\s*text: CAPITAL_MANAGEMENT_TEXT,\s*parse_mode: "HTML",\s*disable_web_page_preview: true\s*\}\);\s*return;\s*\}/;
+  assert.match(source, callbackBlock);
+  assert.match(source, replyBlock);
 });
