@@ -223,7 +223,7 @@ async function backtestSymbol(ticker, fromMs, toMs, btcFourHour) {
           const targetBefore=candidate.side==="LONG"?high>=target:low<=target;
           const entryTouched=candidate.side==="LONG"?low<=entry:high>=entry;
           if(stopBefore){trade.status="MISSED_STOP_BEFORE_ENTRY";trade.missReason="original stop touched before limit entry";done=true;break;}
-          if(targetBefore&&!entryTouched){trade.status="MISSED_TARGET_BEFORE_ENTRY";trade.missReason="TP1 reached before limit entry";done=true;break;}
+          if(targetBefore){trade.status="MISSED_TARGET_BEFORE_ENTRY";trade.missReason=entryTouched?"TP1 and limit entry touched in same 5m candle; conservatively treated as target-before-entry":"TP1 reached before limit entry";done=true;break;}
           if(entryTouched){trade.filled=true;trade.status="OPEN";trade.entryTime=bar.time;} else continue;
         }
         const stopHit=candidate.side==="LONG"?low<=stop:high>=stop,targetHit=candidate.side==="LONG"?high>=target:low<=target;
@@ -324,7 +324,7 @@ async function main() {
     "Symbols: "+report.symbols.join(", "),"","| Mode | Filled | Closed | Missed | Stop before fill | TP1 before fill | Expired | Win rate | Stops | Net margin return |",
     "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...modes.map(m=>{const x=reports[m];return "| "+m+" | "+x.signalsFilled+" | "+x.closed+" | "+x.missed+" | "+x.missedStopBeforeEntry+" | "+x.missedTargetBeforeEntry+" | "+x.expiredWithoutFill+" | "+x.winRatePct.toFixed(2)+"% | "+x.stops+" | "+x.netMarginReturnPct.toFixed(2)+" |";}),
-    "","Method: same engine signal logic, 30-day window, base entry vs 1% and 1.2% adverse-direction limit entries (SHORT above / LONG below). Original absolute stop and TP1 unchanged. Limit valid 24h. Stop or TP1 before fill counts as missed. 5m same-candle ambiguity uses stop-first. Fees, funding and slippage excluded.",
+    "","Method: same engine signal logic, 30-day window, base entry vs 0.5%, 0.75%, 1% and 1.2% adverse-direction limit entries (SHORT above / LONG below). Original absolute stop and TP1 unchanged. Limit valid 24h. Stop or TP1 before fill counts as missed. 5m same-candle ambiguity uses stop-first. Fees, funding and slippage excluded.",
     "","Limitations: OHLC cannot reveal intrabar path; conservative stop-first ordering; current-volume universe creates survivorship bias."];
   await writeFile("artifacts/entry-offset-backtest.md",lines.join("\n"));
   console.log(JSON.stringify({period:report.period,symbols:report.symbols,symbolErrors:report.symbolErrors,reports},null,2));
