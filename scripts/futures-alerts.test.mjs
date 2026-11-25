@@ -73,7 +73,7 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   assert.match(short, /جهت معامله: 🔴 شورت \/ Short\n\nنقطه ورود یک:/);
   assert.match(short, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>65,650\.00<\/b>\n\n🎯 تارگت اول: <b>63,500\.00<\/b>/);
   assert.ok(short.includes("🎯 تارگت اول: <b>63,500.00</b>\n\n🎯 تارگت دوم: <b>62,800.00</b>\n\n🎯 تارگت سوم: <b>62,000.00</b>\n\n⛔ حد ضرر: <b>66,000.00</b>"));
-  assert.doesNotMatch(short, /\\b[1-9](?:\\.[0-9]+)?R\\b/);\n  assert.doesNotMatch(long, /\\b[1-9](?:\\.[0-9]+)?R\\b/);\n    assert.match(long, /^⚪ سیگنال معتبر/);
+  assert.doesNotMatch(short, /[0-9](?:\\.[0-9]+)?R/);\n  assert.doesNotMatch(long, /[0-9](?:\\.[0-9]+)?R/);\n  assert.match(long, /^⚪ سیگنال معتبر/);
   assert.match(long, /نماد: <b>ETH<\/b>/);
   assert.match(long, /جهت معامله: 🟢 لانگ \/ Long/);
   assert.match(long, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>64,025\.00<\/b>/);
