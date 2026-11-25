@@ -1,0 +1,54 @@
+name: Experimental High-Risk Controlled Scenarios
+
+on:
+  push:
+    branches:
+      - audit/futures-backtest-20261125
+
+permissions:
+  contents: read
+
+jobs:
+  scenarios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [baseline, no-longs, exclude-zec, score-80, confirm-15m]
+    steps:
+      - name: Check out isolated audit harness
+        uses: actions/checkout@v4
+        with:
+          ref: audit/futures-backtest-20261125
+          path: harness
+      - name: Check out experimental engine
+        uses: actions/checkout@v4
+        with:
+          ref: experiment/current-engine-comparison-20261124
+          path: engine
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install engine dependencies
+        working-directory: engine
+        run: npm install
+      - name: Install controlled-scenario harness
+        run: cp harness/scripts/backtest-futures-lifecycle-scenarios.mjs engine/scripts/backtest-futures-lifecycle-scenarios.mjs
+      - name: Run identical 30-day scenario
+        working-directory: engine
+        env:
+          BACKTEST_END_MS: "1795527325576"
+          LIFECYCLE_BACKTEST_DAYS: "30"
+          LIFECYCLE_BACKTEST_SYMBOLS: "10"
+          BACKTEST_SYMBOLS: "PF_XBTUSD,PF_ETHUSD,PF_SOLUSD,PF_HYPEUSD,PF_ZECUSD,PF_NVDAXUSD,PF_XRPUSD,PF_NEARUSD,PF_ANTXUSD,PF_UNIUSD"
+          BACKTEST_SCENARIO: ${{ matrix.scenario }}
+        run: node scripts/backtest-futures-lifecycle-scenarios.mjs
+      - name: Upload scenario result
+        uses: actions/upload-artifact@v4
+        with:
+          name: experimental-scenario-${{ matrix.scenario }}
+          path: engine/artifacts/futures-lifecycle-backtest.*
+          if-no-files-found: error
+          retention-days: 14
