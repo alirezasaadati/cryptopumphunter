@@ -4,7 +4,8 @@ import {
   futuresSignalFingerprint,
   selectUnnotifiedFuturesSignals,
   futuresAlertStorageKey,
-  formatFuturesSignalAlert
+  formatFuturesSignalAlert,
+  displayEntryPrice
 } from "../src/futures-alerts.js";
 
 const base = {
@@ -13,6 +14,12 @@ const base = {
   strategyId: "market_structure",
   candleTime: "2026-11-17T09:15:00.000Z"
 };
+
+test("display entry price is exactly 1% higher for either signal direction", () => {
+  assert.equal(displayEntryPrice(65000), 65650);
+  assert.equal(displayEntryPrice(0.5), 0.505);
+  assert.ok(Number.isNaN(displayEntryPrice(undefined)));
+});
 
 test("signal fingerprint is stable across repeated scans with different generated ids", () => {
   assert.equal(futuresSignalFingerprint({...base, id:"one"}), futuresSignalFingerprint({...base, id:"two"}));
@@ -67,6 +74,12 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   assert.match(long, /^⚪ سیگنال معتبر/);
   assert.match(long, /نماد: <b>ETH<\/b>/);
   assert.match(long, /جهت معامله: 🟢 لانگ \/ Long/);
+  const highRiskShort = formatFuturesSignalAlert({...signal, riskLevel:"HIGH_RISK"});
+  const highRiskLong = formatFuturesSignalAlert({...signal, side:"LONG", riskLevel:"HIGH_RISK"});
+  assert.match(highRiskShort, /^⚠️ سیگنال پر ریسک/);
+  assert.match(highRiskLong, /^⚠️ سیگنال پر ریسک/);
+  assert.match(highRiskShort, /قیمت ورود: <b>65,650\.00<\/b>/);
+  assert.match(highRiskLong, /قیمت ورود: <b>65,650\.00<\/b>/);
   const formerlyRisky = formatFuturesSignalAlert({...signal, tier:"EXPERIMENTAL"}, 3);
   assert.match(formerlyRisky, /^⚪ سیگنال معتبر/);
   assert.match(formerlyRisky, /⛔ حد ضرر:/);
