@@ -2766,6 +2766,10 @@ async function showRecentFuturesSignalReport(env,ownerId){
 
 function outboxSelectionKey(ownerId,token){return "admin:outbox-selection:"+ownerId+":"+token;}
 
+export function canManuallyConfirmOutboxDelivery(record){
+  return Boolean(record?.signal) && ["SENDING","UNCERTAIN","SENT","ARCHIVE_PENDING"].includes(record.status);
+}
+
 async function showUncertainSignalOutbox(env,ownerId){
   if(!isOwner(ownerId,env)||!env.APP_KV)return;
   const page=await env.APP_KV.list({prefix:"futures:signal-outbox:v1:",limit:1000});
@@ -2791,7 +2795,7 @@ async function showOutboxSignalDetail(env,ownerId,token){
   if(!record){await sendMessage(env,ownerId,"رکورد ارسال پیدا نشد.");return;}
   const hasPayload=Boolean(record.signal&&typeof record.messageText==="string");
   const keyboard=[];
-  if(["SENDING","UNCERTAIN"].includes(record.status))keyboard.push([{text:"✅ پیام را در تلگرام دیدم؛ ثبت‌شده محسوب شود",callback_data:"outbox:confirm:"+token}]);
+  if(canManuallyConfirmOutboxDelivery(record))keyboard.push([{text:"✅ پیام را در تلگرام دیدم؛ ثبت‌شده محسوب شود",callback_data:"outbox:confirm:"+token}]);
   if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ پیام را ندیدم؛ تلاش مجدد (احتمال تکرار)",callback_data:"outbox:retry:"+token}]);
   if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 تلاش مجدد انتشار در آرشیو (پس از بررسی کانال)",callback_data:"outbox:archive:"+token}]);
   keyboard.push([{text:"⬅️ بازگشت",callback_data:"outbox:review"}]);
@@ -2830,7 +2834,7 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
       await sendMessage(env, ownerId, "این سیگنال قبلاً به‌عنوان ارسال‌شده ثبت شده است.");
       return;
     }
-    if (!["SENDING", "UNCERTAIN", "SENT"].includes(record.status) || !record.signal) {
+    if (!canManuallyConfirmOutboxDelivery(record)) {
       await sendMessage(env, ownerId, "❌ این رکورد برای تأیید دستی اطلاعات کافی ندارد.");
       return;
     }
