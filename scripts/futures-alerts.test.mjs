@@ -70,7 +70,7 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   assert.match(short, /^⚪ سیگنال معتبر\n\n/);
   assert.match(short, /نماد: <b>BTC<\/b>/);
   assert.match(short, /جهت معامله: 🔴 شورت \/ Short/);
-  assert.match(short, /جهت معامله: 🔴 شورت \/ Short\n\nقیمت ورود:/);
+  assert.match(short, /جهت معامله: 🔴 شورت \/ Short\n\nنقطه ورود یک:/);
   assert.match(short, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>65,650\.00<\/b>\n\n🎯 تارگت اول \(1\.5R\): <b>63,500\.00<\/b>/);
   assert.ok(short.includes("🎯 تارگت اول (1.5R): <b>63,500.00</b>\n\n🎯 تارگت دوم (2.5R): <b>62,800.00</b>\n\n🎯 تارگت سوم (3.5R): <b>62,000.00</b>\n\n⛔ حد ضرر: <b>66,000.00</b>"));
   assert.match(short, /تارگت دوم \(2\.5R\)/);
