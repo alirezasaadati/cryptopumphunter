@@ -25,8 +25,8 @@ test("main inline menu keeps the approved button order and row layout", () => {
       : action === "admin:signals"
         ? callbackHandler.includes('action==="admin:signals"') || callbackHandler.includes('action === "admin:signals"')
         : action === "outbox:review"
-          ? callbackHandler.includes('action === "outbox:review"')
-          : callbackHandler.includes(`action === "${action}"`);
+          ? callbackHandler.includes('action==="outbox:review"') || callbackHandler.includes('action === "outbox:review"')
+          : callbackHandler.includes(`action === "${action}"`) || callbackHandler.includes(`action==="${action}"`);
     assert.ok(isRouted, `inline callback "${action}" must have a handler`);
   }
   assert.match(source, /\["⚠️ ارسال‌های نامشخص", "outbox:review"\]/);
