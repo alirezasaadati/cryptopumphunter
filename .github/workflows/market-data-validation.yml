@@ -22,3 +22,5 @@ jobs:
         run: node --test --test-name-pattern="staged 15m preflight" scripts/futures-engine.test.mjs
 
 # Validation-only workflow; it never deploys the Worker.
+
+# Updated validation fixture coverage.
