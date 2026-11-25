@@ -25,7 +25,7 @@ export function selectUnnotifiedFuturesSignals(signals, seenFingerprints = new S
 }
 
 export function futuresAlertStorageKey(chatId, fingerprint) {
-  return \`futures-alert:v1:\${String(chatId)}:\${encodeURIComponent(fingerprint)}\`;
+  return `futures-alert:v1:${String(chatId)}:${encodeURIComponent(fingerprint)}`;
 }
 
 export function displayEntryPrice(value, side) {
@@ -42,21 +42,21 @@ export function formatFuturesSignalAlert(signal, index = 1) {
     ? "⚠️ سیگنال پر ریسک"
     : "⚪ سیگنال معتبر";
   const score = Number(signal?.score);
-  const scoreLine = Number.isFinite(score) ? \`⭐ امتیاز سیگنال: <b>\${Math.round(score)}/100</b>\\n\\n\` : "";
-  return \`\${label}\\n\\n\${scoreLine}\` +
-    \`نماد: <b>\${escapeTelegramHtml(formatFuturesSymbol(signal?.symbol))}</b>\\n\\n\` +
-    \`جهت معامله: \${side}\\n\\n\` +
-    \`قیمت ورود: <b>\${formatSignalPrice(displayEntryPrice(signal?.entry, signal?.side))}</b>\\n\\n\` +
-    \`🎯 تارگت اول (1.5R): <b>\${formatSignalPrice(signal?.target1)}</b>\\n\\n\` +
-    \`🎯 تارگت دوم (2.5R): <b>\${formatSignalPrice(signal?.target2)}</b>\\n\\n\` +
-    \`🎯 تارگت سوم (3.5R): <b>\${formatSignalPrice(signal?.target3)}</b>\\n\\n\` +
-    \`⛔ حد ضرر: <b>\${formatSignalPrice(signal?.stop)}</b>\`;
+  const scoreLine = Number.isFinite(score) ? `⭐ امتیاز سیگنال: <b>${Math.round(score)}/100</b>\n\n` : "";
+  return `${label}\n\n${scoreLine}` +
+    `نماد: <b>${escapeTelegramHtml(formatFuturesSymbol(signal?.symbol))}</b>\n\n` +
+    `جهت معامله: ${side}\n\n` +
+    `قیمت ورود: <b>${formatSignalPrice(displayEntryPrice(signal?.entry, signal?.side))}</b>\n\n` +
+    `🎯 تارگت اول (1.5R): <b>${formatSignalPrice(signal?.target1)}</b>\n\n` +
+    `🎯 تارگت دوم (2.5R): <b>${formatSignalPrice(signal?.target2)}</b>\n\n` +
+    `🎯 تارگت سوم (3.5R): <b>${formatSignalPrice(signal?.target3)}</b>\n\n` +
+    `⛔ حد ضرر: <b>${formatSignalPrice(signal?.stop)}</b>`;
 }
 
 function formatFuturesSymbol(symbol) {
   const normalized = String(symbol || "—").trim().toUpperCase()
     .replace(/^PF_/, "")
-    .replace(/\\.P$/, "")
+    .replace(/\.P$/, "")
     .replace(/[-_/]?(?:USDT|USD)$/, "");
   if (normalized === "XBT") return "BTC";
   if (normalized === "NVDX") return "NVDA";
