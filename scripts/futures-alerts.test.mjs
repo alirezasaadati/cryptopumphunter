@@ -71,20 +71,20 @@ test("signal alert uses the approved HTML layout, bold prices, spacing and direc
   assert.match(short, /نماد: <b>BTC<\/b>/);
   assert.match(short, /جهت معامله: 🔴 شورت \/ Short/);
   assert.match(short, /جهت معامله: 🔴 شورت \/ Short\n\nقیمت ورود:/);
-  assert.match(short, /قیمت ورود: <b>65,650\.00<\/b>\n\n🎯 تارگت اول \(1\.5R\): <b>63,500\.00<\/b>/);
+  assert.match(short, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>65,650\.00<\/b>\n\n🎯 تارگت اول \(1\.5R\): <b>63,500\.00<\/b>/);
   assert.ok(short.includes("🎯 تارگت اول (1.5R): <b>63,500.00</b>\n\n🎯 تارگت دوم (2.5R): <b>62,800.00</b>\n\n🎯 تارگت سوم (3.5R): <b>62,000.00</b>\n\n⛔ حد ضرر: <b>66,000.00</b>"));
   assert.match(short, /تارگت دوم \(2\.5R\)/);
   assert.match(short, /تارگت سوم \(3\.5R\)/);
   assert.match(long, /^⚪ سیگنال معتبر/);
   assert.match(long, /نماد: <b>ETH<\/b>/);
   assert.match(long, /جهت معامله: 🟢 لانگ \/ Long/);
-  assert.match(long, /قیمت ورود: <b>64,025\.00<\/b>/);
+  assert.match(long, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>64,025\.00<\/b>/);
   const highRiskShort = formatFuturesSignalAlert({...signal, riskLevel:"HIGH_RISK"});
   const highRiskLong = formatFuturesSignalAlert({...signal, side:"LONG", riskLevel:"HIGH_RISK"});
   assert.match(highRiskShort, /^⚠️ سیگنال پر ریسک/);
   assert.match(highRiskLong, /^⚠️ سیگنال پر ریسک/);
-  assert.match(highRiskShort, /قیمت ورود: <b>65,650\.00<\/b>/);
-  assert.match(highRiskLong, /قیمت ورود: <b>64,025\.00<\/b>/);
+  assert.match(highRiskShort, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>65,650\.00<\/b>/);
+  assert.match(highRiskLong, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>64,025\.00<\/b>/);
   const formerlyRisky = formatFuturesSignalAlert({...signal, tier:"EXPERIMENTAL"}, 3);
   assert.match(formerlyRisky, /^⚪ سیگنال معتبر/);
   assert.match(formerlyRisky, /⛔ حد ضرر:/);
@@ -108,5 +108,5 @@ test("numeric candle timestamps in seconds and milliseconds produce the same ide
 
 test("manual Futures signal formatter passes direction into the display-only entry adjustment", async () => {
   const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
-  assert.match(source, /displayEntryPrice\(item\.entry,\s*item\.side\)/);
+  assert.match(source, /نقطه ورود یک: <b>\$\{formatSignalPrice\(item\.entry\)\}<\\/b>/);\n  assert.match(source, /نقطه ورود دو: <b>\$\{formatSignalPrice\(displayEntryPrice\(item\.entry, item\.side\)\)\}<\\/b>/);
 });
