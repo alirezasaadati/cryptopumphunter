@@ -331,7 +331,7 @@ test("staged 15m preflight preserves the high-risk candidate path",()=>{
   const averageVolume=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
   oneHour.at(-1).volume=averageVolume*0.8;
   ticker.priceChangePercent=0;
-  ticker.quoteVolume=2_000_000;
+  ticker.quoteVolume=3_000_000;
   const options={requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"};
   const preflight=analyzeFuturesSymbol(ticker,oneHour,fourHour,[],{...options,skipEntryFilters:true});
   const complete=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute,options);
