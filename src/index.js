@@ -344,9 +344,11 @@ async function fetchJson(url, label) {
 async function telegram(method, env, body) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN is not configured.");
 
-  // Keep channel/group posts protected; private bot chats allow screenshots.
-  const protectedBody = method === "sendMessage" && String(body.chat_id).startsWith("-")
-    ? { ...body, protect_content: true }
+  // Explicitly disable Telegram content protection in private chats so users can
+  // screenshot bot messages. Keep protection enabled for channel/group messages.
+  const chatId = body?.chat_id == null ? "" : String(body.chat_id);
+  const protectedBody = method === "sendMessage" && chatId
+    ? { ...body, protect_content: chatId.startsWith("-") }
     : body;
 
   const response = await fetch(
