@@ -2279,12 +2279,6 @@ async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, rep
     throw new Error("SIGNAL_DELIVERY Durable Object binding and authentication secret are required.");
   }
 
-  let cardPng = options.cardPng ?? null;
-  if (!cardPng && options.skipCardRender !== true) {
-    try { cardPng = renderSignalCardPng(signal); }
-    catch (renderError) { console.warn("Signal card rendering failed; recipient will receive text:", String(renderError?.message || renderError)); }
-  }
-
   const key = signalOutboxKey(chatId, signal.id);
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
   const reservation = await signalDeliveryRequest(env, stub, "/deliver/reserve", {
@@ -2292,6 +2286,12 @@ async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, rep
   });
   if (reservation?.duplicate) {
     return { delivered: true, duplicate: true, archivePending: reservation.archivePending === true };
+  }
+
+  let cardPng = options.cardPng ?? null;
+  if (!cardPng && options.skipCardRender !== true) {
+    try { cardPng = renderSignalCardPng(signal); }
+    catch (renderError) { console.warn("Signal card rendering failed; recipient will receive text:", String(renderError?.message || renderError)); }
   }
 
   const record = reservation.record;
