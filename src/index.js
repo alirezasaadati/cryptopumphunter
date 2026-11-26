@@ -515,7 +515,7 @@ async function sendArchiveAccessLink(env, userId) {
         catch(error){ console.error("Archive invite cache write failed:",String(error?.message||error)); }
       }
     }
-    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link);
+    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها of لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link);
   } catch(error) {
     console.error("Archive invite link failed:",String(error?.message||error));
     await sendMessage(env,userId,"⚠️ Could not create an archive invite link right now.");
@@ -608,7 +608,7 @@ async function requestMembership(env, chatId, message) {
         env,
         chatId,
         "⏳ درخواست عضویت شما قبلاً ثبت شده است.\n\n" +
-        "درخواست شما در انتظار بررسی است. You will be notified here once a decision is made."
+        "Your request is awaiting review. You will be notified here once a decision is made."
       );
       return;
     }
@@ -928,7 +928,7 @@ async function changeMemberAccess(env,ownerId,id,allow) {
   }
   if(!archiveResult?.ok) {
     await sendMessage(env,ownerId,
-      "⚠️ وضعیت دسترسی در ربات ذNoه شد، اما تغییر دسترسی کانال آرشیو ناموفق بود.\n"+
+      "⚠️ وضعیت دسترسی در ربات saved، اما تغییر دسترسی کانال آرشیو ناموفق بود.\n"+
       "Reason: "+String(archiveResult?.error||"Unknown error").slice(0,500));
   } else {
     await sendMessage(env,ownerId,allow
@@ -1042,7 +1042,7 @@ async function handleReplyMenuAction(action, env, chatId, message) {
   }
   if (action === "invite") {
     await sendMessage(env, chatId,
-      "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
+      "میتوانید of لینک زیر جهت ثبت نام در صرافی البانک\n" +
       "( برای بررسی دقیق علل PROFIT و LOSS هر کاربر ) اقدام کنید .\n\n" +
       "🔗 Link: https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
     return;
@@ -1281,7 +1281,7 @@ async function handleCallback(query, env) {
     }
     if (action === "invite") {
       await sendMessage(env, chatId,
-        "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
+        "میتوانید of لینک زیر جهت ثبت نام در صرافی البانک\n" +
         "( برای بررسی دقیق علل PROFIT و LOSS هر کاربر ) اقدام کنید .\n\n" +
         "🔗 Link: https://www.lbk.pub/ref/67XF8");
       return;
@@ -2726,7 +2726,7 @@ async function showOutboxSignalDetail(env,ownerId,token){
   if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ I did not see the message; retry (may create a duplicate)",callback_data:"outbox:retry:"+token}]);
   if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 Retry archive publication (after checking the channel)",callback_data:"outbox:archive:"+token}]);
   keyboard.push([{text:"⬅️ Back",callback_data:"outbox:review"}]);
-  const body=["🔍 جزئیات ارسال","━━━━━━━━━━━━━━━━━━","Symbol: "+(record.symbol||"—"),"Chat ID: "+record.chatId,"Signal ID: "+record.signalId,"Status: "+record.status,"Last updated: "+(record.updatedAt||"—"),"","If you can see the message in Telegram, select the delivered confirmation option.","تلاش مجدد فقط وقتی مناسب است که پیام را بررسی کرده باشی؛ در وضعیت Unknown احتمال ارسال تکراری وجود دارد."];
+  const body=["🔍 جزئیات ارسال","━━━━━━━━━━━━━━━━━━","Symbol: "+(record.symbol||"—"),"Chat ID: "+record.chatId,"Signal ID: "+record.signalId,"Status: "+record.status,"Last updated: "+(record.updatedAt||"—"),"","If you can see the message in Telegram, select the delivered confirmation option.","Retry only after checking the message. An uncertain delivery may already have been sent."];
   if(!hasPayload)body.push("⚠️ This is an older record and does not contain enough information for automatic recovery.");
   await sendMessage(env,ownerId,body.join("\n"),{inline_keyboard:keyboard});
 }
@@ -2959,15 +2959,15 @@ async function runAutomaticFuturesAlertScanInternal(env) {
       "Time: " + (diagnostics.finishedAt || new Date().toISOString()),
       "Symbols meeting volume requirements: " + (diagnostics.universeCount ?? "—"),
       "Symbols analyzed: " + (diagnostics.analyzedCount ?? "—"),
-      "نمادهای بررسی‌نشده به‌علت محدودیت Time: " + (diagnostics.notAnalyzedCount ?? "—"),
+      "Symbols not analyzed due to time limits: " + (diagnostics.notAnalyzedCount ?? "—"),
       "Fetch/analysis errors: " + (diagnostics.analysisErrorCount ?? "—"),
       "15M candle-fetch errors: " + (diagnostics.fifteenMinuteDataErrorCount ?? 0),
       "Rejected: " + (diagnostics.rejectedCount ?? "—"),
       "Eligible signals: " + (diagnostics.eligibleCount ?? "—"),
       "Registered: " + (diagnostics.registeredCount ?? "—"),
       "Unregistered candidates: " + (diagnostics.unregisteredCandidateCount ?? 0),
-      "رکوردهای ارسال Unknown: " + (diagnostics.uncertainOutboxCount ?? "—"),
-      "معاملات OPEN بدون بررسی کندل در ۲ ساعت اNo: " + (tracking.stuckCount ?? "—"),
+      "Uncertain delivery records: " + (diagnostics.uncertainOutboxCount ?? "—"),
+      "OPEN trades not candle-checked in the last 2 hours: " + (tracking.stuckCount ?? "—"),
       "Trade-monitor internal errors: " + (tracking.errors ?? 0),
       ...(tracking.errorDetails || []).map(x => "• Monitor " + (x.symbol || "") + " / " + (x.stage || "ERROR") + ": " + x.message),
       ...(tracking.stuckTrades || []).map(x => "⚠️ Stalled trade: " + x.symbol + " " + x.side + " | ID: " + x.tradeId + " | Last checked: " + (x.lastCheckedAt || "Unknown")),
@@ -3052,26 +3052,26 @@ async function runFuturesEntryDiagnostics(env) {
 
 function formatFuturesEntryDiagnostics(d) {
   const lines = [
-    "🧪 گزارش تشخیصی فقط‌خواندنی فیوچرز",
+    "🧪 READ-ONLY FUTURES DIAGNOSTICS",
     "━━━━━━━━━━━━━━━━━━",
-    "نمادهای واجد حجم در بازار: " + d.universeCount,
-    "نمادهای نمونه‌گیری و تحلیل‌شده: " + d.sampledCount,
+    "Symbols meeting market-volume requirements: " + d.universeCount,
+    "Symbols sampled and analyzed: " + d.sampledCount,
     "",
-    "نتیجه تحلیل موتور Kraken Futures 3.8.2:"
+    "Kraken Futures 3.8.2 engine analysis result:"
   ];
   for (const [stage, count] of Object.entries(d.stageCounts || {})) lines.push("• " + stage + ": " + count);
-  lines.push("", "جزئیات نمادها:");
+  lines.push("", "Symbol details:");
   for (const item of (d.samples || []).slice(0, 15)) {
     lines.push("• " + item.symbol + " | " + item.stage +
-      " | Score: " + (item.score ?? "—") + " | جهت: " + (item.side || "—"));
-    if (item.candleCounts) lines.push("  کندل‌ها: 1h=" + item.candleCounts["1h"] +
-      "، 4h=" + item.candleCounts["4h"] + "، 15m=" + item.candleCounts["15m"]);
+      " | Score: " + (item.score ?? "—") + " | Direction: " + (item.side || "—"));
+    if (item.candleCounts) lines.push("  Candles: 1h=" + item.candleCounts["1h"] +
+      "; 4h=" + item.candleCounts["4h"] + "، 15m=" + item.candleCounts["15m"]);
     if (item.entry != null) lines.push("  Entry: " + formatPrice(item.entry) +
-      " | استاپ: " + formatPrice(item.stop) +
-      " | اهداف: " + (item.targets || []).map(formatPrice).join(" / "));
+      " | Stop: " + formatPrice(item.stop) +
+      " | Targets: " + (item.targets || []).map(formatPrice).join(" / "));
     if (item.reason) lines.push("  Reason: " + item.reason);
   }
-  lines.push("", "⛔ این گزارش فقط‌خواندنی است؛ هیچ سیگنالی ثبت، ارسال یا معامله‌ای اجرا نشده است.");
+  lines.push("", "⛔ This report is read-only. No signal was registered or sent, and no trade was executed.");
   return lines.join("\n");
 }
 
@@ -3087,10 +3087,10 @@ async function runFuturesSignalScan(env, options = {}) {
       delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
       deliveryError: null,
       universeError: "Kraken returned no active PI/PF USD perpetuals above the configured 24h quote-volume threshold.",
-      topRejections: [{ reason: "هیچ نماد واجد حداقل حجم ۲۴ساعته پیدا نشد.", count: 1 }]
+      topRejections: [{ reason: "No symbol met the minimum 24-hour volume requirement.", count: 1 }]
     };
     console.error("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
-    return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [], diagnostics };
+    return { report: "⚠️ No Kraken perpetual contract met the required volume threshold.", signals: [], diagnostics };
   }
 
   const filteredUniverse = universe;
@@ -3102,7 +3102,7 @@ async function runFuturesSignalScan(env, options = {}) {
     btcMarketData.candles?.[FUTURES_CONFIG.CONFIRM_INTERVAL]
   );
   if (!btcFourHourTrend) {
-    throw new Error("روند ۴ساعته بیت‌کوین قابل محاسبه نیست؛ اسکن برای جلوگیری از صدور سیگنال بدون تأیید BTC متوقف شد.");
+    throw new Error("Bitcoin's 4H trend could not be calculated. The scan stopped to avoid issuing signals without BTC confirmation.");
   }
   console.log("BTC_4H_ALIGNMENT_CONTEXT", JSON.stringify({
     timestamp: new Date().toISOString(), btcFourHourTrend, required: true
@@ -3150,7 +3150,7 @@ async function runFuturesSignalScan(env, options = {}) {
       return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, analysisOptions);
     } catch (error) {
       analysisErrorCount++;
-      return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticType: "data_or_analysis_error" };
+      return { symbol: ticker.symbol, rejected: error?.message || "Analysis error", diagnosticType: "data_or_analysis_error" };
     }
   }, () => Date.now() < analysisDeadline);
 
@@ -3194,7 +3194,7 @@ async function runFuturesSignalScan(env, options = {}) {
     item.marketRegime = marketRegime;
     item.marketRegimeAdjustment = adjustment;
     item.priorityScore = Math.max(0, Math.min(125, Math.round(Number(item.priorityScore ?? item.score) + adjustment)));
-    if (adjustment) item.reasons = [...(item.reasons || []), "وضعیت کلی بازار: " + marketRegime + "؛ تغییر امتیاز اولویت " + (adjustment > 0 ? "+" : "") + adjustment];
+    if (adjustment) item.reasons = [...(item.reasons || []), "Overall market regime: " + marketRegime + "; priority score adjustment " + (adjustment > 0 ? "+" : "") + adjustment];
   }
 
   const eligibleCandidates = analyzed
@@ -3238,7 +3238,7 @@ async function runFuturesSignalScan(env, options = {}) {
   const rejectionCounts = new Map();
   for (const item of analyzed) {
     if (!item || item.eligible === true) continue;
-    const reason = String(item.rejected || "علت رد Unknown").slice(0, 180);
+    const reason = String(item.rejected || "Rejection reason unavailable").slice(0, 180);
     rejectionCounts.set(reason, (rejectionCounts.get(reason) || 0) + 1);
   }
   const finishedAt = new Date().toISOString();
@@ -3267,22 +3267,22 @@ async function runFuturesSignalScan(env, options = {}) {
     "━━━━━━━━━━━━━━━━━━\n" +
     "🏦 بازار: Kraken Derivatives Perpetual\n" +
     "⏱ تایم‌فریم: 1h با تأیید روند 4h و فیلتر ورود 15m\n" +
-    `📥 نمادهای بررسی‌شده: ${analyzedCount} از ${filteredUniverse.length} نماد واجد حداقل حجم ۲۴ساعته\n` +
-    `🟢 سیگنال‌های عادی: ${signals.filter(item => item.riskLevel !== "HIGH_RISK").length}\n` +
-    `⚠️ سیگنال‌های پر ریسک: ${signals.filter(item => item.riskLevel === "HIGH_RISK").length}\n\n` +
+    `📥 Symbols checked: ${analyzedCount} of ${filteredUniverse.length} نماد واجد حداقل حجم ۲۴ساعته\n` +
+    `🟢 Standard signals: ${signals.filter(item => item.riskLevel !== "HIGH_RISK").length}\n` +
+    `⚠️ High-risk signals: ${signals.filter(item => item.riskLevel === "HIGH_RISK").length}\n\n` +
     (signals.length
       ? signals.map((item, index) => formatFuturesSignal(item, index + 1)).join("\n━━━━━━━━━━━━━━━━━━\n\n")
       : "⚠️ در این بررسی سیگنالی به حداقل امتیاز و شرایط ورود نرسید.\n\n") +
-    `🕒 زمان گزارش: ${new Date().toISOString()}\n` +
+    `🕒 Report time: ${new Date().toISOString()}\n` +
     `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} seconds\n` +
     "📡 منبع داده: Kraken Derivatives Futures\n" +
-    "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و PROFIT تضمین نیست.";
+    "⚠️ Signals are analytical only. No real orders are placed, and profit is not guaranteed.";
   return { report, signals, experimentalSent: 0, analyzed, diagnostics };
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
   if (!(await isApproved(chatId, env))) {
-    await sendMessage(env, chatId, "⛔ دسترسی شما Connected نیست.");
+    await sendMessage(env, chatId, "⛔ Your access is not active.");
     return;
   }
 
@@ -3316,7 +3316,7 @@ async function runFuturesSignalsForChat(env, chatId) {
     }
     if (!acquire.acquired) {
       await sendMessage(env, chatId,
-        "⏳ در حال حاضر یک اسکن فیوچرز دیگر در حال اجراست؛ پس از پایان آن دوباره درخواست بده.",
+        "⏳ در حال حاضر یک اسکن فیوچرز دیگر در حال اجراست؛ پس of پایان آن دوباره درخواست بده.",
         menuForChat(env, chatId));
       return;
     }
@@ -3329,7 +3329,7 @@ async function runFuturesSignalsForChat(env, chatId) {
       "در صورت شناسایی فرصت معاملاتی معتبر، سیگنال نماد مربوطه به‌صورت خودکار در ربات منتشر خواهد شد.\n\n" +
       "━━━━━━━━━━━━━━━━━━\n" +
       "⏳ لطفاً برای ورود به بازار صبور باشید.\n\n" +
-      "⚡ <b>تریدیار | پایش هوشمند بازار</b>",
+      "⚡ <b>TRADEYAR | SMART MARKET MONITOR</b>",
       menuForChat(env, chatId),
       "HTML");
 
@@ -3339,16 +3339,16 @@ async function runFuturesSignalsForChat(env, chatId) {
       const d = result.diagnostics || {};
       await sendMessage(env, chatId,
         "📊 اسکن فیوچرز به پایان رسید؛ سیگنال معتبری پیدا نشد.\n\n" +
-        "نمادهای بررسی‌شده: " + (d.analyzedCount ?? "—") + "\n" +
+        "Symbols checked: " + (d.analyzedCount ?? "—") + "\n" +
         "Symbols meeting volume requirements: " + (d.universeCount ?? "—") + "\n" +
         "Rejected: " + (d.rejectedCount ?? "—") + "\n" +
         "Scan duration: " + (d.durationMs != null ? Math.round(d.durationMs / 1000) + " seconds" : "—") +
-        "\n\nبا تغییر شرایط بازار می‌توانی دوباره اسکن کنی.",
+        "\n\nYou can run another scan when market conditions change.",
         menuForChat(env, chatId));
       return;
     }
 
-    await sendMessage(env, chatId, "✅ اسکن تمام شد؛ " + signals.length + " سیگنال معتبر پیدا شد. در حال ارسال جزئیات...");
+    await sendMessage(env, chatId, "✅ Scan completed; " + signals.length + " valid signal(s) found. Sending details...");
     for (let i = 0; i < signals.length; i++) {
       const signal = signals[i];
       await sendAndArchiveFuturesSignal(env, chatId, signal, formatFuturesSignal(signal, i + 1));
@@ -3363,7 +3363,7 @@ async function runFuturesSignalsForChat(env, chatId) {
         console.error("Could not deliver futures scan diagnostic:", String(diagnosticError?.message || diagnosticError));
       }
     }
-    await sendMessage(env, chatId, "⚠️ اجرای اسکن فیوچرز با خطا مواجه شد؛ درخواست ثبت شد اما نتیجه‌ای تولید نشد. لطفاً بعداً دوباره تلاش کن.", menuForChat(env, chatId));
+    await sendMessage(env, chatId, "⚠️ The futures scan failed. Your request was received, but no result was generated. Please try again later.", menuForChat(env, chatId));
   } finally {
     if (lockAcquired && scanLockStub && scanLockToken) {
       try {
@@ -3484,7 +3484,7 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
         results[currentIndex] = await callback(items[currentIndex]);
       } catch (error) {
         results[currentIndex] = {
-          rejected: error.message || "خطای پردازش"
+          rejected: error.message || "Processing error"
         };
       }
     }
