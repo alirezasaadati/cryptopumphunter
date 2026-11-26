@@ -1,4 +1,5 @@
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, displayEntryPrice, ALERT_TTL_SECONDS } from "./futures-alerts.js";
+import { renderSignalCardPng } from "./signal-card.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
 import { evaluateStagedTradeCandle } from "./futures-trade-lifecycle.js";
@@ -128,69 +129,69 @@ export function withQuotaAwareKV(env) {
 }
 
 const ABOUT_TEXT =
-  "🤖 تریدیار | دستیار معامله‌گر فیوچرز\n\n" +
-  "طراحی و توسعه: علیرضا سعادتی\n\n" +
-  "© تمامی حقوق مادی و معنوی این ربات محفوظ است.\n\n" +
-  "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه از صاحب اثر مجاز نیست.";
+  "🤖 TRADEYAR | Futures Trading Assistant\n\n" +
+  "Designed & developed by Alireza Saadati\n\n" +
+  "© All rights reserved.\n\n" +
+  "Copying, redistribution, or reuse without permission is prohibited.";
 
 const CAPITAL_MANAGEMENT_TEXT =
-  "🚨 <b>نکات مهم مدیریت سرمایه</b> 🚨\n\n" +
-  "لطفاً پیش از ورود به هر سیگنال، این موارد را مطالعه کنید.\n\n\n" +
-  "<b>1️⃣ مدیریت سرمایه</b>\n\n\n" +
-  "🔹 در هر سیگنال حداکثر <b>۱٪ از کل سرمایه ولت</b> را به‌عنوان ریسک معامله در نظر بگیرید.\n\n\n" +
-  "🔹 از افزایش حجم بیش از این مقدار خودداری کنید.\n\n\n" +
-  "<b>2️⃣ مسئولیت ورود به معاملات</b>\n\n\n" +
-  "🔹 مسئولیت تصمیم‌گیری و ورود به سیگنال‌ها بر عهده شماست.\n\n\n" +
-  "🔹 هرگز با سرمایه موردنیاز زندگی وارد معاملات نشوید.\n\n\n" +
-  "🔹 در صورت نداشتن دانش و تجربه کافی، از ورود به معاملات خودداری کنید.\n\n\n" +
-  "🔹 هیچ سیگنالی قطعی یا بدون ریسک نیست؛ احتمال ضرر وجود دارد.\n\n\n" +
-  "<b>3️⃣ ورود پله‌ای به معامله</b>\n\n\n" +
-  "🔹 برای کاهش ریسک ورود در یک قیمت نامناسب، بهتر است سرمایه اختصاص‌یافته به هر معامله را بین دو نقطه ورود تقسیم کنید.\n\n\n" +
-  "🔹 برای مثال، اگر ۱۰ دلار سرمایه برای یک معامله با اهرم ۱۰ در نظر گرفته‌اید، ۵ دلار را در نقطه ورود اول و ۵ دلار باقی‌مانده را در نقطه ورود دوم وارد کنید. با این روش، تمام سرمایه در یک نقطه وارد بازار نمی‌شود و میانگین قیمت ورود می‌تواند بهبود پیدا کند.\n\n\n" +
-  "⚠️ ورود پله‌ای به معنی جلوگیری قطعی از ضرر نیست و با ورود مرحله دوم، حجم و میزان ریسک معامله افزایش پیدا می‌کند. بنابراین رعایت حد ضرر و مدیریت حجم معامله ضروری است.\n\n\n" +
-  "<b>4️⃣ اهرم و نحوه انجام معامله</b>\n\n\n" +
-  "🔹 از اهرم متناسب با ریسک و فاصله حد ضرر استفاده کنید.\n\n\n" +
-  "🔹 حالت <b>Isolated</b> و اهرم پایین‌تر معمولاً ریسک لیکویید شدن را کاهش می‌دهد.\n\n\n" +
-  "🔹 استفاده از اهرم ۱۰ به‌معنای جلوگیری از لیکویید شدن نیست ، حتما از حد ضرر تعیین شده در سیگنال صادر شده استفاده کنید\n\n\n" +
-  "<b>5️⃣ ورود بعد از تارگت اول</b>\n\n\n" +
-  "🔹 اگر قیمت به تارگت اول رسیده است، از ورود دیرهنگام به همان سیگنال خودداری کنید.\n\n\n" +
-  "<b>6️⃣ سیو سود و مدیریت حد ضرر</b>\n\n\n" +
-  "🔹 در تارگت‌ها بخشی از حجم معامله را ببندید و سود را ذخیره کنید.\n\n\n" +
-  "🔹 برای تارگت اول، می‌توانید بخش قابل‌توجهی از حجم را خارج کنید و باقی‌مانده را برای تارگت‌های بعدی نگه دارید.\n\n\n" +
-  "🔹 پس از حرکت قیمت در جهت معامله، حد ضرر را متناسب با شرایط به نقطه ورود یا محدوده‌ای محافظت‌شده منتقل کنید.\n\n\n" +
-  "🔹 میزان خروج در هر تارگت باید طوری تنظیم شود که مجموع حجم‌های بسته‌شده از ۱۰۰٪ بیشتر نشود.\n\n" +
-  "⚠️ <b>حفظ سرمایه مهم‌تر از کسب سود است.</b>\n" +
-  "هیچ‌گاه برای جبران ضرر، حجم معاملات را افزایش ندهید.";
+  "🚨 <b>RISK MANAGEMENT GUIDELINES</b> 🚨\n\n" +
+  "Please review these guidelines before entering any signal.\n\n\n" +
+  "<b>1️⃣ POSITION RISK</b>\n\n\n" +
+  "🔹 Risk no more than <b>1% of your total wallet balance</b> on any single trade.\n\n\n" +
+  "🔹 Do not increase position size beyond this risk limit.\n\n\n" +
+  "<b>2️⃣ TRADING RESPONSIBILITY</b>\n\n\n" +
+  "🔹 You are responsible for your own trading decisions and entries.\n\n\n" +
+  "🔹 Never trade with money needed for essential living expenses.\n\n\n" +
+  "🔹 Do not trade unless you understand the risks and have sufficient experience.\n\n\n" +
+  "🔹 No signal is guaranteed or risk-free. Losses are possible.\n\n\n" +
+  "<b>3️⃣ SCALED ENTRIES</b>\n\n\n" +
+  "🔹 To reduce single-price entry risk, consider splitting the amount allocated to a trade across two entry levels.\n\n\n" +
+  "🔹 For example, with $10 allocated to a trade at 10x leverage, you could enter $5 at the first level and $5 at the second. This avoids committing the full amount at one price and may improve the average entry.\n\n\n" +
+  "⚠️ Scaling in does not eliminate risk. A second entry increases total exposure, so stop-loss discipline and position sizing remain essential.\n\n\n" +
+  "<b>4️⃣ LEVERAGE & EXECUTION</b>\n\n\n" +
+  "🔹 Choose leverage appropriate to the trade risk and stop-loss distance.\n\n\n" +
+  "🔹 <b>Isolated</b> margin and lower leverage generally reduce liquidation risk.\n\n\n" +
+  "🔹 10x leverage does not prevent liquidation. Always respect the signal's stop-loss.\n\n\n" +
+  "<b>5️⃣ LATE ENTRIES</b>\n\n\n" +
+  "🔹 Do not enter a signal late after its first target has already been reached.\n\n\n" +
+  "<b>6️⃣ PROFIT & STOP MANAGEMENT</b>\n\n\n" +
+  "🔹 Consider taking partial profits at target levels.\n\n\n" +
+  "🔹 You may close a meaningful portion at TP1 and let the remainder run toward later targets.\n\n\n" +
+  "🔹 After favorable price movement, consider moving the stop to entry or another protected level.\n\n\n" +
+  "🔹 Ensure that the total closed position across all targets never exceeds 100%.\n\n" +
+  "⚠️ <b>Capital preservation comes before profit.</b>\n" +
+  "Never increase position size to recover a loss.";
 
 function mainMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 سیگنال فیوچرز", callback_data: "futures" }
+      { text: "📈 Futures Signals", callback_data: "futures" }
     ],
-    [{ text: "🛡️ راهنمای مدیریت سرمایه", callback_data: "capital_guide" }],
+    [{ text: "🛡️ Risk Management Guide", callback_data: "capital_guide" }],
     owner
       ? [
-          { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" },
-          { text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }
+          { text: "🗂 Signal Archive", callback_data: "issued_signals" },
+          { text: "📊 Recent Signal Report", callback_data: "admin:signals" }
         ]
       : [
-          { text: "🗂 سیگنال‌های صادرشده", callback_data: "issued_signals" },
-          { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
+          { text: "🗂 Signal Archive", callback_data: "issued_signals" },
+          { text: "🔍 User Trade Monitor", callback_data: "invite" }
         ],
     ...(owner ? [[
-      { text: "👥 مدیریت اعضا", callback_data: "members:0" },
-      { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
+      { text: "👥 Member Management", callback_data: "members:0" },
+      { text: "🔍 User Trade Monitor", callback_data: "invite" }
     ]] : []),
     [
-      { text: "📡 وضعیت ربات", callback_data: "status" },
-      { text: "🔌 تست اتصال", callback_data: "test" }
+      { text: "📡 Bot Status", callback_data: "status" },
+      { text: "🔌 Connection Test", callback_data: "test" }
     ],
     ...(owner ? [[
-      { text: "⚠️ ارسال‌های نامشخص", callback_data: "outbox:review" },
-      { text: "ℹ️ درباره", callback_data: "about" }
+      { text: "⚠️ Uncertain Deliveries", callback_data: "outbox:review" },
+      { text: "ℹ️ About", callback_data: "about" }
     ]] : [[
-      { text: "ℹ️ درباره", callback_data: "about" }
+      { text: "ℹ️ About", callback_data: "about" }
     ]])
   ];
   return { inline_keyboard: keyboard };
@@ -330,7 +331,7 @@ async function fetchJson(url, label) {
   try {
     data = JSON.parse(body);
   } catch {
-    throw new Error(`${label}: پاسخ JSON معتبر نیست؛ HTTP ${response.status}`);
+    throw new Error(`${label}: Invalid JSON response; HTTP ${response.status}`);
   }
 
   if (!response.ok) {
@@ -341,7 +342,7 @@ async function fetchJson(url, label) {
 }
 
 async function telegram(method, env, body) {
-  if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN تنظیم نشده است.");
+  if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN is not configured.");
 
   // Protect messages for regular users, while allowing the owner to copy
   // their own bot messages. Archive-channel posts remain protected.
@@ -381,6 +382,46 @@ async function sendMessage(env, chatId, text, replyMarkup = null, parseMode = nu
   if (parseMode) body.parse_mode = parseMode;
 
   return telegram("sendMessage", env, body);
+}
+
+async function telegramPhoto(env, chatId, photoBytes, caption = "PREMIUM SIGNALS • TRADEYAR", replyMarkup = null, protectContent = !isOwner(chatId, env)) {
+  if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN is not configured.");
+  const form = new FormData();
+  form.set("chat_id", String(chatId));
+  form.set("photo", new Blob([photoBytes], { type: "image/png" }), "tradeyar-signal.png");
+  if (caption) form.set("caption", caption);
+  if (replyMarkup) form.set("reply_markup", JSON.stringify(replyMarkup));
+  if (protectContent) form.set("protect_content", "true");
+
+  const response = await fetch(
+    `${TELEGRAM_API}/bot${(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)}/sendPhoto`,
+    { method: "POST", body: form }
+  );
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    const error = new Error(data.description || `Telegram HTTP ${response.status}`);
+    error.telegramStatus = response.status;
+    error.telegramRetryAfter = Number(data?.parameters?.retry_after) || 0;
+    throw error;
+  }
+  return data;
+}
+
+async function sendSignalCardOrText(env, chatId, signal, messageText, replyMarkup, parseMode, cardPng, options = {}) {
+  if (!cardPng) return sendMessage(env, chatId, messageText, replyMarkup, parseMode);
+  try {
+    return await telegramPhoto(
+      env, chatId, cardPng,
+      `PREMIUM SIGNALS • TRADEYAR • ${signal?.side || "SIGNAL"}`,
+      replyMarkup,
+      options.protectContent
+    );
+  } catch (error) {
+    const status = Number(error?.telegramStatus);
+    if (status !== 400 && status !== 413) throw error;
+    console.warn("Telegram rejected the signal image; falling back to the full text signal:", status);
+    return sendMessage(env, chatId, messageText, replyMarkup, parseMode);
+  }
 }
 
 async function sendCapitalManagementGuide(env, chatId) {
@@ -495,8 +536,8 @@ function archiveChannelId(env) {
 }
 async function sendArchiveAccessLink(env, userId) {
   const channelId = archiveChannelId(env);
-  if (!channelId) return sendMessage(env,userId,"⚠️ اتصال آرشیو هنوز کامل تنظیم نشده است.");
-  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ دسترسی شما به آرشیو فعال نیست.");
+  if (!channelId) return sendMessage(env,userId,"⚠️ Archive access has not been fully configured yet.");
+  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ You do not have archive access.");
   try {
     const key="signal-archive:join-request-link";
     let link=null;
@@ -515,10 +556,10 @@ async function sendArchiveAccessLink(env, userId) {
         catch(error){ console.error("Archive invite cache write failed:",String(error?.message||error)); }
       }
     }
-    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها از لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link);
+    await sendMessage(env,userId,"📚 Open the channel using the link below to view the signal archive.\nYour join request will be checked against your bot membership.\n\n"+link);
   } catch(error) {
     console.error("Archive invite link failed:",String(error?.message||error));
-    await sendMessage(env,userId,"⚠️ ساخت لینک ورود به آرشیو فعلاً ممکن نشد.");
+    await sendMessage(env,userId,"⚠️ Could not create an archive invite link right now.");
   }
 }
 async function handleArchiveJoinRequest(request,env) {
@@ -528,10 +569,10 @@ async function handleArchiveJoinRequest(request,env) {
   try {
     if(await isApproved(userId,env)){
       await telegram("approveChatJoinRequest",env,{chat_id:channelId,user_id:userId});
-      await sendMessage(env,userId,"✅ درخواست ورود به کانال آرشیو تأیید شد.");
+      await sendMessage(env,userId,"✅ Your request to join the archive channel has been approved.");
     } else {
       await telegram("declineChatJoinRequest",env,{chat_id:channelId,user_id:userId});
-      await sendMessage(env,userId,"⛔ فقط اعضای تأییدشده ربات می‌توانند وارد آرشیو شوند.");
+      await sendMessage(env,userId,"⛔ Only approved bot members can join the archive channel.");
     }
   } catch(error){console.error("Archive join request failed:",String(error?.message||error));}
   return true;
@@ -539,7 +580,7 @@ async function handleArchiveJoinRequest(request,env) {
 async function removeArchiveMember(env,userId) {
   const channelId=archiveChannelId(env);
   if(!channelId||!userId||isOwner(userId,env)) {
-    return {ok:false,error:"شناسه کانال آرشیو یا شناسه عضو معتبر نیست."};
+    return {ok:false,error:"The archive channel ID or member ID is invalid."};
   }
   try {
     await telegram("banChatMember",env,{chat_id:channelId,user_id:Number(userId),revoke_messages:false});
@@ -553,7 +594,7 @@ async function removeArchiveMember(env,userId) {
 async function restoreArchiveMemberEligibility(env,userId) {
   const channelId=archiveChannelId(env);
   if(!channelId||!userId||isOwner(userId,env)) {
-    return {ok:false,error:"شناسه کانال آرشیو یا شناسه عضو معتبر نیست."};
+    return {ok:false,error:"The archive channel ID or member ID is invalid."};
   }
   try {
     await telegram("unbanChatMember",env,{chat_id:channelId,user_id:Number(userId),only_if_banned:true});
@@ -575,7 +616,7 @@ async function requestMembership(env, chatId, message) {
     await sendMessage(
       env,
       chatId,
-      "⚠️ در حال حاضر امکان ثبت درخواست عضویت وجود ندارد.\nلطفاً بعداً دوباره تلاش کنید."
+      "⚠️ Membership requests are temporarily unavailable.\nPlease try again later."
     );
     return;
   }
@@ -591,12 +632,12 @@ async function requestMembership(env, chatId, message) {
       await sendMessage(
         env,
         chatId,
-        "⛔ دسترسی شما توسط مدیر لغو شده است.\nبرای فعال‌سازی مجدد باید مدیر دسترسی شما را دوباره مجاز کند."
+        "⛔ Your access has been revoked by the administrator.\nContact the administrator to request reactivation."
       );
       return;
     }
   } catch {
-    await sendMessage(env, chatId, "⚠️ بررسی وضعیت عضویت ناموفق بود. لطفاً بعداً تلاش کنید.");
+    await sendMessage(env, chatId, "⚠️ Could not verify your membership. Please try again later.");
     return;
   }
 
@@ -607,8 +648,8 @@ async function requestMembership(env, chatId, message) {
       await sendMessage(
         env,
         chatId,
-        "⏳ درخواست عضویت شما قبلاً ثبت شده است.\n\n" +
-        "درخواست شما در انتظار بررسی است. پس از تعیین نتیجه، از طریق همین ربات مطلع می‌شوید."
+        "⏳ Your membership request has already been submitted.\n\n" +
+        "Your request is awaiting review. You will be notified here once a decision is made."
       );
       return;
     }
@@ -633,30 +674,30 @@ async function requestMembership(env, chatId, message) {
     const displayName =
       [applicant.firstName, applicant.lastName]
         .filter(Boolean)
-        .join(" ") || "نام ثبت نشده";
+        .join(" ") || "Name not provided";
 
     const username = applicant.username
       ? `@${applicant.username}`
-      : "ندارد";
+      : "None";
 
     const adminText =
-      "🔔 درخواست عضویت جدید\n" +
+      "🔔 NEW MEMBERSHIP REQUEST\n" +
       "━━━━━━━━━━━━━━━━━━\n\n" +
-      `👤 نام: ${displayName}\n` +
-      `🔗 نام کاربری: ${username}\n` +
-      `🆔 شناسه کاربر: ${applicant.userId}\n` +
-      `🕒 زمان درخواست: ${applicant.requestedAt}\n\n` +
-      "برای تعیین وضعیت درخواست از دکمه‌های زیر استفاده کن.";
+      `👤 Name: ${displayName}\n` +
+      `🔗 Username: ${username}\n` +
+      `🆔 User ID: ${applicant.userId}\n` +
+      `🕒 Requested at: ${applicant.requestedAt}\n\n` +
+      "Use the buttons below to review this request.";
 
     const adminButtons = {
       inline_keyboard: [
         [
           {
-            text: "✅ تأیید عضویت",
+            text: "✅ Approve",
             callback_data: `approve:${chatId}`
           },
           {
-            text: "❌ رد درخواست",
+            text: "❌ Reject",
             callback_data: `reject:${chatId}`
           }
         ]
@@ -668,9 +709,9 @@ async function requestMembership(env, chatId, message) {
     await sendMessage(
       env,
       chatId,
-      "✅ درخواست عضویت شما با موفقیت ثبت شد.\n\n" +
-      "⏳ درخواست شما در انتظار بررسی است.\n" +
-      "پس از تعیین نتیجه، از طریق همین ربات مطلع می‌شوید."
+      "✅ Your membership request has been submitted.\n\n" +
+      "⏳ Your request is awaiting review.\n" +
+      "You will be notified here once a decision is made."
     );
   } catch (error) {
     try {
@@ -682,7 +723,7 @@ async function requestMembership(env, chatId, message) {
     await sendMessage(
       env,
       chatId,
-      "❌ ثبت درخواست با مشکل مواجه شد.\nلطفاً کمی بعد دوباره تلاش کنید."
+      "❌ Could not submit your request.\nPlease try again shortly."
     );
   }
 }
@@ -698,7 +739,7 @@ async function handleAdminMembershipCallback(query, env) {
     String(actorId) !== String(ownerId) ||
     String(chatId) !== String(ownerId)
   ) {
-    await answerCallback(env, query.id, "⛔ دسترسی غیرمجاز");
+    await answerCallback(env, query.id, "⛔ Unauthorized");
     return true;
   }
 
@@ -712,11 +753,11 @@ async function handleAdminMembershipCallback(query, env) {
   await answerCallback(
     env,
     query.id,
-    operation === "approve" ? "در حال تأیید..." : "در حال رد درخواست..."
+    operation === "approve" ? "Approving..." : "Rejecting..."
   );
 
   if (!env.APP_KV) {
-    await sendMessage(env, ownerId, "❌ اتصال KV در دسترس نیست.");
+    await sendMessage(env, ownerId, "❌ KV storage is unavailable.");
     return true;
   }
 
@@ -730,7 +771,7 @@ async function handleAdminMembershipCallback(query, env) {
       await sendMessage(
         env,
         ownerId,
-        "⚠️ درخواست پیدا نشد یا مهلت آن به پایان رسیده است."
+        "⚠️ Request not found or expired."
       );
       return true;
     }
@@ -753,17 +794,17 @@ async function handleAdminMembershipCallback(query, env) {
       await sendMessage(
         env,
         applicantId,
-        "🎉 به خانواده CRYPTO PUMP HUNTER خوش آمدید!\n\n" +
-        "✅ عضویت شما با موفقیت تأیید شد و دسترسی شما فعال است.\n\n" +
-        "🚀 از این لحظه می‌توانید از اسکن بازار اسپات و سیگنال‌های تحلیلی فیوچرز استفاده کنید.\n\n" +
-        "⚠️ سیگنال‌ها صرفاً تحلیلی هستند؛ قبل از هر معامله مدیریت ریسک را رعایت کنید."
+        "🎉 Welcome to CRYPTO PUMP HUNTER!\n\n" +
+        "✅ Your membership is approved and access is now active.\n\n" +
+        "🚀 You can now use spot-market scans and analytical futures signals.\n\n" +
+        "⚠️ Signals are for analysis only. Apply proper risk management before trading."
       );
       await showMenu(env, applicantId);
 
       await sendMessage(
         env,
         ownerId,
-        "✅ عضویت کاربر با موفقیت تأیید شد."
+        "✅ Member approved successfully."
       );
     } else {
       await env.APP_KV.delete(pendingKey(applicantId));
@@ -771,20 +812,20 @@ async function handleAdminMembershipCallback(query, env) {
       await sendMessage(
         env,
         applicantId,
-        "❌ درخواست عضویت شما تأیید نشد."
+        "❌ Your membership request was not approved."
       );
 
       await sendMessage(
         env,
         ownerId,
-        "❌ درخواست عضویت رد شد."
+        "❌ Membership request rejected."
       );
     }
   } catch (error) {
     await sendMessage(
       env,
       ownerId,
-      "❌ خطا در پردازش درخواست:\n" +
+      "❌ Error processing request:\n" +
       String(error.message || "Unknown error").slice(0, 500)
     );
   }
@@ -795,11 +836,11 @@ async function handleAdminMembershipCallback(query, env) {
 async function handleOwnerAccessCommand(command, chatId, env, message) {
   if (!["/allow", "/revoke", "/members", "/member"].includes(command)) return false;
   if (!isOwner(chatId, env)) {
-    await sendMessage(env, chatId, "⛔ این دستور فقط برای مدیر ربات فعال است.");
+    await sendMessage(env, chatId, "⛔ This command is available to the bot administrator only.");
     return true;
   }
   if (!env.APP_KV) {
-    await sendMessage(env, chatId, "❌ اتصال WATCHLIST_KV فعال نیست؛ ابتدا KV را به Worker متصل کن.");
+    await sendMessage(env, chatId, "❌ WATCHLIST_KV is not configured. Bind KV to the Worker first.");
     return true;
   }
 
@@ -811,7 +852,7 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
   if (command === "/member") {
     const targetId = (message?.text || "").trim().split(/\s+/)[1];
     if (!targetId || !/^-?\d+$/.test(targetId)) {
-      await sendMessage(env, chatId, "فرمت صحیح: /member 123456789");
+      await sendMessage(env, chatId, "Usage: /member 123456789");
     } else {
       await showMemberProfile(env, chatId, targetId);
     }
@@ -820,11 +861,11 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
 
   const targetId = (message?.text || "").trim().split(/\s+/)[1];
   if (!targetId || !/^-?\d+$/.test(targetId)) {
-    await sendMessage(env, chatId, `فرمت صحیح: ${command} 123456789`);
+    await sendMessage(env, chatId, `Usage: ${command} 123456789`);
     return true;
   }
   if (String(targetId) === String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
-    await sendMessage(env, chatId, "⚠️ دسترسی مدیر اصلی قابل لغو نیست.");
+    await sendMessage(env, chatId, "⚠️ The primary administrator's access cannot be revoked.");
     return true;
   }
 
@@ -837,21 +878,21 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
       await env.APP_KV.delete(pendingKey(targetId));
       await restoreArchiveMemberEligibility(env,targetId);
       await sendMessage(env, targetId,
-        "🎉 دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر فعال شد.\n\n" +
-        "خوش آمدید! اکنون می‌توانید از امکانات ربات استفاده کنید.");
+        "🎉 Your CRYPTO PUMP HUNTER access has been enabled by the administrator.\n\n" +
+        "Welcome! You can now use the bot.");
       await showMenu(env, targetId);
-      await sendMessage(env, chatId, `✅ کاربر ${targetId} مجاز شد و دسترسی او فعال است.`);
+      await sendMessage(env, chatId, `✅ User ${targetId} has been approved and access is active.`);
     } else {
       const member = { ...existing, chatId: String(targetId), approved: false, revoked: true,
         revokedAt: new Date().toISOString(), revokedBy: String(chatId) };
       await env.APP_KV.put(memberKey(targetId), JSON.stringify(member));
       await env.APP_KV.delete(pendingKey(targetId));
       await removeArchiveMember(env,targetId);
-      await sendMessage(env, targetId, "⛔ دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر لغو شد.");
-      await sendMessage(env, chatId, `🚫 دسترسی کاربر ${targetId} لغو شد.`);
+      await sendMessage(env, targetId, "⛔ Your CRYPTO PUMP HUNTER access has been revoked by the administrator.");
+      await sendMessage(env, chatId, `🚫 Access revoked for user ${targetId}.`);
     }
   } catch (error) {
-    await sendMessage(env, chatId, "❌ خطا در تغییر دسترسی: " + String(error.message || "KV error").slice(0, 500));
+    await sendMessage(env, chatId, "❌ Error changing access: " + String(error.message || "KV error").slice(0, 500));
   }
   return true;
 }
@@ -863,7 +904,7 @@ async function showMemberList(env, ownerId, page = 0) {
   const cursorKey = `admin:members:cursor:${ownerId}:${page}`;
   const cursor = page > 0 ? await env.APP_KV.get(cursorKey) : null;
   if (page > 0 && !cursor) {
-    await sendMessage(env, ownerId, "صفحه قبلی منقضی شده است؛ فهرست را دوباره باز کن.");
+    await sendMessage(env, ownerId, "The previous page has expired. Reopen the member list.");
     return;
   }
   const result = await env.APP_KV.list({ prefix: "member:", limit: 10, ...(cursor ? { cursor } : {}) });
@@ -874,66 +915,66 @@ async function showMemberList(env, ownerId, page = 0) {
     const m = await env.APP_KV.get(key.name, "json") || {};
     const blocked = m.revoked === true || m.approved === false;
     if (blocked) revoked++; else active++;
-    const name = [m.firstName, m.lastName].filter(Boolean).join(" ") || "بدون نام";
+    const name = [m.firstName, m.lastName].filter(Boolean).join(" ") || "No name";
     keyboard.push([{ text: `${blocked ? "🚫" : "✅"} ${name.slice(0,24)} | ${id}`, callback_data: `mprof:${id}` }]);
   }
   if (result.list_complete === false && result.cursor) {
     await env.APP_KV.put(`admin:members:cursor:${ownerId}:${page+1}`, result.cursor, { expirationTtl: 3600 });
-    keyboard.push([{ text: "صفحه بعدی ➡️", callback_data: `members:${page+1}` }]);
+    keyboard.push([{ text: "Next page ➡️", callback_data: `members:${page+1}` }]);
   }
-  if (page > 0) keyboard.push([{ text: "⬅️ صفحه قبل", callback_data: `members:${page-1}` }]);
-  keyboard.push([{ text: "🏠 منوی اصلی", callback_data: "menu" }]);
+  if (page > 0) keyboard.push([{ text: "⬅️ Previous page", callback_data: `members:${page-1}` }]);
+  keyboard.push([{ text: "🏠 Main Menu", callback_data: "menu" }]);
   await sendMessage(env, ownerId,
-    `👥 مدیریت اعضا | صفحه ${page+1}\n━━━━━━━━━━━━━━━━━━\nفعال در این صفحه: ${active}\nلغو دسترسی در این صفحه: ${revoked}\n\nبرای دیدن پروفایل و مدیریت دسترسی روی عضو بزن.`,
+    `👥 MEMBER MANAGEMENT | PAGE ${page+1}\n━━━━━━━━━━━━━━━━━━\nActive on this page: ${active}\nRevoked on this page: ${revoked}\n\nSelect a member to view their profile and manage access.`,
     { inline_keyboard: keyboard });
 }
 async function showMemberProfile(env, ownerId, id) {
   if (!isOwner(ownerId,env) || !env.APP_KV || !/^-?\d+$/.test(id)) return;
   const m=await env.APP_KV.get(memberKey(id),"json");
-  if(!m){await sendMessage(env,ownerId,"عضو پیدا نشد.");return;}
+  if(!m){await sendMessage(env,ownerId,"Member not found.");return;}
   const blocked=m.revoked===true||m.approved===false;
-  const name=[m.firstName,m.lastName].filter(Boolean).join(" ")||"ثبت نشده";
-  const body=["👤 پروفایل عضو","━━━━━━━━━━━━━━━━━━",`نام: ${name}`,`نام کاربری: ${m.username?"@"+m.username:"ثبت نشده"}`,`شناسه تلگرام: ${m.userId||id}`,`شناسه گفتگو: ${m.chatId||id}`,`وضعیت: ${blocked?"🚫 لغو دسترسی":"✅ مجاز"}`,`درخواست: ${m.requestedAt||"نامشخص"}`,`تأیید: ${m.approvedAt||"ثبت نشده"}`,`آخرین فعال‌سازی: ${m.allowedAt||"ثبت نشده"}`,`لغو دسترسی: ${m.revokedAt||"ثبت نشده"}`].join("\n");
-  await sendMessage(env,ownerId,body,{inline_keyboard:[[blocked?{text:"✅ اجازه دسترسی مجدد",callback_data:`mall:${id}`}:{text:"🚫 قطع دسترسی",callback_data:`mrev:${id}`}],[{text:"⬅️ بازگشت",callback_data:"members:"}]]});
+  const name=[m.firstName,m.lastName].filter(Boolean).join(" ")||"Not provided";
+  const body=["👤 MEMBER PROFILE","━━━━━━━━━━━━━━━━━━",`Name: ${name}`,`Username: ${m.username?"@"+m.username:"Not provided"}`,`Telegram ID: ${m.userId||id}`,`Chat ID: ${m.chatId||id}`,`Status: ${blocked?"🚫 Revoked":"✅ Active"}`,`Requested: ${m.requestedAt||"Unknown"}`,`Approved: ${m.approvedAt||"Not provided"}`,`Last enabled: ${m.allowedAt||"Not provided"}`,`Access revoked: ${m.revokedAt||"Not provided"}`].join("\n");
+  await sendMessage(env,ownerId,body,{inline_keyboard:[[blocked?{text:"✅ Restore Access",callback_data:`mall:${id}`}:{text:"🚫 Revoke Access",callback_data:`mrev:${id}`}],[{text:"⬅️ Back",callback_data:"members:"}]]});
 }
 async function changeMemberAccess(env,ownerId,id,allow) {
   if(!isOwner(ownerId,env)||!env.APP_KV||!/^-?\d+$/.test(id))return;
-  if(String(id)===String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))){await sendMessage(env,ownerId,"دسترسی مدیر اصلی قابل تغییر نیست.");return;}
+  if(String(id)===String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))){await sendMessage(env,ownerId,"The primary administrator's access cannot be changed.");return;}
   let m;
   try {
     m=await env.APP_KV.get(memberKey(id),"json");
   } catch(error) {
     const message=String(error?.message||error);
     console.error("Member access lookup failed:",message);
-    await sendMessage(env,ownerId,"❌ اطلاعات عضو از KV خوانده نشد؛ هیچ تغییری اعمال نشد.\nعلت: "+message.slice(0,500));
+    await sendMessage(env,ownerId,"❌ Could not read member data from KV. No changes were made.\nReason: "+message.slice(0,500));
     return;
   }
-  if(!m){await sendMessage(env,ownerId,"عضو پیدا نشد.");return;}
+  if(!m){await sendMessage(env,ownerId,"Member not found.");return;}
   const next=allow?{...m,approved:true,revoked:false,allowedAt:new Date().toISOString(),allowedBy:String(ownerId)}:{...m,approved:false,revoked:true,revokedAt:new Date().toISOString(),revokedBy:String(ownerId)};
   try {
     await env.APP_KV.put(memberKey(id),JSON.stringify(next));
   } catch(error) {
     const message=String(error?.message||error);
     console.error("Member access KV write failed:",message);
-    await sendMessage(env,ownerId,"❌ تغییر دسترسی ذخیره نشد؛ هیچ تغییری در وضعیت عضو تأیید نمی‌شود.\nعلت: "+message.slice(0,500));
+    await sendMessage(env,ownerId,"❌ Access change was not saved. The member's status remains unchanged.\nReason: "+message.slice(0,500));
     return;
   }
   const archiveResult=allow
     ? await restoreArchiveMemberEligibility(env,id)
     : await removeArchiveMember(env,id);
   try {
-    await sendMessage(env,id,allow?"🎉 دسترسی شما دوباره فعال شد.":"⛔ دسترسی شما توسط مدیر لغو شد.");
+    await sendMessage(env,id,allow?"🎉 Your access has been restored.":"⛔ Your access has been revoked by the administrator.");
   } catch(error) {
     console.warn("Member access notification failed:",String(error?.message||error));
   }
   if(!archiveResult?.ok) {
     await sendMessage(env,ownerId,
-      "⚠️ وضعیت دسترسی در ربات ذخیره شد، اما تغییر دسترسی کانال آرشیو ناموفق بود.\n"+
-      "علت: "+String(archiveResult?.error||"خطای نامشخص").slice(0,500));
+      "⚠️ Bot access was saved, but the archive-channel permission change failed.\n"+
+      "Reason: "+String(archiveResult?.error||"Unknown error").slice(0,500));
   } else {
     await sendMessage(env,ownerId,allow
-      ?"✅ دسترسی عضو در ربات فعال شد و محدودیت کانال آرشیو برداشته شد."
-      :"✅ دسترسی عضو در ربات لغو شد و عضویت او در کانال آرشیو مسدود شد.");
+      ?"✅ Member access enabled and archive-channel restriction removed."
+      :"✅ Member access revoked and archive-channel membership blocked.");
   }
   await showMemberProfile(env,ownerId,id);
 }
@@ -943,42 +984,42 @@ function replyMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 سیگنال فیوچرز" }
+      { text: "📈 Futures Signals" }
     ],
     [
-      { text: "🛡️ راهنمای مدیریت سرمایه" }
+      { text: "🛡️ Risk Management Guide" }
     ],
     owner
       ? [
-          { text: "🗂 سیگنال‌های صادرشده" },
-          { text: "📊 گزارش سیگنال‌های اخیر" }
+          { text: "🗂 Signal Archive" },
+          { text: "📊 Recent Signal Report" }
         ]
       : [
-          { text: "🗂 سیگنال‌های صادرشده" },
-          { text: "🔍 پایش معاملات کاربران" }
+          { text: "🗂 Signal Archive" },
+          { text: "🔍 User Trade Monitor" }
         ],
     ...(owner ? [[
-      { text: "👥 مدیریت اعضا" },
-      { text: "🔍 پایش معاملات کاربران" }
+      { text: "👥 Member Management" },
+      { text: "🔍 User Trade Monitor" }
     ]] : []),
     [
-      { text: "📡 وضعیت ربات" },
-      { text: "🔌 تست اتصال" }
+      { text: "📡 Bot Status" },
+      { text: "🔌 Connection Test" }
     ],
     owner
       ? [
-          { text: "⚠️ ارسال‌های نامشخص" },
-          { text: "ℹ️ درباره" }
+          { text: "⚠️ Uncertain Deliveries" },
+          { text: "ℹ️ About" }
         ]
       : [
-          { text: "ℹ️ درباره" }
+          { text: "ℹ️ About" }
         ]
   ];
   return {
     keyboard,
     resize_keyboard: true,
     one_time_keyboard: true,
-    input_field_placeholder: "یکی از گزینه‌های تریدیار را انتخاب کنید"
+    input_field_placeholder: "Choose a TRADEYAR option"
   };
 }
 
@@ -989,11 +1030,11 @@ function menuForChat(env, chatId) {
 }
 async function configureTelegramMenu(env, chatId) {
   const commands = [
-    { command: "start", description: "شروع و معرفی ربات" },
-    { command: "menu", description: "نمایش منوی اصلی" },
-    { command: "futures", description: "دریافت سیگنال‌های فیوچرز" },
-    { command: "status", description: "وضعیت سرویس" },
-    { command: "help", description: "راهنمای دستورات" }
+    { command: "start", description: "Start and introduction" },
+    { command: "menu", description: "Open the main menu" },
+    { command: "futures", description: "Get futures signals" },
+    { command: "status", description: "Service status" },
+    { command: "help", description: "Command guide" }
   ];
   const tasks = [
     telegram("setMyCommands", env, { commands }),
@@ -1013,7 +1054,7 @@ async function showMenu(env, chatId) {
   await sendMessage(
     env,
     chatId,
-    "📋 منوی اصلی تریدیار",
+    "📋 TRADEYAR MAIN MENU",
     replyMenuForChat(env, chatId)
   );
 }
@@ -1024,8 +1065,8 @@ async function showWelcome(env, chatId, welcome = true) {
     env,
     chatId,
     welcome
-      ? "🤖 خوش آمدید به تریدیار!\nبرای باز کردن منو، دکمه کیبورد کنار کادر پیام را بزنید."
-      : "منوی اصلی تریدیار:",
+      ? "🤖 Welcome to TRADEYAR!\nTap the keyboard button beside the message field to open the main menu."
+      : "TRADEYAR main menu:",
     replyMenuForChat(env, chatId)
   );
 }
@@ -1033,7 +1074,7 @@ async function showWelcome(env, chatId, welcome = true) {
 async function handleReplyMenuAction(action, env, chatId, message) {
   if (action.startsWith("members:") || action.startsWith("admin:") || action.startsWith("outbox:")) {
     if (!isOwner(chatId, env)) {
-      await sendMessage(env, chatId, "⛔ این گزینه فقط برای مالک ربات فعال است.", menuForChat(env, chatId));
+      await sendMessage(env, chatId, "⛔ This option is available to the bot owner only.", menuForChat(env, chatId));
       return;
     }
     if (action.startsWith("members:")) return showMemberList(env, chatId, Number(action.slice(8)) || 0);
@@ -1042,9 +1083,9 @@ async function handleReplyMenuAction(action, env, chatId, message) {
   }
   if (action === "invite") {
     await sendMessage(env, chatId,
-      "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
-      "( برای بررسی دقیق علل سود و زیان هر کاربر ) اقدام کنید .\n\n" +
-      "🔗 لینک : https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
+      "Register with LBank using the link below\n" +
+      "(for a detailed review of each user's profit and loss)\n\n" +
+      "🔗 Link: https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
     return;
   }
   if (action === "futures") return runFuturesSignalsForChat(env, chatId);
@@ -1065,11 +1106,11 @@ async function handleTelegramCommand(command, chatId, env, message) {
     const selectedMenuText = String(message?.text || "").trim();
     const menuActions = new Map([
       ...mainMenuForChat(env, chatId).inline_keyboard.flat().map(button => [button.text, button.callback_data]),
-      ["👥 مدیریت اعضا", "members:0"],
-      ["📊 گزارش سیگنال‌های اخیر", "admin:signals"],
-      ["⚠️ ارسال‌های نامشخص", "outbox:review"]
+      ["👥 Member Management", "members:0"],
+      ["📊 Recent Signal Report", "admin:signals"],
+      ["⚠️ Uncertain Deliveries", "outbox:review"]
     ]);
-    if (selectedMenuText === "📋 منو" || selectedMenuText === "منو" || selectedMenuText === "/menu") {
+    if (selectedMenuText === "📋 Main Menu" || selectedMenuText === "Main Menu" || selectedMenuText === "/menu") {
       if (await isApproved(chatId, env)) await showMenu(env, chatId);
       else await requestMembership(env, chatId, message);
       return;
@@ -1130,16 +1171,16 @@ async function handleTelegramCommand(command, chatId, env, message) {
       await sendMessage(
         env,
         chatId,
-        "📘 راهنمای تریدیار\n\n" +
-        "/start - معرفی و شروع\n" +
-        "/menu - نمایش منوی اصلی\n" +
-        "/futures - دریافت سیگنال‌های فیوچرز\n" +
-        "/diagfutures - گزارش تشخیصی فقط‌خواندنی (مالک)\n" +
-        "/close_trade <ID> - بستن دستی رکورد پایش (مالک؛ نه معامله صرافی)\n" +
-        "/scan - اسکن دستی بازار اسپات\n" +
-        "/status - وضعیت ربات\n" +
-        "/help - راهنما\n\n" +
-        "اسکن فقط با درخواست دستی شما اجرا می‌شود.",
+        "📘 TRADEYAR COMMAND GUIDE\n\n" +
+        "/start - Start the bot\n" +
+        "/menu - Open the main menu\n" +
+        "/futures - Get futures signals\n" +
+        "/diagfutures - Read-only diagnostic report (owner)\n" +
+        "/close_trade <ID> - Close an internal tracking record (owner; does not close an exchange position)\n" +
+        "/scan - Run a manual spot-market scan\n" +
+        "/status - Check bot status\n" +
+        "/help - Show this guide\n\n" +
+        "Scans run only when you request them manually.",
         menuForChat(env, chatId)
       );
       return;
@@ -1147,18 +1188,18 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     if (command === "/close_trade") {
       if (!isOwner(chatId, env)) {
-        await sendMessage(env, chatId, "⛔ این دستور فقط برای مالک ربات فعال است.");
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
         return;
       }
       const tradeId = String(message?.text || "").trim().split(/\s+/)[1] || "";
       if (!tradeId) {
-        await sendMessage(env, chatId, "شناسه معامله را وارد کن: /close_trade <ID>");
+        await sendMessage(env, chatId, "Enter a trade ID: /close_trade <ID>");
         return;
       }
       const openTrades = await getOpenFuturesTrades(env);
       const trade = openTrades.find(item => String(item.id) === tradeId);
       if (!trade) {
-        await sendMessage(env, chatId, "معامله OPEN با این شناسه پیدا نشد؛ هیچ تغییری انجام نشد.");
+        await sendMessage(env, chatId, "No OPEN trade was found with this ID. No changes were made.");
         return;
       }
       const exitPrice = Number(trade.lastPrice || trade.actualEntry || trade.plannedEntry);
@@ -1171,18 +1212,18 @@ async function handleTelegramCommand(command, chatId, env, message) {
         lastCheckedCandleTime: trade.lastCheckedCandleTime
       }]);
       await sendMessage(env, chatId,
-        "✅ رکورد پایش با موفقیت بسته شد و قفل نماد/جهت آزاد شد.\n" +
-        "قیمت مبنا: " + formatSignalPrice(exitPrice) + "\n" +
-        "⚠️ این دستور فقط رکورد داخلی ربات را می‌بندد؛ موقعیت واقعی صرافی را نمی‌بندد. بررسی و بستن موقعیت صرافی باید جداگانه انجام شود.");
+        "✅ Tracking record closed successfully and the symbol/direction lock was released.\n" +
+        "Reference price: " + formatSignalPrice(exitPrice) + "\n" +
+        "⚠️ This command closes only the bot's internal tracking record; it does not close an actual exchange position. Check and close the exchange position separately.");
       return;
     }
 
     if (command === "/diagfutures") {
       if (!isOwner(chatId, env)) {
-        await sendMessage(env, chatId, "⛔ این دستور فقط برای مالک ربات فعال است.");
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
         return;
       }
-      await sendMessage(env, chatId, "🧪 بررسی تشخیصی فقط‌خواندنی شروع شد؛ هیچ سیگنالی ثبت یا ارسال نمی‌شود.");
+      await sendMessage(env, chatId, "🧪 Read-only diagnostics started. No signals will be saved or sent.");
       const diagnostic = await runFuturesEntryDiagnostics(env);
       await sendLongMessage(env, chatId, formatFuturesEntryDiagnostics(diagnostic));
       return;
@@ -1199,7 +1240,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
     await sendMessage(
       env,
       chatId,
-      "برای استفاده از ربات، /start را بفرست.",
+      "Send /start to begin using the bot.",
       menuForChat(env, chatId)
     );
   } catch (error) {
@@ -1207,7 +1248,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
       await sendMessage(
         env,
         chatId,
-        "❌ خطا در اجرای دستور:\n" +
+        "❌ Command execution failed:\n" +
         String(error.message || "Unknown error").slice(0, 1000),
         menuForChat(env, chatId)
       );
@@ -1243,7 +1284,7 @@ async function handleCallback(query, env) {
       action.startsWith("members:") || action.startsWith("mprof:") ||
       action.startsWith("mrev:") || action.startsWith("mall:") || action.startsWith("outbox:") || action.startsWith("admin:")) {
     if (!isOwner(chatId,env) || String(query.from?.id)!==String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
-      await answerCallback(env,query.id,"⛔ دسترسی غیرمجاز"); return;
+      await answerCallback(env,query.id,"⛔ Unauthorized"); return;
     }
     if(action.startsWith("approve:")||action.startsWith("reject:")) {
       await handleAdminMembershipCallback(query,env);
@@ -1281,9 +1322,9 @@ async function handleCallback(query, env) {
     }
     if (action === "invite") {
       await sendMessage(env, chatId,
-        "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
-        "( برای بررسی دقیق علل سود و زیان هر کاربر ) اقدام کنید .\n\n" +
-        "🔗 لینک : https://www.lbk.pub/ref/67XF8");
+        "Register with LBank using the link below\n" +
+        "(for a detailed review of each user's profit and loss)\n\n" +
+        "🔗 Link: https://www.lbk.pub/ref/67XF8");
       return;
     }
     if (action === "futures") {
@@ -1315,14 +1356,14 @@ async function handleCallback(query, env) {
     await sendMessage(
       env,
       chatId,
-      "❌ خطا:\n" + String(error.message || "Unknown error").slice(0, 1000),
+      "❌ Error:\n" + String(error.message || "Unknown error").slice(0, 1000),
       menuForChat(env, chatId)
     );
   }
 }
 
 async function showStatus(env, chatId) {
-  let lastScan = "هنوز اسکن فیوچرز ذخیره‌شده‌ای وجود ندارد.";
+  let lastScan = "No saved futures scan is available yet.";
 
   if (env.APP_KV) {
     try {
@@ -1333,38 +1374,38 @@ async function showStatus(env, chatId) {
         }) + " UTC";
       }
     } catch {
-      lastScan = "خواندن اطلاعات اسکن قبلی ناموفق بود.";
+      lastScan = "Could not read the previous scan information.";
     }
   }
 
   await sendMessage(
     env,
     chatId,
-    `🟢 وضعیت ربات\n\n` +
-    `نسخه ربات:\n\u200FV${CONFIG.VERSION}\n` +
-    "حالت فعالیت:\n" +
-    "موتور سیگنالدهی کراکن\n" +
-    "اتصال KV:\n" +
-    `${env.APP_KV ? "فعال" : "غیرفعال"}\n` +
-    "آخرین اسکن فیوچرز:\n" +
+    `🟢 BOT STATUS\n\n` +
+    `Bot version:\n\u200FV${CONFIG.VERSION}\n` +
+    "Operating mode:\n" +
+    "Kraken Futures signal engine\n" +
+    "KV connection:\n" +
+    `${env.APP_KV ? "Connected" : "Disconnected"}\n` +
+    "Last futures scan:\n" +
     lastScan,
     menuForChat(env, chatId)
   );
 }
 
 async function showConnectionTest(env, chatId) {
-  await sendMessage(env, chatId, "🔌 در حال بررسی اتصال منابع داده...");
+  await sendMessage(env, chatId, "🔌 Checking data-source connections...");
   const result=await testDataSources();
   const lines=[
-    (result.krakenFutures?.ok?"✅":"❌")+" Kraken Futures: "+(result.krakenFutures?.ok?"متصل":"قطع"),
-    result.krakenFutures?.error?"خطای Futures: "+result.krakenFutures.error.slice(0,350):"",
-    "ورژن: V"+CONFIG.VERSION
+    (result.krakenFutures?.ok?"✅":"❌")+" Kraken Futures: "+(result.krakenFutures?.ok?"Connected":"Disconnected"),
+    result.krakenFutures?.error?"Futures error: "+result.krakenFutures.error.slice(0,350):"",
+    "Version: V"+CONFIG.VERSION
   ].filter(Boolean);
   await sendMessage(env,chatId,lines.join("\n"),menuForChat(env,chatId));
 }
 async function registerWebhook(request, env) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) {
-    return json({ ok: false, error: "BOT_TOKEN تنظیم نشده است." }, 400);
+    return json({ ok: false, error: "BOT_TOKEN is not configured." }, 400);
   }
 
   if (
@@ -1373,7 +1414,7 @@ async function registerWebhook(request, env) {
   ) {
     return json({
       ok: false,
-      error: "WEBHOOK_SECRET فقط باید شامل حروف انگلیسی، عدد، _ یا - باشد."
+      error: "WEBHOOK_SECRET may contain only English letters, numbers, _ or -."
     }, 400);
   }
 
@@ -1409,7 +1450,7 @@ async function testDataSources() {
     const tickers = await getKrakenFuturesUniverse();
     const candles = await getKrakenFuturesCandles(tickers[0].symbol, "1h");
     result.krakenFutures = { ok: candles.length > 0, symbols: tickers.length, sample: tickers[0].symbol, candles: candles.length,
-      error: candles.length ? undefined : "Kraken Futures کندل بسته‌شده برنگرداند." };
+      error: candles.length ? undefined : "Kraken Futures returned no closed candles." };
   } catch (error) { result.krakenFutures = { ok: false, error: error.message }; }
   return result;
 }
@@ -1507,7 +1548,7 @@ async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL)
     } catch (error) {
       lastError = error;
       if (attempt === maxAttempts) {
-        throw new Error(`${label}: خطای اتصال پس از ${attempt} تلاش: ${String(error?.message || error).slice(0, 180)}`);
+        throw new Error(`${label}: Connection failed after ${attempt} attempts: ${String(error?.message || error).slice(0, 180)}`);
       }
       await new Promise(resolve => setTimeout(resolve, 250 * attempt));
       continue;
@@ -1530,15 +1571,15 @@ async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL)
     try {
       data = JSON.parse(body);
     } catch {
-      throw new Error(`${label}: پاسخ موفق HTTP ${response.status}، اما JSON معتبر نیست.`);
+      throw new Error(`${label}: HTTP ${response.status} succeeded, but the response was not valid JSON.`);
     }
     if (data?.result === "error" || (Array.isArray(data?.errors) && data.errors.length)) {
-      throw new Error(`${label}: ${(data.errors || []).join(", ") || data.error || "خطای Kraken"}`);
+      throw new Error(`${label}: ${(data.errors || []).join(", ") || data.error || "Kraken error"}`);
     }
     return data;
   }
 
-  throw lastError || new Error(`${label}: درخواست ناموفق بود.`);
+  throw lastError || new Error(`${label}: Request failed.`);
 }
 
 function isKrakenPerpetualTicker(item) {
@@ -1555,7 +1596,7 @@ function isKrakenPerpetualTicker(item) {
 async function getKrakenFuturesUniverse() {
   const data = await krakenFuturesJson("/tickers", "Kraken Futures tickers");
   if (!Array.isArray(data?.tickers)) {
-    throw new Error("فهرست نمادهای Kraken Futures معتبر نیست.");
+    throw new Error("Kraken Futures returned an invalid symbol list.");
   }
   return data.tickers
     .filter(isKrakenPerpetualTicker)
@@ -1573,7 +1614,7 @@ async function getKrakenFuturesCandles(symbol, interval) {
   const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
     `Kraken ${symbol} ${interval}`, FUTURES_CONFIG.CHARTS_URL);
   if (!Array.isArray(data?.candles)) {
-    throw new Error(`ساختار کندل‌های Kraken برای ${symbol} معتبر نیست.`);
+    throw new Error(`Kraken returned an invalid candle structure for ${symbol}.`);
   }
   const candles = data.candles.map(row => ({
     time: Number(row.time) < 1e12 ? Number(row.time) * 1000 : Number(row.time),
@@ -1670,7 +1711,7 @@ async function getFuturesUniverse() {
 }
 
 async function getFuturesCandles(exchange, symbol, interval) {
-  if (exchange !== "Kraken") throw new Error(`منبع داده ناشناخته: ${exchange}`);
+  if (exchange !== "Kraken") throw new Error(`Unknown data source: ${exchange}`);
   return getKrakenFuturesCandles(symbol, interval);
 }
 
@@ -1784,29 +1825,29 @@ function calculateEntryTimingScore({ side, rsi: rsiValue, rsiSlope, emaDistanceA
 
 function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr, isHighRisk = false }) {
   const marketPrice = Number(ticker?.last);
-  if (!Number.isFinite(marketPrice) || marketPrice <= 0) return { ok: false, rejected: "قیمت لحظه‌ای بازار معتبر نیست" };
+  if (!Number.isFinite(marketPrice) || marketPrice <= 0) return { ok: false, rejected: "Live market price is invalid" };
   const maxDrift = isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT : FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT;
   const driftPct = Math.abs(marketPrice - referencePrice) / referencePrice * 100;
-  if (driftPct > maxDrift) return { ok: false, rejected: "فاصله قیمت لحظه‌ای تا قیمت تحلیلی بیش از حد مجاز است", driftPct };
+  if (driftPct > maxDrift) return { ok: false, rejected: "Live price is too far from the analytical reference", driftPct };
   const maxEmaDist = isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR : FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR;
   const emaDistanceAtr = Math.abs(marketPrice - ema20) / atr;
-  if (emaDistanceAtr > maxEmaDist) return { ok: false, rejected: "ورود دیرهنگام است؛ قیمت بیش از حد از EMA20 فاصله دارد", driftPct, emaDistanceAtr };
-  if (!Array.isArray(candles15m) || candles15m.length < 30) return { ok: false, rejected: "داده ۱۵ دقیقه‌ای برای تأیید نقطه ورود کافی نیست" };
+  if (emaDistanceAtr > maxEmaDist) return { ok: false, rejected: "Entry is too late; price is too far from EMA20", driftPct, emaDistanceAtr };
+  if (!Array.isArray(candles15m) || candles15m.length < 30) return { ok: false, rejected: "Insufficient 15-minute data to confirm the entry" };
   const closes15m = candles15m.map(c => c.close), ema9_15m = ema(closes15m, 9), ema21_15m = ema(closes15m, 21);
   const atr15m = calculateAtr(candles15m, 14), last15m = candles15m[candles15m.length - 1], prev15m = candles15m[candles15m.length - 2];
   const recentPullback = candles15m.slice(-10, -1);
-  if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) return { ok: false, rejected: "محاسبه اندیکاتورهای ۱۵ دقیقه‌ای نامعتبر است" };
+  if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) return { ok: false, rejected: "15-minute indicator calculation is invalid" };
   const momentumConfirmed = side === "LONG"
     ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open && last15m.close > prev15m.high
     : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open && last15m.close < prev15m.low;
   const pullbackConfirmed = side === "LONG"
     ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR)
     : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
-  if (!momentumConfirmed) return { ok: false, rejected: "ماشه مومنتوم ۱۵ دقیقه‌ای هنوز صادر نشده است", driftPct, emaDistanceAtr };
-  if (!pullbackConfirmed) return { ok: false, rejected: "هنوز پولبک به محدوده EMA21 در ۱۵ دقیقه انجام نشده است", driftPct, emaDistanceAtr };
+  if (!momentumConfirmed) return { ok: false, rejected: "The 15-minute momentum trigger has not fired", driftPct, emaDistanceAtr };
+  if (!pullbackConfirmed) return { ok: false, rejected: "No 15-minute pullback to the EMA21 zone yet", driftPct, emaDistanceAtr };
   const maxReclaim = isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR : FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR;
   const reclaimExtensionAtr = side === "LONG" ? (last15m.close - ema9_15m) / atr15m : (ema9_15m - last15m.close) / atr15m;
-  if (reclaimExtensionAtr > maxReclaim) return { ok: false, rejected: "کندل تأیید ۱۵ دقیقه‌ای بیش از حد کشیده شده است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
+  if (reclaimExtensionAtr > maxReclaim) return { ok: false, rejected: "The 15-minute confirmation candle is overextended", driftPct, emaDistanceAtr, reclaimExtensionAtr };
   return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m, momentumConfirmed: true, pullbackConfirmed: true };
 }
 
@@ -1826,16 +1867,16 @@ function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
 function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr, fourHourOpposes }) {
   const marketPrice = Number(ticker?.last);
   if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
-    return { ok: false, rejected: "قیمت لحظه‌ای بازار معتبر نیست" };
+    return { ok: false, rejected: "Live market price is invalid" };
   }
   const driftPct = Math.abs(marketPrice - referencePrice) / referencePrice * 100;
   if (driftPct > FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT) {
-    return { ok: false, rejected: "فاصله قیمت لحظه‌ای برای مسیر پرریسک نیز بیش از حد مجاز است", driftPct };
+    return { ok: false, rejected: "Live price deviation is too large even for the high-risk path", driftPct };
   }
 
   const emaDistanceAtr = Math.abs(marketPrice - ema20) / atr;
   if (emaDistanceAtr > FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR) {
-    return { ok: false, rejected: "قیمت برای ورود پرریسک نیز بیش از حد از EMA20 فاصله دارد", driftPct, emaDistanceAtr };
+    return { ok: false, rejected: "Price is too far from EMA20 even for a high-risk entry", driftPct, emaDistanceAtr };
   }
 
   const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
@@ -1898,12 +1939,12 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
 }
 
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
-  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
+  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error("Not enough closed candles for 1H/4H analysis.");
   const closes1h = candles1h.map(c => c.close), closes4h = candles4h.map(c => c.close);
   const last = candles1h[candles1h.length - 1], prev = candles1h[candles1h.length - 2], referencePrice = last.close;
   const e20 = ema(closes1h, 20), prevE20 = ema(closes1h.slice(0, -1), 20), e50 = ema(closes1h, 50);
   const e20_4h = ema(closes4h, 20), e50_4h = ema(closes4h, 50), rsiValue = rsi(closes1h, 14), atr = calculateAtr(candles1h, 14);
-  if ([e20, prevE20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) throw new Error("محاسبه اندیکاتورها معتبر نیست.");
+  if ([e20, prevE20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) throw new Error("Indicator calculation is invalid.");
   const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume)), volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
   const up1h = e20 > e50 && e20 > prevE20 && referencePrice > e20 && last.close >= prev.low;
   const down1h = e20 < e50 && e20 < prevE20 && referencePrice < e20 && last.close <= prev.high;
@@ -1914,19 +1955,19 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
   const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
-  if (strictLong || (!strictSetup && relaxedLong)) { side = "LONG"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "روند ۱ساعته صعودی با شیب مثبت EMA20" : "ستاپ پرریسک صعودی ۱ساعته"); score += rsiValue >= 52 && rsiValue <= 62 ? 15 : 8; }
-  else if (strictShort || (!strictSetup && relaxedShort)) { side = "SHORT"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "روند ۱ساعته نزولی با شیب منفی EMA20" : "ستاپ پرریسک نزولی ۱ساعته"); score += rsiValue >= 38 && rsiValue <= 48 ? 15 : 8; }
-  else return { symbol: ticker.symbol, fourHourTrend, rejected: "روند ۱ساعته و محدوده بهینه RSI هم‌زمان تأیید نشد", entryDiagnostics: { stage: "trend_rsi", rsi: rsiValue, up1h, down1h, fourHourTrend } };
+  if (strictLong || (!strictSetup && relaxedLong)) { side = "LONG"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "1H uptrend with positive EMA20 slope" : "High-risk 1H bullish setup"); score += rsiValue >= 52 && rsiValue <= 62 ? 15 : 8; }
+  else if (strictShort || (!strictSetup && relaxedShort)) { side = "SHORT"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "1H downtrend with negative EMA20 slope" : "High-risk 1H bearish setup"); score += rsiValue >= 38 && rsiValue <= 48 ? 15 : 8; }
+  else return { symbol: ticker.symbol, fourHourTrend, rejected: "The 1H trend and optimal RSI zone were not confirmed together", entryDiagnostics: { stage: "trend_rsi", rsi: rsiValue, up1h, down1h, fourHourTrend } };
   const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
-  if (fourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "روند ۴ساعته نماد هم‌جهت با سیگنال نیست" };
-  if (options.requireBtcFourHourAlignment === true && options.btcFourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, rejected: "روند ۴ساعته بیت‌کوین هم‌جهت با سیگنال نیست" };
-  score += 10; reasons.push("روند ۴ساعته نماد و بیت‌کوین کاملاً هم‌جهت است");
+  if (fourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 4H trend is not aligned with the signal" };
+  if (options.requireBtcFourHourAlignment === true && options.btcFourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, rejected: "Bitcoin's 4H trend is not aligned with the signal" };
+  score += 10; reasons.push("The symbol and Bitcoin 4H trends are fully aligned");
   const change = Number(ticker.priceChangePercent) || 0;
-  if (side === "LONG") { if (change < -1.5) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "تغییر ۲۴ساعته نماد منفی است؛ ریسک تله گاوی برای لانگ" }; if (volumeRatio < 0.7) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "حجم نسبی برای تأیید لانگ کافی نیست" }; }
+  if (side === "LONG") { if (change < -1.5) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 24H change is negative; bullish-trap risk for LONG" }; if (volumeRatio < 0.7) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "Relative volume is insufficient to confirm LONG" }; }
   score += ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) ? 8 : 2;
   const volumePriorityBonus = volumeRatio >= FUTURES_CONFIG.VOLUME_PRIORITY_TIER_2 ? FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_2 : volumeRatio >= FUTURES_CONFIG.VOLUME_PRIORITY_TIER_1 ? FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_1 : 0;
   const funding = Number(ticker.premium?.lastFundingRate);
-  if (Number.isFinite(funding)) { if (side === "LONG" && funding > 0.0008) { score -= 6; reasons.push("فاندینگ مثبت بالا؛ ریسک ازدحام لانگ"); } else if (side === "SHORT" && funding < -0.0008) { score -= 6; reasons.push("فاندینگ منفی بالا؛ ریسک ازدحام شورت"); } }
+  if (Number.isFinite(funding)) { if (side === "LONG" && funding > 0.0008) { score -= 6; reasons.push("High positive funding; crowded-LONG risk"); } else if (side === "SHORT" && funding < -0.0008) { score -= 6; reasons.push("High negative funding; crowded-SHORT risk"); } }
   const priorityBaseScore = score, quoteVolume = Number(ticker.quoteVolume) || 0;
   const standardThresholdMet = strictSetup && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.85;
   let standardEntryPassed = false, entryFilters;
@@ -1934,20 +1975,20 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   else if (standardThresholdMet) { const strictEntry = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: false }); if (strictEntry.ok) { entryFilters = strictEntry; standardEntryPassed = true; } else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true }); }
   else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true });
   if (!entryFilters.ok) return { symbol: ticker.symbol, fourHourTrend, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
-  if (!standardEntryPassed && quoteVolume < FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "حجم ۲۴ساعته کمتر از کف ایمنی است" };
-  if (!standardEntryPassed && volumeRatio < FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "حجم نسبی کندل آخر کافی نیست" };
+  if (!standardEntryPassed && quoteVolume < FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "24H volume is below the safety threshold" };
+  if (!standardEntryPassed && volumeRatio < FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The latest candle's relative volume is insufficient" };
   const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
   const swing = candles1h.slice(-13, -1), swingLow = Math.min(...swing.map(c => c.low)), swingHigh = Math.max(...swing.map(c => c.high)), liquidityBuffer = atr * 0.25;
   const stop = side === "LONG" ? Math.min(swingLow - liquidityBuffer, entry - atr * 1.6) : Math.max(swingHigh + liquidityBuffer, entry + atr * 1.6);
   const risk = side === "LONG" ? entry - stop : stop - entry, riskPct = risk / entry;
-  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.004 || riskPct > 0.035) return { symbol: ticker.symbol, fourHourTrend, rejected: "فاصله حد ضرر خارج از محدوده استاندارد (0.4% تا 3.5%) است" };
+  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.004 || riskPct > 0.035) return { symbol: ticker.symbol, fourHourTrend, rejected: "Stop distance is outside the standard range (0.4% to 3.5%)." };
   const direction = side === "LONG" ? 1 : -1, target1 = entry + direction * risk * 1.5, target2 = entry + direction * risk * 2.5, target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = standardEntryPassed, highRiskEligible = !standardEntryPassed && score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE;
-  if (!eligible && !highRiskEligible) return { symbol: ticker.symbol, fourHourTrend, side, score, rejected: "امتیاز نهایی به حداقل مجاز نرسید" };
+  if (!eligible && !highRiskEligible) return { symbol: ticker.symbol, fourHourTrend, side, score, rejected: "Final score did not reach the minimum threshold" };
   const confirmationPriorityBonus = FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_BOTH, priorityScore = Math.min(125, priorityBaseScore + volumePriorityBonus + confirmationPriorityBonus);
-  reasons.push("پولبک به EMA21 و ماشه مومنتوم ۱۵ دقیقه‌ای تأیید شد");
-  if (highRiskEligible) reasons.push("سیگنال از مسیر منعطف (پرریسک) با تأیید کامل ۱۵ دقیقه عبور کرد");
+  reasons.push("EMA21 pullback and 15-minute momentum trigger confirmed");
+  if (highRiskEligible) reasons.push("Signal passed the flexible high-risk path with full 15-minute confirmation");
   return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side,
     momentumConfirmed: true, pullbackConfirmed: true, score, baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
     priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))), volumePriorityBonus, fourHourScoreAdjustment: 10,
@@ -1964,20 +2005,25 @@ function formatPrice(value) {
 }
 
 function formatFuturesSignal(item, index = 1) {
-  const sideLabel = item.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
-  const label = item.riskLevel === "HIGH_RISK"
-    ? "⚠️ سیگنال پر ریسک"
-    : "🟢 سیگنال معتبر";
-  const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol));
-  return `${label}\n\n` +
-    `نماد: <b>${symbol}</b>\n\n` +
-    `جهت معامله: ${sideLabel}\n\n` +
-    `نقطه ورود یک: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
-    `نقطه ورود دو: <b>${formatSignalPrice(displayEntryPrice(item.entry, item.side))}</b>\n\n` +
-    `🎯 تارگت اول: <b>${formatSignalPrice(item.target1)}</b>\n\n` +
-    `🎯 تارگت دوم: <b>${formatSignalPrice(item.target2)}</b>\n\n` +
-    `🎯 تارگت سوم: <b>${formatSignalPrice(item.target3)}</b>\n\n` +
-    `⛔ حد ضرر: <b>${formatSignalPrice(item.stop)}</b>`;
+  const sideLabel = item.side === "LONG" ? "🟢 LONG ↗" : "🔴 SHORT ↘";
+  const riskLabel = item.riskLevel === "HIGH_RISK" ? "HIGH RISK" : "STANDARD";
+  const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol) + "/USD");
+  const entry = formatSignalPrice(item.entry);
+  const entry2 = formatSignalPrice(displayEntryPrice(item.entry, item.side));
+  const stop = formatSignalPrice(item.stop);
+  const score = Number(item.score);
+  const scoreLine = Number.isFinite(score) ? `\nScore: <b>${Math.round(score)}/100</b>` : "";
+  return `<b>PREMIUM SIGNALS</b>  •  <b>TRADEYAR</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `<b>${sideLabel}</b>  •  <b>${symbol}</b>\n` +
+    `<i>${escapeTelegramHtml(formatPerpetualLabel(item.symbol))}</i>\n\n` +
+    `<b>STOP LOSS</b>  <code>${stop}</code>   |   <b>ENTRY PRICE</b>  <code>${entry}</code>\n` +
+    `Entry 2: <code>${entry2}</code>\n\n` +
+    `<b>TAKE PROFIT TARGETS</b>\n` +
+    `🎯 TP1  <code>${formatSignalPrice(item.target1)}</code>\n` +
+    `🎯 TP2  <code>${formatSignalPrice(item.target2)}</code>\n` +
+    `🎯 TP3  <code>${formatSignalPrice(item.target3)}</code>\n\n` +
+    `<b>RISK</b>  ${riskLabel}${scoreLine}`;
 }
 
 function formatSignalPrice(value) {
@@ -1999,6 +2045,12 @@ function formatFuturesSymbol(symbol) {
   if (normalized === "XBT") return "BTC";
   if (normalized === "NVDX") return "NVDA";
   return normalized;
+}
+
+function formatPerpetualLabel(symbol) {
+  const base = formatFuturesSymbol(symbol);
+  const names = { BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", XRP: "XRP" };
+  return `${names[base] || base} Perpetual`;
 }
 
 
@@ -2133,7 +2185,7 @@ const stopReached=(side,p,t)=>side==="LONG"?p<=t:p>=t;
 const FUTURES_DISPLAY_LEVERAGE=10;
 function priceChangePercent(side,entry,exit){const e=Number(entry),x=Number(exit);return Number.isFinite(e)&&e>0&&Number.isFinite(x)?tradeDir(side)*(x-e)/e*100:null}
 function leveragedPriceChangePercent(side,entry,exit){const p=priceChangePercent(side,entry,exit);return p===null?null:p*FUTURES_DISPLAY_LEVERAGE}
-function formatOutcomePercent(value){if(value===null||value===undefined||value==="")return "—";const n=Number(value);if(!Number.isFinite(n))return "—";const label=n>0?"سود":n<0?"زیان":"سر‌به‌سر";return `${Math.abs(n).toFixed(2)}٪ ${label}`}
+function formatOutcomePercent(value){if(value===null||value===undefined||value==="")return "—";const n=Number(value);if(!Number.isFinite(n))return "—";const label=n>0?"PROFIT":n<0?"LOSS":"BREAKEVEN";return `${Math.abs(n).toFixed(2)}% ${label}`}
 function tradeResultR(t,includeRemainder){const risk=Number(t.initialRisk),entry=Number(t.actualEntry),target=Number(t.target1);if(!Number.isFinite(risk)||risk<=0||!Number.isFinite(entry)||entry<=0)return null;if((t.tpHits||[]).includes("TP1")&&Number.isFinite(target))return tradeDir(t.side)*(target-entry)/risk;return includeRemainder?tradeDir(t.side)*(Number(t.currentStop)-entry)/risk:0}
 function tradeOutcomePercent(t,exitPrice){const realized=Number(t?.marginReturnPercent??t?.realizedMarginReturnPct);if(Number.isFinite(realized))return realized;const e=Number(t.actualEntry??t.entry);if(!Number.isFinite(e)||e<=0)return null;const exit=(t.tpHits||[]).includes("TP1")?Number(t.target1):Number(exitPrice);const p=priceChangePercent(t.side,e,exit);return p===null?null:p*FUTURES_DISPLAY_LEVERAGE}
 function getNewClosedFuturesCandles(candles,lastCheckedCandleTime=0){return(Array.isArray(candles)?candles:[]).filter(c=>Number(c.time)>Number(lastCheckedCandleTime||0)).sort((a,b)=>a.time-b.time)}
@@ -2179,15 +2231,15 @@ async function publishSignalToArchive(env, signal, messageText, parseMode = "HTM
     return { published: reservation.published === true, duplicate: true, messageId: reservation.messageId ?? null };
   }
 
+  let cardPng = options.cardPng ?? null;
+  if (!cardPng && options.skipCardRender !== true) {
+    try { cardPng = renderSignalCardPng(signal); }
+    catch (renderError) { console.warn("Signal card rendering failed; archive will use text:", String(renderError?.message || renderError)); }
+  }
+
   let sent;
   try {
-    sent = await telegram("sendMessage", env, {
-      chat_id: channelId,
-      text: messageText,
-      parse_mode: parseMode || "HTML",
-      disable_web_page_preview: true,
-      protect_content: true
-    });
+    sent = await sendSignalCardOrText(env, channelId, signal, messageText, null, parseMode || "HTML", cardPng, { protectContent: true });
   } catch (error) {
     try {
       await signalDeliveryRequest(env, stub, "/archive-publish/complete", {
@@ -2234,13 +2286,19 @@ async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, rep
     return { delivered: true, duplicate: true, archivePending: reservation.archivePending === true };
   }
 
+  let cardPng = options.cardPng ?? null;
+  if (!cardPng && options.skipCardRender !== true) {
+    try { cardPng = renderSignalCardPng(signal); }
+    catch (renderError) { console.warn("Signal card rendering failed; recipient will receive text:", String(renderError?.message || renderError)); }
+  }
+
   const record = reservation.record;
   let response;
   let deliveryError = null;
   let retryAttempts = 0;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      response = await sendMessage(env, chatId, messageText, replyMarkup, parseMode);
+      response = await sendSignalCardOrText(env, chatId, signal, messageText, replyMarkup, parseMode, cardPng);
       deliveryError = null;
       break;
     } catch (error) {
@@ -2301,7 +2359,7 @@ async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, rep
   }
 
   try {
-    const archiveResult = await publishSignalToArchive(env, signal, messageText, parseMode);
+    const archiveResult = await publishSignalToArchive(env, signal, messageText, parseMode, { cardPng, skipCardRender: true });
     const archiveComplete = archiveResult?.skipped === true || archiveResult?.published === true ||
       (archiveResult?.duplicate === true && archiveResult?.pending !== true);
     currentRecord = {
@@ -2614,7 +2672,7 @@ export class SignalDeliveryCoordinator {
 async function showRecentFuturesSignalReport(env,ownerId){
   if(!isOwner(ownerId,env))return;
   if(!env.SIGNAL_DELIVERY||!getSignalDeliverySecret(env)){
-    await sendMessage(env,ownerId,"❌ اتصال امن حافظه سیگنال‌ها در دسترس نیست.");
+    await sendMessage(env,ownerId,"❌ Secure signal-memory connection is unavailable.");
     return;
   }
   try{
@@ -2626,10 +2684,10 @@ async function showRecentFuturesSignalReport(env,ownerId){
     });
     let payload={};
     try{payload=await response.json()}catch{}
-    if(!response.ok||!payload?.ok)throw new Error(payload?.error||"دریافت فهرست سیگنال‌ها ناموفق بود.");
+    if(!response.ok||!payload?.ok)throw new Error(payload?.error||"Could not retrieve the signal list.");
     const signals=Array.isArray(payload.signals)?payload.signals:[];
     if(!signals.length){
-      await sendMessage(env,ownerId,"📊 در حال حاضر سیگنال فعالی در حافظه موتور وجود ندارد.\nاین گزارش فقط سیگنال‌های هنوز معتبر و منقضی‌نشده را نشان می‌دهد.");
+      await sendMessage(env,ownerId,"📊 There are currently no active signals in engine memory.\nThis report includes only valid, unexpired signals.");
       return;
     }
     const fmt=value=>{
@@ -2638,40 +2696,40 @@ async function showRecentFuturesSignalReport(env,ownerId){
       return Number.isFinite(n)?n.toLocaleString("en-US",{maximumFractionDigits:8}):"—";
     };
     const lines=[
-      "📊 گزارش مدیریتی سیگنال‌های اخیر",
+      "📊 RECENT SIGNAL ADMIN REPORT",
       "━━━━━━━━━━━━━━━━━━",
-      "منبع: حافظه Durable Object موتور فیوچرز",
-      "تعداد نمایش: "+signals.length,
-      "این گزارش فقط خواندنی است و هیچ داده‌ای در KV ذخیره نمی‌کند.",
+      "Source: Futures engine Durable Object memory",
+      "Displayed signals: "+signals.length,
+      "This report is read-only. No data is written to KV.",
       ""
     ];
     for(let i=0;i<signals.length;i++){
       const s=signals[i];
-      const side=s.side==="LONG"?"🟢 لانگ":"🔴 شورت";
+      const side=s.side==="LONG"?"🟢 LONG":"🔴 SHORT";
       const created=Number(s.createdAt);
-      const createdText=Number.isFinite(created)&&created>0?new Date(created).toISOString():"نامشخص";
+      const createdText=Number.isFinite(created)&&created>0?new Date(created).toISOString():"Unknown";
       lines.push(
         (i+1)+") "+formatFuturesSymbol(s.symbol)+" | "+side,
-        "امتیاز: "+fmt(s.score)+" از 100",
-        "ورود: "+fmt(s.entry)+" | حد ضرر: "+fmt(s.stop),
-        "تارگت اول: "+fmt(s.target1)+" | تارگت دوم: "+fmt(s.target2)+" | تارگت سوم: "+fmt(s.target3),
-        "RSI: "+fmt(s.rsi)+" | نسبت حجم: "+fmt(s.volumeRatio)+" | تغییر ۲۴ساعته: "+fmt(s.change24h)+"٪",
-        "حجم مظنه: "+fmt(s.quoteVolume)+" USD | فاندینگ: "+fmt(s.funding),
-        "زمان ایجاد: "+createdText
+        "Score: "+fmt(s.score)+" / 100",
+        "Entry: "+fmt(s.entry)+" | Stop Loss: "+fmt(s.stop),
+        "TP1: "+fmt(s.target1)+" | TP2: "+fmt(s.target2)+" | TP3: "+fmt(s.target3),
+        "RSI: "+fmt(s.rsi)+" | Volume ratio: "+fmt(s.volumeRatio)+" | 24H change: "+fmt(s.change24h)+"%",
+        "Quote volume: "+fmt(s.quoteVolume)+" USD | Funding: "+fmt(s.funding),
+        "Created: "+createdText
       );
       if(Array.isArray(s.reasons)&&s.reasons.length){
-        lines.push("دلایل امتیازدهی:");
+        lines.push("Scoring reasons:");
         for(const reason of s.reasons.slice(0,8))lines.push("• "+String(reason).slice(0,180));
       }
       const d=s.entryDiagnostics;
       if(d&&typeof d==="object"){
         const checks=[
-          ["فاصله قیمت تا قیمت تحلیلی",d.driftPct,"٪"],
-          ["فاصله از EMA20 بر حسب ATR",d.emaDistanceAtr," ATR"],
-          ["تأیید مومنتوم ۱۵دقیقه‌ای",d.momentumConfirmed===true?"بله":d.momentumConfirmed===false?"خیر":"نامشخص",""],
-          ["تأیید پولبک ۱۵دقیقه‌ای",d.pullbackConfirmed===true?"بله":d.pullbackConfirmed===false?"خیر":"نامشخص",""]
+          ["Live-to-reference price deviation",d.driftPct,"%"],
+          ["Distance from EMA20 (ATR)",d.emaDistanceAtr," ATR"],
+          ["15M momentum confirmation",d.momentumConfirmed===true?"Yes":d.momentumConfirmed===false?"No":"Unknown",""],
+          ["15M pullback confirmation",d.pullbackConfirmed===true?"Yes":d.pullbackConfirmed===false?"No":"Unknown",""]
         ];
-        lines.push("کنترل ورود:");
+        lines.push("Entry checks:");
         for(const [label,value,suffix] of checks){
           if(value!==undefined)lines.push("• "+label+": "+(typeof value==="number"?fmt(value)+suffix:value));
         }
@@ -2681,7 +2739,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
     await sendLongMessage(env,ownerId,lines.join("\n"));
   }catch(error){
     console.error("Admin recent signal report failed:",String(error?.stack||error));
-    await sendMessage(env,ownerId,"❌ ساخت گزارش مدیریتی ناموفق بود:\n"+String(error?.message||error).slice(0,500));
+    await sendMessage(env,ownerId,"❌ Could not build the admin report:\n"+String(error?.message||error).slice(0,500));
   }
 }
 
@@ -2704,25 +2762,25 @@ async function showUncertainSignalOutbox(env,ownerId){
     await env.APP_KV.put(outboxSelectionKey(ownerId,token),JSON.stringify({chatId:record.chatId,signalId:record.signalId}),{expirationTtl:3600});
     keyboard.push([{text:"⚠️ "+(record.symbol||"Signal")+" · "+record.status,callback_data:"outbox:detail:"+token}]);
   }
-  keyboard.push([{text:"🔄 به‌روزرسانی",callback_data:"outbox:review"},{text:"🏠 منوی اصلی",callback_data:"menu"}]);
-  const note=page.list_complete===false?"\nنمایش بر اساس اولین ۱۰۰۰ رکورد KV است.":"";
-  await sendMessage(env,ownerId,"🛠 بررسی ارسال‌های نیازمند تعیین تکلیف\n━━━━━━━━━━━━━━━━━━\nتعداد موارد نیازمند بررسی: "+records.length+note+"\n\nبرای هر مورد، ابتدا پیام‌های تلگرام را بررسی کن.",{inline_keyboard:keyboard});
+  keyboard.push([{text:"🔄 Refresh",callback_data:"outbox:review"},{text:"🏠 Main Menu",callback_data:"menu"}]);
+  const note=page.list_complete===false?"\nShowing the first 1,000 KV records.":"";
+  await sendMessage(env,ownerId,"🛠 DELIVERIES REQUIRING REVIEW\n━━━━━━━━━━━━━━━━━━\nItems requiring review: "+records.length+note+"\n\nCheck the Telegram messages for each item before taking action.",{inline_keyboard:keyboard});
 }
 
 async function showOutboxSignalDetail(env,ownerId,token){
   if(!isOwner(ownerId,env)||!env.APP_KV)return;
   const selection=await env.APP_KV.get(outboxSelectionKey(ownerId,token),"json");
-  if(!selection){await sendMessage(env,ownerId,"این مورد منقضی شده است؛ فهرست را دوباره باز کن.");return;}
+  if(!selection){await sendMessage(env,ownerId,"This item has expired. Reopen the list.");return;}
   const record=await env.APP_KV.get(signalOutboxKey(selection.chatId,selection.signalId),"json");
-  if(!record){await sendMessage(env,ownerId,"رکورد ارسال پیدا نشد.");return;}
+  if(!record){await sendMessage(env,ownerId,"Delivery record not found.");return;}
   const hasPayload=Boolean(record.signal&&typeof record.messageText==="string");
   const keyboard=[];
-  if(canManuallyConfirmOutboxDelivery(record))keyboard.push([{text:"✅ پیام را در تلگرام دیدم؛ ثبت‌شده محسوب شود",callback_data:"outbox:confirm:"+token}]);
-  if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ پیام را ندیدم؛ تلاش مجدد (احتمال تکرار)",callback_data:"outbox:retry:"+token}]);
-  if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 تلاش مجدد انتشار در آرشیو (پس از بررسی کانال)",callback_data:"outbox:archive:"+token}]);
-  keyboard.push([{text:"⬅️ بازگشت",callback_data:"outbox:review"}]);
-  const body=["🔍 جزئیات ارسال","━━━━━━━━━━━━━━━━━━","نماد: "+(record.symbol||"—"),"شناسه گفتگو: "+record.chatId,"شناسه سیگنال: "+record.signalId,"وضعیت: "+record.status,"آخرین به‌روزرسانی: "+(record.updatedAt||"—"),"","اگر پیام در تلگرام دیده می‌شود، گزینه ثبت ارسال‌شده را بزن.","تلاش مجدد فقط وقتی مناسب است که پیام را بررسی کرده باشی؛ در وضعیت نامشخص احتمال ارسال تکراری وجود دارد."];
-  if(!hasPayload)body.push("⚠️ این رکورد قدیمی است و اطلاعات کافی برای بازیابی خودکار ندارد.");
+  if(canManuallyConfirmOutboxDelivery(record))keyboard.push([{text:"✅ I verified the Telegram message; mark as delivered",callback_data:"outbox:confirm:"+token}]);
+  if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ I did not see the message; retry (may create a duplicate)",callback_data:"outbox:retry:"+token}]);
+  if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 Retry archive publication (after checking the channel)",callback_data:"outbox:archive:"+token}]);
+  keyboard.push([{text:"⬅️ Back",callback_data:"outbox:review"}]);
+  const body=["🔍 DELIVERY DETAILS","━━━━━━━━━━━━━━━━━━","Symbol: "+(record.symbol||"—"),"Chat ID: "+record.chatId,"Signal ID: "+record.signalId,"Status: "+record.status,"Last updated: "+(record.updatedAt||"—"),"","If you can see the message in Telegram, select the delivered confirmation option.","Retry only after checking the message. An uncertain delivery may already have been sent."];
+  if(!hasPayload)body.push("⚠️ This is an older record and does not contain enough information for automatic recovery.");
   await sendMessage(env,ownerId,body.join("\n"),{inline_keyboard:keyboard});
 }
 
@@ -2730,34 +2788,34 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
   if (!isOwner(ownerId, env) || !env.APP_KV || !env.SIGNAL_DELIVERY) return;
   const selection = await env.APP_KV.get(outboxSelectionKey(ownerId, token), "json");
   if (!selection) {
-    await sendMessage(env, ownerId, "این مورد منقضی شده است؛ فهرست را دوباره باز کن.");
+    await sendMessage(env, ownerId, "This item has expired. Reopen the list.");
     return;
   }
   const key = signalOutboxKey(selection.chatId, selection.signalId);
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
   if (!getSignalDeliverySecret(env)) {
-    await sendMessage(env, ownerId, "❌ کلید امنیتی ارتباط داخلی تنظیم نشده است.");
+    await sendMessage(env, ownerId, "❌ Internal communication security secret is not configured.");
     return;
   }
 
   let record;
   try { record = await env.APP_KV.get(key, "json"); }
   catch (error) {
-    await sendMessage(env, ownerId, "❌ خواندن وضعیت ارسال ممکن نشد: " + String(error?.message || error));
+    await sendMessage(env, ownerId, "❌ Could not read delivery status: " + String(error?.message || error));
     return;
   }
   if (!record) {
-    await sendMessage(env, ownerId, "این رکورد دیگر در آرشیو ارسال‌ها وجود ندارد.");
+    await sendMessage(env, ownerId, "This record is no longer in the delivery archive.");
     return;
   }
 
   if (action === "confirm_delivered") {
     if (record.status === "ARCHIVED") {
-      await sendMessage(env, ownerId, "این سیگنال قبلاً به‌عنوان ارسال‌شده ثبت شده است.");
+      await sendMessage(env, ownerId, "This signal is already marked as delivered.");
       return;
     }
     if (!canManuallyConfirmOutboxDelivery(record)) {
-      await sendMessage(env, ownerId, "❌ این رکورد برای تأیید دستی اطلاعات کافی ندارد.");
+      await sendMessage(env, ownerId, "❌ This record does not contain enough information for manual confirmation.");
       return;
     }
     const confirmedAt = new Date().toISOString();
@@ -2772,14 +2830,14 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
         updatedAt: confirmedAt, manualConfirmedAt: confirmedAt
       });
       await env.APP_KV.put(key, JSON.stringify(confirmed));
-      await sendMessage(env, ownerId, "✅ سیگنال به‌عنوان ارسال‌شده ثبت شد.");
+      await sendMessage(env, ownerId, "✅ Signal marked as delivered.");
     } catch (error) {
-      await sendMessage(env, ownerId, "❌ ثبت تأیید دستی کامل نشد: " + String(error?.message || error));
+      await sendMessage(env, ownerId, "❌ Manual confirmation failed: " + String(error?.message || error));
       return;
     }
   } else if (action === "retry_archive") {
     if (!["SENT", "ARCHIVE_PENDING"].includes(record.status) || !record.signal || typeof record.messageText !== "string") {
-      await sendMessage(env, ownerId, "❌ این رکورد برای تلاش مجدد آرشیو آماده نیست.");
+      await sendMessage(env, ownerId, "❌ This record is not eligible for an archive retry.");
       return;
     }
     try {
@@ -2801,7 +2859,7 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
         archivedAt, archiveRetryAt: archivedAt, updatedAt: archivedAt
       });
       await env.APP_KV.put(key, JSON.stringify(archived));
-      await sendMessage(env, ownerId, "📚 انتشار سیگنال در آرشیو دوباره انجام شد.");
+      await sendMessage(env, ownerId, "📚 Signal successfully republished to the archive.");
     } catch (error) {
       const failedAt = new Date().toISOString();
       const pending = {
@@ -2820,11 +2878,11 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
       } catch (stateError) {
         console.error("ARCHIVE_RETRY_FAILURE_STATE_PERSIST_FAILED", String(stateError?.message || stateError));
       }
-      await sendMessage(env, ownerId, "❌ انتشار آرشیو انجام نشد: " + String(error?.message || error));
+      await sendMessage(env, ownerId, "❌ Archive publication failed: " + String(error?.message || error));
     }
   } else if (action === "retry") {
     if (!["SENDING", "UNCERTAIN"].includes(record.status) || !record.signal || typeof record.messageText !== "string") {
-      await sendMessage(env, ownerId, "❌ این رکورد برای تلاش مجدد ارسال آماده نیست.");
+      await sendMessage(env, ownerId, "❌ This record is not eligible for a delivery retry.");
       return;
     }
     const queuedAt = new Date().toISOString();
@@ -2839,17 +2897,17 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
         env, selection.chatId, queued.signal, queued.messageText,
         queued.replyMarkup ?? null, queued.parseMode ?? "HTML"
       );
-      await sendMessage(env, ownerId, "🔁 تلاش مجدد ارسال انجام شد.");
+      await sendMessage(env, ownerId, "🔁 Delivery retry completed.");
     } catch (error) {
-      await sendMessage(env, ownerId, "❌ تلاش مجدد ارسال کامل نشد: " + String(error?.message || error));
+      await sendMessage(env, ownerId, "❌ Delivery retry failed: " + String(error?.message || error));
     }
   } else {
-    await sendMessage(env, ownerId, "❌ عملیات در وضعیت فعلی قابل اجرا نیست.");
+    await sendMessage(env, ownerId, "❌ This action is not available for the current status.");
   }
 
   await showUncertainSignalOutbox(env, ownerId);
 }
-async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت و پیگیری نتایج معاملات در این نسخه غیرفعال است.")}
+async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ Trade result logging and tracking are not available in this version.")}
 async function countUncertainSignalOutbox(env) {
   if(!env.APP_KV)return null;
   try{
@@ -2900,7 +2958,7 @@ async function runAutomaticFuturesAlertScan(env) {
     console.error("AUTOMATIC_FUTURES_SCAN_FATAL", JSON.stringify({
       timestamp: new Date().toISOString(), version: CONFIG.VERSION, error: diagnostic
     }));
-    await notifyOwnerScanDiagnostics(env, "🚨 خطای اجرای اسکن زمان‌بندی‌شده فیوچرز\n\n" + diagnostic,
+    await notifyOwnerScanDiagnostics(env, "🚨 SCHEDULED FUTURES SCAN ERROR\n\n" + diagnostic,
       "futures:scan-diagnostic:fatal", 15 * 60);
     return { scanned: false, error: diagnostic };
   }
@@ -2911,16 +2969,16 @@ async function runAutomaticFuturesAlertScanInternal(env) {
     const result=await runFuturesSignalScan(env,{analysisOnly:true});
     const d=result.diagnostics||{};
     const message=[
-      "⚠️ اسکن فیوچرز در حالت تحلیل بدون ثبت اجرا شد",
-      "علت: binding یا secret مربوط به Durable Object موجود نیست.",
-      "نمادهای تحلیل‌شده: "+(d.analyzedCount??0),
-      "نمادهای بررسی‌نشده: "+(d.notAnalyzedCount??0),
-      "کاندیداهای واجد شرایط اما ثبت‌نشده: "+(d.unregisteredCandidateCount??0),
-      "ردشده‌ها: "+(d.rejectedCount??0),
+      "⚠️ Futures scan ran in analysis-only mode; no signals were registered",
+      "Reason: Durable Object binding or secret is missing.",
+      "Symbols analyzed: "+(d.analyzedCount??0),
+      "Symbols not analyzed: "+(d.notAnalyzedCount??0),
+      "Eligible but unregistered candidates: "+(d.unregisteredCandidateCount??0),
+      "Rejected: "+(d.rejectedCount??0),
       "",
       ...(d.topRejections||[]).map(x=>"• "+x.reason+": "+x.count),
       "",
-      "هیچ سیگنالی ارسال یا به‌عنوان فعال ثبت نشد؛ اتصال Durable Object را بررسی کن."
+      "No signals were sent or marked as registered. Check the Durable Object binding."
     ].join("\n");
     await notifyOwnerScanDiagnostics(env,message,null,0);
     return {scanned:true,analysisOnly:true,signals:0,diagnostics:d};
@@ -2948,35 +3006,35 @@ async function runAutomaticFuturesAlertScanInternal(env) {
     const diagnostics = result.diagnostics || {};
     diagnostics.uncertainOutboxCount = await countUncertainSignalOutbox(env);
     const noSignalMessage = [
-      "🧪 گزارش تشخیصی اسکن خودکار فیوچرز",
+      "🧪 AUTOMATED FUTURES SCAN DIAGNOSTICS",
       "━━━━━━━━━━━━━━━━━━",
-      "نسخه: " + CONFIG.VERSION,
-      "زمان: " + (diagnostics.finishedAt || new Date().toISOString()),
-      "نمادهای واجد حجم: " + (diagnostics.universeCount ?? "—"),
-      "نمادهای تحلیل‌شده: " + (diagnostics.analyzedCount ?? "—"),
-      "نمادهای بررسی‌نشده به‌علت محدودیت زمان: " + (diagnostics.notAnalyzedCount ?? "—"),
-      "خطاهای دریافت/تحلیل: " + (diagnostics.analysisErrorCount ?? "—"),
-      "خطاهای دریافت کندل ۱۵دقیقه‌ای: " + (diagnostics.fifteenMinuteDataErrorCount ?? 0),
-      "ردشده‌ها: " + (diagnostics.rejectedCount ?? "—"),
-      "سیگنال واجد شرایط: " + (diagnostics.eligibleCount ?? "—"),
-      "ثبت‌شده: " + (diagnostics.registeredCount ?? "—"),
-      "کاندیداهای ثبت‌نشده: " + (diagnostics.unregisteredCandidateCount ?? 0),
-      "رکوردهای ارسال نامشخص: " + (diagnostics.uncertainOutboxCount ?? "—"),
-      "معاملات OPEN بدون بررسی کندل در ۲ ساعت اخیر: " + (tracking.stuckCount ?? "—"),
-      "خطاهای داخلی پایش معاملات: " + (tracking.errors ?? 0),
-      ...(tracking.errorDetails || []).map(x => "• پایش " + (x.symbol || "") + " / " + (x.stage || "ERROR") + ": " + x.message),
-      ...(tracking.stuckTrades || []).map(x => "⚠️ معامله گیرکرده: " + x.symbol + " " + x.side + " | ID: " + x.tradeId + " | آخرین بررسی: " + (x.lastCheckedAt || "نامشخص")),
-      "ارسال موفق: " + (diagnostics.delivery?.delivered ?? "—"),
-      "ارسال ناموفق: " + (diagnostics.delivery?.failed ?? "—"),
-      "مدت اسکن: " + (diagnostics.durationMs != null ? Math.round(diagnostics.durationMs / 1000) + " ثانیه" : "—"),
+      "Version: " + CONFIG.VERSION,
+      "Time: " + (diagnostics.finishedAt || new Date().toISOString()),
+      "Symbols meeting volume requirements: " + (diagnostics.universeCount ?? "—"),
+      "Symbols analyzed: " + (diagnostics.analyzedCount ?? "—"),
+      "Symbols not analyzed due to time limits: " + (diagnostics.notAnalyzedCount ?? "—"),
+      "Fetch/analysis errors: " + (diagnostics.analysisErrorCount ?? "—"),
+      "15M candle-fetch errors: " + (diagnostics.fifteenMinuteDataErrorCount ?? 0),
+      "Rejected: " + (diagnostics.rejectedCount ?? "—"),
+      "Eligible signals: " + (diagnostics.eligibleCount ?? "—"),
+      "Registered: " + (diagnostics.registeredCount ?? "—"),
+      "Unregistered candidates: " + (diagnostics.unregisteredCandidateCount ?? 0),
+      "Uncertain delivery records: " + (diagnostics.uncertainOutboxCount ?? "—"),
+      "OPEN trades not candle-checked in the last 2 hours: " + (tracking.stuckCount ?? "—"),
+      "Trade-monitor internal errors: " + (tracking.errors ?? 0),
+      ...(tracking.errorDetails || []).map(x => "• Monitor " + (x.symbol || "") + " / " + (x.stage || "ERROR") + ": " + x.message),
+      ...(tracking.stuckTrades || []).map(x => "⚠️ Stalled trade: " + x.symbol + " " + x.side + " | ID: " + x.tradeId + " | Last checked: " + (x.lastCheckedAt || "Unknown")),
+      "Successful deliveries: " + (diagnostics.delivery?.delivered ?? "—"),
+      "Failed deliveries: " + (diagnostics.delivery?.failed ?? "—"),
+      "Scan duration: " + (diagnostics.durationMs != null ? Math.round(diagnostics.durationMs / 1000) + " seconds" : "—"),
       "",
-      "مهم‌ترین دلایل رد:",
+      "Top rejection reasons:",
       ...(diagnostics.topRejections || []).map(x => "• " + x.reason + ": " + x.count),
-      diagnostics.deliveryError ? "\nخطای ارسال: " + diagnostics.deliveryError : "",
-      diagnostics.trackingError ? "\nخطای پایش معاملات: " + diagnostics.trackingError : "",
+      diagnostics.deliveryError ? "\nDelivery error: " + diagnostics.deliveryError : "",
+      diagnostics.trackingError ? "\nTrade-monitor error: " + diagnostics.trackingError : "",
       "━━━━━━━━━━━━━━━━━━",
-      diagnostics.signalCount ? "سیگنال صادر شد؛ این پیام گزارش خطا/وضعیت نیست." :
-        "در این نوبت سیگنالی واجد شرایط پیدا نشد."
+      diagnostics.signalCount ? "A signal was generated; this is not an error/status report." :
+        "No eligible signals were found in this scan."
     ].filter(Boolean).join("\n");
     if (diagnostics.analysisErrorCount > 0 || diagnostics.fifteenMinuteDataErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError || tracking.errors > 0 || tracking.stuckCount > 0) {
       await notifyOwnerScanDiagnostics(env, noSignalMessage,
@@ -3047,26 +3105,26 @@ async function runFuturesEntryDiagnostics(env) {
 
 function formatFuturesEntryDiagnostics(d) {
   const lines = [
-    "🧪 گزارش تشخیصی فقط‌خواندنی فیوچرز",
+    "🧪 READ-ONLY FUTURES DIAGNOSTICS",
     "━━━━━━━━━━━━━━━━━━",
-    "نمادهای واجد حجم در بازار: " + d.universeCount,
-    "نمادهای نمونه‌گیری و تحلیل‌شده: " + d.sampledCount,
+    "Symbols meeting market-volume requirements: " + d.universeCount,
+    "Symbols sampled and analyzed: " + d.sampledCount,
     "",
-    "نتیجه تحلیل موتور Kraken Futures 3.8.2:"
+    "Kraken Futures 3.8.2 engine analysis result:"
   ];
   for (const [stage, count] of Object.entries(d.stageCounts || {})) lines.push("• " + stage + ": " + count);
-  lines.push("", "جزئیات نمادها:");
+  lines.push("", "Symbol details:");
   for (const item of (d.samples || []).slice(0, 15)) {
     lines.push("• " + item.symbol + " | " + item.stage +
-      " | امتیاز: " + (item.score ?? "—") + " | جهت: " + (item.side || "—"));
-    if (item.candleCounts) lines.push("  کندل‌ها: 1h=" + item.candleCounts["1h"] +
-      "، 4h=" + item.candleCounts["4h"] + "، 15m=" + item.candleCounts["15m"]);
-    if (item.entry != null) lines.push("  ورود: " + formatPrice(item.entry) +
-      " | استاپ: " + formatPrice(item.stop) +
-      " | اهداف: " + (item.targets || []).map(formatPrice).join(" / "));
-    if (item.reason) lines.push("  علت: " + item.reason);
+      " | Score: " + (item.score ?? "—") + " | Direction: " + (item.side || "—"));
+    if (item.candleCounts) lines.push("  Candles: 1h=" + item.candleCounts["1h"] +
+      "; 4h=" + item.candleCounts["4h"] + "; 15m=" + item.candleCounts["15m"]);
+    if (item.entry != null) lines.push("  Entry: " + formatPrice(item.entry) +
+      " | Stop: " + formatPrice(item.stop) +
+      " | Targets: " + (item.targets || []).map(formatPrice).join(" / "));
+    if (item.reason) lines.push("  Reason: " + item.reason);
   }
-  lines.push("", "⛔ این گزارش فقط‌خواندنی است؛ هیچ سیگنالی ثبت، ارسال یا معامله‌ای اجرا نشده است.");
+  lines.push("", "⛔ This report is read-only. No signal was registered or sent, and no trade was executed.");
   return lines.join("\n");
 }
 
@@ -3082,10 +3140,10 @@ async function runFuturesSignalScan(env, options = {}) {
       delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
       deliveryError: null,
       universeError: "Kraken returned no active PI/PF USD perpetuals above the configured 24h quote-volume threshold.",
-      topRejections: [{ reason: "هیچ نماد واجد حداقل حجم ۲۴ساعته پیدا نشد.", count: 1 }]
+      topRejections: [{ reason: "No symbol met the minimum 24-hour volume requirement.", count: 1 }]
     };
     console.error("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
-    return { report: "⚠️ در Kraken قرارداد دائمی با حجم کافی پیدا نشد.", signals: [], diagnostics };
+    return { report: "⚠️ No Kraken perpetual contract met the required volume threshold.", signals: [], diagnostics };
   }
 
   const filteredUniverse = universe;
@@ -3097,7 +3155,7 @@ async function runFuturesSignalScan(env, options = {}) {
     btcMarketData.candles?.[FUTURES_CONFIG.CONFIRM_INTERVAL]
   );
   if (!btcFourHourTrend) {
-    throw new Error("روند ۴ساعته بیت‌کوین قابل محاسبه نیست؛ اسکن برای جلوگیری از صدور سیگنال بدون تأیید BTC متوقف شد.");
+    throw new Error("Bitcoin's 4H trend could not be calculated. The scan stopped to avoid issuing signals without BTC confirmation.");
   }
   console.log("BTC_4H_ALIGNMENT_CONTEXT", JSON.stringify({
     timestamp: new Date().toISOString(), btcFourHourTrend, required: true
@@ -3145,7 +3203,7 @@ async function runFuturesSignalScan(env, options = {}) {
       return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, analysisOptions);
     } catch (error) {
       analysisErrorCount++;
-      return { symbol: ticker.symbol, rejected: error?.message || "خطای تحلیل", diagnosticType: "data_or_analysis_error" };
+      return { symbol: ticker.symbol, rejected: error?.message || "Analysis error", diagnosticType: "data_or_analysis_error" };
     }
   }, () => Date.now() < analysisDeadline);
 
@@ -3189,7 +3247,7 @@ async function runFuturesSignalScan(env, options = {}) {
     item.marketRegime = marketRegime;
     item.marketRegimeAdjustment = adjustment;
     item.priorityScore = Math.max(0, Math.min(125, Math.round(Number(item.priorityScore ?? item.score) + adjustment)));
-    if (adjustment) item.reasons = [...(item.reasons || []), "وضعیت کلی بازار: " + marketRegime + "؛ تغییر امتیاز اولویت " + (adjustment > 0 ? "+" : "") + adjustment];
+    if (adjustment) item.reasons = [...(item.reasons || []), "Overall market regime: " + marketRegime + "; priority score adjustment " + (adjustment > 0 ? "+" : "") + adjustment];
   }
 
   const eligibleCandidates = analyzed
@@ -3233,7 +3291,7 @@ async function runFuturesSignalScan(env, options = {}) {
   const rejectionCounts = new Map();
   for (const item of analyzed) {
     if (!item || item.eligible === true) continue;
-    const reason = String(item.rejected || "علت رد نامشخص").slice(0, 180);
+    const reason = String(item.rejected || "Rejection reason unavailable").slice(0, 180);
     rejectionCounts.set(reason, (rejectionCounts.get(reason) || 0) + 1);
   }
   const finishedAt = new Date().toISOString();
@@ -3260,24 +3318,25 @@ async function runFuturesSignalScan(env, options = {}) {
   const report =
     "📈 CRYPTO PUMP HUNTER — KRAKEN FUTURES 3.8.2\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
-    "🏦 بازار: Kraken Derivatives Perpetual\n" +
-    "⏱ تایم‌فریم: 1h با تأیید روند 4h و فیلتر ورود 15m\n" +
-    `📥 نمادهای بررسی‌شده: ${analyzedCount} از ${filteredUniverse.length} نماد واجد حداقل حجم ۲۴ساعته\n` +
-    `🟢 سیگنال‌های عادی: ${signals.filter(item => item.riskLevel !== "HIGH_RISK").length}\n` +
-    `⚠️ سیگنال‌های پر ریسک: ${signals.filter(item => item.riskLevel === "HIGH_RISK").length}\n\n` +
+    "🏦 Market: Kraken Derivatives Perpetual\n" +
+    "⏱ Timeframes: 1H with 4H trend confirmation and 15M entry filter\n" +
+    `📥 Symbols checked: ${analyzedCount} of ${filteredUniverse.length} symbols meeting the 24H volume threshold
+` +
+    `🟢 Standard signals: ${signals.filter(item => item.riskLevel !== "HIGH_RISK").length}\n` +
+    `⚠️ High-risk signals: ${signals.filter(item => item.riskLevel === "HIGH_RISK").length}\n\n` +
     (signals.length
       ? signals.map((item, index) => formatFuturesSignal(item, index + 1)).join("\n━━━━━━━━━━━━━━━━━━\n\n")
-      : "⚠️ در این بررسی سیگنالی به حداقل امتیاز و شرایط ورود نرسید.\n\n") +
-    `🕒 زمان گزارش: ${new Date().toISOString()}\n` +
-    `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} ثانیه\n` +
-    "📡 منبع داده: Kraken Derivatives Futures\n" +
-    "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و سود تضمین نیست.";
+      : "⚠️ No signal met the minimum score and entry requirements in this scan.\n\n") +
+    `🕒 Report time: ${new Date().toISOString()}\n` +
+    `⏱ Scan duration: ${Math.round((Date.now() - started) / 1000)} seconds\n` +
+    "📡 Data source: Kraken Derivatives Futures\n" +
+    "⚠️ Signals are analytical only. No real orders are placed, and profit is not guaranteed.";
   return { report, signals, experimentalSent: 0, analyzed, diagnostics };
 }
 
 async function runFuturesSignalsForChat(env, chatId) {
   if (!(await isApproved(chatId, env))) {
-    await sendMessage(env, chatId, "⛔ دسترسی شما فعال نیست.");
+    await sendMessage(env, chatId, "⛔ Your access is not active.");
     return;
   }
 
@@ -3311,20 +3370,20 @@ async function runFuturesSignalsForChat(env, chatId) {
     }
     if (!acquire.acquired) {
       await sendMessage(env, chatId,
-        "⏳ در حال حاضر یک اسکن فیوچرز دیگر در حال اجراست؛ پس از پایان آن دوباره درخواست بده.",
+        "⏳ Another futures scan is currently running. Please try again after it finishes.",
         menuForChat(env, chatId));
       return;
     }
     lockAcquired = true;
 
     await sendMessage(env, chatId,
-      "🔍 <b>درخواست بررسی ثبت شد</b>\n" +
+      "🔍 <b>SCAN REQUEST RECEIVED</b>\n" +
       "━━━━━━━━━━━━━━━━━━\n\n" +
-      "📊 موتور کراکن در حال بررسی بازار است.\n\n" +
-      "در صورت شناسایی فرصت معاملاتی معتبر، سیگنال نماد مربوطه به‌صورت خودکار در ربات منتشر خواهد شد.\n\n" +
+      "📊 The Kraken engine is scanning the market.\n\n" +
+      "If a valid trading opportunity is found, its signal will be published automatically in the bot.\n\n" +
       "━━━━━━━━━━━━━━━━━━\n" +
-      "⏳ لطفاً برای ورود به بازار صبور باشید.\n\n" +
-      "⚡ <b>تریدیار | پایش هوشمند بازار</b>",
+      "⏳ Please wait for a confirmed opportunity before entering the market.\n\n" +
+      "⚡ <b>TRADEYAR | SMART MARKET MONITOR</b>",
       menuForChat(env, chatId),
       "HTML");
 
@@ -3333,17 +3392,17 @@ async function runFuturesSignalsForChat(env, chatId) {
     if (!signals.length) {
       const d = result.diagnostics || {};
       await sendMessage(env, chatId,
-        "📊 اسکن فیوچرز به پایان رسید؛ سیگنال معتبری پیدا نشد.\n\n" +
-        "نمادهای بررسی‌شده: " + (d.analyzedCount ?? "—") + "\n" +
-        "نمادهای واجد حجم: " + (d.universeCount ?? "—") + "\n" +
-        "ردشده‌ها: " + (d.rejectedCount ?? "—") + "\n" +
-        "مدت اسکن: " + (d.durationMs != null ? Math.round(d.durationMs / 1000) + " ثانیه" : "—") +
-        "\n\nبا تغییر شرایط بازار می‌توانی دوباره اسکن کنی.",
+        "📊 Futures scan completed. No valid signals were found.\n\n" +
+        "Symbols checked: " + (d.analyzedCount ?? "—") + "\n" +
+        "Symbols meeting volume requirements: " + (d.universeCount ?? "—") + "\n" +
+        "Rejected: " + (d.rejectedCount ?? "—") + "\n" +
+        "Scan duration: " + (d.durationMs != null ? Math.round(d.durationMs / 1000) + " seconds" : "—") +
+        "\n\nYou can run another scan when market conditions change.",
         menuForChat(env, chatId));
       return;
     }
 
-    await sendMessage(env, chatId, "✅ اسکن تمام شد؛ " + signals.length + " سیگنال معتبر پیدا شد. در حال ارسال جزئیات...");
+    await sendMessage(env, chatId, "✅ Scan completed; " + signals.length + " valid signal(s) found. Sending details...");
     for (let i = 0; i < signals.length; i++) {
       const signal = signals[i];
       await sendAndArchiveFuturesSignal(env, chatId, signal, formatFuturesSignal(signal, i + 1));
@@ -3353,12 +3412,12 @@ async function runFuturesSignalsForChat(env, chatId) {
     console.error("Manual futures scan failed:", diagnostic);
     if (String(chatId) === String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
       try {
-        await sendMessage(env, chatId, "🧪 خطای فنی اسکن فیوچرز (فقط مدیر):\n" + diagnostic);
+        await sendMessage(env, chatId, "🧪 Futures scan technical error (owner only):\n" + diagnostic);
       } catch (diagnosticError) {
         console.error("Could not deliver futures scan diagnostic:", String(diagnosticError?.message || diagnosticError));
       }
     }
-    await sendMessage(env, chatId, "⚠️ اجرای اسکن فیوچرز با خطا مواجه شد؛ درخواست ثبت شد اما نتیجه‌ای تولید نشد. لطفاً بعداً دوباره تلاش کن.", menuForChat(env, chatId));
+    await sendMessage(env, chatId, "⚠️ The futures scan failed. Your request was received, but no result was generated. Please try again later.", menuForChat(env, chatId));
   } finally {
     if (lockAcquired && scanLockStub && scanLockToken) {
       try {
@@ -3412,10 +3471,13 @@ async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
   for (let i = 0; i < signals.length; i++) {
     const signal = signals[i];
     const messageText = formatFuturesSignalAlert(signal, i + 1);
+    let cardPng = null;
+    try { cardPng = renderSignalCardPng(signal); }
+    catch (renderError) { console.warn("Signal card rendering failed; this signal will use text delivery:", String(renderError?.message || renderError)); }
     const deliveredChats = [];
     await mapLimit(targets, 4, async chatId => {
       try {
-        await sendAndArchiveFuturesSignal(env, chatId, signal, messageText, null, "HTML", { archive: false });
+        await sendAndArchiveFuturesSignal(env, chatId, signal, messageText, null, "HTML", { archive: false, cardPng, skipCardRender: true });
         deliveredChats.push(String(chatId));
         delivered++;
       } catch (error) {
@@ -3426,7 +3488,7 @@ async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
 
     let archiveState;
     try {
-      const result = await publishSignalToArchive(env, signal, messageText, "HTML");
+      const result = await publishSignalToArchive(env, signal, messageText, "HTML", { cardPng, skipCardRender: true });
       const complete = result?.skipped === true || result?.published === true ||
         (result?.duplicate === true && result?.pending !== true);
       archiveState = {
@@ -3479,7 +3541,7 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
         results[currentIndex] = await callback(items[currentIndex]);
       } catch (error) {
         results[currentIndex] = {
-          rejected: error.message || "خطای پردازش"
+          rejected: error.message || "Processing error"
         };
       }
     }

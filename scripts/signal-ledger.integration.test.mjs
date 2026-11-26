@@ -381,7 +381,7 @@ test("archive Telegram network I/O runs in the Worker and remains idempotent", a
   const { env, storages } = deliveryEnvironment({ archive: true });
   const calls = [];
   await withTelegramFetch(async (_url, options) => {
-    const body = JSON.parse(options.body);
+    const body = options.body instanceof FormData ? { chat_id: options.body.get("chat_id") } : JSON.parse(options.body);
     calls.push(String(body.chat_id));
     return Response.json({ ok: true, result: { message_id: 900 + calls.length } });
   }, async () => {
@@ -450,7 +450,7 @@ test("automated fan-out publishes each signal to the archive exactly once", asyn
   }
   const telegramChats = [];
   await withTelegramFetch(async (_url, options) => {
-    const body = JSON.parse(options.body);
+    const body = options.body instanceof FormData ? { chat_id: options.body.get("chat_id") } : JSON.parse(options.body);
     telegramChats.push(String(body.chat_id));
     await new Promise(resolve => setTimeout(resolve, 2));
     return Response.json({ ok: true, result: { message_id: 1200 + telegramChats.length } });

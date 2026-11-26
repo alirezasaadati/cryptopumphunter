@@ -37,23 +37,23 @@ export function displayEntryPrice(value, side) {
 }
 
 export function formatFuturesSignalAlert(signal, index = 1) {
-  const side = signal?.side === "LONG" ? "🟢 لانگ / Long" : "🔴 شورت / Short";
-  const label = signal?.riskLevel === "HIGH_RISK"
-    ? "⚠️ سیگنال پر ریسک"
-    : "⚪ سیگنال معتبر";
+  const side = signal?.side === "LONG" ? "🟢 LONG ↗" : "🔴 SHORT ↘";
+  const risk = signal?.riskLevel === "HIGH_RISK" ? "HIGH RISK" : "STANDARD";
   const score = Number(signal?.score);
-  const scoreLine = Number.isFinite(score) ? `⭐ امتیاز سیگنال: <b>${Math.round(score)}/100</b>\n\n` : "";
-  return `${label}\n\n${scoreLine}` +
-    `نماد: <b>${escapeTelegramHtml(formatFuturesSymbol(signal?.symbol))}</b>\n\n` +
-    `جهت معامله: ${side}\n\n` +
-    `نقطه ورود یک: <b>${formatSignalPrice(signal?.entry)}</b>\n\n` +
-    `نقطه ورود دو: <b>${formatSignalPrice(displayEntryPrice(signal?.entry, signal?.side))}</b>\n\n` +
-    `🎯 تارگت اول: <b>${formatSignalPrice(signal?.target1)}</b>\n\n` +
-    `🎯 تارگت دوم: <b>${formatSignalPrice(signal?.target2)}</b>\n\n` +
-    `🎯 تارگت سوم: <b>${formatSignalPrice(signal?.target3)}</b>\n\n` +
-    `⛔ حد ضرر: <b>${formatSignalPrice(signal?.stop)}</b>`;
+  const scoreLine = Number.isFinite(score) ? `\nScore: <b>${Math.round(score)}/100</b>` : "";
+  const symbol = escapeTelegramHtml(formatFuturesSymbol(signal?.symbol) + "/USD");
+  return `<b>PREMIUM SIGNALS</b>  •  <b>TRADEYAR</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `<b>${side}</b>  •  <b>${symbol}</b>\n` +
+    `<i>${escapeTelegramHtml(formatPerpetualLabel(signal?.symbol))}</i>\n\n` +
+    `<b>STOP LOSS</b>  <code>${formatSignalPrice(signal?.stop)}</code>   |   <b>ENTRY PRICE</b>  <code>${formatSignalPrice(signal?.entry)}</code>\n` +
+    `Entry 2: <code>${formatSignalPrice(displayEntryPrice(signal?.entry, signal?.side))}</code>\n\n` +
+    `<b>TAKE PROFIT TARGETS</b>\n` +
+    `🎯 TP1  <code>${formatSignalPrice(signal?.target1)}</code>\n` +
+    `🎯 TP2  <code>${formatSignalPrice(signal?.target2)}</code>\n` +
+    `🎯 TP3  <code>${formatSignalPrice(signal?.target3)}</code>\n\n` +
+    `<b>RISK</b>  ${risk}${scoreLine}`;
 }
-
 function formatFuturesSymbol(symbol) {
   const normalized = String(symbol || "—").trim().toUpperCase()
     .replace(/^PF_/, "")
@@ -62,6 +62,12 @@ function formatFuturesSymbol(symbol) {
   if (normalized === "XBT") return "BTC";
   if (normalized === "NVDX") return "NVDA";
   return normalized;
+}
+
+function formatPerpetualLabel(symbol) {
+  const base = formatFuturesSymbol(symbol);
+  const names = { BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", XRP: "XRP" };
+  return `${names[base] || base} Perpetual`;
 }
 
 function escapeTelegramHtml(value) {

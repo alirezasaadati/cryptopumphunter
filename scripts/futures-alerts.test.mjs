@@ -63,38 +63,26 @@ test("per-chat storage keys are distinct and stable", () => {
   assert.notEqual(futuresAlertStorageKey("123", fp), futuresAlertStorageKey("456", fp));
 });
 
-test("signal alert uses the approved HTML layout, bold prices, spacing and direction label", () => {
-  const signal = {...base, symbol:"PF_BTCUSD", entry: 65000, stop: 66000, target1: 63500, target2: 62800, target3: 62000};
+test("signal alert uses the premium English TRADEYAR layout and preserves price calculations", () => {
+  const signal = {...base, symbol:"PF_BTCUSD", entry:65000, stop:66000, target1:63500, target2:62800, target3:62000, score:82};
   const short = formatFuturesSignalAlert(signal, 1);
   const long = formatFuturesSignalAlert({...signal, symbol:"PF_ETHUSD", side:"LONG"}, 2);
-  assert.match(short, /^⚪ سیگنال معتبر\n\n/);
-  assert.match(short, /نماد: <b>BTC<\/b>/);
-  assert.match(short, /جهت معامله: 🔴 شورت \/ Short/);
-  assert.match(short, /جهت معامله: 🔴 شورت \/ Short\n\nنقطه ورود یک:/);
-  assert.match(short, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>65,650\.00<\/b>\n\n🎯 تارگت اول: <b>63,500\.00<\/b>/);
-  assert.ok(short.includes("🎯 تارگت اول: <b>63,500.00</b>\n\n🎯 تارگت دوم: <b>62,800.00</b>\n\n🎯 تارگت سوم: <b>62,000.00</b>\n\n⛔ حد ضرر: <b>66,000.00</b>"));
-  assert.ok(!short.includes("R"));
-  assert.ok(!long.includes("R"));
-  assert.match(long, /^⚪ سیگنال معتبر/);
-  assert.match(long, /نماد: <b>ETH<\/b>/);
-  assert.match(long, /جهت معامله: 🟢 لانگ \/ Long/);
-  assert.match(long, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>64,025\.00<\/b>/);
-  const highRiskShort = formatFuturesSignalAlert({...signal, riskLevel:"HIGH_RISK"});
-  const highRiskLong = formatFuturesSignalAlert({...signal, side:"LONG", riskLevel:"HIGH_RISK"});
-  assert.match(highRiskShort, /^⚠️ سیگنال پر ریسک/);
-  assert.match(highRiskLong, /^⚠️ سیگنال پر ریسک/);
-  assert.match(highRiskShort, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>65,650\.00<\/b>/);
-  assert.match(highRiskLong, /نقطه ورود یک: <b>65,000\.00<\/b>\n\nنقطه ورود دو: <b>64,025\.00<\/b>/);
-  const formerlyRisky = formatFuturesSignalAlert({...signal, tier:"EXPERIMENTAL"}, 3);
-  assert.match(formerlyRisky, /^⚪ سیگنال معتبر/);
-  assert.match(formerlyRisky, /⛔ حد ضرر:/);
+  assert.match(short, /^<b>PREMIUM SIGNALS<\/b>  •  <b>TRADEYAR<\/b>/);
+  assert.match(short, /<b>🔴 SHORT ↘<\/b>  •  <b>BTC\/USD<\/b>/);
+  assert.match(short, /<i>Bitcoin Perpetual<\/i>/);
+  assert.match(short, /<b>STOP LOSS<\/b>  <code>66,000\.00<\/code>\s+\|\s+<b>ENTRY PRICE<\/b>  <code>65,000\.00<\/code>/);
+  assert.match(short, /Entry 2: <code>65,650\.00<\/code>/);
+  assert.match(short, /🎯 TP1  <code>63,500\.00<\/code>/);
+  assert.match(short, /🎯 TP2  <code>62,800\.00<\/code>/);
+  assert.match(short, /🎯 TP3  <code>62,000\.00<\/code>/);
+  assert.match(short, /<b>RISK<\/b>  STANDARD/);
+  assert.doesNotMatch(short, /LEVERAGE|10x/);
+  assert.match(short, /Score: <b>82\/100<\/b>/);
+  assert.match(long, /<b>🟢 LONG ↗<\/b>  •  <b>ETH\/USD<\/b>/);
+  assert.match(long, /Entry 2: <code>64,025\.00<\/code>/);
+  assert.match(formatFuturesSignalAlert({...signal, riskLevel:"HIGH_RISK"}), /<b>RISK<\/b>  HIGH RISK/);
+  assert.doesNotMatch(short, /[\u0600-\u06FF]/);
   assert.doesNotMatch(short, /PF_|BTCUSD/);
-  const krakenXbt = formatFuturesSignalAlert({...signal, symbol:"PF_XBTUSD"}, 4);
-  const krakenNvdx = formatFuturesSignalAlert({...signal, symbol:"PF_NVDXUSD"}, 5);
-  const lowercase = formatFuturesSignalAlert({...signal, symbol:"pf_adausd"}, 6);
-  assert.match(krakenXbt, /نماد: <b>BTC<\/b>/);
-  assert.match(krakenNvdx, /نماد: <b>NVDA<\/b>/);
-  assert.match(lowercase, /نماد: <b>ADA<\/b>/);
 });
 test("numeric candle timestamps in seconds and milliseconds produce the same identity", () => {
   const seconds = 1794906900;
@@ -106,8 +94,9 @@ test("numeric candle timestamps in seconds and milliseconds produce the same ide
 });
 
 
-test("manual Futures signal formatter passes direction into the display-only entry adjustment", async () => {
+test("manual Futures signal formatter uses the premium layout and keeps the display-only entry adjustment", async () => {
   const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
-  assert.ok(source.includes("`نقطه ورود یک: <b>${formatSignalPrice(item.entry)}</b>\\n\\n` +"));
-  assert.ok(source.includes("`نقطه ورود دو: <b>${formatSignalPrice(displayEntryPrice(item.entry, item.side))}</b>\\n\\n` +"));
+  assert.ok(source.includes("`<b>PREMIUM SIGNALS</b>  •  <b>TRADEYAR</b>\\n` +"));
+  assert.ok(source.includes("`<b>STOP LOSS</b>  <code>${stop}</code>   |   <b>ENTRY PRICE</b>  <code>${entry}</code>\\n` +"));
+  assert.ok(source.includes("formatSignalPrice(displayEntryPrice(item.entry, item.side))"));
 });
