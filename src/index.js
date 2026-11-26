@@ -344,14 +344,17 @@ async function fetchJson(url, label) {
 async function telegram(method, env, body) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN is not configured.");
 
-  // User-facing bot messages are not protected, so users can take screenshots.
+  // Keep channel/group posts protected; private bot chats allow screenshots.
+  const protectedBody = method === "sendMessage" && String(body.chat_id).startsWith("-")
+    ? { ...body, protect_content: true }
+    : body;
 
   const response = await fetch(
     `${TELEGRAM_API}/bot${(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)}/${method}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(protectedBody)
     }
   );
 
