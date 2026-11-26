@@ -1322,8 +1322,7 @@ async function handleCallback(query, env) {
     }
     if (action === "invite") {
       await sendMessage(env, chatId,
-        "Register with LBank using the link below
-" +
+        "Register with LBank using the link below\n" +
         "(for a detailed review of each user's profit and loss)\n\n" +
         "🔗 Link: https://www.lbk.pub/ref/67XF8");
       return;
