@@ -68,7 +68,8 @@ test("signal alert uses the premium English TRADEYAR layout and preserves price 
   const short = formatFuturesSignalAlert(signal, 1);
   const long = formatFuturesSignalAlert({...signal, symbol:"PF_ETHUSD", side:"LONG"}, 2);
   assert.match(short, /^<b>PREMIUM SIGNALS<\/b>  •  <b>TRADEYAR<\/b>/);
-  assert.match(short, /<b>🔴 SHORT ↘<\/b>  •  <b>BTC\/USD<\/b>/);\n  assert.match(short, /<i>Bitcoin Perpetual<\/i>/);
+  assert.match(short, /<b>🔴 SHORT ↘<\/b>  •  <b>BTC\/USD<\/b>/);
+  assert.match(short, /<i>Bitcoin Perpetual<\/i>/);
   assert.match(short, /<b>STOP LOSS<\/b>  <code>66,000\.00<\/code>\s+\|\s+<b>ENTRY PRICE<\/b>  <code>65,000\.00<\/code>/);
   assert.match(short, /Entry 2: <code>65,650\.00<\/code>/);
   assert.match(short, /🎯 TP1  <code>63,500\.00<\/code>/);
