@@ -167,31 +167,31 @@ function mainMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 سیگنال‌های فیوچرز", callback_data: "futures" }
+      { text: "📈 Futures Signals", callback_data: "futures" }
     ],
-    [{ text: "🛡️ راهنمای مدیریت ریسک", callback_data: "capital_guide" }],
+    [{ text: "🛡️ Risk Management Guide", callback_data: "capital_guide" }],
     owner
       ? [
-          { text: "🗂 آرشیو سیگنال‌ها", callback_data: "issued_signals" },
-          { text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }
+          { text: "🗂 Signal Archive", callback_data: "issued_signals" },
+          { text: "📊 Recent Signals Report", callback_data: "admin:signals" }
         ]
       : [
-          { text: "🗂 آرشیو سیگنال‌ها", callback_data: "issued_signals" },
-          { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
+          { text: "🗂 Signal Archive", callback_data: "issued_signals" },
+          { text: "🔍 User Trade Monitoring", callback_data: "invite" }
         ],
     ...(owner ? [[
-      { text: "👥 مدیریت اعضا", callback_data: "members:0" },
-      { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
+      { text: "👥 Member Management", callback_data: "members:0" },
+      { text: "🔍 User Trade Monitoring", callback_data: "invite" }
     ]] : []),
     [
-      { text: "📡 وضعیت ربات", callback_data: "status" },
-      { text: "🔌 تست اتصال", callback_data: "test" }
+      { text: "📡 Bot Status", callback_data: "status" },
+      { text: "🔌 Connection Test", callback_data: "test" }
     ],
     ...(owner ? [[
-      { text: "⚠️ ارسال‌های نامشخص", callback_data: "outbox:review" },
-      { text: "ℹ️ درباره ربات", callback_data: "about" }
+      { text: "⚠️ Uncertain Deliveries", callback_data: "outbox:review" },
+      { text: "ℹ️ About", callback_data: "about" }
     ]] : [[
-      { text: "ℹ️ درباره ربات", callback_data: "about" }
+      { text: "ℹ️ About", callback_data: "about" }
     ]]),
     [{ text: "🎧 پشتیبانی", url: "https://t.me/alirza_saadati" }]
   ];
@@ -932,42 +932,42 @@ function replyMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 سیگنال‌های فیوچرز" }
+      { text: "📈 Futures Signals" }
     ],
     [
-      { text: "🛡️ راهنمای مدیریت ریسک" }
+      { text: "🛡️ Risk Management Guide" }
     ],
     owner
       ? [
-          { text: "🗂 آرشیو سیگنال‌ها" },
-          { text: "📊 گزارش سیگنال‌های اخیر" }
+          { text: "🗂 Signal Archive" },
+          { text: "📊 Recent Signals Report" }
         ]
       : [
-          { text: "🗂 آرشیو سیگنال‌ها" },
-          { text: "🔍 پایش معاملات کاربران" }
+          { text: "🗂 Signal Archive" },
+          { text: "🔍 User Trade Monitoring" }
         ],
     ...(owner ? [[
-      { text: "👥 مدیریت اعضا" },
-      { text: "🔍 پایش معاملات کاربران" }
+      { text: "👥 Member Management" },
+      { text: "🔍 User Trade Monitoring" }
     ]] : []),
     [
-      { text: "📡 وضعیت ربات" },
-      { text: "🔌 تست اتصال" }
+      { text: "📡 Bot Status" },
+      { text: "🔌 Connection Test" }
     ],
     owner
       ? [
-          { text: "⚠️ ارسال‌های نامشخص" },
-          { text: "ℹ️ درباره ربات" }
+          { text: "⚠️ Uncertain Deliveries" },
+          { text: "ℹ️ About" }
         ]
       : [
-          { text: "ℹ️ درباره ربات" }
+          { text: "ℹ️ About" }
         ]
   ];
   return {
     keyboard,
     resize_keyboard: true,
     one_time_keyboard: true,
-    input_field_placeholder: "یک گزینه از تریدیار انتخاب کنید"
+    input_field_placeholder: "Choose an option from Tradeyar"
   };
 }
 
@@ -1088,6 +1088,9 @@ async function handleTelegramCommand(command, chatId, env, message) {
     const selectedMenuText = String(message?.text || "").trim();
     const menuActions = new Map([
       ...mainMenuForChat(env, chatId).inline_keyboard.flat().map(button => [button.text, button.callback_data]),
+      ["👥 Member Management", "members:0"],
+      ["📊 Recent Signals Report", "admin:signals"],
+      ["⚠️ Uncertain Deliveries", "outbox:review"]
       ["👥 مدیریت اعضا", "members:0"],
       ["📊 گزارش سیگنال‌های اخیر", "admin:signals"],
       ["⚠️ ارسال‌های نامشخص", "outbox:review"]
