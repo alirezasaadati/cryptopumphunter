@@ -1055,6 +1055,25 @@ async function configureTelegramMenu(env, chatId) {
     menu_button: { type: "default" }
   }));
 
+  // Keep the bot's profile description and short bio English for both the
+  // default profile locale and Persian-language Telegram clients.
+  const botDescription =
+    "TRADEYAR is a specialized futures trading assistant. It identifies LONG and SHORT opportunities using a customized trading strategy and provides analytical entry levels, stop-losses, and profit targets. Signals are for research and education only. TRADEYAR does not place orders or manage exchange accounts.";
+  const botShortDescription =
+    "🤖 TRADEYAR | Futures Trading Assistant • Analytical LONG/SHORT signals";
+
+  for (const language_code of [undefined, "fa"]) {
+    const locale = language_code ? { language_code } : {};
+    tasks.push(telegram("setMyDescription", env, {
+      description: botDescription,
+      ...locale
+    }));
+    tasks.push(telegram("setMyShortDescription", env, {
+      short_description: botShortDescription,
+      ...locale
+    }));
+  }
+
   const results = await Promise.allSettled(tasks);
   const failed = results.filter(x => x.status === "rejected");
   if (failed.length) console.error("Telegram menu/profile setup warning:", failed.map(x => x.reason?.message || "Telegram API error"));
