@@ -344,18 +344,14 @@ async function fetchJson(url, label) {
 async function telegram(method, env, body) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN is not configured.");
 
-  // Protect messages for regular users, while allowing the owner to copy
-  // their own bot messages. Archive-channel posts remain protected.
-  const protectedBody = method === "sendMessage" && !isOwner(body.chat_id, env)
-    ? { ...body, protect_content: true }
-    : body;
+  // User-facing bot messages are not protected, so users can take screenshots.
 
   const response = await fetch(
     `${TELEGRAM_API}/bot${(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)}/${method}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(protectedBody)
+      body: JSON.stringify(body)
     }
   );
 
