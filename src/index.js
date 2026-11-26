@@ -1008,7 +1008,7 @@ async function configureTelegramMenu(env, chatId) {
   const botDescription =
     "🤖 تریدیار | پایش هوشمند بازار\n\nشناسایی فرصت‌های \n\nمعاملاتی در دو جهت بازار:\n\n🟢 LONG | 🔴 SHORT\n\n🔎 شناسایی فرصت‌های معاملاتی با استفاده از \n\n\"موتور قدرتمند کراکن\"\n\n📍 ارائه نقاط ورود، حد ضرر و اهداف قیمتی\n\n📊 ارزیابی شرایط بازار پیش از صدور سیگنال\n\n🛡️ توجه به مدیریت ریسک در معاملات\n\n⚡ تحلیل بازار بر اساس استراتژی اختصاصی";
   const botShortDescription =
-    "🤖 تریدیار | پایش هوشمند بازار • فرصت‌های LONG و SHORT";
+    "⚡🤖 شناسایی هوشمند معاملات بازار فیوچرز";
 
   for (const language_code of [undefined, "fa"]) {
     const locale = language_code ? { language_code } : {};
