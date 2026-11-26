@@ -1036,10 +1036,25 @@ async function configureTelegramMenu(env, chatId) {
     { command: "status", description: "Service status" },
     { command: "help", description: "Command guide" }
   ];
-  const tasks = [
-    telegram("setMyCommands", env, { commands }),
-    telegram("setChatMenuButton", env, { chat_id: chatId, menu_button: { type: "default" } }),
+
+  // Telegram may prefer localized or chat-specific command lists over the
+  // default list. Explicitly register English labels for the Persian locale
+  // and for private-chat scopes so stale Persian descriptions cannot win.
+  const scopes = [
+    { type: "default" },
+    { type: "all_private_chats" },
+    { type: "chat", chat_id: chatId }
   ];
+  const tasks = [];
+  for (const scope of scopes) {
+    tasks.push(telegram("setMyCommands", env, { commands, scope }));
+    tasks.push(telegram("setMyCommands", env, { commands, scope, language_code: "fa" }));
+  }
+  tasks.push(telegram("setChatMenuButton", env, {
+    chat_id: chatId,
+    menu_button: { type: "default" }
+  }));
+
   const results = await Promise.allSettled(tasks);
   const failed = results.filter(x => x.status === "rejected");
   if (failed.length) console.error("Telegram menu/profile setup warning:", failed.map(x => x.reason?.message || "Telegram API error"));
