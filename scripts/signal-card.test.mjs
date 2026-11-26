@@ -53,8 +53,8 @@ test("short signals render a distinct card and high risk is represented without 
 
 test("Telegram delivery uses one photo upload with a full-text fallback", async () => {
   const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
-  assert.match(source, /async function telegramPhoto[\\s\\S]*?\\/sendPhoto/);
-  assert.match(source, /async function sendSignalCardOrText[\\s\\S]*?Telegram rejected the signal image[\\s\\S]*?sendMessage/);
-  assert.match(source, /renderSignalCardPng\\(signal\\)/);
+  assert.match(source, /async function telegramPhoto[\s\S]*?\/sendPhoto/);
+  assert.match(source, /async function sendSignalCardOrText[\s\S]*?Telegram rejected the signal image[\s\S]*?sendMessage/);
+  assert.match(source, /renderSignalCardPng\(signal\)/);
   assert.match(source, /cardPng, skipCardRender: true/);
 });
