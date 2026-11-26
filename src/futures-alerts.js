@@ -37,22 +37,24 @@ export function displayEntryPrice(value, side) {
 }
 
 export function formatFuturesSignalAlert(signal, index = 1) {
-  const side = signal?.side === "LONG" ? "🟢 LONG ↗" : "🔴 SHORT ↘";
-  const risk = signal?.riskLevel === "HIGH_RISK" ? "HIGH RISK" : "STANDARD";
-  const score = Number(signal?.score);
-  const scoreLine = Number.isFinite(score) ? `\nScore: <b>${Math.round(score)}/100</b>` : "";
-  const symbol = escapeTelegramHtml(formatFuturesSymbol(signal?.symbol) + "/USD");
-  return `<b>PREMIUM SIGNALS</b>  •  <b>TRADEYAR</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `<b>${side}</b>  •  <b>${symbol}</b>\n` +
-    `<i>${escapeTelegramHtml(formatPerpetualLabel(signal?.symbol))}</i>\n\n` +
-    `<b>STOP LOSS</b>  <code>${formatSignalPrice(signal?.stop)}</code>   |   <b>ENTRY PRICE</b>  <code>${formatSignalPrice(signal?.entry)}</code>\n` +
-    `Entry 2: <code>${formatSignalPrice(displayEntryPrice(signal?.entry, signal?.side))}</code>\n\n` +
-    `<b>TAKE PROFIT TARGETS</b>\n` +
-    `🎯 TP1  <code>${formatSignalPrice(signal?.target1)}</code>\n` +
-    `🎯 TP2  <code>${formatSignalPrice(signal?.target2)}</code>\n` +
-    `🎯 TP3  <code>${formatSignalPrice(signal?.target3)}</code>\n\n` +
-    `<b>RISK</b>  ${risk}${scoreLine}`;
+  const side = signal?.side === "LONG" ? "LONG 🟢" : "SHORT 🔴";
+  const symbol = escapeTelegramHtml(formatFuturesSymbol(signal?.symbol) + "/USDT");
+  const lines = [
+    `<b>${symbol}</b>`,
+    `<b>${side}</b>`,
+    "",
+    `Entry Zone 1 : ${formatSignalPrice(signal?.entry)}`,
+    `Entry Zone 2 : ${formatSignalPrice(displayEntryPrice(signal?.entry, signal?.side))}`,
+    "",
+    `🎯 TP 1 : ${formatSignalPrice(signal?.target1)}`,
+    `🎯 TP 2 : ${formatSignalPrice(signal?.target2)}`,
+    `🎯 TP 3 : ${formatSignalPrice(signal?.target3)}`,
+    "",
+    `⛔ SL : ${formatSignalPrice(signal?.stop)}`
+  ];
+  // Prefix every line with a left-to-right mark so Telegram keeps the
+  // English signal aligned from the left even in RTL-language clients.
+  return lines.map(line => `\u200E${line}`).join("\n");
 }
 function formatFuturesSymbol(symbol) {
   const normalized = String(symbol || "—").trim().toUpperCase()
