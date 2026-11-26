@@ -496,7 +496,7 @@ function archiveChannelId(env) {
 async function sendArchiveAccessLink(env, userId) {
   const channelId = archiveChannelId(env);
   if (!channelId) return sendMessage(env,userId,"⚠️ Archive access has not been fully configured yet.");
-  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ دسترسی شما به آرشیو Connected نیست.");
+  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ You do not have archive access.");
   try {
     const key="signal-archive:join-request-link";
     let link=null;
@@ -608,7 +608,7 @@ async function requestMembership(env, chatId, message) {
         env,
         chatId,
         "⏳ درخواست عضویت شما قبلاً ثبت شده است.\n\n" +
-        "درخواست شما در انتظار بررسی است. پس از تعیین نتیجه، از طریق همین ربات مطلع می‌شوید."
+        "درخواست شما در انتظار بررسی است. You will be notified here once a decision is made."
       );
       return;
     }
@@ -670,7 +670,7 @@ async function requestMembership(env, chatId, message) {
       chatId,
       "✅ درخواست عضویت شما با موفقیت ثبت شد.\n\n" +
       "⏳ درخواست شما در انتظار بررسی است.\n" +
-      "پس از تعیین نتیجه، از طریق همین ربات مطلع می‌شوید."
+      "You will be notified here once a decision is made."
     );
   } catch (error) {
     try {
@@ -756,7 +756,7 @@ async function handleAdminMembershipCallback(query, env) {
         "🎉 به خانواده CRYPTO PUMP HUNTER خوش آمدید!\n\n" +
         "✅ عضویت شما با موفقیت تأیید شد و دسترسی شما Connected است.\n\n" +
         "🚀 از این لحظه می‌توانید از اسکن بازار اسپات و سیگنال‌های تحلیلی فیوچرز استفاده کنید.\n\n" +
-        "⚠️ سیگنال‌ها صرفاً تحلیلی هستند؛ قبل از هر معامله مدیریت ریسک را رعایت کنید."
+        "⚠️ Signals are for analysis only. Apply proper risk management before trading."
       );
       await showMenu(env, applicantId);
 
@@ -795,11 +795,11 @@ async function handleAdminMembershipCallback(query, env) {
 async function handleOwnerAccessCommand(command, chatId, env, message) {
   if (!["/allow", "/revoke", "/members", "/member"].includes(command)) return false;
   if (!isOwner(chatId, env)) {
-    await sendMessage(env, chatId, "⛔ این دستور فقط برای مدیر ربات Connected است.");
+    await sendMessage(env, chatId, "⛔ This command is available to the bot administrator only.");
     return true;
   }
   if (!env.APP_KV) {
-    await sendMessage(env, chatId, "❌ اتصال WATCHLIST_KV Connected نیست؛ ابتدا KV را به Worker Connected کن.");
+    await sendMessage(env, chatId, "❌ WATCHLIST_KV is not configured. Bind KV to the Worker first.");
     return true;
   }
 
@@ -838,7 +838,7 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
       await restoreArchiveMemberEligibility(env,targetId);
       await sendMessage(env, targetId,
         "🎉 دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر Connected شد.\n\n" +
-        "خوش آمدید! اکنون می‌توانید از امکانات ربات استفاده کنید.");
+        "Welcome! You can now use the bot.");
       await showMenu(env, targetId);
       await sendMessage(env, chatId, `✅ کاربر ${targetId} مجاز شد و دسترسی او Connected است.`);
     } else {
@@ -884,7 +884,7 @@ async function showMemberList(env, ownerId, page = 0) {
   if (page > 0) keyboard.push([{ text: "⬅️ Previous page", callback_data: `members:${page-1}` }]);
   keyboard.push([{ text: "🏠 Main Menu", callback_data: "menu" }]);
   await sendMessage(env, ownerId,
-    `👥 Member Management | صفحه ${page+1}\n━━━━━━━━━━━━━━━━━━\nConnected در این صفحه: ${active}\nلغو دسترسی در این صفحه: ${revoked}\n\nبرای دیدن پروفایل و مدیریت دسترسی روی عضو بزن.`,
+    `👥 MEMBER MANAGEMENT | PAGE ${page+1}\n━━━━━━━━━━━━━━━━━━\nActive on this page: ${active}\nRevoked on this page: ${revoked}\n\nSelect a member to view their profile and manage access.`,
     { inline_keyboard: keyboard });
 }
 async function showMemberProfile(env, ownerId, id) {
@@ -893,8 +893,8 @@ async function showMemberProfile(env, ownerId, id) {
   if(!m){await sendMessage(env,ownerId,"Member not found.");return;}
   const blocked=m.revoked===true||m.approved===false;
   const name=[m.firstName,m.lastName].filter(Boolean).join(" ")||"Not provided";
-  const body=["👤 MEMBER PROFILE","━━━━━━━━━━━━━━━━━━",`Name: ${name}`,`Username: ${m.username?"@"+m.username:"Not provided"}`,`Telegram ID: ${m.userId||id}`,`Chat ID: ${m.chatId||id}`,`Status: ${blocked?"🚫 Revoke Access":"✅ مجاز"}`,`Requested: ${m.requestedAt||"نامشخص"}`,`Approved: ${m.approvedAt||"Not provided"}`,`آخرین Connected‌سازی: ${m.allowedAt||"Not provided"}`,`Access revoked: ${m.revokedAt||"Not provided"}`].join("\n");
-  await sendMessage(env,ownerId,body,{inline_keyboard:[[blocked?{text:"✅ اجازه دسترسی مجدد",callback_data:`mall:${id}`}:{text:"🚫 Disconnected دسترسی",callback_data:`mrev:${id}`}],[{text:"⬅️ Back",callback_data:"members:"}]]});
+  const body=["👤 MEMBER PROFILE","━━━━━━━━━━━━━━━━━━",`Name: ${name}`,`Username: ${m.username?"@"+m.username:"Not provided"}`,`Telegram ID: ${m.userId||id}`,`Chat ID: ${m.chatId||id}`,`Status: ${blocked?"🚫 Revoked":"✅ Active"}`,`Requested: ${m.requestedAt||"Unknown"}`,`Approved: ${m.approvedAt||"Not provided"}`,`Last enabled: ${m.allowedAt||"Not provided"}`,`Access revoked: ${m.revokedAt||"Not provided"}`].join("\n");
+  await sendMessage(env,ownerId,body,{inline_keyboard:[[blocked?{text:"✅ Restore Access",callback_data:`mall:${id}`}:{text:"🚫 Revoke Access",callback_data:`mrev:${id}`}],[{text:"⬅️ Back",callback_data:"members:"}]]});
 }
 async function changeMemberAccess(env,ownerId,id,allow) {
   if(!isOwner(ownerId,env)||!env.APP_KV||!/^-?\d+$/.test(id))return;
@@ -905,7 +905,7 @@ async function changeMemberAccess(env,ownerId,id,allow) {
   } catch(error) {
     const message=String(error?.message||error);
     console.error("Member access lookup failed:",message);
-    await sendMessage(env,ownerId,"❌ اطلاعات عضو از KV خوانده نشد؛ هیچ تغییری اعمال نشد.\nReason: "+message.slice(0,500));
+    await sendMessage(env,ownerId,"❌ Could not read member data from KV. No changes were made.\nReason: "+message.slice(0,500));
     return;
   }
   if(!m){await sendMessage(env,ownerId,"Member not found.");return;}
@@ -915,14 +915,14 @@ async function changeMemberAccess(env,ownerId,id,allow) {
   } catch(error) {
     const message=String(error?.message||error);
     console.error("Member access KV write failed:",message);
-    await sendMessage(env,ownerId,"❌ تغییر دسترسی ذخیره نشد؛ هیچ تغییری در وضعیت عضو تأیید نمی‌شود.\nReason: "+message.slice(0,500));
+    await sendMessage(env,ownerId,"❌ Access change was not saved. The member's status remains unchanged.\nReason: "+message.slice(0,500));
     return;
   }
   const archiveResult=allow
     ? await restoreArchiveMemberEligibility(env,id)
     : await removeArchiveMember(env,id);
   try {
-    await sendMessage(env,id,allow?"🎉 دسترسی شما دوباره Connected شد.":"⛔ Your access has been revoked by the administrator.");
+    await sendMessage(env,id,allow?"🎉 Your access has been restored.":"⛔ Your access has been revoked by the administrator.");
   } catch(error) {
     console.warn("Member access notification failed:",String(error?.message||error));
   }
@@ -932,7 +932,7 @@ async function changeMemberAccess(env,ownerId,id,allow) {
       "Reason: "+String(archiveResult?.error||"Unknown error").slice(0,500));
   } else {
     await sendMessage(env,ownerId,allow
-      ?"✅ دسترسی عضو در ربات Connected شد و محدودیت کانال آرشیو برداشته شد."
+      ?"✅ Member access enabled and archive-channel restriction removed."
       :"✅ Member access revoked and archive-channel membership blocked.");
   }
   await showMemberProfile(env,ownerId,id);
@@ -1044,7 +1044,7 @@ async function handleReplyMenuAction(action, env, chatId, message) {
     await sendMessage(env, chatId,
       "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
       "( برای بررسی دقیق علل PROFIT و LOSS هر کاربر ) اقدام کنید .\n\n" +
-      "🔗 لینک : https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
+      "🔗 Link: https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
     return;
   }
   if (action === "futures") return runFuturesSignalsForChat(env, chatId);
@@ -1069,7 +1069,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
       ["📊 Recent Signal Report", "admin:signals"],
       ["⚠️ Uncertain Deliveries", "outbox:review"]
     ]);
-    if (selectedMenuText === "📋 منو" || selectedMenuText === "منو" || selectedMenuText === "/menu") {
+    if (selectedMenuText === "📋 Main Menu" || selectedMenuText === "Main Menu" || selectedMenuText === "/menu") {
       if (await isApproved(chatId, env)) await showMenu(env, chatId);
       else await requestMembership(env, chatId, message);
       return;
@@ -1147,7 +1147,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     if (command === "/close_trade") {
       if (!isOwner(chatId, env)) {
-        await sendMessage(env, chatId, "⛔ این دستور فقط برای مالک ربات Connected است.");
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
         return;
       }
       const tradeId = String(message?.text || "").trim().split(/\s+/)[1] || "";
@@ -1179,7 +1179,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     if (command === "/diagfutures") {
       if (!isOwner(chatId, env)) {
-        await sendMessage(env, chatId, "⛔ این دستور فقط برای مالک ربات Connected است.");
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
         return;
       }
       await sendMessage(env, chatId, "🧪 Read-only diagnostics started. No signals will be saved or sent.");
@@ -1283,7 +1283,7 @@ async function handleCallback(query, env) {
       await sendMessage(env, chatId,
         "میتوانید از لینک زیر جهت ثبت نام در صرافی البانک\n" +
         "( برای بررسی دقیق علل PROFIT و LOSS هر کاربر ) اقدام کنید .\n\n" +
-        "🔗 لینک : https://www.lbk.pub/ref/67XF8");
+        "🔗 Link: https://www.lbk.pub/ref/67XF8");
       return;
     }
     if (action === "futures") {
@@ -1345,7 +1345,7 @@ async function showStatus(env, chatId) {
     "Operating mode:\n" +
     "Kraken Futures signal engine\n" +
     "KV connection:\n" +
-    `${env.APP_KV ? "Connected" : "غیرConnected"}\n` +
+    `${env.APP_KV ? "Connected" : "Disconnected"}\n` +
     "Last futures scan:\n" +
     lastScan,
     menuForChat(env, chatId)
@@ -1373,7 +1373,7 @@ async function registerWebhook(request, env) {
   ) {
     return json({
       ok: false,
-      error: "WEBHOOK_SECRET فقط باید شامل حروف انگلیسی، عدد، _ یا - باشد."
+      error: "WEBHOOK_SECRET may contain only English letters, numbers, _ or -."
     }, 400);
   }
 
@@ -1409,7 +1409,7 @@ async function testDataSources() {
     const tickers = await getKrakenFuturesUniverse();
     const candles = await getKrakenFuturesCandles(tickers[0].symbol, "1h");
     result.krakenFutures = { ok: candles.length > 0, symbols: tickers.length, sample: tickers[0].symbol, candles: candles.length,
-      error: candles.length ? undefined : "Kraken Futures کندل بسته‌شده برنگرداند." };
+      error: candles.length ? undefined : "Kraken Futures returned no closed candles." };
   } catch (error) { result.krakenFutures = { ok: false, error: error.message }; }
   return result;
 }
@@ -1507,7 +1507,7 @@ async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL)
     } catch (error) {
       lastError = error;
       if (attempt === maxAttempts) {
-        throw new Error(`${label}: خطای اتصال پس از ${attempt} تلاش: ${String(error?.message || error).slice(0, 180)}`);
+        throw new Error(`${label}: Connection failed after ${attempt} attempts: ${String(error?.message || error).slice(0, 180)}`);
       }
       await new Promise(resolve => setTimeout(resolve, 250 * attempt));
       continue;
@@ -1530,15 +1530,15 @@ async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL)
     try {
       data = JSON.parse(body);
     } catch {
-      throw new Error(`${label}: پاسخ موفق HTTP ${response.status}، اما JSON معتبر نیست.`);
+      throw new Error(`${label}: HTTP ${response.status} succeeded, but the response was not valid JSON.`);
     }
     if (data?.result === "error" || (Array.isArray(data?.errors) && data.errors.length)) {
-      throw new Error(`${label}: ${(data.errors || []).join(", ") || data.error || "خطای Kraken"}`);
+      throw new Error(`${label}: ${(data.errors || []).join(", ") || data.error || "Kraken error"}`);
     }
     return data;
   }
 
-  throw lastError || new Error(`${label}: درخواست ناموفق بود.`);
+  throw lastError || new Error(`${label}: Request failed.`);
 }
 
 function isKrakenPerpetualTicker(item) {
@@ -1555,7 +1555,7 @@ function isKrakenPerpetualTicker(item) {
 async function getKrakenFuturesUniverse() {
   const data = await krakenFuturesJson("/tickers", "Kraken Futures tickers");
   if (!Array.isArray(data?.tickers)) {
-    throw new Error("فهرست نمادهای Kraken Futures معتبر نیست.");
+    throw new Error("Kraken Futures returned an invalid symbol list.");
   }
   return data.tickers
     .filter(isKrakenPerpetualTicker)
@@ -1573,7 +1573,7 @@ async function getKrakenFuturesCandles(symbol, interval) {
   const data = await krakenFuturesJson(url.replace(FUTURES_CONFIG.CHARTS_URL, ""),
     `Kraken ${symbol} ${interval}`, FUTURES_CONFIG.CHARTS_URL);
   if (!Array.isArray(data?.candles)) {
-    throw new Error(`ساختار کندل‌های Kraken برای ${symbol} معتبر نیست.`);
+    throw new Error(`Kraken returned an invalid candle structure for ${symbol}.`);
   }
   const candles = data.candles.map(row => ({
     time: Number(row.time) < 1e12 ? Number(row.time) * 1000 : Number(row.time),
@@ -1940,7 +1940,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const swing = candles1h.slice(-13, -1), swingLow = Math.min(...swing.map(c => c.low)), swingHigh = Math.max(...swing.map(c => c.high)), liquidityBuffer = atr * 0.25;
   const stop = side === "LONG" ? Math.min(swingLow - liquidityBuffer, entry - atr * 1.6) : Math.max(swingHigh + liquidityBuffer, entry + atr * 1.6);
   const risk = side === "LONG" ? entry - stop : stop - entry, riskPct = risk / entry;
-  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.004 || riskPct > 0.035) return { symbol: ticker.symbol, fourHourTrend, rejected: "فاصله حد ضرر خارج از محدوده استاNone (0.4% تا 3.5%) است" };
+  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.004 || riskPct > 0.035) return { symbol: ticker.symbol, fourHourTrend, rejected: "Stop distance is outside the standard range (0.4% to 3.5%)." };
   const direction = side === "LONG" ? 1 : -1, target1 = entry + direction * risk * 1.5, target2 = entry + direction * risk * 2.5, target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = standardEntryPassed, highRiskEligible = !standardEntryPassed && score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE;
