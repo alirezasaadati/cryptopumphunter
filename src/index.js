@@ -889,9 +889,10 @@ async function showMemberList(env, ownerId, page = 0) {
   }
   if (page > 0) keyboard.push([{ text: "⬅️ صفحه قبل", callback_data: `members:${page-1}` }]);
   keyboard.push([{ text: "🏠 منوی اصلی", callback_data: "menu" }]);
+  const faDigits = value => String(value).replace(/\\d/g, digit => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)]);
   await sendMessage(env, ownerId,
-    `👥 مدیریت اعضا | صفحه ${page+1}\n━━━━━━━━━━━━━━━━━━\nاعضای فعال در این صفحه: ${active}\nدسترسی لغوشده در این صفحه: ${revoked}\n\nبرای مشاهده پروفایل و مدیریت دسترسی، یک عضو را انتخاب کنید.`,
-    { inline_keyboard: keyboard });
+    `<b>مدیریت اعضا</b>\n\n- مدیریت اعضا | صفحه ${faDigits(page+1)}\n- اعضای فعال در این صفحه: ${faDigits(active)}\n- دسترسی لغوشده در این صفحه: ${faDigits(revoked)}`,
+    { inline_keyboard: keyboard }, "HTML");
 }
 async function showMemberProfile(env, ownerId, id) {
   if (!isOwner(ownerId,env) || !env.APP_KV || !/^-?\d+$/.test(id)) return;
