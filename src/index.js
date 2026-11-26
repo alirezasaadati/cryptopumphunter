@@ -167,31 +167,31 @@ function mainMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 Futures Signals", callback_data: "futures" }
+      { text: "📈 سیگنال‌های فیوچرز", callback_data: "futures" }
     ],
-    [{ text: "🛡️ Risk Management Guide", callback_data: "capital_guide" }],
+    [{ text: "🛡️ راهنمای مدیریت ریسک", callback_data: "capital_guide" }],
     owner
       ? [
-          { text: "🗂 Signal Archive", callback_data: "issued_signals" },
-          { text: "📊 Recent Signals Report", callback_data: "admin:signals" }
+          { text: "🗂 آرشیو سیگنال‌ها", callback_data: "issued_signals" },
+          { text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }
         ]
       : [
-          { text: "🗂 Signal Archive", callback_data: "issued_signals" },
-          { text: "🔍 User Trade Monitoring", callback_data: "invite" }
+          { text: "🗂 آرشیو سیگنال‌ها", callback_data: "issued_signals" },
+          { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
         ],
     ...(owner ? [[
-      { text: "👥 Member Management", callback_data: "members:0" },
-      { text: "🔍 User Trade Monitoring", callback_data: "invite" }
+      { text: "👥 مدیریت اعضا", callback_data: "members:0" },
+      { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
     ]] : []),
     [
-      { text: "📡 Bot Status", callback_data: "status" },
-      { text: "🔌 Connection Test", callback_data: "test" }
+      { text: "📡 وضعیت ربات", callback_data: "status" },
+      { text: "🔌 تست اتصال", callback_data: "test" }
     ],
     ...(owner ? [[
-      { text: "⚠️ Uncertain Deliveries", callback_data: "outbox:review" },
-      { text: "ℹ️ About", callback_data: "about" }
+      { text: "⚠️ ارسال‌های نامشخص", callback_data: "outbox:review" },
+      { text: "ℹ️ درباره ربات", callback_data: "about" }
     ]] : [[
-      { text: "ℹ️ About", callback_data: "about" }
+      { text: "ℹ️ درباره ربات", callback_data: "about" }
     ]]),
     [{ text: "🎧 پشتیبانی", url: "https://t.me/alirza_saadati" }]
   ];
@@ -932,42 +932,42 @@ function replyMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 Futures Signals" }
+      { text: "📈 سیگنال‌های فیوچرز" }
     ],
     [
-      { text: "🛡️ Risk Management Guide" }
+      { text: "🛡️ راهنمای مدیریت ریسک" }
     ],
     owner
       ? [
-          { text: "🗂 Signal Archive" },
-          { text: "📊 Recent Signals Report" }
+          { text: "🗂 آرشیو سیگنال‌ها" },
+          { text: "📊 گزارش سیگنال‌های اخیر" }
         ]
       : [
-          { text: "🗂 Signal Archive" },
-          { text: "🔍 User Trade Monitoring" }
+          { text: "🗂 آرشیو سیگنال‌ها" },
+          { text: "🔍 پایش معاملات کاربران" }
         ],
     ...(owner ? [[
-      { text: "👥 Member Management" },
-      { text: "🔍 User Trade Monitoring" }
+      { text: "👥 مدیریت اعضا" },
+      { text: "🔍 پایش معاملات کاربران" }
     ]] : []),
     [
-      { text: "📡 Bot Status" },
-      { text: "🔌 Connection Test" }
+      { text: "📡 وضعیت ربات" },
+      { text: "🔌 تست اتصال" }
     ],
     owner
       ? [
-          { text: "⚠️ Uncertain Deliveries" },
-          { text: "ℹ️ About" }
+          { text: "⚠️ ارسال‌های نامشخص" },
+          { text: "ℹ️ درباره ربات" }
         ]
       : [
-          { text: "ℹ️ About" }
+          { text: "ℹ️ درباره ربات" }
         ]
   ];
   return {
     keyboard,
     resize_keyboard: true,
     one_time_keyboard: true,
-    input_field_placeholder: "Choose an option from Tradeyar"
+    input_field_placeholder: "یک گزینه از تریدیار انتخاب کنید"
   };
 }
 
