@@ -166,31 +166,31 @@ function mainMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 Futures Signals", callback_data: "futures" }
+      { text: "📈 سیگنال‌های فیوچرز", callback_data: "futures" }
     ],
-    [{ text: "🛡️ Risk Management Guide", callback_data: "capital_guide" }],
+    [{ text: "🛡️ راهنمای مدیریت ریسک", callback_data: "capital_guide" }],
     owner
       ? [
-          { text: "🗂 Signal Archive", callback_data: "issued_signals" },
-          { text: "📊 Recent Signal Report", callback_data: "admin:signals" }
+          { text: "🗂 آرشیو سیگنال‌ها", callback_data: "issued_signals" },
+          { text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }
         ]
       : [
-          { text: "🗂 Signal Archive", callback_data: "issued_signals" },
-          { text: "🔍 User Trade Monitor", callback_data: "invite" }
+          { text: "🗂 آرشیو سیگنال‌ها", callback_data: "issued_signals" },
+          { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
         ],
     ...(owner ? [[
-      { text: "👥 Member Management", callback_data: "members:0" },
-      { text: "🔍 User Trade Monitor", callback_data: "invite" }
+      { text: "👥 مدیریت اعضا", callback_data: "members:0" },
+      { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
     ]] : []),
     [
-      { text: "📡 Bot Status", callback_data: "status" },
-      { text: "🔌 Connection Test", callback_data: "test" }
+      { text: "📡 وضعیت ربات", callback_data: "status" },
+      { text: "🔌 تست اتصال", callback_data: "test" }
     ],
     ...(owner ? [[
-      { text: "⚠️ Uncertain Deliveries", callback_data: "outbox:review" },
-      { text: "ℹ️ About", callback_data: "about" }
+      { text: "⚠️ ارسال‌های نامشخص", callback_data: "outbox:review" },
+      { text: "ℹ️ درباره ربات", callback_data: "about" }
     ]] : [[
-      { text: "ℹ️ About", callback_data: "about" }
+      { text: "ℹ️ درباره ربات", callback_data: "about" }
     ]])
   ];
   return { inline_keyboard: keyboard };
@@ -645,23 +645,23 @@ async function requestMembership(env, chatId, message) {
       : "None";
 
     const adminText =
-      "🔔 NEW MEMBERSHIP REQUEST\n" +
+      "🔔 درخواست عضویت جدید\n" +
       "━━━━━━━━━━━━━━━━━━\n\n" +
-      `👤 Name: ${displayName}\n` +
-      `🔗 Username: ${username}\n` +
-      `🆔 User ID: ${applicant.userId}\n` +
-      `🕒 Requested at: ${applicant.requestedAt}\n\n` +
-      "Use the buttons below to review this request.";
+      `👤 نام: ${displayName}\n` +
+      `🔗 نام کاربری: ${username}\n` +
+      `🆔 شناسه کاربر: ${applicant.userId}\n` +
+      `🕒 زمان درخواست: ${applicant.requestedAt}\n\n` +
+      "برای بررسی درخواست از دکمه‌های زیر استفاده کنید.";
 
     const adminButtons = {
       inline_keyboard: [
         [
           {
-            text: "✅ Approve",
+            text: "✅ تأیید",
             callback_data: `approve:${chatId}`
           },
           {
-            text: "❌ Reject",
+            text: "❌ رد درخواست",
             callback_data: `reject:${chatId}`
           }
         ]
@@ -673,9 +673,9 @@ async function requestMembership(env, chatId, message) {
     await sendMessage(
       env,
       chatId,
-      "✅ Your membership request has been submitted.\n\n" +
-      "⏳ Your request is awaiting review.\n" +
-      "You will be notified here once a decision is made."
+      "✅ درخواست عضویت شما ثبت شد.\n\n" +
+      "⏳ درخواست شما در انتظار بررسی است.\n" +
+      "پس از تصمیم‌گیری، همین‌جا به شما اطلاع می‌دهیم."
     );
   } catch (error) {
     try {
@@ -687,7 +687,7 @@ async function requestMembership(env, chatId, message) {
     await sendMessage(
       env,
       chatId,
-      "❌ Could not submit your request.\nPlease try again shortly."
+      "❌ ثبت درخواست انجام نشد.\nلطفاً کمی بعد دوباره تلاش کنید."
     );
   }
 }
@@ -884,10 +884,10 @@ async function showMemberList(env, ownerId, page = 0) {
   }
   if (result.list_complete === false && result.cursor) {
     await env.APP_KV.put(`admin:members:cursor:${ownerId}:${page+1}`, result.cursor, { expirationTtl: 3600 });
-    keyboard.push([{ text: "Next page ➡️", callback_data: `members:${page+1}` }]);
+    keyboard.push([{ text: "صفحه بعد ➡️", callback_data: `members:${page+1}` }]);
   }
-  if (page > 0) keyboard.push([{ text: "⬅️ Previous page", callback_data: `members:${page-1}` }]);
-  keyboard.push([{ text: "🏠 Main Menu", callback_data: "menu" }]);
+  if (page > 0) keyboard.push([{ text: "⬅️ صفحه قبل", callback_data: `members:${page-1}` }]);
+  keyboard.push([{ text: "🏠 منوی اصلی", callback_data: "menu" }]);
   await sendMessage(env, ownerId,
     `👥 MEMBER MANAGEMENT | PAGE ${page+1}\n━━━━━━━━━━━━━━━━━━\nActive on this page: ${active}\nRevoked on this page: ${revoked}\n\nSelect a member to view their profile and manage access.`,
     { inline_keyboard: keyboard });
@@ -899,7 +899,7 @@ async function showMemberProfile(env, ownerId, id) {
   const blocked=m.revoked===true||m.approved===false;
   const name=[m.firstName,m.lastName].filter(Boolean).join(" ")||"Not provided";
   const body=["👤 MEMBER PROFILE","━━━━━━━━━━━━━━━━━━",`Name: ${name}`,`Username: ${m.username?"@"+m.username:"Not provided"}`,`Telegram ID: ${m.userId||id}`,`Chat ID: ${m.chatId||id}`,`Status: ${blocked?"🚫 Revoked":"✅ Active"}`,`Requested: ${m.requestedAt||"Unknown"}`,`Approved: ${m.approvedAt||"Not provided"}`,`Last enabled: ${m.allowedAt||"Not provided"}`,`Access revoked: ${m.revokedAt||"Not provided"}`].join("\n");
-  await sendMessage(env,ownerId,body,{inline_keyboard:[[blocked?{text:"✅ Restore Access",callback_data:`mall:${id}`}:{text:"🚫 Revoke Access",callback_data:`mrev:${id}`}],[{text:"⬅️ Back",callback_data:"members:"}]]});
+  await sendMessage(env,ownerId,body,{inline_keyboard:[[blocked?{text:"✅ فعال‌سازی دسترسی",callback_data:`mall:${id}`}:{text:"🚫 لغو دسترسی",callback_data:`mrev:${id}`}],[{text:"⬅️ بازگشت",callback_data:"members:"}]]});
 }
 async function changeMemberAccess(env,ownerId,id,allow) {
   if(!isOwner(ownerId,env)||!env.APP_KV||!/^-?\d+$/.test(id))return;
@@ -948,42 +948,42 @@ function replyMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
     [
-      { text: "📈 Futures Signals" }
+      { text: "📈 سیگنال‌های فیوچرز" }
     ],
     [
-      { text: "🛡️ Risk Management Guide" }
+      { text: "🛡️ راهنمای مدیریت ریسک" }
     ],
     owner
       ? [
-          { text: "🗂 Signal Archive" },
-          { text: "📊 Recent Signal Report" }
+          { text: "🗂 آرشیو سیگنال‌ها" },
+          { text: "📊 گزارش سیگنال‌های اخیر" }
         ]
       : [
-          { text: "🗂 Signal Archive" },
-          { text: "🔍 User Trade Monitor" }
+          { text: "🗂 آرشیو سیگنال‌ها" },
+          { text: "🔍 پایش معاملات کاربران" }
         ],
     ...(owner ? [[
-      { text: "👥 Member Management" },
-      { text: "🔍 User Trade Monitor" }
+      { text: "👥 مدیریت اعضا" },
+      { text: "🔍 پایش معاملات کاربران" }
     ]] : []),
     [
-      { text: "📡 Bot Status" },
-      { text: "🔌 Connection Test" }
+      { text: "📡 وضعیت ربات" },
+      { text: "🔌 تست اتصال" }
     ],
     owner
       ? [
-          { text: "⚠️ Uncertain Deliveries" },
-          { text: "ℹ️ About" }
+          { text: "⚠️ ارسال‌های نامشخص" },
+          { text: "ℹ️ درباره ربات" }
         ]
       : [
-          { text: "ℹ️ About" }
+          { text: "ℹ️ درباره ربات" }
         ]
   ];
   return {
     keyboard,
     resize_keyboard: true,
     one_time_keyboard: true,
-    input_field_placeholder: "Choose a TRADEYAR option"
+    input_field_placeholder: "یک گزینه از تریدیار انتخاب کنید"
   };
 }
 
@@ -994,11 +994,11 @@ function menuForChat(env, chatId) {
 }
 async function configureTelegramMenu(env, chatId) {
   const commands = [
-    { command: "start", description: "Start and introduction" },
-    { command: "menu", description: "Open the main menu" },
-    { command: "futures", description: "Get futures signals" },
-    { command: "status", description: "Service status" },
-    { command: "help", description: "Command guide" }
+    { command: "start", description: "شروع ربات و معرفی" },
+    { command: "menu", description: "باز کردن منوی اصلی" },
+    { command: "futures", description: "دریافت سیگنال‌های فیوچرز" },
+    { command: "status", description: "وضعیت سرویس" },
+    { command: "help", description: "راهنمای دستورات" }
   ];
 
   // Telegram may prefer localized or chat-specific command lists over the
@@ -1052,7 +1052,7 @@ async function showMenu(env, chatId) {
   await sendMessage(
     env,
     chatId,
-    "📋 TRADEYAR MAIN MENU",
+    "📋 منوی اصلی تریدیار",
     replyMenuForChat(env, chatId)
   );
 }
@@ -1063,8 +1063,8 @@ async function showWelcome(env, chatId, welcome = true) {
     env,
     chatId,
     welcome
-      ? "🤖 Welcome to TRADEYAR!\nTap the keyboard button beside the message field to open the main menu."
-      : "TRADEYAR main menu:",
+      ? "🤖 به تریدیار خوش آمدید!\nبرای باز کردن منوی اصلی، دکمه صفحه‌کلید کنار کادر پیام را لمس کنید."
+      : "منوی اصلی تریدیار:",
     replyMenuForChat(env, chatId)
   );
 }
@@ -1072,7 +1072,7 @@ async function showWelcome(env, chatId, welcome = true) {
 async function handleReplyMenuAction(action, env, chatId, message) {
   if (action.startsWith("members:") || action.startsWith("admin:") || action.startsWith("outbox:")) {
     if (!isOwner(chatId, env)) {
-      await sendMessage(env, chatId, "⛔ This option is available to the bot owner only.", menuForChat(env, chatId));
+      await sendMessage(env, chatId, "⛔ این گزینه فقط برای مالک ربات در دسترس است.", menuForChat(env, chatId));
       return;
     }
     if (action.startsWith("members:")) return showMemberList(env, chatId, Number(action.slice(8)) || 0);
@@ -1081,7 +1081,7 @@ async function handleReplyMenuAction(action, env, chatId, message) {
   }
   if (action === "invite") {
     await sendMessage(env, chatId,
-      "Register with LBank using the link below\n" +
+      "برای پایش دقیق سود و زیان معاملات، از طریق لینک زیر در LBank ثبت‌نام کنید.\n" +
       "(for a detailed review of each user's profit and loss)\n\n" +
       "🔗 Link: https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
     return;
@@ -1104,9 +1104,9 @@ async function handleTelegramCommand(command, chatId, env, message) {
     const selectedMenuText = String(message?.text || "").trim();
     const menuActions = new Map([
       ...mainMenuForChat(env, chatId).inline_keyboard.flat().map(button => [button.text, button.callback_data]),
-      ["👥 Member Management", "members:0"],
-      ["📊 Recent Signal Report", "admin:signals"],
-      ["⚠️ Uncertain Deliveries", "outbox:review"]
+      ["👥 مدیریت اعضا", "members:0"],
+      ["📊 گزارش سیگنال‌های اخیر", "admin:signals"],
+      ["⚠️ ارسال‌های نامشخص", "outbox:review"]
     ]);
     if (selectedMenuText === "📋 Main Menu" || selectedMenuText === "Main Menu" || selectedMenuText === "/menu") {
       if (await isApproved(chatId, env)) await showMenu(env, chatId);
@@ -1169,16 +1169,16 @@ async function handleTelegramCommand(command, chatId, env, message) {
       await sendMessage(
         env,
         chatId,
-        "📘 TRADEYAR COMMAND GUIDE\n\n" +
-        "/start - Start the bot\n" +
-        "/menu - Open the main menu\n" +
-        "/futures - Get futures signals\n" +
-        "/diagfutures - Read-only diagnostic report (owner)\n" +
-        "/close_trade <ID> - Close an internal tracking record (owner; does not close an exchange position)\n" +
-        "/scan - Run a manual spot-market scan\n" +
-        "/status - Check bot status\n" +
-        "/help - Show this guide\n\n" +
-        "Scans run only when you request them manually.",
+        "📘 راهنمای دستورات تریدیار\n\n" +
+        "/start - شروع ربات\n" +
+        "/menu - باز کردن منوی اصلی\n" +
+        "/futures - دریافت سیگنال‌های فیوچرز\n" +
+        "/diagfutures - گزارش عیب‌یابی فقط‌خواندنی (مالک)\n" +
+        "/close_trade <ID> - بستن رکورد پیگیری داخلی (مالک؛ پوزیشن صرافی را نمی‌بندد)\n" +
+        "/scan - اجرای اسکن دستی بازار اسپات\n" +
+        "/status - بررسی وضعیت ربات\n" +
+        "/help - نمایش این راهنما\n\n" +
+        "اسکن‌ها فقط با درخواست دستی شما اجرا می‌شوند.",
         menuForChat(env, chatId)
       );
       return;
@@ -1320,7 +1320,7 @@ async function handleCallback(query, env) {
     }
     if (action === "invite") {
       await sendMessage(env, chatId,
-        "Register with LBank using the link below\n" +
+        "برای پایش دقیق سود و زیان معاملات، از طریق لینک زیر در LBank ثبت‌نام کنید.\n" +
         "(for a detailed review of each user's profit and loss)\n\n" +
         "🔗 Link: https://www.lbk.pub/ref/67XF8");
       return;
@@ -1361,7 +1361,7 @@ async function handleCallback(query, env) {
 }
 
 async function showStatus(env, chatId) {
-  let lastScan = "No saved futures scan is available yet.";
+  let lastScan = "هنوز گزارشی از اسکن فیوچرز ذخیره نشده است.";
 
   if (env.APP_KV) {
     try {
@@ -1372,32 +1372,32 @@ async function showStatus(env, chatId) {
         }) + " UTC";
       }
     } catch {
-      lastScan = "Could not read the previous scan information.";
+      lastScan = "خواندن اطلاعات اسکن قبلی ممکن نشد.";
     }
   }
 
   await sendMessage(
     env,
     chatId,
-    `🟢 BOT STATUS\n\n` +
+    `🟢 وضعیت ربات\n\n` +
     `Bot version:\n\u200FV${CONFIG.VERSION}\n` +
-    "Operating mode:\n" +
-    "Kraken Futures signal engine\n" +
-    "KV connection:\n" +
-    `${env.APP_KV ? "Connected" : "Disconnected"}\n` +
-    "Last futures scan:\n" +
+    "حالت فعالیت:\n" +
+    "موتور سیگنال‌دهی فیوچرز کراکن\n" +
+    "اتصال KV:\n" +
+    `${env.APP_KV ? "متصل" : "قطع" }\n` +
+    "آخرین اسکن فیوچرز:\n" +
     lastScan,
     menuForChat(env, chatId)
   );
 }
 
 async function showConnectionTest(env, chatId) {
-  await sendMessage(env, chatId, "🔌 Checking data-source connections...");
+  await sendMessage(env, chatId, "🔌 در حال بررسی اتصال به منابع داده...");
   const result=await testDataSources();
   const lines=[
     (result.krakenFutures?.ok?"✅":"❌")+" Kraken Futures: "+(result.krakenFutures?.ok?"Connected":"Disconnected"),
-    result.krakenFutures?.error?"Futures error: "+result.krakenFutures.error.slice(0,350):"",
-    "Version: V"+CONFIG.VERSION
+    result.krakenFutures?.error?"خطای فیوچرز: "+result.krakenFutures.error.slice(0,350):"",
+    "نسخه: V"+CONFIG.VERSION
   ].filter(Boolean);
   await sendMessage(env,chatId,lines.join("\n"),menuForChat(env,chatId));
 }
@@ -2778,7 +2778,7 @@ async function showUncertainSignalOutbox(env,ownerId){
     await env.APP_KV.put(outboxSelectionKey(ownerId,token),JSON.stringify({chatId:record.chatId,signalId:record.signalId}),{expirationTtl:3600});
     keyboard.push([{text:"⚠️ "+(record.symbol||"Signal")+" · "+record.status,callback_data:"outbox:detail:"+token}]);
   }
-  keyboard.push([{text:"🔄 Refresh",callback_data:"outbox:review"},{text:"🏠 Main Menu",callback_data:"menu"}]);
+  keyboard.push([{text:"🔄 تازه‌سازی",callback_data:"outbox:review"},{text:"🏠 منوی اصلی",callback_data:"menu"}]);
   const note=page.list_complete===false?"\nShowing the first 1,000 KV records.":"";
   await sendMessage(env,ownerId,"🛠 DELIVERIES REQUIRING REVIEW\n━━━━━━━━━━━━━━━━━━\nItems requiring review: "+records.length+note+"\n\nCheck the Telegram messages for each item before taking action.",{inline_keyboard:keyboard});
 }
@@ -2791,10 +2791,10 @@ async function showOutboxSignalDetail(env,ownerId,token){
   if(!record){await sendMessage(env,ownerId,"Delivery record not found.");return;}
   const hasPayload=Boolean(record.signal&&typeof record.messageText==="string");
   const keyboard=[];
-  if(canManuallyConfirmOutboxDelivery(record))keyboard.push([{text:"✅ I verified the Telegram message; mark as delivered",callback_data:"outbox:confirm:"+token}]);
-  if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ I did not see the message; retry (may create a duplicate)",callback_data:"outbox:retry:"+token}]);
-  if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 Retry archive publication (after checking the channel)",callback_data:"outbox:archive:"+token}]);
-  keyboard.push([{text:"⬅️ Back",callback_data:"outbox:review"}]);
+  if(canManuallyConfirmOutboxDelivery(record))keyboard.push([{text:"✅ پیام تلگرام را بررسی کردم؛ ارسال‌شده ثبت شود",callback_data:"outbox:confirm:"+token}]);
+  if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ پیام را ندیدم؛ تلاش مجدد (ممکن است تکراری شود)",callback_data:"outbox:retry:"+token}]);
+  if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 تلاش مجدد برای انتشار در آرشیو (پس از بررسی کانال)",callback_data:"outbox:archive:"+token}]);
+  keyboard.push([{text:"⬅️ بازگشت",callback_data:"outbox:review"}]);
   const body=["🔍 DELIVERY DETAILS","━━━━━━━━━━━━━━━━━━","Symbol: "+(record.symbol||"—"),"Chat ID: "+record.chatId,"Signal ID: "+record.signalId,"Status: "+record.status,"Last updated: "+(record.updatedAt||"—"),"","If you can see the message in Telegram, select the delivered confirmation option.","Retry only after checking the message. An uncertain delivery may already have been sent."];
   if(!hasPayload)body.push("⚠️ This is an older record and does not contain enough information for automatic recovery.");
   await sendMessage(env,ownerId,body.join("\n"),{inline_keyboard:keyboard});
