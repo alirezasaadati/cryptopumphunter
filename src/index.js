@@ -128,10 +128,10 @@ export function withQuotaAwareKV(env) {
 }
 
 const ABOUT_TEXT =
-  "🤖 TRADEYAR | Futures Trading Assistant\n\n" +
-  "Designed & developed by Alireza Saadati\n\n" +
-  "© All rights reserved.\n\n" +
-  "Copying, redistribution, or reuse without permission is prohibited.";
+  "🤖 تریدیار | دستیار معاملات فیوچرز\n\n" +
+  "طراحی و توسعه: علیرضا سعادتی\n\n" +
+  "© تمامی حقوق محفوظ است.\n\n" +
+  "هرگونه کپی‌برداری، بازنشر یا استفاده بدون کسب اجازه ممنوع است.";
 
 const CAPITAL_MANAGEMENT_TEXT =
   "🚨 <b>راهنمای مدیریت ریسک</b> 🚨\n\n" +
@@ -852,11 +852,11 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
       await env.APP_KV.put(memberKey(targetId), JSON.stringify(member));
       await env.APP_KV.delete(pendingKey(targetId));
       await removeArchiveMember(env,targetId);
-      await sendMessage(env, targetId, "⛔ Your CRYPTO PUMP HUNTER access has been revoked by the administrator.");
-      await sendMessage(env, chatId, `🚫 Access revoked for user ${targetId}.`);
+      await sendMessage(env, targetId, "⛔ دسترسی شما به ربات تریدیار توسط مدیر لغو شد.");
+      await sendMessage(env, chatId, `🚫 دسترسی کاربر ${targetId} لغو شد.`);
     }
   } catch (error) {
-    await sendMessage(env, chatId, "❌ Error changing access: " + String(error.message || "KV error").slice(0, 500));
+    await sendMessage(env, chatId, "❌ خطا در تغییر دسترسی: " + String(error.message || "KV error").slice(0, 500));
   }
   return true;
 }
@@ -868,7 +868,7 @@ async function showMemberList(env, ownerId, page = 0) {
   const cursorKey = `admin:members:cursor:${ownerId}:${page}`;
   const cursor = page > 0 ? await env.APP_KV.get(cursorKey) : null;
   if (page > 0 && !cursor) {
-    await sendMessage(env, ownerId, "The previous page has expired. Reopen the member list.");
+    await sendMessage(env, ownerId, "صفحه قبلی منقضی شده است. فهرست اعضا را دوباره باز کنید.");
     return;
   }
   const result = await env.APP_KV.list({ prefix: "member:", limit: 10, ...(cursor ? { cursor } : {}) });
@@ -889,13 +889,13 @@ async function showMemberList(env, ownerId, page = 0) {
   if (page > 0) keyboard.push([{ text: "⬅️ صفحه قبل", callback_data: `members:${page-1}` }]);
   keyboard.push([{ text: "🏠 منوی اصلی", callback_data: "menu" }]);
   await sendMessage(env, ownerId,
-    `👥 MEMBER MANAGEMENT | PAGE ${page+1}\n━━━━━━━━━━━━━━━━━━\nActive on this page: ${active}\nRevoked on this page: ${revoked}\n\nSelect a member to view their profile and manage access.`,
+    `👥 مدیریت اعضا | صفحه ${page+1}\n━━━━━━━━━━━━━━━━━━\nاعضای فعال در این صفحه: ${active}\nدسترسی لغوشده در این صفحه: ${revoked}\n\nبرای مشاهده پروفایل و مدیریت دسترسی، یک عضو را انتخاب کنید.`,
     { inline_keyboard: keyboard });
 }
 async function showMemberProfile(env, ownerId, id) {
   if (!isOwner(ownerId,env) || !env.APP_KV || !/^-?\d+$/.test(id)) return;
   const m=await env.APP_KV.get(memberKey(id),"json");
-  if(!m){await sendMessage(env,ownerId,"Member not found.");return;}
+  if(!m){await sendMessage(env,ownerId,"عضو موردنظر پیدا نشد.");return;}
   const blocked=m.revoked===true||m.approved===false;
   const name=[m.firstName,m.lastName].filter(Boolean).join(" ")||"Not provided";
   const body=["👤 پروفایل عضو","━━━━━━━━━━━━━━━━━━",`نام: ${name}`,`نام کاربری: ${m.username?"@"+m.username:"ثبت نشده"}`,`شناسه تلگرام: ${m.userId||id}`,`شناسه گفتگو: ${m.chatId||id}`,`وضعیت: ${blocked?"🚫 لغوشده":"✅ فعال"}`,`زمان درخواست: ${m.requestedAt||"نامشخص"}`,`زمان تأیید: ${m.approvedAt||"ثبت نشده"}`,`آخرین فعال‌سازی: ${m.allowedAt||"ثبت نشده"}`,`زمان لغو دسترسی: ${m.revokedAt||"ثبت نشده"}`].join("\n");
@@ -903,7 +903,7 @@ async function showMemberProfile(env, ownerId, id) {
 }
 async function changeMemberAccess(env,ownerId,id,allow) {
   if(!isOwner(ownerId,env)||!env.APP_KV||!/^-?\d+$/.test(id))return;
-  if(String(id)===String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))){await sendMessage(env,ownerId,"The primary administrator's access cannot be changed.");return;}
+  if(String(id)===String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))){await sendMessage(env,ownerId,"دسترسی مدیر اصلی قابل تغییر نیست.");return;}
   let m;
   try {
     m=await env.APP_KV.get(memberKey(id),"json");
@@ -2779,24 +2779,24 @@ async function showUncertainSignalOutbox(env,ownerId){
     keyboard.push([{text:"⚠️ "+(record.symbol||"Signal")+" · "+record.status,callback_data:"outbox:detail:"+token}]);
   }
   keyboard.push([{text:"🔄 تازه‌سازی",callback_data:"outbox:review"},{text:"🏠 منوی اصلی",callback_data:"menu"}]);
-  const note=page.list_complete===false?"\nShowing the first 1,000 KV records.":"";
-  await sendMessage(env,ownerId,"🛠 DELIVERIES REQUIRING REVIEW\n━━━━━━━━━━━━━━━━━━\nItems requiring review: "+records.length+note+"\n\nCheck the Telegram messages for each item before taking action.",{inline_keyboard:keyboard});
+  const note=page.list_complete===false?"\nدر حال نمایش ۱۰۰۰ رکورد اول ذخیره‌شده.":"";
+  await sendMessage(env,ownerId,"🛠 ارسال‌های نیازمند بررسی\n━━━━━━━━━━━━━━━━━━\nموارد نیازمند بررسی: "+records.length+note+"\n\nپیش از هر اقدامی، پیام تلگرام مربوط به هر مورد را بررسی کنید.",{inline_keyboard:keyboard});
 }
 
 async function showOutboxSignalDetail(env,ownerId,token){
   if(!isOwner(ownerId,env)||!env.APP_KV)return;
   const selection=await env.APP_KV.get(outboxSelectionKey(ownerId,token),"json");
-  if(!selection){await sendMessage(env,ownerId,"This item has expired. Reopen the list.");return;}
+  if(!selection){await sendMessage(env,ownerId,"این مورد منقضی شده است. فهرست را دوباره باز کنید.");return;}
   const record=await env.APP_KV.get(signalOutboxKey(selection.chatId,selection.signalId),"json");
-  if(!record){await sendMessage(env,ownerId,"Delivery record not found.");return;}
+  if(!record){await sendMessage(env,ownerId,"رکورد ارسال پیدا نشد.");return;}
   const hasPayload=Boolean(record.signal&&typeof record.messageText==="string");
   const keyboard=[];
   if(canManuallyConfirmOutboxDelivery(record))keyboard.push([{text:"✅ پیام تلگرام را بررسی کردم؛ ارسال‌شده ثبت شود",callback_data:"outbox:confirm:"+token}]);
   if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ پیام را ندیدم؛ تلاش مجدد (ممکن است تکراری شود)",callback_data:"outbox:retry:"+token}]);
   if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 تلاش مجدد برای انتشار در آرشیو (پس از بررسی کانال)",callback_data:"outbox:archive:"+token}]);
   keyboard.push([{text:"⬅️ بازگشت",callback_data:"outbox:review"}]);
-  const body=["🔍 DELIVERY DETAILS","━━━━━━━━━━━━━━━━━━","Symbol: "+(record.symbol||"—"),"Chat ID: "+record.chatId,"Signal ID: "+record.signalId,"Status: "+record.status,"Last updated: "+(record.updatedAt||"—"),"","If you can see the message in Telegram, select the delivered confirmation option.","Retry only after checking the message. An uncertain delivery may already have been sent."];
-  if(!hasPayload)body.push("⚠️ This is an older record and does not contain enough information for automatic recovery.");
+  const body=["🔍 جزئیات ارسال","━━━━━━━━━━━━━━━━━━","نماد: "+(record.symbol||"—"),"شناسه گفتگو: "+record.chatId,"شناسه سیگنال: "+record.signalId,"وضعیت: "+record.status,"آخرین به‌روزرسانی: "+(record.updatedAt||"—"),"","اگر پیام را در تلگرام مشاهده می‌کنید، گزینه تأیید ارسال را انتخاب کنید.","فقط پس از بررسی پیام، ارسال مجدد را انتخاب کنید. ممکن است پیامِ با وضعیت نامشخص قبلاً ارسال شده باشد."];
+  if(!hasPayload)body.push("⚠️ این رکورد قدیمی است و اطلاعات کافی برای بازیابی خودکار ندارد.");
   await sendMessage(env,ownerId,body.join("\n"),{inline_keyboard:keyboard});
 }
 
