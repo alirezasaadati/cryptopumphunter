@@ -2371,7 +2371,7 @@ async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, rep
   }
 
   try {
-    const archiveResult = await publishSignalToArchive(env, signal, messageText, parseMode, { cardPng, skipCardRender: true });
+    const archiveResult = await publishSignalToArchive(env, signal, messageText, parseMode);
     const archiveComplete = archiveResult?.skipped === true || archiveResult?.published === true ||
       (archiveResult?.duplicate === true && archiveResult?.pending !== true);
     currentRecord = {
