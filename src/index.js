@@ -192,7 +192,8 @@ function mainMenuForChat(env, chatId) {
       { text: "ℹ️ درباره ربات", callback_data: "about" }
     ]] : [[
       { text: "ℹ️ درباره ربات", callback_data: "about" }
-    ]])
+    ]]),
+    [{ text: "🎧 پشتیبانی", url: "https://t.me/alirza_saadati" }]
   ];
   return { inline_keyboard: keyboard };
 }
