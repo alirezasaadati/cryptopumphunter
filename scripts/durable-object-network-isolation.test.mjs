@@ -24,7 +24,7 @@ test("signal delivery uses short reserve/complete Durable Object calls and sends
   const workerDelivery = source.slice(start, end);
   assert.match(workerDelivery, /\/deliver\/reserve/);
   assert.match(workerDelivery, /\/deliver\/complete/);
-  assert.match(workerDelivery, /await sendMessage\(env, chatId/);
+  assert.match(workerDelivery, /await sendSignalCardOrText\(env, chatId/);\n  assert.match(source, /async function telegramPhoto/);\n  assert.match(source, /sendPhoto/);\n  assert.match(source, /return sendMessage\(env, chatId, messageText/);
   assert.match(workerDelivery, /await publishSignalToArchive\(/);
 });
 
@@ -35,7 +35,7 @@ test("archive publishing reserves idempotency in the DO but sends Telegram from 
   const archive = source.slice(start, end);
   assert.match(archive, /\/archive-publish\/reserve/);
   assert.match(archive, /\/archive-publish\/complete/);
-  assert.match(archive, /await telegram\("sendMessage", env/);
+  assert.match(archive, /await sendSignalCardOrText\(env, channelId/);
   assert.doesNotMatch(coordinator, /await telegram\(/);
 });
 
