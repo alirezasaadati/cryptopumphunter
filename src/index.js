@@ -1096,7 +1096,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
       ...mainMenuForChat(env, chatId).inline_keyboard.flat().map(button => [button.text, button.callback_data]),
       ["👥 Member Management", "members:0"],
       ["📊 Recent Signals Report", "admin:signals"],
-      ["⚠️ Uncertain Deliveries", "outbox:review"]
+      ["⚠️ Uncertain Deliveries", "outbox:review"],
       ["👥 مدیریت اعضا", "members:0"],
       ["📊 گزارش سیگنال‌های اخیر", "admin:signals"],
       ["⚠️ ارسال‌های نامشخص", "outbox:review"],
