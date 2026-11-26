@@ -920,8 +920,8 @@ async function changeMemberAccess(env,ownerId,id,allow) {
       "Reason: "+String(archiveResult?.error||"Unknown error").slice(0,500));
   } else {
     await sendMessage(env,ownerId,allow
-      ?"✅ Member access enabled and archive-channel restriction removed."
-      :"✅ Member access revoked and archive-channel membership blocked.");
+      ?"✅ دسترسی عضو فعال شد و محدودیت عضویت در کانال آرشیو برداشته شد."
+      :"✅ دسترسی عضو لغو شد و عضویت در کانال آرشیو مسدود شد.");
   }
   await showMemberProfile(env,ownerId,id);
 }
