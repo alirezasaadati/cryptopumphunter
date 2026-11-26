@@ -1568,9 +1568,28 @@ function calculateFourHourTrend(candles4h) {
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
 
 async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL) {
-  const maxAttempts = 3;
-  const retryableStatuses = new Set([500, 502, 503, 504, 520, 522, 524, 526]);
+  // Kraken can briefly return 5xx/429 during maintenance or load spikes.
+  // Retry with exponential backoff; never substitute stale market data.
+  const maxAttempts = 4;
+  const retryableStatuses = new Set([408, 429, 500, 502, 503, 504, 520, 522, 524, 526]);
+  const baseDelayMs = 1000;
+  const maxDelayMs = 15000;
   let lastError = null;
+
+  const retryDelay = (response, attempt) => {
+    const retryAfter = response?.headers?.get("Retry-After");
+    if (retryAfter) {
+      const seconds = Number(retryAfter);
+      const retryAt = Date.parse(retryAfter);
+      const requestedMs = Number.isFinite(seconds)
+        ? seconds * 1000
+        : (Number.isFinite(retryAt) ? retryAt - Date.now() : NaN);
+      if (Number.isFinite(requestedMs) && requestedMs > 0) {
+        return Math.min(maxDelayMs, Math.max(baseDelayMs, requestedMs));
+      }
+    }
+    return Math.min(maxDelayMs, baseDelayMs * (2 ** (attempt - 1)));
+  };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let response;
@@ -1580,22 +1599,29 @@ async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL)
         signal: AbortSignal.timeout(FUTURES_CONFIG.REQUEST_TIMEOUT_MS)
       });
     } catch (error) {
-      lastError = error;
-      if (attempt === maxAttempts) {
-        throw new Error(`${label}: Connection failed after ${attempt} attempts: ${String(error?.message || error).slice(0, 180)}`);
-      }
-      await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+      lastError = new Error(
+        `${label}: Connection failed (attempt ${attempt}/${maxAttempts}): ${String(error?.message || error).slice(0, 180)}`
+      );
+      if (attempt === maxAttempts) throw lastError;
+      const delayMs = retryDelay(null, attempt);
+      console.warn("Kraken request temporarily unavailable; retrying:", JSON.stringify({
+        label, attempt, maxAttempts, delayMs, error: String(error?.message || error).slice(0, 180)
+      }));
+      await new Promise(resolve => setTimeout(resolve, delayMs));
       continue;
     }
 
     const body = await response.text();
     if (!response.ok) {
-      // Check HTTP status before attempting JSON parsing: proxy/CDN errors (for example 526)
-      // commonly return HTML rather than a JSON payload.
+      // Check status before JSON parsing: CDN/proxy failures often return HTML.
       const detail = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 180);
       lastError = new Error(`${label}: HTTP ${response.status}${detail ? ` — ${detail}` : ""}`);
       if (retryableStatuses.has(response.status) && attempt < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+        const delayMs = retryDelay(response, attempt);
+        console.warn("Kraken returned a retryable HTTP status; retrying:", JSON.stringify({
+          label, status: response.status, attempt, maxAttempts, delayMs
+        }));
+        await new Promise(resolve => setTimeout(resolve, delayMs));
         continue;
       }
       throw lastError;
@@ -3164,7 +3190,29 @@ function formatFuturesEntryDiagnostics(d) {
 
 async function runFuturesSignalScan(env, options = {}) {
   const started = Date.now();
-  const universe = await getKrakenFuturesUniverse();
+  let universe;
+  try {
+    universe = await getKrakenFuturesUniverse();
+  } catch (error) {
+    const finishedAt = new Date().toISOString();
+    const universeError = String(error?.message || error).slice(0, 500);
+    const diagnostics = {
+      startedAt: new Date(started).toISOString(), finishedAt,
+      durationMs: Date.now() - started,
+      universeCount: 0, analyzedCount: 0, notAnalyzedCount: 0,
+      analysisErrorCount: 0, fifteenMinuteDataErrorCount: 0,
+      unregisteredCandidateCount: 0, uncertainOutboxCount: null,
+      rejectedCount: 0, eligibleCount: 0, signalCount: 0, registeredCount: 0,
+      delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
+      deliveryError: null, universeError,
+      topRejections: [{ reason: "Kraken Futures market universe unavailable; scan safely skipped.", count: 1 }]
+    };
+    console.error("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
+    return {
+      report: "⚠️ Kraken Futures market data is temporarily unavailable. No signals were generated.",
+      signals: [], diagnostics
+    };
+  }
   if (!universe.length) {
     const finishedAt = new Date().toISOString();
     const diagnostics = {
