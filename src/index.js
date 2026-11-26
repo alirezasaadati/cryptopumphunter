@@ -2885,25 +2885,35 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
       await sendMessage(env, ownerId, "❌ Archive publication failed: " + String(error?.message || error));
     }
   } else if (action === "retry") {
-    if (!["SENDING", "UNCERTAIN"].includes(record.status) || !record.signal || typeof record.messageText !== "string") {
-      await sendMessage(env, ownerId, "❌ This record is not eligible for a delivery retry.");
+    if (!["SENDING", "UNCERTAIN", "QUEUED"].includes(record.status) || !record.signal || typeof record.messageText !== "string") {
+      await sendMessage(env, ownerId, "❌ This record is not eligible for an archive publication retry.");
       return;
     }
-    const queuedAt = new Date().toISOString();
-    const queued = { ...record, status: "QUEUED", retryAuthorizedAt: queuedAt, updatedAt: queuedAt };
     try {
+      const archiveResult = await publishSignalToArchive(
+        env, record.signal, record.messageText, record.parseMode ?? "HTML"
+      );
+      const published = archiveResult?.published === true ||
+        (archiveResult?.duplicate === true && archiveResult?.pending !== true);
+      const updatedAt = new Date().toISOString();
+      const archived = {
+        ...record, status: published ? "ARCHIVED" : "ARCHIVE_PENDING",
+        archivePublished: published,
+        archiveMessageId: archiveResult?.messageId ?? null,
+        ...(published ? { archivedAt: updatedAt } : {}),
+        updatedAt
+      };
       await signalDeliveryRequest(env, stub, "/deliver/complete", {
         chatId: String(selection.chatId), signalId: String(selection.signalId),
-        status: "QUEUED", seed: queued, retryAuthorizedAt: queuedAt, updatedAt: queuedAt
+        status: archived.status, seed: archived,
+        archivePublished: archived.archivePublished,
+        archiveMessageId: archived.archiveMessageId,
+        archivedAt: archived.archivedAt, updatedAt
       });
-      await env.APP_KV.put(key, JSON.stringify(queued));
-      await sendAndArchiveFuturesSignal(
-        env, selection.chatId, queued.signal, queued.messageText,
-        queued.replyMarkup ?? null, queued.parseMode ?? "HTML"
-      );
-      await sendMessage(env, ownerId, "🔁 Delivery retry completed.");
+      await env.APP_KV.put(key, JSON.stringify(archived));
+      await sendMessage(env, ownerId, "📚 Signal publication retry completed in the archive channel. No private signal message was sent.");
     } catch (error) {
-      await sendMessage(env, ownerId, "❌ Delivery retry failed: " + String(error?.message || error));
+      await sendMessage(env, ownerId, "❌ Archive publication retry failed: " + String(error?.message || error));
     }
   } else {
     await sendMessage(env, ownerId, "❌ This action is not available for the current status.");
