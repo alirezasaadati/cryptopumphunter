@@ -3008,35 +3008,41 @@ async function runAutomaticFuturesAlertScanInternal(env) {
     const diagnostics = result.diagnostics || {};
     diagnostics.uncertainOutboxCount = await countUncertainSignalOutbox(env);
     const noSignalMessage = [
-      "🧪 AUTOMATED FUTURES SCAN DIAGNOSTICS",
+      "🧪 گزارش تشخیصی اسکن خودکار فیوچرز",
       "━━━━━━━━━━━━━━━━━━",
-      "Version: " + CONFIG.VERSION,
-      "Time: " + (diagnostics.finishedAt || new Date().toISOString()),
-      "Symbols meeting volume requirements: " + (diagnostics.universeCount ?? "—"),
-      "Symbols analyzed: " + (diagnostics.analyzedCount ?? "—"),
-      "Symbols not analyzed due to time limits: " + (diagnostics.notAnalyzedCount ?? "—"),
-      "Fetch/analysis errors: " + (diagnostics.analysisErrorCount ?? "—"),
-      "15M candle-fetch errors: " + (diagnostics.fifteenMinuteDataErrorCount ?? 0),
-      "Rejected: " + (diagnostics.rejectedCount ?? "—"),
-      "Eligible signals: " + (diagnostics.eligibleCount ?? "—"),
-      "Registered: " + (diagnostics.registeredCount ?? "—"),
-      "Unregistered candidates: " + (diagnostics.unregisteredCandidateCount ?? 0),
-      "Uncertain delivery records: " + (diagnostics.uncertainOutboxCount ?? "—"),
-      "OPEN trades not candle-checked in the last 2 hours: " + (tracking.stuckCount ?? "—"),
-      "Trade-monitor internal errors: " + (tracking.errors ?? 0),
+      "نسخه: " + CONFIG.VERSION,
+      "زمان: " + (diagnostics.finishedAt || new Date().toISOString()),
+      "نمادهای دارای شرایط لازم حجم معاملات: " + (diagnostics.universeCount ?? "—"),
+      "نمادهای بررسی‌شده: " + (diagnostics.analyzedCount ?? "—"),
+      "نمادهای بررسی‌نشده به دلیل محدودیت زمانی: " + (diagnostics.notAnalyzedCount ?? "—"),
+      "خطاهای دریافت داده یا تحلیل: " + (diagnostics.analysisErrorCount ?? "—"),
+      "خطاهای دریافت کندل ۱۵ دقیقه‌ای: " + (diagnostics.fifteenMinuteDataErrorCount ?? 0),
+      "نمادهای ردشده: " + (diagnostics.rejectedCount ?? "—"),
+      "سیگنال‌های واجد شرایط: " + (diagnostics.eligibleCount ?? "—"),
+      "سیگنال‌های ثبت‌شده: " + (diagnostics.registeredCount ?? "—"),
+      "فرصت‌های ثبت‌نشده: " + (diagnostics.unregisteredCandidateCount ?? 0),
+      "سوابق ارسال نامشخص: " + (diagnostics.uncertainOutboxCount ?? "—"),
+      "معاملات باز که طی ۲ ساعت گذشته کندل آن‌ها بررسی نشده: " + (tracking.stuckCount ?? "—"),
+      "خطاهای داخلی سیستم پایش معاملات: " + (tracking.errors ?? 0),
       ...(tracking.errorDetails || []).map(x => "• Monitor " + (x.symbol || "") + " / " + (x.stage || "ERROR") + ": " + x.message),
       ...(tracking.stuckTrades || []).map(x => "⚠️ Stalled trade: " + x.symbol + " " + x.side + " | ID: " + x.tradeId + " | Last checked: " + (x.lastCheckedAt || "Unknown")),
-      "Successful deliveries: " + (diagnostics.delivery?.delivered ?? "—"),
-      "Failed deliveries: " + (diagnostics.delivery?.failed ?? "—"),
-      "Scan duration: " + (diagnostics.durationMs != null ? Math.round(diagnostics.durationMs / 1000) + " seconds" : "—"),
+      "ارسال‌های موفق: " + (diagnostics.delivery?.delivered ?? "—"),
+      "ارسال‌های ناموفق: " + (diagnostics.delivery?.failed ?? "—"),
+      "Scan duration: " + (diagnostics.durationMs != null ? Math.round(diagnostics.durationMs / 1000) + " ثانیه" : "—"),
       "",
-      "Top rejection reasons:",
-      ...(diagnostics.topRejections || []).map(x => "• " + x.reason + ": " + x.count),
-      diagnostics.deliveryError ? "\nDelivery error: " + diagnostics.deliveryError : "",
-      diagnostics.trackingError ? "\nTrade-monitor error: " + diagnostics.trackingError : "",
+      "مهم‌ترین دلایل رد شدن نمادها:",
+      ...(diagnostics.topRejections || []).map(x => "• " + ({
+        "The symbol's 4H trend is not aligned with the signal": "هم‌جهت نبودن روند ۴ ساعته نماد با جهت سیگنال",
+        "The 1H trend and optimal RSI zone were not confirmed together": "تأیید نشدن هم‌زمان روند ۱ ساعته و محدوده بهینه RSI",
+        "Bitcoin's 4H trend is not aligned with the signal": "هم‌جهت نبودن روند ۴ ساعته بیت‌کوین با جهت سیگنال",
+        "No symbol met the minimum 24-hour volume requirement.": "هیچ نمادی حداقل حجم معاملات ۲۴ ساعته را نداشت.",
+        "Kraken Futures market universe unavailable; scan safely skipped.": "فهرست بازار فیوچرز کراکن در دسترس نبود؛ اسکن برای حفظ ایمنی اجرا نشد."
+      }[x.reason] || x.reason) + ": " + x.count),
+      diagnostics.deliveryError ? "\nخطای ارسال: " + diagnostics.deliveryError : "",
+      diagnostics.trackingError ? "\nخطای سیستم پایش معاملات: " + diagnostics.trackingError : "",
       "━━━━━━━━━━━━━━━━━━",
-      diagnostics.signalCount ? "A signal was generated; this is not an error/status report." :
-        "No eligible signals were found in this scan."
+      diagnostics.signalCount ? "سیگنال تولید شده است؛ این گزارش خطا یا وضعیت نیست." :
+        "در این مرحله هیچ فرصت معاملاتی واجد شرایطی شناسایی نشد."
     ].filter(Boolean).join("\n");
     if (diagnostics.analysisErrorCount > 0 || diagnostics.fifteenMinuteDataErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError || tracking.errors > 0 || tracking.stuckCount > 0) {
       await notifyOwnerScanDiagnostics(env, noSignalMessage,
@@ -3416,12 +3422,12 @@ async function runFuturesSignalsForChat(env, chatId) {
     if (!signals.length) {
       const d = result.diagnostics || {};
       await sendMessage(env, chatId,
-        "📊 Futures scan completed. No valid signals were found.\n\n" +
-        "Symbols checked: " + (d.analyzedCount ?? "—") + "\n" +
-        "Symbols meeting volume requirements: " + (d.universeCount ?? "—") + "\n" +
-        "Rejected: " + (d.rejectedCount ?? "—") + "\n" +
-        "Scan duration: " + (d.durationMs != null ? Math.round(d.durationMs / 1000) + " seconds" : "—") +
-        "\n\nYou can run another scan when market conditions change.",
+        "📊 اسکن فیوچرز به پایان رسید؛ سیگنال معتبری پیدا نشد.\n\n" +
+        "نمادهای بررسی‌شده: " + (d.analyzedCount ?? "—") + "\n" +
+        "نمادهای دارای شرایط لازم حجم معاملات: " + (d.universeCount ?? "—") + "\n" +
+        "نمادهای ردشده: " + (d.rejectedCount ?? "—") + "\n" +
+        "مدت‌زمان اسکن: " + (d.durationMs != null ? Math.round(d.durationMs / 1000) + " ثانیه" : "—") +
+        "\n\nبا تغییر شرایط بازار می‌توانید اسکن دیگری اجرا کنید.",
         menuForChat(env, chatId));
       return;
     }
