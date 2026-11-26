@@ -232,6 +232,41 @@ export default {
       return registerWebhook(request, env);
     }
 
+    if (request.method === "POST" && url.pathname === "/__preview/test-card") {
+      if (env.ENVIRONMENT !== "preview" || !env.PREVIEW_TEST_KEY) {
+        return json({ ok: false, error: "Not available." }, 404);
+      }
+      const providedKey = request.headers.get("Authorization")?.replace(/^Bearer\\s+/i, "") || "";
+      if (!(await verifySignalDeliverySecret(providedKey, env.PREVIEW_TEST_KEY))) {
+        return json({ ok: false, error: "Unauthorized." }, 401);
+      }
+      const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
+      if (!ownerId || !env.BOT_TOKEN) {
+        return json({ ok: false, error: "Preview Telegram secrets are not configured." }, 503);
+      }
+      const demoSignal = {
+        side: "LONG",
+        symbol: "BTC/USD",
+        entry: 88000,
+        stop: 87000,
+        target1: 89000,
+        target2: 90000,
+        target3: 91000,
+        riskLevel: "STANDARD",
+        score: 87
+      };
+      try {
+        const result = await telegramPhoto(
+          env, ownerId, renderSignalCardPng(demoSignal),
+          "PREVIEW TEST • NOT A TRADING SIGNAL",
+          null, false
+        );
+        return json({ ok: true, delivered: true, telegram_message_id: result?.result?.message_id || null });
+      } catch (error) {
+        return json({ ok: false, delivered: false, error: String(error?.message || error).slice(0, 300) }, 502);
+      }
+    }
+
     if (request.method === "POST" && url.pathname === "/telegram") {
       if (
         !(env.TELEGRAM_WEBHOOK_SECRET || env.WEBHOOK_SECRET) ||
