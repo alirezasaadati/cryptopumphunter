@@ -3432,23 +3432,12 @@ async function runFuturesSignalsForChat(env, chatId) {
       return;
     }
 
-    let published = 0;
-    let failed = 0;
-    for (let i = 0; i < signals.length; i++) {
-      const signal = signals[i];
-      try {
-        const result = await publishSignalToArchive(env, signal, formatFuturesSignal(signal, i + 1), "HTML");
-        if (result?.published || result?.duplicate) published++;
-        else failed++;
-      } catch (error) {
-        failed++;
-        console.error("Manual archive signal publication failed:", signal.symbol, String(error?.message || error));
-      }
-    }
+    const delivery = result.diagnostics?.delivery || { delivered: 0, failed: signals.length };
     await sendMessage(env, chatId,
       "✅ اسکن به پایان رسید.\n" +
-      "سیگنال‌های منتشرشده در کانال آرشیو: " + published + "\n" +
-      "ارسال‌های ناموفق: " + failed,
+      "تعداد سیگنال‌های شناسایی‌شده: " + signals.length + "\n" +
+      "منتشرشده در کانال آرشیو: " + delivery.delivered + "\n" +
+      "ارسال‌های ناموفق: " + delivery.failed,
       menuForChat(env, chatId));
   } catch (error) {
     const diagnostic = String(error?.stack || error?.message || error).slice(0, 1800);
