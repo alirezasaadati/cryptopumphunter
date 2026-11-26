@@ -1071,9 +1071,11 @@ async function handleReplyMenuAction(action, env, chatId, message) {
   }
   if (action === "invite") {
     await sendMessage(env, chatId,
-      "برای پایش دقیق سود و زیان معاملات، از طریق لینک زیر در LBank ثبت‌نام کنید.\n" +
-      "" +
-      "🔗 Link: https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
+      "📊 <b>رصد هوشمند معاملات کاربران</b>\n\n" +
+      "با ثبت‌نام در صرافی LBank از طریق لینک اختصاصی زیر، می‌توانید برای بررسی دقیق دلایل سود و زیان معاملات خود، از طریق پشتیبانی گروه تریدیار اقدام کنید.\n\n" +
+      "🔗 <b>لینک ثبت‌نام در LBank:</b>\n" +
+      '<a href="https://www.lbk.pub/ref/67XF8">https://www.lbk.pub/ref/67XF8</a>\n\n' +
+      "💠 تریدیار | پایش هوشمند بازار", menuForChat(env, chatId), "HTML");
     return;
   }
   if (action === "futures") return runFuturesSignalsForChat(env, chatId);
@@ -1319,9 +1321,11 @@ async function handleCallback(query, env) {
     }
     if (action === "invite") {
       await sendMessage(env, chatId,
-        "برای پایش دقیق سود و زیان معاملات، از طریق لینک زیر در LBank ثبت‌نام کنید.\n" +
-        "" +
-        "🔗 Link: https://www.lbk.pub/ref/67XF8");
+        "📊 <b>رصد هوشمند معاملات کاربران</b>\n\n" +
+        "با ثبت‌نام در صرافی LBank از طریق لینک اختصاصی زیر، می‌توانید برای بررسی دقیق دلایل سود و زیان معاملات خود، از طریق پشتیبانی گروه تریدیار اقدام کنید.\n\n" +
+        "🔗 <b>لینک ثبت‌نام در LBank:</b>\n" +
+        '<a href="https://www.lbk.pub/ref/67XF8">https://www.lbk.pub/ref/67XF8</a>\n\n' +
+        "💠 تریدیار | پایش هوشمند بازار", null, "HTML");
       return;
     }
     if (action === "futures") {
