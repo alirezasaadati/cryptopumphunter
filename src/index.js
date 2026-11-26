@@ -176,7 +176,7 @@ function mainMenuForChat(env, chatId) {
           { text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }
         ]
       : [
-          { text: "🗂 آرشیو سیگنال‌ها", callback_data: "issued_signals" },
+          { text: "🎧 پشتیبانی", url: "https://t.me/alirza_saadati" },
           { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
         ],
     ...(owner ? [[
@@ -193,7 +193,7 @@ function mainMenuForChat(env, chatId) {
     ]] : [[
       { text: "ℹ️ درباره ربات", callback_data: "about" }
     ]]),
-    [{ text: "🎧 پشتیبانی", url: "https://t.me/alirza_saadati" }]
+    ...(owner ? [[{ text: "🎧 پشتیبانی", url: "https://t.me/alirza_saadati" }]] : [])
   ];
   return { inline_keyboard: keyboard };
 }
@@ -943,7 +943,7 @@ function replyMenuForChat(env, chatId) {
           { text: "📊 گزارش سیگنال‌های اخیر" }
         ]
       : [
-          { text: "🗂 آرشیو سیگنال‌ها" },
+          { text: "🎧 پشتیبانی" },
           { text: "🔍 پایش معاملات کاربران" }
         ],
     ...(owner ? [[
@@ -1063,6 +1063,12 @@ async function handleReplyMenuAction(action, env, chatId, message) {
     if (action === "admin:signals") return showRecentFuturesSignalReport(env, chatId);
     if (action === "outbox:review") return showUncertainSignalOutbox(env, chatId);
   }
+  if (action === "support") {
+    await sendMessage(env, chatId, "برای ارتباط مستقیم با پشتیبانی، دکمه زیر را انتخاب کنید:", {
+      inline_keyboard: [[{ text: "🎧 ورود به چت خصوصی پشتیبانی", url: "https://t.me/alirza_saadati" }]]
+    });
+    return;
+  }
   if (action === "invite") {
     await sendMessage(env, chatId,
       "برای پایش دقیق سود و زیان معاملات، از طریق لینک زیر در LBank ثبت‌نام کنید.\n" +
@@ -1093,7 +1099,8 @@ async function handleTelegramCommand(command, chatId, env, message) {
       ["⚠️ Uncertain Deliveries", "outbox:review"]
       ["👥 مدیریت اعضا", "members:0"],
       ["📊 گزارش سیگنال‌های اخیر", "admin:signals"],
-      ["⚠️ ارسال‌های نامشخص", "outbox:review"]
+      ["⚠️ ارسال‌های نامشخص", "outbox:review"],
+      ["🎧 پشتیبانی", "support"]
     ]);
     if (selectedMenuText === "📋 Main Menu" || selectedMenuText === "Main Menu" || selectedMenuText === "/menu") {
       if (await isApproved(chatId, env)) await showMenu(env, chatId);
