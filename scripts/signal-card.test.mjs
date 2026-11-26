@@ -42,7 +42,7 @@ test("signal card labels Kraken XBT as BTC and uses the real USD quote", () => {
   assert.equal(display.side, "LONG");
 });
 
-test("short signals render a distinct card and high risk is represented without invented leverage", () => {
+test("short signals render a distinct card and high risk is represented without invented leverage", async () => {
   const long = renderSignalCardPng({ symbol: "PF_XBTUSD", side: "LONG", entry: 65000, stop: 64000, target1: 66000, target2: 67000, target3: 68000, riskLevel: "STANDARD" });
   const short = renderSignalCardPng({ symbol: "PF_ETHUSD", side: "SHORT", entry: 3000, stop: 3100, target1: 2900, target2: 2800, target3: 2700, riskLevel: "HIGH_RISK" });
   assert.notDeepEqual(long, short);
