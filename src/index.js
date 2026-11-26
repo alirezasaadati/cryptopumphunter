@@ -522,7 +522,7 @@ async function sendArchiveAccessLink(env, userId) {
         catch(error){ console.error("Archive invite cache write failed:",String(error?.message||error)); }
       }
     }
-    await sendMessage(env,userId,"🎉 عضویت شما تأیید شد.\n\n🔗 برای ورود به کانال VIP از لینک زیر استفاده کنید.\nدر صورت نمایش درخواست عضویت، آن را ارسال کنید تا به‌صورت خودکار تأیید شود.\n\n"+link);
+    await sendMessage(env,userId,"🎉 عضویت شما تایید شد.\n\n🔗 برای ورود به کانال VIP از لینک زیر استفاده کنید.\n\nلینک : "+link);
   } catch(error) {
     console.error("Archive invite link failed:",String(error?.message||error));
     await sendMessage(env,userId,"⚠️ Could not create an archive invite link right now.");
