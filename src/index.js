@@ -1984,7 +1984,7 @@ function formatFuturesSignal(item, index = 1) {
     `🎯 TP1  <code>${formatSignalPrice(item.target1)}</code>\n` +
     `🎯 TP2  <code>${formatSignalPrice(item.target2)}</code>\n` +
     `🎯 TP3  <code>${formatSignalPrice(item.target3)}</code>\n\n` +
-    `<b>LEVERAGE</b>  10x   |   <b>RISK</b>  ${riskLabel}${scoreLine}`;
+    `<b>RISK</b>  ${riskLabel}${scoreLine}`;
 }
 
 function formatSignalPrice(value) {
