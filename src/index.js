@@ -1977,7 +1977,7 @@ function formatFuturesSignal(item, index = 1) {
   return `<b>PREMIUM SIGNALS</b>  •  <b>TRADEYAR</b>\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `<b>${sideLabel}</b>  •  <b>${symbol}</b>\n` +
-    `<i>Kraken Perpetual</i>\n\n` +
+    `<i>${escapeTelegramHtml(formatPerpetualLabel(item.symbol))}</i>\n\n` +
     `<b>STOP LOSS</b>  <code>${stop}</code>   |   <b>ENTRY PRICE</b>  <code>${entry}</code>\n` +
     `Entry 2: <code>${entry2}</code>\n\n` +
     `<b>TAKE PROFIT TARGETS</b>\n` +
@@ -2006,6 +2006,12 @@ function formatFuturesSymbol(symbol) {
   if (normalized === "XBT") return "BTC";
   if (normalized === "NVDX") return "NVDA";
   return normalized;
+}
+
+function formatPerpetualLabel(symbol) {
+  const base = formatFuturesSymbol(symbol);
+  const names = { BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", XRP: "XRP" };
+  return `${names[base] || base} Perpetual`;
 }
 
 
