@@ -24,7 +24,10 @@ test("signal delivery uses short reserve/complete Durable Object calls and sends
   const workerDelivery = source.slice(start, end);
   assert.match(workerDelivery, /\/deliver\/reserve/);
   assert.match(workerDelivery, /\/deliver\/complete/);
-  assert.match(workerDelivery, /await sendSignalCardOrText\(env, chatId/);\n  assert.match(source, /async function telegramPhoto/);\n  assert.match(source, /sendPhoto/);\n  assert.match(source, /return sendMessage\(env, chatId, messageText/);
+  assert.match(workerDelivery, /await sendSignalCardOrText\(env, chatId/);
+  assert.match(source, /async function telegramPhoto/);
+  assert.match(source, /sendPhoto/);
+  assert.match(source, /return sendMessage\(env, chatId, messageText/);
   assert.match(workerDelivery, /await publishSignalToArchive\(/);
 });
 
