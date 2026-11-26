@@ -1267,6 +1267,38 @@ async function handleTelegramCommand(command, chatId, env, message) {
       await showStatus(env, chatId);
       return;
     }
+    if (command === "/testcard") {
+      if (!isOwner(chatId, env)) {
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
+        return;
+      }
+      const testSignal = {
+        id: "OWNER-TEST-CARD",
+        symbol: "PF_XBTUSD",
+        side: "LONG",
+        entry: 65000,
+        stop: 64000,
+        target1: 66000,
+        target2: 67000,
+        target3: 68000,
+        riskLevel: "STANDARD",
+        score: 82
+      };
+      const testText =
+        "🧪 <b>TEST SIGNAL — NOT FOR TRADING</b>\\n" +
+        "BTC/USDT • LONG\\n" +
+        "Entry: 65000\\nStop Loss: 64000\\n" +
+        "TP1: 66000\\nTP2: 67000\\nTP3: 68000\\n" +
+        "This is a delivery test only. No signal was created or saved.";
+      const testPng = renderSignalCardPng(testSignal);
+      const result = await sendSignalCardOrText(
+        env, chatId, testSignal, testText, null, "HTML", testPng
+      );
+      if (result?.message_id) {
+        console.log("OWNER_TEST_CARD_DELIVERED", result.message_id);
+      }
+      return;
+    }
     if (command === "/futures") {
       await runFuturesSignalsForChat(env, chatId);
       return;
