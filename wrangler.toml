@@ -35,3 +35,15 @@ head_sampling_rate = 1
 [observability.traces]
 enabled = true
 head_sampling_rate = 0.01
+
+[previews.vars]
+ENVIRONMENT = "preview"
+SIGNAL_ARCHIVE_CHANNEL_ID = ""
+
+[[previews.kv_namespaces]]
+binding = "APP_KV"
+id = "2931a4ee170e495badcc65b53e3c0c51"
+
+[[previews.durable_objects.bindings]]
+name = "SIGNAL_DELIVERY"
+class_name = "SignalDeliveryCoordinator"
