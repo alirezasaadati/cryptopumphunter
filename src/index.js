@@ -668,7 +668,7 @@ async function requestMembership(env, chatId, message) {
     await sendMessage(
       env,
       chatId,
-      "✅ درخواست عضویت شما با موفقیت ثبت شد.\n\n" +
+      "✅ Your membership request has been submitted.\n\n" +
       "⏳ Your request is awaiting review.\n" +
       "You will be notified here once a decision is made."
     );
@@ -2728,7 +2728,7 @@ async function showOutboxSignalDetail(env,ownerId,token){
   if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ I did not see the message; retry (may create a duplicate)",callback_data:"outbox:retry:"+token}]);
   if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 Retry archive publication (after checking the channel)",callback_data:"outbox:archive:"+token}]);
   keyboard.push([{text:"⬅️ Back",callback_data:"outbox:review"}]);
-  const body=["🔍 جزئیات ارسال","━━━━━━━━━━━━━━━━━━","Symbol: "+(record.symbol||"—"),"Chat ID: "+record.chatId,"Signal ID: "+record.signalId,"Status: "+record.status,"Last updated: "+(record.updatedAt||"—"),"","If you can see the message in Telegram, select the delivered confirmation option.","Retry only after checking the message. An uncertain delivery may already have been sent."];
+  const body=["🔍 DELIVERY DETAILS","━━━━━━━━━━━━━━━━━━","Symbol: "+(record.symbol||"—"),"Chat ID: "+record.chatId,"Signal ID: "+record.signalId,"Status: "+record.status,"Last updated: "+(record.updatedAt||"—"),"","If you can see the message in Telegram, select the delivered confirmation option.","Retry only after checking the message. An uncertain delivery may already have been sent."];
   if(!hasPayload)body.push("⚠️ This is an older record and does not contain enough information for automatic recovery.");
   await sendMessage(env,ownerId,body.join("\n"),{inline_keyboard:keyboard});
 }
@@ -3277,7 +3277,7 @@ async function runFuturesSignalScan(env, options = {}) {
       ? signals.map((item, index) => formatFuturesSignal(item, index + 1)).join("\n━━━━━━━━━━━━━━━━━━\n\n")
       : "⚠️ No signal met the minimum score and entry requirements in this scan.\n\n") +
     `🕒 Report time: ${new Date().toISOString()}\n` +
-    `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} seconds\n` +
+    `⏱ Scan duration: ${Math.round((Date.now() - started) / 1000)} seconds\n` +
     "📡 Data source: Kraken Derivatives Futures\n" +
     "⚠️ Signals are analytical only. No real orders are placed, and profit is not guaranteed.";
   return { report, signals, experimentalSent: 0, analyzed, diagnostics };
@@ -3331,7 +3331,7 @@ async function runFuturesSignalsForChat(env, chatId) {
       "📊 The Kraken engine is scanning the market.\n\n" +
       "If a valid trading opportunity is found, its signal will be published automatically in the bot.\n\n" +
       "━━━━━━━━━━━━━━━━━━\n" +
-      "⏳ لطفاً برای ورود به بازار صبور باشید.\n\n" +
+      "⏳ Please wait for a confirmed opportunity before entering the market.\n\n" +
       "⚡ <b>TRADEYAR | SMART MARKET MONITOR</b>",
       menuForChat(env, chatId),
       "HTML");
