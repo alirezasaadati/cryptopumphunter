@@ -106,7 +106,7 @@ function escapeTelegramHtml(value) {
 function formatSignalPrice(value) {
   const price = Number(value);
   if (!Number.isFinite(price)) return "—";
-  return price.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 8 });
+  return price.toLocaleString("en-US", { useGrouping: true, minimumFractionDigits: price >= 1 ? 2 : 0, maximumFractionDigits: 8 });
 }
 
 export { ALERT_TTL_SECONDS };
