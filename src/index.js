@@ -1,5 +1,4 @@
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, displayEntryPrice, ALERT_TTL_SECONDS } from "./futures-alerts.js";
-import { renderSignalCardPng } from "./signal-card.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
 import { evaluateStagedTradeCandle } from "./futures-trade-lifecycle.js";
@@ -384,44 +383,9 @@ async function sendMessage(env, chatId, text, replyMarkup = null, parseMode = nu
   return telegram("sendMessage", env, body);
 }
 
-async function telegramPhoto(env, chatId, photoBytes, caption = "PREMIUM SIGNALS • TRADEYAR", replyMarkup = null, protectContent = !isOwner(chatId, env)) {
-  if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN is not configured.");
-  const form = new FormData();
-  form.set("chat_id", String(chatId));
-  form.set("photo", new Blob([photoBytes], { type: "image/png" }), "tradeyar-signal.png");
-  if (caption) form.set("caption", caption);
-  if (replyMarkup) form.set("reply_markup", JSON.stringify(replyMarkup));
-  if (protectContent) form.set("protect_content", "true");
-
-  const response = await fetch(
-    `${TELEGRAM_API}/bot${(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)}/sendPhoto`,
-    { method: "POST", body: form }
-  );
-  const data = await response.json();
-  if (!response.ok || !data.ok) {
-    const error = new Error(data.description || `Telegram HTTP ${response.status}`);
-    error.telegramStatus = response.status;
-    error.telegramRetryAfter = Number(data?.parameters?.retry_after) || 0;
-    throw error;
-  }
-  return data;
-}
-
-async function sendSignalCardOrText(env, chatId, signal, messageText, replyMarkup, parseMode, cardPng, options = {}) {
-  if (!cardPng) return sendMessage(env, chatId, messageText, replyMarkup, parseMode);
-  try {
-    return await telegramPhoto(
-      env, chatId, cardPng,
-      `PREMIUM SIGNALS • TRADEYAR • ${signal?.side || "SIGNAL"}`,
-      replyMarkup,
-      options.protectContent
-    );
-  } catch (error) {
-    const status = Number(error?.telegramStatus);
-    if (status !== 400 && status !== 413) throw error;
-    console.warn("Telegram rejected the signal image; falling back to the full text signal:", status);
-    return sendMessage(env, chatId, messageText, replyMarkup, parseMode);
-  }
+async function sendSignalCardOrText(env, chatId, signal, messageText, replyMarkup, parseMode) {
+  // Signal alerts are intentionally delivered as text for readability and easy copying.
+  return sendMessage(env, chatId, messageText, replyMarkup, parseMode);
 }
 
 async function sendCapitalManagementGuide(env, chatId) {
@@ -1265,38 +1229,6 @@ async function handleTelegramCommand(command, chatId, env, message) {
 
     if (command === "/status") {
       await showStatus(env, chatId);
-      return;
-    }
-    if (command === "/testcard") {
-      if (!isOwner(chatId, env)) {
-        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
-        return;
-      }
-      const testSignal = {
-        id: "OWNER-TEST-CARD",
-        symbol: "PF_XBTUSD",
-        side: "LONG",
-        entry: 65000,
-        stop: 64000,
-        target1: 66000,
-        target2: 67000,
-        target3: 68000,
-        riskLevel: "STANDARD",
-        score: 82
-      };
-      const testText =
-        "🧪 <b>TEST SIGNAL — NOT FOR TRADING</b>\\n" +
-        "BTC/USDT • LONG\\n" +
-        "Entry: 65000\\nStop Loss: 64000\\n" +
-        "TP1: 66000\\nTP2: 67000\\nTP3: 68000\\n" +
-        "This is a delivery test only. No signal was created or saved.";
-      const testPng = renderSignalCardPng(testSignal);
-      const result = await sendSignalCardOrText(
-        env, chatId, testSignal, testText, null, "HTML", testPng
-      );
-      if (result?.message_id) {
-        console.log("OWNER_TEST_CARD_DELIVERED", result.message_id);
-      }
       return;
     }
     if (command === "/futures") {
@@ -2323,15 +2255,9 @@ async function publishSignalToArchive(env, signal, messageText, parseMode = "HTM
     return { published: reservation.published === true, duplicate: true, messageId: reservation.messageId ?? null };
   }
 
-  let cardPng = options.cardPng ?? null;
-  if (!cardPng && options.skipCardRender !== true) {
-    try { cardPng = renderSignalCardPng(signal); }
-    catch (renderError) { console.warn("Signal card rendering failed; archive will use text:", String(renderError?.message || renderError)); }
-  }
-
   let sent;
   try {
-    sent = await sendSignalCardOrText(env, channelId, signal, messageText, null, parseMode || "HTML", cardPng, { protectContent: true });
+    sent = await sendSignalCardOrText(env, channelId, signal, messageText, null, parseMode || "HTML");
   } catch (error) {
     try {
       await signalDeliveryRequest(env, stub, "/archive-publish/complete", {
@@ -2378,19 +2304,13 @@ async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, rep
     return { delivered: true, duplicate: true, archivePending: reservation.archivePending === true };
   }
 
-  let cardPng = options.cardPng ?? null;
-  if (!cardPng && options.skipCardRender !== true) {
-    try { cardPng = renderSignalCardPng(signal); }
-    catch (renderError) { console.warn("Signal card rendering failed; recipient will receive text:", String(renderError?.message || renderError)); }
-  }
-
   const record = reservation.record;
   let response;
   let deliveryError = null;
   let retryAttempts = 0;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      response = await sendSignalCardOrText(env, chatId, signal, messageText, replyMarkup, parseMode, cardPng);
+      response = await sendSignalCardOrText(env, chatId, signal, messageText, replyMarkup, parseMode);
       deliveryError = null;
       break;
     } catch (error) {
@@ -3585,13 +3505,10 @@ async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
   for (let i = 0; i < signals.length; i++) {
     const signal = signals[i];
     const messageText = formatFuturesSignalAlert(signal, i + 1);
-    let cardPng = null;
-    try { cardPng = renderSignalCardPng(signal); }
-    catch (renderError) { console.warn("Signal card rendering failed; this signal will use text delivery:", String(renderError?.message || renderError)); }
     const deliveredChats = [];
     await mapLimit(targets, 4, async chatId => {
       try {
-        await sendAndArchiveFuturesSignal(env, chatId, signal, messageText, null, "HTML", { archive: false, cardPng, skipCardRender: true });
+        await sendAndArchiveFuturesSignal(env, chatId, signal, messageText, null, "HTML", { archive: false });
         deliveredChats.push(String(chatId));
         delivered++;
       } catch (error) {
@@ -3602,7 +3519,7 @@ async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
 
     let archiveState;
     try {
-      const result = await publishSignalToArchive(env, signal, messageText, "HTML", { cardPng, skipCardRender: true });
+      const result = await publishSignalToArchive(env, signal, messageText, "HTML");
       const complete = result?.skipped === true || result?.published === true ||
         (result?.duplicate === true && result?.pending !== true);
       archiveState = {
