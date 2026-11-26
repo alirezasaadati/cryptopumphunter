@@ -501,7 +501,7 @@ function archiveChannelId(env) {
 async function sendArchiveAccessLink(env, userId) {
   const channelId = archiveChannelId(env);
   if (!channelId) return sendMessage(env,userId,"⚠️ Archive access has not been fully configured yet.");
-  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ You do not have archive access.");
+  if (!(await isApproved(userId,env))) return sendMessage(env,userId,"⛔ شما به آرشیو دسترسی ندارید.");
   try {
     const key="signal-archive:join-request-link";
     let link=null;
@@ -717,7 +717,7 @@ async function handleAdminMembershipCallback(query, env) {
   await answerCallback(
     env,
     query.id,
-    operation === "approve" ? "Approving..." : "Rejecting..."
+    operation === "approve" ? "در حال تأیید..." : "در حال رد درخواست..."
   );
 
   if (!env.APP_KV) {
@@ -898,7 +898,7 @@ async function showMemberProfile(env, ownerId, id) {
   if(!m){await sendMessage(env,ownerId,"Member not found.");return;}
   const blocked=m.revoked===true||m.approved===false;
   const name=[m.firstName,m.lastName].filter(Boolean).join(" ")||"Not provided";
-  const body=["👤 MEMBER PROFILE","━━━━━━━━━━━━━━━━━━",`Name: ${name}`,`Username: ${m.username?"@"+m.username:"Not provided"}`,`Telegram ID: ${m.userId||id}`,`Chat ID: ${m.chatId||id}`,`Status: ${blocked?"🚫 Revoked":"✅ Active"}`,`Requested: ${m.requestedAt||"Unknown"}`,`Approved: ${m.approvedAt||"Not provided"}`,`Last enabled: ${m.allowedAt||"Not provided"}`,`Access revoked: ${m.revokedAt||"Not provided"}`].join("\n");
+  const body=["👤 پروفایل عضو","━━━━━━━━━━━━━━━━━━",`نام: ${name}`,`نام کاربری: ${m.username?"@"+m.username:"ثبت نشده"}`,`شناسه تلگرام: ${m.userId||id}`,`شناسه گفتگو: ${m.chatId||id}`,`وضعیت: ${blocked?"🚫 لغوشده":"✅ فعال"}`,`زمان درخواست: ${m.requestedAt||"نامشخص"}`,`زمان تأیید: ${m.approvedAt||"ثبت نشده"}`,`آخرین فعال‌سازی: ${m.allowedAt||"ثبت نشده"}`,`زمان لغو دسترسی: ${m.revokedAt||"ثبت نشده"}`].join("\n");
   await sendMessage(env,ownerId,body,{inline_keyboard:[[blocked?{text:"✅ فعال‌سازی دسترسی",callback_data:`mall:${id}`}:{text:"🚫 لغو دسترسی",callback_data:`mrev:${id}`}],[{text:"⬅️ بازگشت",callback_data:"members:"}]]});
 }
 async function changeMemberAccess(env,ownerId,id,allow) {
@@ -1002,8 +1002,8 @@ async function configureTelegramMenu(env, chatId) {
   ];
 
   // Telegram may prefer localized or chat-specific command lists over the
-  // default list. Explicitly register English labels for the Persian locale
-  // and for private-chat scopes so stale Persian descriptions cannot win.
+  // فهرست دستورات فارسی را برای زبان فارسی و محدوده‌های خصوصی ثبت می‌کنیم.
+  // تا توضیحات قدیمی تلگرام جایگزین متن‌های جدید نشوند.
   const scopes = [
     { type: "default" },
     { type: "all_private_chats" },
@@ -1019,8 +1019,8 @@ async function configureTelegramMenu(env, chatId) {
     menu_button: { type: "default" }
   }));
 
-  // Keep the bot's profile description and short bio English for both the
-  // default profile locale and Persian-language Telegram clients.
+  // توضیحات پروفایل ربات برای زبان پیش‌فرض و فارسی ثبت می‌شود.
+  
   const botDescription =
     "TRADEYAR is a specialized futures trading assistant. It identifies LONG and SHORT opportunities using a customized trading strategy and provides analytical entry levels, stop-losses, and profit targets. Signals are for research and education only. TRADEYAR does not place orders or manage exchange accounts.";
   const botShortDescription =
@@ -1082,7 +1082,7 @@ async function handleReplyMenuAction(action, env, chatId, message) {
   if (action === "invite") {
     await sendMessage(env, chatId,
       "برای پایش دقیق سود و زیان معاملات، از طریق لینک زیر در LBank ثبت‌نام کنید.\n" +
-      "(for a detailed review of each user's profit and loss)\n\n" +
+      "" +
       "🔗 Link: https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
     return;
   }
@@ -1321,7 +1321,7 @@ async function handleCallback(query, env) {
     if (action === "invite") {
       await sendMessage(env, chatId,
         "برای پایش دقیق سود و زیان معاملات، از طریق لینک زیر در LBank ثبت‌نام کنید.\n" +
-        "(for a detailed review of each user's profit and loss)\n\n" +
+        "" +
         "🔗 Link: https://www.lbk.pub/ref/67XF8");
       return;
     }
@@ -1380,7 +1380,7 @@ async function showStatus(env, chatId) {
     env,
     chatId,
     `🟢 وضعیت ربات\n\n` +
-    `Bot version:\n\u200FV${CONFIG.VERSION}\n` +
+    `نسخه ربات:\n\u200FV${CONFIG.VERSION}\n` +
     "حالت فعالیت:\n" +
     "موتور سیگنال‌دهی فیوچرز کراکن\n" +
     "اتصال KV:\n" +
@@ -1395,7 +1395,7 @@ async function showConnectionTest(env, chatId) {
   await sendMessage(env, chatId, "🔌 در حال بررسی اتصال به منابع داده...");
   const result=await testDataSources();
   const lines=[
-    (result.krakenFutures?.ok?"✅":"❌")+" Kraken Futures: "+(result.krakenFutures?.ok?"Connected":"Disconnected"),
+    (result.krakenFutures?.ok?"✅":"❌")+" فیوچرز کراکن: "+(result.krakenFutures?.ok?"متصل":"قطع"),
     result.krakenFutures?.error?"خطای فیوچرز: "+result.krakenFutures.error.slice(0,350):"",
     "نسخه: V"+CONFIG.VERSION
   ].filter(Boolean);
