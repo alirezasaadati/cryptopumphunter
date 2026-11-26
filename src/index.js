@@ -2702,7 +2702,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
     if(!response.ok||!payload?.ok)throw new Error(payload?.error||"Could not retrieve the signal list.");
     const signals=Array.isArray(payload.signals)?payload.signals:[];
     if(!signals.length){
-      await sendMessage(env,ownerId,"📊 There are currently no active signals in engine memory.\nThis report includes only valid, unexpired signals.");
+      await sendMessage(env,ownerId,"📊 در حال حاضر هیچ سیگنال فعالی در حافظه موتور وجود ندارد.\nاین گزارش فقط سیگنال‌های معتبر و منقضی‌نشده را نمایش می‌دهد.");
       return;
     }
     const fmt=value=>{
