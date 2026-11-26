@@ -515,7 +515,7 @@ async function sendArchiveAccessLink(env, userId) {
         catch(error){ console.error("Archive invite cache write failed:",String(error?.message||error)); }
       }
     }
-    await sendMessage(env,userId,"📚 برای مشاهده آرشیو سیگنال‌ها of لینک زیر وارد کانال شو.\nدرخواست ورودت بر اساس عضویت ربات بررسی می‌شود.\n\n"+link);
+    await sendMessage(env,userId,"📚 Open the channel using the link below to view the signal archive.\nYour join request will be checked against your bot membership.\n\n"+link);
   } catch(error) {
     console.error("Archive invite link failed:",String(error?.message||error));
     await sendMessage(env,userId,"⚠️ Could not create an archive invite link right now.");
@@ -575,7 +575,7 @@ async function requestMembership(env, chatId, message) {
     await sendMessage(
       env,
       chatId,
-      "⚠️ در حال حاضر امکان ثبت درخواست عضویت وجود None.\nلطفاً بعداً دوباره تلاش کنید."
+      "⚠️ Membership requests are temporarily unavailable.\nPlease try again later."
     );
     return;
   }
@@ -591,7 +591,7 @@ async function requestMembership(env, chatId, message) {
       await sendMessage(
         env,
         chatId,
-        "⛔ دسترسی شما توسط مدیر لغو شده است.\nبرای Connected‌سازی مجدد باید مدیر دسترسی شما را دوباره مجاز کند."
+        "⛔ Your access has been revoked by the administrator.\nContact the administrator to request reactivation."
       );
       return;
     }
@@ -607,7 +607,7 @@ async function requestMembership(env, chatId, message) {
       await sendMessage(
         env,
         chatId,
-        "⏳ درخواست عضویت شما قبلاً ثبت شده است.\n\n" +
+        "⏳ Your membership request has already been submitted.\n\n" +
         "Your request is awaiting review. You will be notified here once a decision is made."
       );
       return;
@@ -682,7 +682,7 @@ async function requestMembership(env, chatId, message) {
     await sendMessage(
       env,
       chatId,
-      "❌ ثبت درخواست با مشکل مواجه شد.\nلطفاً کمی بعد دوباره تلاش کنید."
+      "❌ Could not submit your request.\nPlease try again shortly."
     );
   }
 }
@@ -753,7 +753,7 @@ async function handleAdminMembershipCallback(query, env) {
       await sendMessage(
         env,
         applicantId,
-        "🎉 به خانواده CRYPTO PUMP HUNTER خوش آمدید!\n\n" +
+        "🎉 Welcome to CRYPTO PUMP HUNTER!\n\n" +
         "✅ Your membership is approved and access is now active.\n\n" +
         "🚀 You can now use spot-market scans and analytical futures signals.\n\n" +
         "⚠️ Signals are for analysis only. Apply proper risk management before trading."
@@ -837,7 +837,7 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
       await env.APP_KV.delete(pendingKey(targetId));
       await restoreArchiveMemberEligibility(env,targetId);
       await sendMessage(env, targetId,
-        "🎉 دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر Connected شد.\n\n" +
+        "🎉 Your CRYPTO PUMP HUNTER access has been enabled by the administrator.\n\n" +
         "Welcome! You can now use the bot.");
       await showMenu(env, targetId);
       await sendMessage(env, chatId, `✅ User ${targetId} has been approved and access is active.`);
@@ -928,7 +928,7 @@ async function changeMemberAccess(env,ownerId,id,allow) {
   }
   if(!archiveResult?.ok) {
     await sendMessage(env,ownerId,
-      "⚠️ وضعیت دسترسی در ربات saved، اما تغییر دسترسی کانال آرشیو ناموفق بود.\n"+
+      "⚠️ Bot access was saved, but the archive-channel permission change failed.\n"+
       "Reason: "+String(archiveResult?.error||"Unknown error").slice(0,500));
   } else {
     await sendMessage(env,ownerId,allow
@@ -1024,7 +1024,7 @@ async function showWelcome(env, chatId, welcome = true) {
     env,
     chatId,
     welcome
-      ? "🤖 خوش آمدید به تریدیار!\nبرای باز کردن Main Menu، دکمه کیبورد کنار کادر پیام را بزنید."
+      ? "🤖 Welcome to TRADEYAR!\nTap the keyboard button beside the message field to open the main menu."
       : "TRADEYAR main menu:",
     replyMenuForChat(env, chatId)
   );
@@ -1042,8 +1042,9 @@ async function handleReplyMenuAction(action, env, chatId, message) {
   }
   if (action === "invite") {
     await sendMessage(env, chatId,
-      "میتوانید of لینک زیر جهت ثبت نام در صرافی البانک\n" +
-      "( برای بررسی دقیق علل PROFIT و LOSS هر کاربر ) اقدام کنید .\n\n" +
+      "Register with LBank using the link below
+" +
+      "(for a detailed review of each user's profit and loss)\n\n" +
       "🔗 Link: https://www.lbk.pub/ref/67XF8", menuForChat(env, chatId));
     return;
   }
@@ -1171,7 +1172,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         lastCheckedCandleTime: trade.lastCheckedCandleTime
       }]);
       await sendMessage(env, chatId,
-        "✅ رکورد پایش با موفقیت بسته شد و قفل نماد/جهت آزاد شد.\n" +
+        "✅ Tracking record closed successfully and the symbol/direction lock was released.\n" +
         "Reference price: " + formatSignalPrice(exitPrice) + "\n" +
         "⚠️ This command closes only the bot's internal tracking record; it does not close an actual exchange position. Check and close the exchange position separately.");
       return;
@@ -1207,7 +1208,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
       await sendMessage(
         env,
         chatId,
-        "❌ خطا در اجرای دستور:\n" +
+        "❌ Command execution failed:\n" +
         String(error.message || "Unknown error").slice(0, 1000),
         menuForChat(env, chatId)
       );
@@ -1281,8 +1282,9 @@ async function handleCallback(query, env) {
     }
     if (action === "invite") {
       await sendMessage(env, chatId,
-        "میتوانید of لینک زیر جهت ثبت نام در صرافی البانک\n" +
-        "( برای بررسی دقیق علل PROFIT و LOSS هر کاربر ) اقدام کنید .\n\n" +
+        "Register with LBank using the link below
+" +
+        "(for a detailed review of each user's profit and loss)\n\n" +
         "🔗 Link: https://www.lbk.pub/ref/67XF8");
       return;
     }
@@ -1315,7 +1317,7 @@ async function handleCallback(query, env) {
     await sendMessage(
       env,
       chatId,
-      "❌ خطا:\n" + String(error.message || "Unknown error").slice(0, 1000),
+      "❌ Error:\n" + String(error.message || "Unknown error").slice(0, 1000),
       menuForChat(env, chatId)
     );
   }
@@ -2634,7 +2636,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
     if(!response.ok||!payload?.ok)throw new Error(payload?.error||"Could not retrieve the signal list.");
     const signals=Array.isArray(payload.signals)?payload.signals:[];
     if(!signals.length){
-      await sendMessage(env,ownerId,"📊 در حال حاضر سیگنال Connectedی در حافظه موتور وجود None.\nاین گزارش فقط سیگنال‌های هنوز معتبر و منقضی‌نشده را نشان می‌دهد.");
+      await sendMessage(env,ownerId,"📊 There are currently no active signals in engine memory.\nThis report includes only valid, unexpired signals.");
       return;
     }
     const fmt=value=>{
@@ -2686,7 +2688,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
     await sendLongMessage(env,ownerId,lines.join("\n"));
   }catch(error){
     console.error("Admin recent signal report failed:",String(error?.stack||error));
-    await sendMessage(env,ownerId,"❌ ساخت گزارش مدیریتی ناموفق بود:\n"+String(error?.message||error).slice(0,500));
+    await sendMessage(env,ownerId,"❌ Could not build the admin report:\n"+String(error?.message||error).slice(0,500));
   }
 }
 
@@ -2905,7 +2907,7 @@ async function runAutomaticFuturesAlertScan(env) {
     console.error("AUTOMATIC_FUTURES_SCAN_FATAL", JSON.stringify({
       timestamp: new Date().toISOString(), version: CONFIG.VERSION, error: diagnostic
     }));
-    await notifyOwnerScanDiagnostics(env, "🚨 خطای اجرای اسکن زمان‌بندی‌شده فیوچرز\n\n" + diagnostic,
+    await notifyOwnerScanDiagnostics(env, "🚨 SCHEDULED FUTURES SCAN ERROR\n\n" + diagnostic,
       "futures:scan-diagnostic:fatal", 15 * 60);
     return { scanned: false, error: diagnostic };
   }
@@ -2977,8 +2979,8 @@ async function runAutomaticFuturesAlertScanInternal(env) {
       "",
       "Top rejection reasons:",
       ...(diagnostics.topRejections || []).map(x => "• " + x.reason + ": " + x.count),
-      diagnostics.deliveryError ? "\nخطای ارسال: " + diagnostics.deliveryError : "",
-      diagnostics.trackingError ? "\nخطای پایش معاملات: " + diagnostics.trackingError : "",
+      diagnostics.deliveryError ? "\nDelivery error: " + diagnostics.deliveryError : "",
+      diagnostics.trackingError ? "\nTrade-monitor error: " + diagnostics.trackingError : "",
       "━━━━━━━━━━━━━━━━━━",
       diagnostics.signalCount ? "A signal was generated; this is not an error/status report." :
         "No eligible signals were found in this scan."
@@ -3265,17 +3267,18 @@ async function runFuturesSignalScan(env, options = {}) {
   const report =
     "📈 CRYPTO PUMP HUNTER — KRAKEN FUTURES 3.8.2\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
-    "🏦 بازار: Kraken Derivatives Perpetual\n" +
-    "⏱ تایم‌فریم: 1h با تأیید روند 4h و فیلتر ورود 15m\n" +
-    `📥 Symbols checked: ${analyzedCount} of ${filteredUniverse.length} نماد واجد حداقل حجم ۲۴ساعته\n` +
+    "🏦 Market: Kraken Derivatives Perpetual\n" +
+    "⏱ Timeframes: 1H with 4H trend confirmation and 15M entry filter\n" +
+    `📥 Symbols checked: ${analyzedCount} of ${filteredUniverse.length} symbols meeting the 24H volume threshold
+` +
     `🟢 Standard signals: ${signals.filter(item => item.riskLevel !== "HIGH_RISK").length}\n` +
     `⚠️ High-risk signals: ${signals.filter(item => item.riskLevel === "HIGH_RISK").length}\n\n` +
     (signals.length
       ? signals.map((item, index) => formatFuturesSignal(item, index + 1)).join("\n━━━━━━━━━━━━━━━━━━\n\n")
-      : "⚠️ در این بررسی سیگنالی به حداقل امتیاز و شرایط ورود نرسید.\n\n") +
+      : "⚠️ No signal met the minimum score and entry requirements in this scan.\n\n") +
     `🕒 Report time: ${new Date().toISOString()}\n` +
     `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} seconds\n` +
-    "📡 منبع داده: Kraken Derivatives Futures\n" +
+    "📡 Data source: Kraken Derivatives Futures\n" +
     "⚠️ Signals are analytical only. No real orders are placed, and profit is not guaranteed.";
   return { report, signals, experimentalSent: 0, analyzed, diagnostics };
 }
@@ -3323,10 +3326,10 @@ async function runFuturesSignalsForChat(env, chatId) {
     lockAcquired = true;
 
     await sendMessage(env, chatId,
-      "🔍 <b>درخواست بررسی ثبت شد</b>\n" +
+      "🔍 <b>SCAN REQUEST RECEIVED</b>\n" +
       "━━━━━━━━━━━━━━━━━━\n\n" +
-      "📊 موتور کراکن در حال بررسی بازار است.\n\n" +
-      "در صورت شناسایی فرصت معاملاتی معتبر، سیگنال نماد مربوطه به‌صورت خودکار در ربات منتشر خواهد شد.\n\n" +
+      "📊 The Kraken engine is scanning the market.\n\n" +
+      "If a valid trading opportunity is found, its signal will be published automatically in the bot.\n\n" +
       "━━━━━━━━━━━━━━━━━━\n" +
       "⏳ لطفاً برای ورود به بازار صبور باشید.\n\n" +
       "⚡ <b>TRADEYAR | SMART MARKET MONITOR</b>",
@@ -3338,7 +3341,7 @@ async function runFuturesSignalsForChat(env, chatId) {
     if (!signals.length) {
       const d = result.diagnostics || {};
       await sendMessage(env, chatId,
-        "📊 اسکن فیوچرز به پایان رسید؛ سیگنال معتبری پیدا نشد.\n\n" +
+        "📊 Futures scan completed. No valid signals were found.\n\n" +
         "Symbols checked: " + (d.analyzedCount ?? "—") + "\n" +
         "Symbols meeting volume requirements: " + (d.universeCount ?? "—") + "\n" +
         "Rejected: " + (d.rejectedCount ?? "—") + "\n" +
@@ -3358,7 +3361,7 @@ async function runFuturesSignalsForChat(env, chatId) {
     console.error("Manual futures scan failed:", diagnostic);
     if (String(chatId) === String((env.OWNER_TELEGRAM_ID || env.OWNER_ID))) {
       try {
-        await sendMessage(env, chatId, "🧪 خطای فنی اسکن فیوچرز (فقط مدیر):\n" + diagnostic);
+        await sendMessage(env, chatId, "🧪 Futures scan technical error (owner only):\n" + diagnostic);
       } catch (diagnosticError) {
         console.error("Could not deliver futures scan diagnostic:", String(diagnosticError?.message || diagnosticError));
       }
