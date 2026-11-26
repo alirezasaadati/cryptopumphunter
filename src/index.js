@@ -172,7 +172,7 @@ function mainMenuForChat(env, chatId) {
     [{ text: "🛡️ راهنمای مدیریت ریسک", callback_data: "capital_guide" }],
     owner
       ? [
-          { text: "🗂 آرشیو سیگنال‌ها", callback_data: "issued_signals" },
+          { text: "📢 کانال سیگنال VIP", callback_data: "issued_signals" },
           { text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }
         ]
       : [
