@@ -939,7 +939,7 @@ function replyMenuForChat(env, chatId) {
     ],
     owner
       ? [
-          { text: "🗂 آرشیو سیگنال‌ها" },
+          { text: "📢 کانال سیگنال VIP" },
           { text: "📊 گزارش سیگنال‌های اخیر" }
         ]
       : [
