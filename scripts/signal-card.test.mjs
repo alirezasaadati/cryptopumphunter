@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { inflateSync } from "node:zlib";
+import { readFile } from "node:fs/promises";
 import { renderSignalCardPng, getSignalCardDisplayData } from "../src/signal-card.js";
 
 function readPngChunks(png) {
@@ -46,5 +47,14 @@ test("short signals render a distinct card and high risk is represented without 
   const short = renderSignalCardPng({ symbol: "PF_ETHUSD", side: "SHORT", entry: 3000, stop: 3100, target1: 2900, target2: 2800, target3: 2700, riskLevel: "HIGH_RISK" });
   assert.notDeepEqual(long, short);
   assert.equal(getSignalCardDisplayData({ symbol: "PF_ETHUSD", side: "SHORT", riskLevel: "HIGH_RISK" }).risk, "HIGH RISK");
-  assert.doesNotMatch(new TextDecoder().decode(short), /LEVERAGE|10x/);
+  const rendererSource = await readFile(new URL("../src/signal-card.js", import.meta.url), "utf8");
+  assert.doesNotMatch(rendererSource, /LEVERAGE|10x/);
+});
+
+test("Telegram delivery uses one photo upload with a full-text fallback", async () => {
+  const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(source, /async function telegramPhoto[\\s\\S]*?\\/sendPhoto/);
+  assert.match(source, /async function sendSignalCardOrText[\\s\\S]*?Telegram rejected the signal image[\\s\\S]*?sendMessage/);
+  assert.match(source, /renderSignalCardPng\\(signal\\)/);
+  assert.match(source, /cardPng, skipCardRender: true/);
 });
