@@ -63,24 +63,21 @@ test("per-chat storage keys are distinct and stable", () => {
   assert.notEqual(futuresAlertStorageKey("123", fp), futuresAlertStorageKey("456", fp));
 });
 
-test("signal alert uses the premium English TRADEYAR layout and preserves price calculations", () => {
-  const signal = {...base, symbol:"PF_BTCUSD", entry:65000, stop:66000, target1:63500, target2:62800, target3:62000, score:82};
+test("signal alert matches the approved left-aligned plain-text template", () => {
+  const signal = {...base, symbol:"PF_BTCUSD", entry:65000, stop:64500, target1:65800, target2:66400, target3:67200, score:82};
   const short = formatFuturesSignalAlert(signal, 1);
   const long = formatFuturesSignalAlert({...signal, symbol:"PF_ETHUSD", side:"LONG"}, 2);
-  assert.match(short, /^<b>PREMIUM SIGNALS<\/b>  •  <b>TRADEYAR<\/b>/);
-  assert.match(short, /<b>🔴 SHORT ↘<\/b>  •  <b>BTC\/USD<\/b>/);
-  assert.match(short, /<i>Bitcoin Perpetual<\/i>/);
-  assert.match(short, /<b>STOP LOSS<\/b>  <code>66,000\.00<\/code>\s+\|\s+<b>ENTRY PRICE<\/b>  <code>65,000\.00<\/code>/);
-  assert.match(short, /Entry 2: <code>65,650\.00<\/code>/);
-  assert.match(short, /🎯 TP1  <code>63,500\.00<\/code>/);
-  assert.match(short, /🎯 TP2  <code>62,800\.00<\/code>/);
-  assert.match(short, /🎯 TP3  <code>62,000\.00<\/code>/);
-  assert.match(short, /<b>RISK<\/b>  STANDARD/);
-  assert.doesNotMatch(short, /LEVERAGE|10x/);
-  assert.match(short, /Score: <b>82\/100<\/b>/);
-  assert.match(long, /<b>🟢 LONG ↗<\/b>  •  <b>ETH\/USD<\/b>/);
-  assert.match(long, /Entry 2: <code>64,025\.00<\/code>/);
-  assert.match(formatFuturesSignalAlert({...signal, riskLevel:"HIGH_RISK"}), /<b>RISK<\/b>  HIGH RISK/);
+  assert.match(short, /^\u200E<b>BTC\/USDT<\/b>/);
+  assert.match(short, /\u200E<b>SHORT 🔴<\/b>/);
+  assert.match(short, /\u200EEntry Zone 1 : 65000/);
+  assert.match(short, /\u200EEntry Zone 2 : 65650/);
+  assert.match(short, /\u200E🎯 TP 1 : 65800/);
+  assert.match(short, /\u200E🎯 TP 2 : 66400/);
+  assert.match(short, /\u200E🎯 TP 3 : 67200/);
+  assert.match(short, /\u200E⛔ SL : 64500/);
+  assert.match(long, /\u200E<b>LONG 🟢<\/b>/);
+  assert.match(long, /\u200EEntry Zone 2 : 64025/);
+  assert.doesNotMatch(short, /PREMIUM SIGNALS|RISK|Score:|LEVERAGE|10x/);
   assert.doesNotMatch(short, /[\u0600-\u06FF]/);
   assert.doesNotMatch(short, /PF_|BTCUSD/);
 });
@@ -94,9 +91,10 @@ test("numeric candle timestamps in seconds and milliseconds produce the same ide
 });
 
 
-test("manual Futures signal formatter uses the premium layout and keeps the display-only entry adjustment", async () => {
+test("manual Futures signal formatter matches the approved plain-text layout", async () => {
   const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
-  assert.ok(source.includes("`<b>PREMIUM SIGNALS</b>  •  <b>TRADEYAR</b>\\n` +"));
-  assert.ok(source.includes("`<b>STOP LOSS</b>  <code>${stop}</code>   |   <b>ENTRY PRICE</b>  <code>${entry}</code>\\n` +"));
-  assert.ok(source.includes("formatSignalPrice(displayEntryPrice(item.entry, item.side))"));
+  assert.ok(source.includes("`Entry Zone 1 : ${formatSignalDisplayPrice(item.entry)}`"));
+  assert.ok(source.includes("`Entry Zone 2 : ${formatSignalDisplayPrice(displayEntryPrice(item.entry, item.side))}`"));
+  assert.ok(source.includes("`⛔ SL : ${formatSignalDisplayPrice(item.stop)}`"));
+  assert.ok(source.includes('lines.map(line => `\\u200E${line}`).join("\\n")'));
 });
