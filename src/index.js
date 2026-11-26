@@ -1964,20 +1964,25 @@ function formatPrice(value) {
 }
 
 function formatFuturesSignal(item, index = 1) {
-  const sideLabel = item.side === "LONG" ? "🟢 LONG" : "🔴 SHORT";
-  const label = item.riskLevel === "HIGH_RISK"
-    ? "⚠️ HIGH RISK SIGNAL"
-    : "🟢 VALID SIGNAL";
-  const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol));
-  return `${label}\n\n` +
-    `Symbol: <b>${symbol}</b>\n\n` +
-    `Direction: ${sideLabel}\n\n` +
-    `Entry 1: <b>${formatSignalPrice(item.entry)}</b>\n\n` +
-    `Entry 2: <b>${formatSignalPrice(displayEntryPrice(item.entry, item.side))}</b>\n\n` +
-    `🎯 Take Profit 1: <b>${formatSignalPrice(item.target1)}</b>\n\n` +
-    `🎯 Take Profit 2: <b>${formatSignalPrice(item.target2)}</b>\n\n` +
-    `🎯 Take Profit 3: <b>${formatSignalPrice(item.target3)}</b>\n\n` +
-    `⛔ Stop Loss: <b>${formatSignalPrice(item.stop)}</b>`;
+  const sideLabel = item.side === "LONG" ? "🟢 LONG ↗" : "🔴 SHORT ↘";
+  const riskLabel = item.riskLevel === "HIGH_RISK" ? "HIGH RISK" : "STANDARD";
+  const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol) + "/USD");
+  const entry = formatSignalPrice(item.entry);
+  const entry2 = formatSignalPrice(displayEntryPrice(item.entry, item.side));
+  const stop = formatSignalPrice(item.stop);
+  const score = Number(item.score);
+  const scoreLine = Number.isFinite(score) ? `\nScore: <b>${Math.round(score)}/100</b>` : "";
+  return `<b>PREMIUM SIGNALS</b>  •  <b>TRADEYAR</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `<b>${sideLabel}</b>  •  <b>${symbol}</b>\n` +
+    `<i>Kraken Perpetual</i>\n\n` +
+    `<b>STOP LOSS</b>  <code>${stop}</code>   |   <b>ENTRY PRICE</b>  <code>${entry}</code>\n` +
+    `Entry 2: <code>${entry2}</code>\n\n` +
+    `<b>TAKE PROFIT TARGETS</b>\n` +
+    `🎯 TP1  <code>${formatSignalPrice(item.target1)}</code>\n` +
+    `🎯 TP2  <code>${formatSignalPrice(item.target2)}</code>\n` +
+    `🎯 TP3  <code>${formatSignalPrice(item.target3)}</code>\n\n` +
+    `<b>LEVERAGE</b>  10x   |   <b>RISK</b>  ${riskLabel}${scoreLine}`;
 }
 
 function formatSignalPrice(value) {
