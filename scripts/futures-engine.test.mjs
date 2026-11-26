@@ -569,7 +569,7 @@ test("entry drift filter rejects a stale candle-close entry",()=>{
     side:"LONG",referencePrice:oneHour.at(-1).close,ema20,atr
   });
   assert.equal(result.ok,false);
-  assert.match(result.rejected,/فاصله قیمت لحظه‌ای/);
+  assert.match(result.rejected,/Live price is too far from the analytical reference/);
 });
 
 test("late-entry filter rejects an overextended price versus hourly EMA20",()=>{
@@ -581,7 +581,7 @@ test("late-entry filter rejects an overextended price versus hourly EMA20",()=>{
     side:"LONG",referencePrice:ema20+atr*4,ema20,atr
   });
   assert.equal(result.ok,false);
-  assert.match(result.rejected,/ورود دیرهنگام/);
+  assert.match(result.rejected,/Entry is too late; price is too far from EMA20/);
 });
 
 test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=>{
