@@ -669,7 +669,7 @@ async function requestMembership(env, chatId, message) {
       env,
       chatId,
       "✅ درخواست عضویت شما با موفقیت ثبت شد.\n\n" +
-      "⏳ درخواست شما در انتظار بررسی است.\n" +
+      "⏳ Your request is awaiting review.\n" +
       "You will be notified here once a decision is made."
     );
   } catch (error) {
@@ -3065,7 +3065,7 @@ function formatFuturesEntryDiagnostics(d) {
     lines.push("• " + item.symbol + " | " + item.stage +
       " | Score: " + (item.score ?? "—") + " | Direction: " + (item.side || "—"));
     if (item.candleCounts) lines.push("  Candles: 1h=" + item.candleCounts["1h"] +
-      "; 4h=" + item.candleCounts["4h"] + "، 15m=" + item.candleCounts["15m"]);
+      "; 4h=" + item.candleCounts["4h"] + "; 15m=" + item.candleCounts["15m"]);
     if (item.entry != null) lines.push("  Entry: " + formatPrice(item.entry) +
       " | Stop: " + formatPrice(item.stop) +
       " | Targets: " + (item.targets || []).map(formatPrice).join(" / "));
@@ -3316,7 +3316,7 @@ async function runFuturesSignalsForChat(env, chatId) {
     }
     if (!acquire.acquired) {
       await sendMessage(env, chatId,
-        "⏳ در حال حاضر یک اسکن فیوچرز دیگر در حال اجراست؛ پس of پایان آن دوباره درخواست بده.",
+        "⏳ Another futures scan is currently running. Please try again after it finishes.",
         menuForChat(env, chatId));
       return;
     }
