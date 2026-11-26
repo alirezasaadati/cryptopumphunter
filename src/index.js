@@ -3415,13 +3415,13 @@ async function runFuturesSignalsForChat(env, chatId) {
     lockAcquired = true;
 
     await sendMessage(env, chatId,
-      "🔍 <b>SCAN REQUEST RECEIVED</b>\n" +
+      "🔍 <b>درخواست اسکن دریافت شد</b>\n" +
       "━━━━━━━━━━━━━━━━━━\n\n" +
-      "📊 The Kraken engine is scanning the market.\n\n" +
-      "If a valid trading opportunity is found, its signal will be published automatically in the bot.\n\n" +
+      "📊 موتور کراکن در حال بررسی بازار است.\n\n" +
+      "در صورت شناسایی فرصت معاملاتی معتبر، سیگنال آن به‌صورت خودکار در ربات منتشر خواهد شد.\n\n" +
       "━━━━━━━━━━━━━━━━━━\n" +
-      "⏳ Please wait for a confirmed opportunity before entering the market.\n\n" +
-      "⚡ <b>TRADEYAR | SMART MARKET MONITOR</b>",
+      "⏳ لطفاً پیش از ورود به بازار، منتظر تأیید یک فرصت معاملاتی بمانید.\n\n" +
+      "⚡ <b>تریدیار | پایش هوشمند بازار</b>",
       menuForChat(env, chatId),
       "HTML");
 
