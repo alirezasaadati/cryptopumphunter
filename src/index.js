@@ -1005,7 +1005,7 @@ async function configureTelegramMenu(env, chatId) {
   // توضیحات پروفایل ربات برای زبان پیش‌فرض و فارسی ثبت می‌شود.
   
   const botDescription =
-    "TRADEYAR is a specialized futures trading assistant. It identifies LONG and SHORT opportunities using a customized trading strategy and provides analytical entry levels, stop-losses, and profit targets. Signals are for research and education only. TRADEYAR does not place orders or manage exchange accounts.";
+    "🤖 تریدیار | پایش هوشمند بازار\n\nشناسایی فرصت‌های \n\nمعاملاتی در دو جهت بازار:\n\n🟢 LONG | 🔴 SHORT\n\n🔎 شناسایی فرصت‌های معاملاتی با استفاده از \n\n\"موتور قدرتمند کراکن\"\n\n📍 ارائه نقاط ورود، حد ضرر و اهداف قیمتی\n\n📊 ارزیابی شرایط بازار پیش از صدور سیگنال\n\n🛡️ توجه به مدیریت ریسک در معاملات\n\n⚡ تحلیل بازار بر اساس استراتژی اختصاصی";
   const botShortDescription =
     "🤖 TRADEYAR | Futures Trading Assistant • Analytical LONG/SHORT signals";
 
