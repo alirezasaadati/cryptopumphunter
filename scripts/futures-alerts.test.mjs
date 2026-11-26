@@ -74,7 +74,8 @@ test("signal alert uses the premium English TRADEYAR layout and preserves price 
   assert.match(short, /🎯 TP1  <code>63,500\.00<\/code>/);
   assert.match(short, /🎯 TP2  <code>62,800\.00<\/code>/);
   assert.match(short, /🎯 TP3  <code>62,000\.00<\/code>/);
-  assert.match(short, /<b>RISK<\\/b>  STANDARD/);\n  assert.doesNotMatch(short, /LEVERAGE|10x/);
+  assert.match(short, /<b>RISK<\/b>  STANDARD/);
+  assert.doesNotMatch(short, /LEVERAGE|10x/);
   assert.match(short, /Score: <b>82\/100<\/b>/);
   assert.match(long, /<b>🟢 LONG ↗<\/b>  •  <b>ETH\/USD<\/b>/);
   assert.match(long, /Entry 2: <code>64,025\.00<\/code>/);
