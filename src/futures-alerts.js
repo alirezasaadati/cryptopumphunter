@@ -52,7 +52,7 @@ export function formatFuturesSignalAlert(signal, index = 1) {
     `🎯 TP1  <code>${formatSignalPrice(signal?.target1)}</code>\n` +
     `🎯 TP2  <code>${formatSignalPrice(signal?.target2)}</code>\n` +
     `🎯 TP3  <code>${formatSignalPrice(signal?.target3)}</code>\n\n` +
-    `<b>LEVERAGE</b>  10x   |   <b>RISK</b>  ${risk}${scoreLine}`;
+    `<b>RISK</b>  ${risk}${scoreLine}`;
 }
 function formatFuturesSymbol(symbol) {
   const normalized = String(symbol || "—").trim().toUpperCase()
