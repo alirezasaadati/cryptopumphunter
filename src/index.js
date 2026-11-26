@@ -1096,7 +1096,7 @@ async function handleReplyMenuAction(action, env, chatId, message) {
   }
   if (action === "status") return showStatus(env, chatId);
   if (action === "test") return showConnectionTest(env, chatId);
-  if (action === "about") return sendMessage(env, chatId, ABOUT_TEXT, menuForChat(env, chatId));
+  if (action === "about") return sendMessage(env, chatId, ABOUT_TEXT, menuForChat(env, chatId), "HTML");
 }
 
 async function handleTelegramCommand(command, chatId, env, message) {
@@ -1347,7 +1347,7 @@ async function handleCallback(query, env) {
     }
 
     if (action === "about") {
-      await sendMessage(env, chatId, ABOUT_TEXT);
+      await sendMessage(env, chatId, ABOUT_TEXT, null, "HTML");
       return;
     }
 
