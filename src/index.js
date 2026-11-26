@@ -177,11 +177,11 @@ function mainMenuForChat(env, chatId) {
         ]
       : [
           { text: "🎧 پشتیبانی", url: "https://t.me/alirza_saadati" },
-          { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
+          { text: "📊 رصد معاملات کاربران", callback_data: "invite" }
         ],
     ...(owner ? [[
       { text: "👥 مدیریت اعضا", callback_data: "members:0" },
-      { text: "🔍 پایش معاملات کاربران", callback_data: "invite" }
+      { text: "📊 رصد معاملات کاربران", callback_data: "invite" }
     ]] : []),
     [
       { text: "📡 وضعیت ربات", callback_data: "status" },
@@ -944,11 +944,11 @@ function replyMenuForChat(env, chatId) {
         ]
       : [
           { text: "🎧 پشتیبانی" },
-          { text: "🔍 پایش معاملات کاربران" }
+          { text: "📊 رصد معاملات کاربران" }
         ],
     ...(owner ? [[
       { text: "👥 مدیریت اعضا" },
-      { text: "🔍 پایش معاملات کاربران" }
+      { text: "📊 رصد معاملات کاربران" }
     ]] : []),
     [
       { text: "📡 وضعیت ربات" },
