@@ -9,13 +9,13 @@ assert.ok(start >= 0 && end > start, "mainMenuForChat must exist");
 const menu = source.slice(start, end);
 
 test("main inline menu keeps the approved button order and row layout", () => {
-  assert.ok(menu.includes('"📈 سیگنال فیوچرز"'));
-  assert.doesNotMatch(menu, /سیگنال اسپات|callback_data: "spot"/);
-  assert.match(menu, /\[\s*\{ text: "🛡️ راهنمای مدیریت سرمایه"/);
-  assert.ok(menu.indexOf('"🗂 سیگنال‌های صادرشده"') < menu.indexOf('"📊 گزارش سیگنال‌های اخیر"'));
-  assert.ok(menu.indexOf('"👥 مدیریت اعضا"') < menu.lastIndexOf('"🔍 پایش معاملات کاربران"'));
-  assert.ok(menu.indexOf('"📡 وضعیت ربات"') < menu.indexOf('"🔌 تست اتصال"'));
-  assert.ok(menu.indexOf('"⚠️ ارسال‌های نامشخص"') < menu.indexOf('"ℹ️ درباره"'));
+  assert.ok(menu.includes('"📈 Futures Signals"'));
+  assert.doesNotMatch(menu, /Spot Signals|callback_data: "spot"/);
+  assert.match(menu, /\[\s*\{ text: "🛡️ Risk Management Guide"/);
+  assert.ok(menu.indexOf('"🗂 Signal Archive"') < menu.indexOf('"📊 Recent Signal Report"'));
+  assert.ok(menu.indexOf('"👥 Member Management"') < menu.lastIndexOf('"🔍 User Trade Monitor"'));
+  assert.ok(menu.indexOf('"📡 Bot Status"') < menu.indexOf('"🔌 Connection Test"'));
+  assert.ok(menu.indexOf('"⚠️ Uncertain Deliveries"') < menu.indexOf('"ℹ️ About"'));
   assert.match(menu, /return \{ inline_keyboard: keyboard \}/);
   const callbackActions = [...menu.matchAll(/callback_data: "([^"]+)"/g)].map((match) => match[1]);
   const callbackHandler = source.slice(source.indexOf("async function handleCallback"));
@@ -29,7 +29,7 @@ test("main inline menu keeps the approved button order and row layout", () => {
           : callbackHandler.includes(`action === "${action}"`) || callbackHandler.includes(`action==="${action}"`);
     assert.ok(isRouted, `inline callback "${action}" must have a handler`);
   }
-  assert.match(source, /\["⚠️ ارسال‌های نامشخص", "outbox:review"\]/);
+  assert.match(source, /\["⚠️ Uncertain Deliveries", "outbox:review"\]/);
 });
 
 test("reply menu keeps the original layout but hides after selection and is not reattached to every response", () => {
@@ -40,10 +40,10 @@ test("reply menu keeps the original layout but hides after selection and is not 
   assert.match(menu, /resize_keyboard:\s*true/);
   assert.match(menu, /one_time_keyboard:\s*true/);
   assert.doesNotMatch(menu, /is_persistent:\s*true/);
-  assert.match(menu, /"📈 سیگنال فیوچرز"/);
-  assert.doesNotMatch(menu, /سیگنال اسپات/);
-  assert.match(menu, /"🛡️ راهنمای مدیریت سرمایه"/);
-  assert.match(menu, /"👥 مدیریت اعضا"/);
+  assert.match(menu, /"📈 Futures Signals"/);
+  assert.doesNotMatch(menu, /Spot Signals/);
+  assert.match(menu, /"🛡️ Risk Management Guide"/);
+  assert.match(menu, /"👥 Member Management"/);
   assert.match(source, /function menuForChat\(env, chatId\)\s*\{\s*return null;/);
   assert.doesNotMatch(source, /remove_keyboard:\s*true/);
   assert.match(source, /replyMenuForChat\(env, chatId\)/);
@@ -55,12 +55,12 @@ test("capital guide is delivered through one shared HTML-safe path from both men
   assert.equal((source.match(/sendCapitalManagementGuide\(env, chatId\)/g) || []).length, 3);
   assert.match(source, /if \(action === "capital_guide"\) \{\s*await sendCapitalManagementGuide\(env, chatId\);/);
   assert.match(source, /if \(action === "capital_guide"\) \{\s*await sendCapitalManagementGuide\(env, chatId\);/);
-  assert.match(source, /3️⃣ ورود پله‌ای به معامله/);
-  assert.match(source, /۵ دلار را در نقطه ورود اول و ۵ دلار باقی‌مانده را در نقطه ورود دوم/);
-  assert.match(source, /ورود پله‌ای به معنی جلوگیری قطعی از ضرر نیست/);
-  assert.match(source, /4️⃣ اهرم و نحوه انجام معامله/);
-  assert.match(source, /5️⃣ ورود بعد از تارگت اول/);
-  assert.match(source, /6️⃣ سیو سود و مدیریت حد ضرر/);
+  assert.match(source, /3️⃣ SCALED ENTRIES/);
+  assert.match(source, /enter \$5 at the first level and \$5 at the second/);
+  assert.match(source, /Scaling in does not eliminate risk/);
+  assert.match(source, /4️⃣ LEVERAGE & EXECUTION/);
+  assert.match(source, /5️⃣ LATE ENTRIES/);
+  assert.match(source, /6️⃣ PROFIT & STOP MANAGEMENT/);
 });
 
 
