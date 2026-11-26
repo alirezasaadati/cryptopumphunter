@@ -754,8 +754,8 @@ async function handleAdminMembershipCallback(query, env) {
         env,
         applicantId,
         "🎉 به خانواده CRYPTO PUMP HUNTER خوش آمدید!\n\n" +
-        "✅ عضویت شما با موفقیت تأیید شد و دسترسی شما Connected است.\n\n" +
-        "🚀 از این لحظه می‌توانید از اسکن بازار اسپات و سیگنال‌های تحلیلی فیوچرز استفاده کنید.\n\n" +
+        "✅ Your membership is approved and access is now active.\n\n" +
+        "🚀 You can now use spot-market scans and analytical futures signals.\n\n" +
         "⚠️ Signals are for analysis only. Apply proper risk management before trading."
       );
       await showMenu(env, applicantId);
@@ -840,7 +840,7 @@ async function handleOwnerAccessCommand(command, chatId, env, message) {
         "🎉 دسترسی شما به CRYPTO PUMP HUNTER توسط مدیر Connected شد.\n\n" +
         "Welcome! You can now use the bot.");
       await showMenu(env, targetId);
-      await sendMessage(env, chatId, `✅ کاربر ${targetId} مجاز شد و دسترسی او Connected است.`);
+      await sendMessage(env, chatId, `✅ User ${targetId} has been approved and access is active.`);
     } else {
       const member = { ...existing, chatId: String(targetId), approved: false, revoked: true,
         revokedAt: new Date().toISOString(), revokedBy: String(chatId) };
@@ -928,7 +928,7 @@ async function changeMemberAccess(env,ownerId,id,allow) {
   }
   if(!archiveResult?.ok) {
     await sendMessage(env,ownerId,
-      "⚠️ وضعیت دسترسی در ربات ذخیره شد، اما تغییر دسترسی کانال آرشیو ناموفق بود.\n"+
+      "⚠️ وضعیت دسترسی در ربات ذNoه شد، اما تغییر دسترسی کانال آرشیو ناموفق بود.\n"+
       "Reason: "+String(archiveResult?.error||"Unknown error").slice(0,500));
   } else {
     await sendMessage(env,ownerId,allow
@@ -1024,7 +1024,7 @@ async function showWelcome(env, chatId, welcome = true) {
     env,
     chatId,
     welcome
-      ? "🤖 خوش آمدید به تریدیار!\nبرای باز کردن منو، دکمه کیبورد کنار کادر پیام را بزنید."
+      ? "🤖 خوش آمدید به تریدیار!\nبرای باز کردن Main Menu، دکمه کیبورد کنار کادر پیام را بزنید."
       : "TRADEYAR main menu:",
     replyMenuForChat(env, chatId)
   );
@@ -2619,7 +2619,7 @@ export class SignalDeliveryCoordinator {
 async function showRecentFuturesSignalReport(env,ownerId){
   if(!isOwner(ownerId,env))return;
   if(!env.SIGNAL_DELIVERY||!getSignalDeliverySecret(env)){
-    await sendMessage(env,ownerId,"❌ اتصال امن حافظه سیگنال‌ها در دسترس نیست.");
+    await sendMessage(env,ownerId,"❌ Secure signal-memory connection is unavailable.");
     return;
   }
   try{
@@ -2631,7 +2631,7 @@ async function showRecentFuturesSignalReport(env,ownerId){
     });
     let payload={};
     try{payload=await response.json()}catch{}
-    if(!response.ok||!payload?.ok)throw new Error(payload?.error||"دریافت فهرست سیگنال‌ها ناموفق بود.");
+    if(!response.ok||!payload?.ok)throw new Error(payload?.error||"Could not retrieve the signal list.");
     const signals=Array.isArray(payload.signals)?payload.signals:[];
     if(!signals.length){
       await sendMessage(env,ownerId,"📊 در حال حاضر سیگنال Connectedی در حافظه موتور وجود None.\nاین گزارش فقط سیگنال‌های هنوز معتبر و منقضی‌نشده را نشان می‌دهد.");
@@ -2643,40 +2643,40 @@ async function showRecentFuturesSignalReport(env,ownerId){
       return Number.isFinite(n)?n.toLocaleString("en-US",{maximumFractionDigits:8}):"—";
     };
     const lines=[
-      "📊 گزارش مدیریتی سیگنال‌های اخیر",
+      "📊 RECENT SIGNAL ADMIN REPORT",
       "━━━━━━━━━━━━━━━━━━",
-      "منبع: حافظه Durable Object موتور فیوچرز",
-      "تعداد نمایش: "+signals.length,
-      "این گزارش فقط خواندنی است و هیچ داده‌ای در KV ذخیره نمی‌کند.",
+      "Source: Futures engine Durable Object memory",
+      "Displayed signals: "+signals.length,
+      "This report is read-only. No data is written to KV.",
       ""
     ];
     for(let i=0;i<signals.length;i++){
       const s=signals[i];
-      const side=s.side==="LONG"?"🟢 لانگ":"🔴 شورت";
+      const side=s.side==="LONG"?"🟢 LONG":"🔴 SHORT";
       const created=Number(s.createdAt);
-      const createdText=Number.isFinite(created)&&created>0?new Date(created).toISOString():"نامشخص";
+      const createdText=Number.isFinite(created)&&created>0?new Date(created).toISOString():"Unknown";
       lines.push(
         (i+1)+") "+formatFuturesSymbol(s.symbol)+" | "+side,
-        "امتیاز: "+fmt(s.score)+" از 100",
-        "ورود: "+fmt(s.entry)+" | حد ضرر: "+fmt(s.stop),
-        "تارگت اول: "+fmt(s.target1)+" | تارگت دوم: "+fmt(s.target2)+" | تارگت سوم: "+fmt(s.target3),
-        "RSI: "+fmt(s.rsi)+" | نسبت حجم: "+fmt(s.volumeRatio)+" | تغییر ۲۴ساعته: "+fmt(s.change24h)+"%",
-        "حجم مظنه: "+fmt(s.quoteVolume)+" USD | فاندینگ: "+fmt(s.funding),
-        "زمان ایجاد: "+createdText
+        "Score: "+fmt(s.score)+" / 100",
+        "Entry: "+fmt(s.entry)+" | Stop Loss: "+fmt(s.stop),
+        "TP1: "+fmt(s.target1)+" | TP2: "+fmt(s.target2)+" | TP3: "+fmt(s.target3),
+        "RSI: "+fmt(s.rsi)+" | Volume ratio: "+fmt(s.volumeRatio)+" | 24H change: "+fmt(s.change24h)+"%",
+        "Quote volume: "+fmt(s.quoteVolume)+" USD | Funding: "+fmt(s.funding),
+        "Created: "+createdText
       );
       if(Array.isArray(s.reasons)&&s.reasons.length){
-        lines.push("دلایل امتیازدهی:");
+        lines.push("Scoring reasons:");
         for(const reason of s.reasons.slice(0,8))lines.push("• "+String(reason).slice(0,180));
       }
       const d=s.entryDiagnostics;
       if(d&&typeof d==="object"){
         const checks=[
-          ["فاصله قیمت تا قیمت تحلیلی",d.driftPct,"%"],
-          ["فاصله از EMA20 بر حسب ATR",d.emaDistanceAtr," ATR"],
-          ["تأیید مومنتوم ۱۵دقیقه‌ای",d.momentumConfirmed===true?"بله":d.momentumConfirmed===false?"خیر":"نامشخص",""],
-          ["تأیید پولبک ۱۵دقیقه‌ای",d.pullbackConfirmed===true?"بله":d.pullbackConfirmed===false?"خیر":"نامشخص",""]
+          ["Live-to-reference price deviation",d.driftPct,"%"],
+          ["Distance from EMA20 (ATR)",d.emaDistanceAtr," ATR"],
+          ["15M momentum confirmation",d.momentumConfirmed===true?"Yes":d.momentumConfirmed===false?"No":"Unknown",""],
+          ["15M pullback confirmation",d.pullbackConfirmed===true?"Yes":d.pullbackConfirmed===false?"No":"Unknown",""]
         ];
-        lines.push("کنترل ورود:");
+        lines.push("Entry checks:");
         for(const [label,value,suffix] of checks){
           if(value!==undefined)lines.push("• "+label+": "+(typeof value==="number"?fmt(value)+suffix:value));
         }
@@ -2709,25 +2709,25 @@ async function showUncertainSignalOutbox(env,ownerId){
     await env.APP_KV.put(outboxSelectionKey(ownerId,token),JSON.stringify({chatId:record.chatId,signalId:record.signalId}),{expirationTtl:3600});
     keyboard.push([{text:"⚠️ "+(record.symbol||"Signal")+" · "+record.status,callback_data:"outbox:detail:"+token}]);
   }
-  keyboard.push([{text:"🔄 به‌روزرسانی",callback_data:"outbox:review"},{text:"🏠 Main Menu",callback_data:"menu"}]);
-  const note=page.list_complete===false?"\nنمایش بر اساس اولین ۱۰۰۰ رکورد KV است.":"";
-  await sendMessage(env,ownerId,"🛠 بررسی ارسال‌های نیازمند تعیین تکلیف\n━━━━━━━━━━━━━━━━━━\nتعداد موارد نیازمند بررسی: "+records.length+note+"\n\nبرای هر مورد، ابتدا پیام‌های تلگرام را بررسی کن.",{inline_keyboard:keyboard});
+  keyboard.push([{text:"🔄 Refresh",callback_data:"outbox:review"},{text:"🏠 Main Menu",callback_data:"menu"}]);
+  const note=page.list_complete===false?"\nShowing the first 1,000 KV records.":"";
+  await sendMessage(env,ownerId,"🛠 DELIVERIES REQUIRING REVIEW\n━━━━━━━━━━━━━━━━━━\nItems requiring review: "+records.length+note+"\n\nCheck the Telegram messages for each item before taking action.",{inline_keyboard:keyboard});
 }
 
 async function showOutboxSignalDetail(env,ownerId,token){
   if(!isOwner(ownerId,env)||!env.APP_KV)return;
   const selection=await env.APP_KV.get(outboxSelectionKey(ownerId,token),"json");
-  if(!selection){await sendMessage(env,ownerId,"این مورد منقضی شده است؛ فهرست را دوباره باز کن.");return;}
+  if(!selection){await sendMessage(env,ownerId,"This item has expired. Reopen the list.");return;}
   const record=await env.APP_KV.get(signalOutboxKey(selection.chatId,selection.signalId),"json");
-  if(!record){await sendMessage(env,ownerId,"رکورد ارسال پیدا نشد.");return;}
+  if(!record){await sendMessage(env,ownerId,"Delivery record not found.");return;}
   const hasPayload=Boolean(record.signal&&typeof record.messageText==="string");
   const keyboard=[];
-  if(canManuallyConfirmOutboxDelivery(record))keyboard.push([{text:"✅ پیام را در تلگرام دیدم؛ ثبت‌شده محسوب شود",callback_data:"outbox:confirm:"+token}]);
-  if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ پیام را ندیدم؛ تلاش مجدد (احتمال تکرار)",callback_data:"outbox:retry:"+token}]);
-  if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 تلاش مجدد انتشار در آرشیو (پس از بررسی کانال)",callback_data:"outbox:archive:"+token}]);
+  if(canManuallyConfirmOutboxDelivery(record))keyboard.push([{text:"✅ I verified the Telegram message; mark as delivered",callback_data:"outbox:confirm:"+token}]);
+  if(["SENDING","UNCERTAIN"].includes(record.status)&&hasPayload)keyboard.push([{text:"⚠️ I did not see the message; retry (may create a duplicate)",callback_data:"outbox:retry:"+token}]);
+  if(["SENT","ARCHIVE_PENDING"].includes(record.status)&&hasPayload)keyboard.push([{text:"📚 Retry archive publication (after checking the channel)",callback_data:"outbox:archive:"+token}]);
   keyboard.push([{text:"⬅️ Back",callback_data:"outbox:review"}]);
-  const body=["🔍 جزئیات ارسال","━━━━━━━━━━━━━━━━━━","Symbol: "+(record.symbol||"—"),"Chat ID: "+record.chatId,"شناسه سیگنال: "+record.signalId,"Status: "+record.status,"آخرین به‌روزرسانی: "+(record.updatedAt||"—"),"","اگر پیام در تلگرام دیده می‌شود، گزینه ثبت ارسال‌شده را بزن.","تلاش مجدد فقط وقتی مناسب است که پیام را بررسی کرده باشی؛ در وضعیت نامشخص احتمال ارسال تکراری وجود دارد."];
-  if(!hasPayload)body.push("⚠️ این رکورد قدیمی است و اطلاعات کافی برای بازیابی خودکار None.");
+  const body=["🔍 جزئیات ارسال","━━━━━━━━━━━━━━━━━━","Symbol: "+(record.symbol||"—"),"Chat ID: "+record.chatId,"Signal ID: "+record.signalId,"Status: "+record.status,"Last updated: "+(record.updatedAt||"—"),"","If you can see the message in Telegram, select the delivered confirmation option.","تلاش مجدد فقط وقتی مناسب است که پیام را بررسی کرده باشی؛ در وضعیت Unknown احتمال ارسال تکراری وجود دارد."];
+  if(!hasPayload)body.push("⚠️ This is an older record and does not contain enough information for automatic recovery.");
   await sendMessage(env,ownerId,body.join("\n"),{inline_keyboard:keyboard});
 }
 
@@ -2735,34 +2735,34 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
   if (!isOwner(ownerId, env) || !env.APP_KV || !env.SIGNAL_DELIVERY) return;
   const selection = await env.APP_KV.get(outboxSelectionKey(ownerId, token), "json");
   if (!selection) {
-    await sendMessage(env, ownerId, "این مورد منقضی شده است؛ فهرست را دوباره باز کن.");
+    await sendMessage(env, ownerId, "This item has expired. Reopen the list.");
     return;
   }
   const key = signalOutboxKey(selection.chatId, selection.signalId);
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
   if (!getSignalDeliverySecret(env)) {
-    await sendMessage(env, ownerId, "❌ کلید امنیتی ارتباط داخلی is not configured.");
+    await sendMessage(env, ownerId, "❌ Internal communication security secret is not configured.");
     return;
   }
 
   let record;
   try { record = await env.APP_KV.get(key, "json"); }
   catch (error) {
-    await sendMessage(env, ownerId, "❌ خواندن وضعیت ارسال ممکن نشد: " + String(error?.message || error));
+    await sendMessage(env, ownerId, "❌ Could not read delivery status: " + String(error?.message || error));
     return;
   }
   if (!record) {
-    await sendMessage(env, ownerId, "این رکورد دیگر در آرشیو ارسال‌ها وجود None.");
+    await sendMessage(env, ownerId, "This record is no longer in the delivery archive.");
     return;
   }
 
   if (action === "confirm_delivered") {
     if (record.status === "ARCHIVED") {
-      await sendMessage(env, ownerId, "این سیگنال قبلاً به‌عنوان ارسال‌شده ثبت شده است.");
+      await sendMessage(env, ownerId, "This signal is already marked as delivered.");
       return;
     }
     if (!canManuallyConfirmOutboxDelivery(record)) {
-      await sendMessage(env, ownerId, "❌ این رکورد برای تأیید دستی اطلاعات کافی None.");
+      await sendMessage(env, ownerId, "❌ This record does not contain enough information for manual confirmation.");
       return;
     }
     const confirmedAt = new Date().toISOString();
@@ -2777,14 +2777,14 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
         updatedAt: confirmedAt, manualConfirmedAt: confirmedAt
       });
       await env.APP_KV.put(key, JSON.stringify(confirmed));
-      await sendMessage(env, ownerId, "✅ سیگنال به‌عنوان ارسال‌شده ثبت شد.");
+      await sendMessage(env, ownerId, "✅ Signal marked as delivered.");
     } catch (error) {
-      await sendMessage(env, ownerId, "❌ ثبت تأیید دستی کامل نشد: " + String(error?.message || error));
+      await sendMessage(env, ownerId, "❌ Manual confirmation failed: " + String(error?.message || error));
       return;
     }
   } else if (action === "retry_archive") {
     if (!["SENT", "ARCHIVE_PENDING"].includes(record.status) || !record.signal || typeof record.messageText !== "string") {
-      await sendMessage(env, ownerId, "❌ این رکورد برای تلاش مجدد آرشیو آماده نیست.");
+      await sendMessage(env, ownerId, "❌ This record is not eligible for an archive retry.");
       return;
     }
     try {
@@ -2806,7 +2806,7 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
         archivedAt, archiveRetryAt: archivedAt, updatedAt: archivedAt
       });
       await env.APP_KV.put(key, JSON.stringify(archived));
-      await sendMessage(env, ownerId, "📚 انتشار سیگنال در آرشیو دوباره انجام شد.");
+      await sendMessage(env, ownerId, "📚 Signal successfully republished to the archive.");
     } catch (error) {
       const failedAt = new Date().toISOString();
       const pending = {
@@ -2825,11 +2825,11 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
       } catch (stateError) {
         console.error("ARCHIVE_RETRY_FAILURE_STATE_PERSIST_FAILED", String(stateError?.message || stateError));
       }
-      await sendMessage(env, ownerId, "❌ انتشار آرشیو انجام نشد: " + String(error?.message || error));
+      await sendMessage(env, ownerId, "❌ Archive publication failed: " + String(error?.message || error));
     }
   } else if (action === "retry") {
     if (!["SENDING", "UNCERTAIN"].includes(record.status) || !record.signal || typeof record.messageText !== "string") {
-      await sendMessage(env, ownerId, "❌ این رکورد برای تلاش مجدد ارسال آماده نیست.");
+      await sendMessage(env, ownerId, "❌ This record is not eligible for a delivery retry.");
       return;
     }
     const queuedAt = new Date().toISOString();
@@ -2844,17 +2844,17 @@ async function reconcileSignalOutbox(env, ownerId, token, action) {
         env, selection.chatId, queued.signal, queued.messageText,
         queued.replyMarkup ?? null, queued.parseMode ?? "HTML"
       );
-      await sendMessage(env, ownerId, "🔁 تلاش مجدد ارسال انجام شد.");
+      await sendMessage(env, ownerId, "🔁 Delivery retry completed.");
     } catch (error) {
-      await sendMessage(env, ownerId, "❌ تلاش مجدد ارسال کامل نشد: " + String(error?.message || error));
+      await sendMessage(env, ownerId, "❌ Delivery retry failed: " + String(error?.message || error));
     }
   } else {
-    await sendMessage(env, ownerId, "❌ عملیات در وضعیت فعلی قابل اجرا نیست.");
+    await sendMessage(env, ownerId, "❌ This action is not available for the current status.");
   }
 
   await showUncertainSignalOutbox(env, ownerId);
 }
-async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ ثبت و پیگیری نتایج معاملات در این نسخه غیرConnected است.")}
+async function handleFillCommand(env,chatId,message){return sendMessage(env,chatId,"ℹ️ Trade result logging and tracking are not available in this version.")}
 async function countUncertainSignalOutbox(env) {
   if(!env.APP_KV)return null;
   try{
@@ -2916,16 +2916,16 @@ async function runAutomaticFuturesAlertScanInternal(env) {
     const result=await runFuturesSignalScan(env,{analysisOnly:true});
     const d=result.diagnostics||{};
     const message=[
-      "⚠️ اسکن فیوچرز در حالت تحلیل بدون ثبت اجرا شد",
-      "Reason: binding یا secret مربوط به Durable Object موجود نیست.",
-      "نمادهای تحلیل‌شده: "+(d.analyzedCount??0),
-      "نمادهای بررسی‌نشده: "+(d.notAnalyzedCount??0),
-      "کاندیداهای واجد شرایط اما ثبت‌نشده: "+(d.unregisteredCandidateCount??0),
-      "ردشده‌ها: "+(d.rejectedCount??0),
+      "⚠️ Futures scan ran in analysis-only mode; no signals were registered",
+      "Reason: Durable Object binding or secret is missing.",
+      "Symbols analyzed: "+(d.analyzedCount??0),
+      "Symbols not analyzed: "+(d.notAnalyzedCount??0),
+      "Eligible but unregistered candidates: "+(d.unregisteredCandidateCount??0),
+      "Rejected: "+(d.rejectedCount??0),
       "",
       ...(d.topRejections||[]).map(x=>"• "+x.reason+": "+x.count),
       "",
-      "هیچ سیگنالی ارسال یا به‌عنوان Connected ثبت نشد؛ اتصال Durable Object را بررسی کن."
+      "No signals were sent or marked as registered. Check the Durable Object binding."
     ].join("\n");
     await notifyOwnerScanDiagnostics(env,message,null,0);
     return {scanned:true,analysisOnly:true,signals:0,diagnostics:d};
@@ -2953,35 +2953,35 @@ async function runAutomaticFuturesAlertScanInternal(env) {
     const diagnostics = result.diagnostics || {};
     diagnostics.uncertainOutboxCount = await countUncertainSignalOutbox(env);
     const noSignalMessage = [
-      "🧪 گزارش تشخیصی اسکن خودکار فیوچرز",
+      "🧪 AUTOMATED FUTURES SCAN DIAGNOSTICS",
       "━━━━━━━━━━━━━━━━━━",
-      "نسخه: " + CONFIG.VERSION,
-      "زمان: " + (diagnostics.finishedAt || new Date().toISOString()),
-      "نمادهای واجد حجم: " + (diagnostics.universeCount ?? "—"),
-      "نمادهای تحلیل‌شده: " + (diagnostics.analyzedCount ?? "—"),
-      "نمادهای بررسی‌نشده به‌علت محدودیت زمان: " + (diagnostics.notAnalyzedCount ?? "—"),
-      "خطاهای دریافت/تحلیل: " + (diagnostics.analysisErrorCount ?? "—"),
-      "خطاهای دریافت کندل ۱۵دقیقه‌ای: " + (diagnostics.fifteenMinuteDataErrorCount ?? 0),
-      "ردشده‌ها: " + (diagnostics.rejectedCount ?? "—"),
-      "سیگنال واجد شرایط: " + (diagnostics.eligibleCount ?? "—"),
-      "ثبت‌شده: " + (diagnostics.registeredCount ?? "—"),
-      "کاندیداهای ثبت‌نشده: " + (diagnostics.unregisteredCandidateCount ?? 0),
-      "رکوردهای ارسال نامشخص: " + (diagnostics.uncertainOutboxCount ?? "—"),
-      "معاملات OPEN بدون بررسی کندل در ۲ ساعت اخیر: " + (tracking.stuckCount ?? "—"),
-      "خطاهای داخلی پایش معاملات: " + (tracking.errors ?? 0),
-      ...(tracking.errorDetails || []).map(x => "• پایش " + (x.symbol || "") + " / " + (x.stage || "ERROR") + ": " + x.message),
-      ...(tracking.stuckTrades || []).map(x => "⚠️ معامله گیرکرده: " + x.symbol + " " + x.side + " | ID: " + x.tradeId + " | آخرین بررسی: " + (x.lastCheckedAt || "نامشخص")),
-      "ارسال موفق: " + (diagnostics.delivery?.delivered ?? "—"),
-      "ارسال ناموفق: " + (diagnostics.delivery?.failed ?? "—"),
-      "مدت اسکن: " + (diagnostics.durationMs != null ? Math.round(diagnostics.durationMs / 1000) + " ثانیه" : "—"),
+      "Version: " + CONFIG.VERSION,
+      "Time: " + (diagnostics.finishedAt || new Date().toISOString()),
+      "Symbols meeting volume requirements: " + (diagnostics.universeCount ?? "—"),
+      "Symbols analyzed: " + (diagnostics.analyzedCount ?? "—"),
+      "نمادهای بررسی‌نشده به‌علت محدودیت Time: " + (diagnostics.notAnalyzedCount ?? "—"),
+      "Fetch/analysis errors: " + (diagnostics.analysisErrorCount ?? "—"),
+      "15M candle-fetch errors: " + (diagnostics.fifteenMinuteDataErrorCount ?? 0),
+      "Rejected: " + (diagnostics.rejectedCount ?? "—"),
+      "Eligible signals: " + (diagnostics.eligibleCount ?? "—"),
+      "Registered: " + (diagnostics.registeredCount ?? "—"),
+      "Unregistered candidates: " + (diagnostics.unregisteredCandidateCount ?? 0),
+      "رکوردهای ارسال Unknown: " + (diagnostics.uncertainOutboxCount ?? "—"),
+      "معاملات OPEN بدون بررسی کندل در ۲ ساعت اNo: " + (tracking.stuckCount ?? "—"),
+      "Trade-monitor internal errors: " + (tracking.errors ?? 0),
+      ...(tracking.errorDetails || []).map(x => "• Monitor " + (x.symbol || "") + " / " + (x.stage || "ERROR") + ": " + x.message),
+      ...(tracking.stuckTrades || []).map(x => "⚠️ Stalled trade: " + x.symbol + " " + x.side + " | ID: " + x.tradeId + " | Last checked: " + (x.lastCheckedAt || "Unknown")),
+      "Successful deliveries: " + (diagnostics.delivery?.delivered ?? "—"),
+      "Failed deliveries: " + (diagnostics.delivery?.failed ?? "—"),
+      "Scan duration: " + (diagnostics.durationMs != null ? Math.round(diagnostics.durationMs / 1000) + " seconds" : "—"),
       "",
-      "مهم‌ترین دلایل رد:",
+      "Top rejection reasons:",
       ...(diagnostics.topRejections || []).map(x => "• " + x.reason + ": " + x.count),
       diagnostics.deliveryError ? "\nخطای ارسال: " + diagnostics.deliveryError : "",
       diagnostics.trackingError ? "\nخطای پایش معاملات: " + diagnostics.trackingError : "",
       "━━━━━━━━━━━━━━━━━━",
-      diagnostics.signalCount ? "سیگنال صادر شد؛ این پیام گزارش خطا/وضعیت نیست." :
-        "در این نوبت سیگنالی واجد شرایط پیدا نشد."
+      diagnostics.signalCount ? "A signal was generated; this is not an error/status report." :
+        "No eligible signals were found in this scan."
     ].filter(Boolean).join("\n");
     if (diagnostics.analysisErrorCount > 0 || diagnostics.fifteenMinuteDataErrorCount > 0 || diagnostics.delivery?.failed > 0 || diagnostics.deliveryError || diagnostics.trackingError || diagnostics.universeError || tracking.errors > 0 || tracking.stuckCount > 0) {
       await notifyOwnerScanDiagnostics(env, noSignalMessage,
@@ -3063,10 +3063,10 @@ function formatFuturesEntryDiagnostics(d) {
   lines.push("", "جزئیات نمادها:");
   for (const item of (d.samples || []).slice(0, 15)) {
     lines.push("• " + item.symbol + " | " + item.stage +
-      " | امتیاز: " + (item.score ?? "—") + " | جهت: " + (item.side || "—"));
+      " | Score: " + (item.score ?? "—") + " | جهت: " + (item.side || "—"));
     if (item.candleCounts) lines.push("  کندل‌ها: 1h=" + item.candleCounts["1h"] +
       "، 4h=" + item.candleCounts["4h"] + "، 15m=" + item.candleCounts["15m"]);
-    if (item.entry != null) lines.push("  ورود: " + formatPrice(item.entry) +
+    if (item.entry != null) lines.push("  Entry: " + formatPrice(item.entry) +
       " | استاپ: " + formatPrice(item.stop) +
       " | اهداف: " + (item.targets || []).map(formatPrice).join(" / "));
     if (item.reason) lines.push("  Reason: " + item.reason);
@@ -3238,7 +3238,7 @@ async function runFuturesSignalScan(env, options = {}) {
   const rejectionCounts = new Map();
   for (const item of analyzed) {
     if (!item || item.eligible === true) continue;
-    const reason = String(item.rejected || "علت رد نامشخص").slice(0, 180);
+    const reason = String(item.rejected || "علت رد Unknown").slice(0, 180);
     rejectionCounts.set(reason, (rejectionCounts.get(reason) || 0) + 1);
   }
   const finishedAt = new Date().toISOString();
@@ -3274,7 +3274,7 @@ async function runFuturesSignalScan(env, options = {}) {
       ? signals.map((item, index) => formatFuturesSignal(item, index + 1)).join("\n━━━━━━━━━━━━━━━━━━\n\n")
       : "⚠️ در این بررسی سیگنالی به حداقل امتیاز و شرایط ورود نرسید.\n\n") +
     `🕒 زمان گزارش: ${new Date().toISOString()}\n` +
-    `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} ثانیه\n` +
+    `⏱ مدت بررسی: ${Math.round((Date.now() - started) / 1000)} seconds\n` +
     "📡 منبع داده: Kraken Derivatives Futures\n" +
     "⚠️ سیگنال‌ها تحلیلی‌اند؛ سفارش واقعی ثبت نمی‌شود و PROFIT تضمین نیست.";
   return { report, signals, experimentalSent: 0, analyzed, diagnostics };
@@ -3340,9 +3340,9 @@ async function runFuturesSignalsForChat(env, chatId) {
       await sendMessage(env, chatId,
         "📊 اسکن فیوچرز به پایان رسید؛ سیگنال معتبری پیدا نشد.\n\n" +
         "نمادهای بررسی‌شده: " + (d.analyzedCount ?? "—") + "\n" +
-        "نمادهای واجد حجم: " + (d.universeCount ?? "—") + "\n" +
-        "ردشده‌ها: " + (d.rejectedCount ?? "—") + "\n" +
-        "مدت اسکن: " + (d.durationMs != null ? Math.round(d.durationMs / 1000) + " ثانیه" : "—") +
+        "Symbols meeting volume requirements: " + (d.universeCount ?? "—") + "\n" +
+        "Rejected: " + (d.rejectedCount ?? "—") + "\n" +
+        "Scan duration: " + (d.durationMs != null ? Math.round(d.durationMs / 1000) + " seconds" : "—") +
         "\n\nبا تغییر شرایط بازار می‌توانی دوباره اسکن کنی.",
         menuForChat(env, chatId));
       return;
