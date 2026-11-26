@@ -1,0 +1,29 @@
+name: Premium UI checks
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/index.js"
+      - "src/futures-alerts.js"
+      - "src/signal-card.js"
+      - "scripts/menu-layout.test.mjs"
+      - "scripts/futures-alerts.test.mjs"
+      - "scripts/signal-card.test.mjs"
+      - "package.json"
+      - "wrangler.toml"
+      - ".github/workflows/premium-ui-checks.yml"
+jobs:
+  premium-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Check Worker syntax
+        run: node --check src/index.js
+      - name: Run focused UI and signal-card tests
+        run: node --test scripts/menu-layout.test.mjs scripts/futures-alerts.test.mjs scripts/signal-card.test.mjs
+      - name: Validate Cloudflare Worker bundle
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-dry-run
