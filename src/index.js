@@ -521,7 +521,7 @@ async function sendArchiveAccessLink(env, userId) {
         catch(error){ console.error("Archive invite cache write failed:",String(error?.message||error)); }
       }
     }
-    await sendMessage(env,userId,"📚 Open the channel using the link below to view the signal archive.\nYour join request will be checked against your bot membership.\n\n"+link);
+    await sendMessage(env,userId,"🎉 عضویت شما تأیید شد.\n\n🔗 برای ورود به کانال VIP از لینک زیر استفاده کنید.\nدر صورت نمایش درخواست عضویت، آن را ارسال کنید تا به‌صورت خودکار تأیید شود.\n\n"+link);
   } catch(error) {
     console.error("Archive invite link failed:",String(error?.message||error));
     await sendMessage(env,userId,"⚠️ Could not create an archive invite link right now.");
@@ -571,18 +571,16 @@ async function restoreArchiveMemberEligibility(env,userId) {
   }
 }
 
-async function requestMembership(env, chatId, message) {
+const LBANK_REFERRAL_URL = "https://www.lbk.pub/ref/67XF8";
+
+async function requestMembership(env, chatId, message, submittedUid = "") {
   if (isOwner(chatId, env)) {
     await showMenu(env, chatId);
     return;
   }
 
   if (!(env.OWNER_TELEGRAM_ID || env.OWNER_ID) || !env.APP_KV) {
-    await sendMessage(
-      env,
-      chatId,
-      "⚠️ Membership requests are temporarily unavailable.\nPlease try again later."
-    );
+    await sendMessage(env, chatId, "⚠️ ثبت درخواست عضویت در حال حاضر امکان‌پذیر نیست. لطفاً بعداً تلاش کنید.");
     return;
   }
 
@@ -594,39 +592,53 @@ async function requestMembership(env, chatId, message) {
   try {
     const existingMember = await env.APP_KV.get(memberKey(chatId), "json");
     if (existingMember?.revoked === true) {
-      await sendMessage(
-        env,
-        chatId,
-        "⛔ Your access has been revoked by the administrator.\nContact the administrator to request reactivation."
-      );
+      await sendMessage(env, chatId, "⛔ دسترسی شما قبلاً توسط مدیر لغو شده است. برای فعال‌سازی مجدد با مدیر تماس بگیرید.");
       return;
     }
   } catch {
-    await sendMessage(env, chatId, "⚠️ Could not verify your membership. Please try again later.");
+    await sendMessage(env, chatId, "⚠️ بررسی وضعیت عضویت ممکن نشد. لطفاً دوباره تلاش کنید.");
     return;
   }
 
   try {
-    const existing = await env.APP_KV.get(pendingKey(chatId));
+    const existing = await env.APP_KV.get(pendingKey(chatId), "json");
 
-    if (existing) {
+    if (!submittedUid) {
+      if (existing?.uid) {
+        await sendMessage(env, chatId, "⏳ UID شما قبلاً ثبت شده و درخواستتان در انتظار بررسی مدیر است. پس از تصمیم‌گیری به شما اطلاع می‌دهیم.");
+        return;
+      }
       await sendMessage(
         env,
         chatId,
-        "⏳ Your membership request has already been submitted.\n\n" +
-        "Your request is awaiting review. You will be notified here once a decision is made."
+        "👋 به تریدیار خوش آمدید\n\n" +
+        "برای استفاده از سیگنال‌ها، ابتدا از طریق لینک زیر در صرافی LBank ثبت‌نام کنید. سپس UID حساب خود را در قالب یک پیام برای ربات ارسال کنید.\n\n" +
+        "🔗 لینک ثبت‌نام: " + LBANK_REFERRAL_URL + "\n\n" +
+        "پس از بررسی UID توسط مدیر، در صورت تأیید عضویت، لینک کانال VIP برای شما ارسال خواهد شد.\n\n" +
+        "📩 لطفاً UID خود را در پیام بعدی ارسال کنید."
       );
       return;
     }
 
-    const user = message?.from || {};
+    const uid = String(submittedUid).trim();
+    if (!/^[A-Za-z0-9_-]{3,64}$/.test(uid)) {
+      await sendMessage(env, chatId, "⚠️ UID معتبر نیست. لطفاً فقط UID حساب LBank را بدون فاصله و توضیحات ارسال کنید.");
+      return;
+    }
 
+    if (existing?.uid) {
+      await sendMessage(env, chatId, "⏳ UID شما قبلاً ثبت شده و درخواستتان در انتظار بررسی مدیر است. پس از تصمیم‌گیری به شما اطلاع می‌دهیم.");
+      return;
+    }
+
+    const user = message?.from || {};
     const applicant = {
       chatId: String(chatId),
       userId: String(user.id || chatId),
       username: user.username || "",
       firstName: user.first_name || "",
       lastName: user.last_name || "",
+      uid,
       requestedAt: new Date().toISOString()
     };
 
@@ -636,60 +648,30 @@ async function requestMembership(env, chatId, message) {
       { expirationTtl: CONFIG.PENDING_TTL }
     );
 
-    const displayName =
-      [applicant.firstName, applicant.lastName]
-        .filter(Boolean)
-        .join(" ") || "Name not provided";
-
-    const username = applicant.username
-      ? `@${applicant.username}`
-      : "None";
-
+    const displayName = [applicant.firstName, applicant.lastName].filter(Boolean).join(" ") || "نام ثبت نشده";
+    const username = applicant.username ? `@${applicant.username}` : "ندارد";
     const adminText =
       "🔔 درخواست عضویت جدید\n" +
       "━━━━━━━━━━━━━━━━━━\n\n" +
       `👤 نام: ${displayName}\n` +
       `🔗 نام کاربری: ${username}\n` +
-      `🆔 شناسه کاربر: ${applicant.userId}\n` +
+      `🆔 شناسه تلگرام: ${applicant.userId}\n` +
+      `🪪 UID صرافی LBank: ${applicant.uid}\n` +
       `🕒 زمان درخواست: ${applicant.requestedAt}\n\n` +
-      "برای بررسی درخواست از دکمه‌های زیر استفاده کنید.";
+      "لطفاً UID را بررسی و درباره عضویت تصمیم‌گیری کنید.";
 
     const adminButtons = {
-      inline_keyboard: [
-        [
-          {
-            text: "✅ تأیید",
-            callback_data: `approve:${chatId}`
-          },
-          {
-            text: "❌ رد درخواست",
-            callback_data: `reject:${chatId}`
-          }
-        ]
-      ]
+      inline_keyboard: [[
+        { text: "✅ قبول عضویت", callback_data: `approve:${chatId}` },
+        { text: "❌ رد درخواست", callback_data: `reject:${chatId}` }
+      ]]
     };
 
     await sendMessage(env, (env.OWNER_TELEGRAM_ID || env.OWNER_ID), adminText, adminButtons);
-
-    await sendMessage(
-      env,
-      chatId,
-      "✅ درخواست عضویت شما ثبت شد.\n\n" +
-      "⏳ درخواست شما در انتظار بررسی است.\n" +
-      "پس از تصمیم‌گیری، همین‌جا به شما اطلاع می‌دهیم."
-    );
+    await sendMessage(env, chatId, "✅ UID شما با موفقیت ثبت شد.\n\n⏳ درخواست عضویت برای مدیر ارسال شد و پس از بررسی، نتیجه همین‌جا به شما اطلاع داده می‌شود.");
   } catch (error) {
-    try {
-      await env.APP_KV.delete(pendingKey(chatId));
-    } catch {
-      // Ignore cleanup errors.
-    }
-
-    await sendMessage(
-      env,
-      chatId,
-      "❌ ثبت درخواست انجام نشد.\nلطفاً کمی بعد دوباره تلاش کنید."
-    );
+    console.error("Membership UID submission failed:", String(error?.message || error));
+    await sendMessage(env, chatId, "❌ ثبت UID انجام نشد. لطفاً کمی بعد دوباره تلاش کنید.");
   }
 }
 
@@ -759,11 +741,9 @@ async function handleAdminMembershipCallback(query, env) {
       await sendMessage(
         env,
         applicantId,
-        "🎉 Welcome to CRYPTO PUMP HUNTER!\n\n" +
-        "✅ Your membership is approved and access is now active.\n\n" +
-        "🚀 You can now use spot-market scans and analytical futures signals.\n\n" +
-        "⚠️ Signals are for analysis only. Apply proper risk management before trading."
+        "🎉 عضویت شما در تریدیار تأیید شد.\n\n✅ دسترسی شما فعال است. لینک ورود به کانال VIP در پیام بعدی برایتان ارسال می‌شود."
       );
+      await sendArchiveAccessLink(env, applicantId);
       await showMenu(env, applicantId);
 
       await sendMessage(
@@ -777,7 +757,7 @@ async function handleAdminMembershipCallback(query, env) {
       await sendMessage(
         env,
         applicantId,
-        "❌ Your membership request was not approved."
+        "❌ ثبت‌نام شما ناموفق بوده است.\n\nلطفاً از طریق لینک زیر در صرافی LBank ثبت‌نام کنید و UID خود را برای بررسی مجدداً ارسال کنید.\n\n🔗 لینک ثبت‌نام: " + LBANK_REFERRAL_URL
       );
 
       await sendMessage(
@@ -1159,7 +1139,12 @@ async function handleTelegramCommand(command, chatId, env, message) {
     }
 
     if (!(await isApproved(chatId, env))) {
-      await requestMembership(env, chatId, message);
+      const submittedText = String(message?.text || "").trim();
+      if (submittedText && !submittedText.startsWith("/")) {
+        await requestMembership(env, chatId, message, submittedText);
+      } else {
+        await requestMembership(env, chatId, message);
+      }
       return;
     }
 
