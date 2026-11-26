@@ -2234,7 +2234,7 @@ async function signalDeliveryRequest(env, stub, path, body) {
 
 async function publishSignalToArchive(env, signal, messageText, parseMode = "HTML", options = {}) {
   const channelId = archiveChannelId(env);
-  if (!channelId) return { skipped: true };
+  if (!channelId) throw new Error("SIGNAL_ARCHIVE_CHANNEL_ID is missing or invalid; signal was not published.");
   if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) throw new Error("Archive publishing requires SIGNAL_DELIVERY coordination.");
 
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:signal-archive-publisher"));
@@ -3412,14 +3412,12 @@ async function runFuturesSignalsForChat(env, chatId) {
       "🔍 <b>درخواست اسکن دریافت شد</b>\n" +
       "━━━━━━━━━━━━━━━━━━\n\n" +
       "📊 موتور کراکن در حال بررسی بازار است.\n\n" +
-      "در صورت شناسایی فرصت معاملاتی معتبر، سیگنال آن به‌صورت خودکار در ربات منتشر خواهد شد.\n\n" +
-      "━━━━━━━━━━━━━━━━━━\n" +
-      "⏳ لطفاً پیش از ورود به بازار، منتظر تأیید یک فرصت معاملاتی بمانید.\n\n" +
+      "در صورت شناسایی فرصت معتبر، سیگنال مستقیماً در کانال آرشیو منتشر می‌شود.\n\n" +
       "⚡ <b>تریدیار | پایش هوشمند بازار</b>",
       menuForChat(env, chatId),
       "HTML");
 
-    const result = await runFuturesSignalScan(env, { excludeChatId: chatId });
+    const result = await runFuturesSignalScan(env);
     const signals = result.signals || [];
     if (!signals.length) {
       const d = result.diagnostics || {};
@@ -3434,11 +3432,24 @@ async function runFuturesSignalsForChat(env, chatId) {
       return;
     }
 
-    await sendMessage(env, chatId, "✅ Scan completed; " + signals.length + " valid signal(s) found. Sending details...");
+    let published = 0;
+    let failed = 0;
     for (let i = 0; i < signals.length; i++) {
       const signal = signals[i];
-      await sendAndArchiveFuturesSignal(env, chatId, signal, formatFuturesSignal(signal, i + 1));
+      try {
+        const result = await publishSignalToArchive(env, signal, formatFuturesSignal(signal, i + 1), "HTML");
+        if (result?.published || result?.duplicate) published++;
+        else failed++;
+      } catch (error) {
+        failed++;
+        console.error("Manual archive signal publication failed:", signal.symbol, String(error?.message || error));
+      }
     }
+    await sendMessage(env, chatId,
+      "✅ اسکن به پایان رسید.\n" +
+      "سیگنال‌های منتشرشده در کانال آرشیو: " + published + "\n" +
+      "ارسال‌های ناموفق: " + failed,
+      menuForChat(env, chatId));
   } catch (error) {
     const diagnostic = String(error?.stack || error?.message || error).slice(0, 1800);
     console.error("Manual futures scan failed:", diagnostic);
@@ -3467,94 +3478,32 @@ async function runFuturesSignalsForChat(env, chatId) {
 }
 
 async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
-  if (!Array.isArray(signals) || !signals.length) return { newSignals: 0, recipients: 0, delivered: 0, failed: 0 };
-  const recipients = new Set();
-  const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
-  if (ownerId) recipients.add(String(ownerId));
-  // KV is used only to read the allow-list. Any read/quota outage must not
-  // prevent delivery to the owner, and must never broaden access to users.
-  if (env.APP_KV) {
-    try {
-      let cursor;
-      do {
-        const page = await env.APP_KV.list({ prefix: "member:", limit: 1000, ...(cursor ? { cursor } : {}) });
-        for (const item of page.keys || []) {
-          const chatId = item.name.slice("member:".length);
-          const member = await env.APP_KV.get(item.name, "json");
-          if (member && member.approved !== false && member.revoked !== true) recipients.add(String(chatId));
-        }
-        cursor = page.list_complete === false ? page.cursor : null;
-      } while (cursor);
-      const legacyMembers = await env.APP_KV.get("v1:members", "json") || {};
-      for (const [chatId, legacy] of Object.entries(legacyMembers)) {
-        if (legacy?.status !== "active") continue;
-        const modern = await env.APP_KV.get(memberKey(chatId), "json");
-        if (!modern) recipients.add(String(chatId));
-      }
-    } catch (error) {
-      console.error("Approved-member read failed; continuing with owner delivery only:", String(error?.message || error));
-    }
+  if (!Array.isArray(signals) || !signals.length) {
+    return { newSignals: 0, recipients: 0, delivered: 0, failed: 0 };
   }
-  const targets = [...recipients].filter(id => excludeChatId == null || String(id) !== String(excludeChatId));
-  let delivered = 0, failed = 0;
 
-  // Process one signal at a time: private notifications fan out in parallel,
-  // while the public archive receives exactly one publish attempt per signal.
+  // Publish each signal once, directly to the archive channel. Signal content
+  // is never fanned out to private bot chats or copied from private messages.
+  let delivered = 0;
+  let failed = 0;
   for (let i = 0; i < signals.length; i++) {
     const signal = signals[i];
-    const messageText = formatFuturesSignalAlert(signal, i + 1);
-    const deliveredChats = [];
-    await mapLimit(targets, 4, async chatId => {
-      try {
-        await sendAndArchiveFuturesSignal(env, chatId, signal, messageText, null, "HTML", { archive: false });
-        deliveredChats.push(String(chatId));
-        delivered++;
-      } catch (error) {
-        failed++;
-        console.error("Immediate futures alert delivery failed", chatId, signal.symbol, String(error?.message || error));
-      }
-    });
-
-    let archiveState;
     try {
-      const result = await publishSignalToArchive(env, signal, messageText, "HTML");
-      const complete = result?.skipped === true || result?.published === true ||
-        (result?.duplicate === true && result?.pending !== true);
-      archiveState = {
-        status: complete ? "ARCHIVED" : "ARCHIVE_PENDING",
-        archivePublished: complete,
-        archiveMessageId: result?.messageId ?? null,
-        ...(complete ? { archivedAt: new Date().toISOString() } : {
-          archivePublishError: result?.pending ? "Archive publication is already in progress for this signal." : "Archive publication is pending."
-        })
-      };
-    } catch (error) {
-      archiveState = {
-        status: "ARCHIVE_PENDING",
-        archivePublished: false,
-        archivePublishError: String(error?.message || error).slice(0, 500)
-      };
-      console.error("Single archive publish failed; private deliveries remain successful:", signal.symbol, String(error?.message || error));
-    }
-
-    await mapLimit(deliveredChats, 4, async chatId => {
-      const key = signalOutboxKey(chatId, signal.id);
-      const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName(key));
-      try {
-        const result = await signalDeliveryRequest(env, stub, "/deliver/complete", {
-          chatId, signalId: String(signal.id), ...archiveState, updatedAt: new Date().toISOString()
-        });
-        await persistSignalOutboxMirror(env, chatId, signal.id, result.record,
-          "SIGNAL_OUTBOX_ARCHIVE_STATE_MIRROR_FAILED");
-      } catch (error) {
-        console.error("Could not synchronize archive status to recipient outbox:", chatId, signal.symbol, String(error?.message || error));
+      const result = await publishSignalToArchive(
+        env, signal, formatFuturesSignalAlert(signal, i + 1), "HTML"
+      );
+      if (result?.published === true || (result?.duplicate === true && result?.pending !== true)) {
+        delivered++;
+      } else {
+        failed++;
       }
-    });
+    } catch (error) {
+      failed++;
+      console.error("Direct archive signal publication failed:", signal.symbol, String(error?.message || error));
+    }
   }
-  return { newSignals: signals.length, recipients: targets.length, delivered, failed };
+  return { newSignals: signals.length, recipients: 1, delivered, failed };
 }
-
-// ---------------- CONCURRENCY ----------------
 
 async function mapLimit(items, limit, callback, shouldContinue = () => true) {
   const results = new Array(items.length);
