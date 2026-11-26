@@ -128,8 +128,8 @@ function encodePng() {
 }
 export function getSignalCardDisplayData(signal) {
   const symbol = String(signal?.symbol || "—").toUpperCase()
-    .replace(/^PF_/, "").replace(/\.P$/, "").replace(/[-_/]?(USDT|USD)$/, "").replace(/^XBT$/, "BTC");
-  const names = { BTC: "BITCOIN", ETH: "ETHEREUM", SOL: "SOLANA", XRP: "XRP" };
+    .replace(/^PF_/, "").replace(/\.P$/, "").replace(/[-_/]?(USDT|USD)$/, "").replace(/^XBT$/, "BTC").replace(/^NVDX$/, "NVDA");
+  const names = { BTC: "BITCOIN", ETH: "ETHEREUM", SOL: "SOLANA", XRP: "XRP", NVDA: "NVIDIA" };
   return {
     symbol, assetName: names[symbol] || symbol,
     side: signal?.side === "LONG" ? "LONG" : "SHORT",
