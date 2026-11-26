@@ -2029,25 +2029,29 @@ function formatPrice(value) {
 }
 
 function formatFuturesSignal(item, index = 1) {
-  const sideLabel = item.side === "LONG" ? "🟢 LONG ↗" : "🔴 SHORT ↘";
-  const riskLabel = item.riskLevel === "HIGH_RISK" ? "HIGH RISK" : "STANDARD";
-  const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol) + "/USD");
-  const entry = formatSignalPrice(item.entry);
-  const entry2 = formatSignalPrice(displayEntryPrice(item.entry, item.side));
-  const stop = formatSignalPrice(item.stop);
-  const score = Number(item.score);
-  const scoreLine = Number.isFinite(score) ? `\nScore: <b>${Math.round(score)}/100</b>` : "";
-  return `<b>PREMIUM SIGNALS</b>  •  <b>TRADEYAR</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `<b>${sideLabel}</b>  •  <b>${symbol}</b>\n` +
-    `<i>${escapeTelegramHtml(formatPerpetualLabel(item.symbol))}</i>\n\n` +
-    `<b>STOP LOSS</b>  <code>${stop}</code>   |   <b>ENTRY PRICE</b>  <code>${entry}</code>\n` +
-    `Entry 2: <code>${entry2}</code>\n\n` +
-    `<b>TAKE PROFIT TARGETS</b>\n` +
-    `🎯 TP1  <code>${formatSignalPrice(item.target1)}</code>\n` +
-    `🎯 TP2  <code>${formatSignalPrice(item.target2)}</code>\n` +
-    `🎯 TP3  <code>${formatSignalPrice(item.target3)}</code>\n\n` +
-    `<b>RISK</b>  ${riskLabel}${scoreLine}`;
+  const sideLabel = item.side === "LONG" ? "LONG 🟢" : "SHORT 🔴";
+  const symbol = escapeTelegramHtml(formatFuturesSymbol(item.symbol) + "/USDT");
+  const lines = [
+    `<b>${symbol}</b>`,
+    `<b>${sideLabel}</b>`,
+    "",
+    `Entry Zone 1 : ${formatSignalDisplayPrice(item.entry)}`,
+    `Entry Zone 2 : ${formatSignalDisplayPrice(displayEntryPrice(item.entry, item.side))}`,
+    "",
+    `🎯 TP 1 : ${formatSignalDisplayPrice(item.target1)}`,
+    `🎯 TP 2 : ${formatSignalDisplayPrice(item.target2)}`,
+    `🎯 TP 3 : ${formatSignalDisplayPrice(item.target3)}`,
+    "",
+    `⛔ SL : ${formatSignalDisplayPrice(item.stop)}`
+  ];
+  return lines.map(line => `\u200E${line}`).join("\n");
+}
+
+function formatSignalDisplayPrice(value) {
+  const price = Number(value);
+  return Number.isFinite(price)
+    ? price.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 8 })
+    : "—";
 }
 
 function formatSignalPrice(value) {
