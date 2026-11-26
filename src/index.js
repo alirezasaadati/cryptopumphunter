@@ -1397,7 +1397,7 @@ async function showConnectionTest(env, chatId) {
   await sendMessage(env, chatId, "🔌 در حال بررسی اتصال به منابع داده...");
   const result=await testDataSources();
   const lines=[
-    (result.krakenFutures?.ok?"✅":"❌")+" فیوچرز کراکن: "+(result.krakenFutures?.ok?"متصل":"قطع"),
+    (result.krakenFutures?.ok?"✅":"❌")+" موتور کراکن: "+(result.krakenFutures?.ok?"متصل":"قطع"),
     result.krakenFutures?.error?"خطای فیوچرز: "+result.krakenFutures.error.slice(0,350):"",
     "نسخه: V"+CONFIG.VERSION
   ].filter(Boolean);
