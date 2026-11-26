@@ -236,7 +236,7 @@ export default {
       if (env.ENVIRONMENT !== "preview" || !env.PREVIEW_TEST_KEY) {
         return json({ ok: false, error: "Not available." }, 404);
       }
-      const providedKey = request.headers.get("Authorization")?.replace(/^Bearer\\s+/i, "") || "";
+      const providedKey = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "") || "";
       if (!(await verifySignalDeliverySecret(providedKey, env.PREVIEW_TEST_KEY))) {
         return json({ ok: false, error: "Unauthorized." }, 401);
       }
