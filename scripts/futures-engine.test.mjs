@@ -210,7 +210,7 @@ test("15m momentum breakout is a required entry gate",()=>{
 test("15m pullback to EMA21 is a required entry gate",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const ema21=testEma(fifteenMinute.map(c=>c.close),21);
-  for(const candle of fifteenMinute.slice(-10,-1)){
+  for(const candle of fifteenMinute.slice(-10,-2)){
     candle.low=ema21+0.4;
     candle.high=Math.max(candle.high,candle.low+0.1);
   }
