@@ -1506,21 +1506,36 @@ function average(values) {
 const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
-  CONCURRENCY: 5, MAX_SCAN_DURATION_MS: 180000, SCAN_FINALIZATION_RESERVE_MS: 45000,
-  REQUEST_TIMEOUT_MS: 12000, MAX_SIGNALS_PER_SCAN: 20,
-  MIN_QUOTE_VOLUME: 5_000_000, HIGH_RISK_MIN_QUOTE_VOLUME: 5_000_000,
-  KLINE_LIMIT: 120, MIN_CANDLES: 60, MIN_SCORE: 72,
-  INTERVAL: "1h", CONFIRM_INTERVAL: "4h", ENTRY_CONFIRM_INTERVAL: "15m",
-  SIGNAL_TTL_MINUTES: 60, MAX_ENTRY_DRIFT_PCT: 0.35, LONG_MAX_ENTRY_DRIFT_PCT: 0.70,
-  MAX_ENTRY_EMA_DISTANCE_ATR: 3.0, MAX_PULLBACK_DISTANCE_ATR: 0.35, LONG_MAX_PULLBACK_DISTANCE_ATR: 0.60,
-  MAX_RECLAIM_EXTENSION_ATR: 3.0, HIGH_RISK_MIN_SCORE: 55, LONG_MIN_SCORE: 67, HIGH_RISK_LONG_MIN_SCORE: 60,
-  HIGH_RISK_MIN_VOLUME_RATIO: 0.5, HIGH_RISK_LONG_MIN_VOLUME_RATIO: 0.60, VOLUME_PRIORITY_TIER_1: 0.8,
-  VOLUME_PRIORITY_TIER_2: 1.3, VOLUME_PRIORITY_BONUS_TIER_1: 5,
-  VOLUME_PRIORITY_BONUS_TIER_2: 10, CONFIRMATION_PRIORITY_BONUS_ONE: 7,
-  CONFIRMATION_PRIORITY_BONUS_BOTH: 15, HIGH_RISK_LONG_RSI_MIN: 35, HIGH_RISK_LONG_RSI_MAX: 78,
-  HIGH_RISK_SHORT_RSI_MIN: 22, HIGH_RISK_SHORT_RSI_MAX: 65, HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.75, HIGH_RISK_LONG_MAX_ENTRY_DRIFT_PCT: 0.90,
-  HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 4.0, HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 4.0,
+  // Scan all liquid perpetuals, stopping only when the safe execution budget is reached.
+  CONCURRENCY: 3,
+  MAX_SCAN_DURATION_MS: 180000,
+  SCAN_FINALIZATION_RESERVE_MS: 45000,
+  REQUEST_TIMEOUT_MS: 12000,
+  MAX_SIGNALS_PER_SCAN: 20,
+  MIN_QUOTE_VOLUME: 5_000_000,
+  KLINE_LIMIT: 120,
+  MIN_CANDLES: 60,
+  MIN_SCORE: 72,
+  INTERVAL: "1h",
+  CONFIRM_INTERVAL: "4h",
+  ENTRY_CONFIRM_INTERVAL: "15m",
+  SIGNAL_TTL_MINUTES: 60,
+  MAX_ENTRY_DRIFT_PCT: 0.35,
+  MAX_ENTRY_EMA_DISTANCE_ATR: 3.0,
+  MAX_PULLBACK_DISTANCE_ATR: 0.35,
+  MAX_RECLAIM_EXTENSION_ATR: 3.0,
+  // Separate experimental path. These values never affect the standard setup.
+  HIGH_RISK_MIN_SCORE: 55,
+  HIGH_RISK_MIN_VOLUME_RATIO: 0.5,
+  HIGH_RISK_LONG_RSI_MIN: 35,
+  HIGH_RISK_LONG_RSI_MAX: 78,
+  HIGH_RISK_SHORT_RSI_MIN: 22,
+  HIGH_RISK_SHORT_RSI_MAX: 65,
+  HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.75,
+  HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 4.0,
+  HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 4.0
 };
+
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
 
 async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL) {
@@ -1973,7 +1988,6 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const down1h = e20 < e50 && referencePrice < e20;
   const up4h = e20_4h > e50_4h;
   const down4h = e20_4h < e50_4h;
-  const fourHourTrend = up4h ? "BULLISH" : down4h ? "BEARISH" : "NEUTRAL";
   let side = null;
   let score = 0;
   const reasons = [];
@@ -2122,18 +2136,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     reasons,
     entryDiagnostics: entryFilters,
     eligible: eligible || highRiskEligible,
-    highRiskEligible,
-    fourHourTrend,
-    momentumConfirmed: Boolean(entryFilters.momentumConfirmed),
-    pullbackConfirmed: Boolean(entryFilters.pullbackConfirmed),
-    baseScore: score,
-    priorityScore: score,
-    volumePriorityBonus: 0,
-    fourHourScoreAdjustment: 0,
-    confirmationPriorityBonus: 0,
-    confirmationCount: Number(Boolean(entryFilters.momentumConfirmed)) + Number(Boolean(entryFilters.pullbackConfirmed))
+    highRiskEligible
   };
 }
+
 function formatPrice(value) {
   const price = Number(value);
   if (!Number.isFinite(price)) return "—";
@@ -3330,40 +3336,29 @@ async function runFuturesSignalScan(env, options = {}) {
   let fifteenMinuteDataErrorCount = 0;
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
-      // Stage 1: fetch only the 1h/4h inputs and run the unchanged engine with
-      // entry filters skipped. This is a conservative preflight: any symbol
-      // that can become eligible in the full analysis must pass this stage.
-      const baseData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
-        FUTURES_CONFIG.INTERVAL, FUTURES_CONFIG.CONFIRM_INTERVAL
+      // Match the supplied 3.8.2 scan path: fetch all three timeframes for
+      // each symbol, then run the original analyzer once on the complete data.
+      const marketData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
+        FUTURES_CONFIG.INTERVAL,
+        FUTURES_CONFIG.CONFIRM_INTERVAL,
+        FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL
       ]);
-      const oneHour = baseData.candles[FUTURES_CONFIG.INTERVAL];
-      const fourHour = baseData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
+      const oneHour = marketData.candles[FUTURES_CONFIG.INTERVAL];
+      const fourHour = marketData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
+      const fifteenMinute = marketData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
       if (!Array.isArray(oneHour) || !Array.isArray(fourHour)) {
-        throw new Error(baseData.errors?.[FUTURES_CONFIG.INTERVAL] ||
-          baseData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
-          "Required Kraken candle data is missing.");
+        throw new Error(
+          marketData.errors?.[FUTURES_CONFIG.INTERVAL] ||
+          marketData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
+          "Required Kraken 1h/4h candle data is missing."
+        );
       }
-
-      const analysisOptions = { ...options };
-      const preflight = analyzeFuturesSymbol(ticker, oneHour, fourHour, [], {
-        ...analysisOptions, skipEntryFilters: true
-      });
-      if (preflight?.eligible !== true && preflight?.highRiskEligible !== true) {
-        return preflight;
-      }
-
-      // Stage 2: only symbols surviving every 1h/4h/BTC/volume/score/risk
-      // prerequisite request 15m candles. Final qualification still runs the
-      // original, unchanged entry-filter implementation on the real 15m data.
-      const entryData = await getKrakenFuturesCandlesViaCoordinator(
-        env, ticker.symbol, [FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]
-      );
-      const fifteenMinute = entryData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
-      if (entryData.errors?.[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]) {
+      if (marketData.errors?.[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]) {
         fifteenMinuteDataErrorCount++;
-        console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol, entryData.errors[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]);
+        console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol,
+          marketData.errors[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]);
       }
-      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, analysisOptions);
+      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, options);
     } catch (error) {
       analysisErrorCount++;
       return { symbol: ticker.symbol, rejected: error?.message || "Analysis error", diagnosticType: "data_or_analysis_error" };
