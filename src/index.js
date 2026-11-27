@@ -2317,6 +2317,14 @@ async function registerPendingFuturesSignals(env, candidates) {
   });
   const payload = await response.json();
   if (!response.ok || !payload?.ok || !Array.isArray(payload.signals)) throw new Error(payload?.error || "Durable pending-signal registration failed.");
+  if (payload.registrationDiagnostics) {
+    console.log("FUTURES_SIGNAL_REGISTRATION_DIAGNOSTICS", JSON.stringify({
+      timestamp: new Date().toISOString(),
+      received: Array.isArray(candidates) ? candidates.length : 0,
+      registered: payload.signals.length,
+      ...payload.registrationDiagnostics
+    }));
+  }
   return payload.signals;
 }
 const tradeDir=side=>side==="LONG"?1:-1;
@@ -2664,15 +2672,18 @@ export class SignalDeliveryCoordinator {
           const seen=new Set();
           const fresh=[];
           const newTrades=[];
+          const registrationDiagnostics={invalid:0,blockedByOpenOpposite:0,blockedByDailyDirectionLock:0,blockedByActiveSameSide:0,blockedByOpenSameSide:0,duplicateInBatch:0,expired:0};
           for(const signal of Array.isArray(payload.signals)?payload.signals:[]){
-            if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
+            if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal)){registrationDiagnostics.invalid++;continue;}
             const symbol=String(signal.symbol).trim().toUpperCase();
             const key=symbol+"|"+signal.side;
             // Never allow an opposite signal while a trade is OPEN or after the symbol
             // has already emitted the other direction during this UTC day.
-            if((openDirectionBySymbol.has(symbol)&&openDirectionBySymbol.get(symbol)!==signal.side)||
-              (directionLocks[symbol]&&directionLocks[symbol]!==signal.side))continue;
-            if(activeKeys.has(key)||openTradeKeys.has(key)||seen.has(key))continue;
+            if(openDirectionBySymbol.has(symbol)&&openDirectionBySymbol.get(symbol)!==signal.side){registrationDiagnostics.blockedByOpenOpposite++;continue;}
+            if(directionLocks[symbol]&&directionLocks[symbol]!==signal.side){registrationDiagnostics.blockedByDailyDirectionLock++;continue;}
+            if(activeKeys.has(key)){registrationDiagnostics.blockedByActiveSameSide++;continue;}
+            if(openTradeKeys.has(key)){registrationDiagnostics.blockedByOpenSameSide++;continue;}
+            if(seen.has(key)){registrationDiagnostics.duplicateInBatch++;continue;}
             const suppliedCreatedAt=Number(signal.createdAt);
             const createdAt=Number.isFinite(suppliedCreatedAt)&&suppliedCreatedAt>0?suppliedCreatedAt:now;
             const suppliedExpiry=Number(signal.expiresAt);
@@ -2681,7 +2692,7 @@ export class SignalDeliveryCoordinator {
             const expiresAt=Number.isFinite(suppliedExpiry)&&signal.expiresAt!=null&&signal.expiresAt!==""
               ? suppliedExpiry
               : createdAt+FUTURES_CONFIG.SIGNAL_TTL_MINUTES*60000;
-            if(!Number.isFinite(expiresAt)||expiresAt<=now)continue;
+            if(!Number.isFinite(expiresAt)||expiresAt<=now){registrationDiagnostics.expired++;continue;}
             const normalizedSignal={...signal,createdAt,expiresAt};
             seen.add(key);fresh.push(normalizedSignal);
             directionLocks[symbol]=signal.side;
@@ -2702,7 +2713,7 @@ export class SignalDeliveryCoordinator {
               await transaction.put("daily-signal-direction-locks",{day:today,symbols:directionLocks});
             }
           });
-          return Response.json({ok:true,signals:fresh,trackedTrades:newTrades.length});
+          return Response.json({ok:true,signals:fresh,trackedTrades:newTrades.length,registrationDiagnostics});
         }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
