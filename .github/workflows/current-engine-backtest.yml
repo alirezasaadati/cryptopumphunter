@@ -2,7 +2,7 @@ name: Current futures engine backtest
 on:
   workflow_dispatch:
   push:
-    branches: [add-entry-quality-filters]
+    branches: [add-entry-quality-filters, experiment/long-neutral-4h-recovery]
     paths:
       - "scripts/backtest-kraken.mjs"
       - ".github/workflows/current-engine-backtest.yml"
@@ -18,7 +18,7 @@ jobs:
           node-version: 22
       - name: Run historical backtest
         env:
-          BACKTEST_DAYS: "60"
+          BACKTEST_DAYS: "90"
           BACKTEST_SYMBOLS: "24"
           BACKTEST_FEE: "0.0005"
           BACKTEST_SLIPPAGE: "0.0003"
