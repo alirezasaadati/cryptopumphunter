@@ -302,7 +302,7 @@ async function main() {
   if (!Array.isArray(tickerData?.tickers)) throw new Error("Kraken tickers response invalid");
   const universe=tickerData.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&
     /^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&
-    Number(t.volumeQuote)>=(process.env.BACKTEST_SYMBOL?FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME:FUTURES_CONFIG.MIN_QUOTE_VOLUME)&&Number(t.last)>0)
+    Number(t.volumeQuote)>=FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME&&Number(t.last)>0)
     .filter(t => !process.env.BACKTEST_SYMBOL || String(t.symbol) === String(process.env.BACKTEST_SYMBOL))
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found; XAUT ticker diagnostics: " + JSON.stringify(tickerData.tickers.filter(t=>String(t.symbol||"").includes("XAUT")).map(t=>({symbol:t.symbol,tag:t.tag,suspended:t.suspended,volumeQuote:t.volumeQuote,last:t.last,keys:Object.keys(t)}))));
