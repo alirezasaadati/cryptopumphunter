@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
+import { analyzeFuturesSymbol as analyzeLegacyFuturesSymbol, FUTURES_CONFIG as LEGACY_FUTURES_CONFIG } from "../src/legacy-engine-v112.js";
 import { evaluateStagedTradeCandle, FUTURES_TRADE_LEVERAGE } from "../src/futures-trade-lifecycle.js";
 
 const BASE = "https://futures.kraken.com";
@@ -282,7 +283,7 @@ async function backtestSymbol(ticker,btc4h,fromMs,toMs) {
   if(h1.length<100||h4.length<FUTURES_CONFIG.MIN_CANDLES||m15.length<120||m5.length<1000)
     throw new Error("insufficient candles: 1h="+h1.length+", 4h="+h4.length+", 15m="+m15.length+", 5m="+m5.length);
   const modes={};
-  for(const name of ["current","file","combined"])for(const cap of ["uncapped","cap10"]){
+  for(const name of ["current","legacy"])for(const cap of ["uncapped","cap10"]){
     modes[name+"_"+cap]={name,cap,signals:0,qualityRejected:0,qualityRejectedLong:0,qualityRejectedShort:0,riskCapRejected:0,riskCapRejectedLong:0,riskCapRejectedShort:0,skippedByLock:0,rejected:0,trades:[],lockUntil:new Map()};
   }
   let h4Index=0,m15Index=0,btcIndex=0;
@@ -294,22 +295,18 @@ async function backtestSymbol(ticker,btc4h,fromMs,toMs) {
     while(m15Index<m15.length&&m15[m15Index].time+MS["15m"]<=signalCloseTime)m15Index++;
     while(btcIndex<btc4h.length&&btc4h[btcIndex].time+MS["4h"]<=signalCloseTime)btcIndex++;
     const closed4h=h4.slice(0,h4Index),closed15=m15.slice(Math.max(0,m15Index-120),m15Index),closedBtc=btc4h.slice(0,btcIndex);
-    if(closed4h.length<FUTURES_CONFIG.MIN_CANDLES||closed15.length<40)continue;
+    if(closed4h.length<Math.max(FUTURES_CONFIG.MIN_CANDLES,LEGACY_FUTURES_CONFIG.MIN_CANDLES)||closed15.length<40)continue;
     const next=h1[i+1],tickerAtSignal={symbol:ticker.symbol,last:next.open,quoteVolume:Number(ticker.volumeQuote)||0,
       priceChangePercent:historicalChange(h1,i),premium:{lastFundingRate:null}};
-    let base;
-    try{base=analyzeFuturesSymbol(tickerAtSignal,h1.slice(0,i+1),closed4h,closed15);}
-    catch{for(const m of Object.values(modes))m.rejected++;continue;}
-    if(!base||base.eligible!==true||!["LONG","SHORT"].includes(base.side)){for(const m of Object.values(modes))m.rejected++;continue;}
-    const regime=futuresRegimeFromCandles(closedBtc);
-    const fileCandidate=applyFileLogic(base,h1.slice(0,i+1),closed4h,regime);
-    const candidates={current:base,file:fileCandidate,combined:fileCandidate};
-    for(const name of ["current","file","combined"]){
+    let currentCandidate=null, legacyCandidate=null;
+    try{currentCandidate=analyzeFuturesSymbol(tickerAtSignal,h1.slice(0,i+1),closed4h,closed15);}catch{}
+    try{legacyCandidate=analyzeLegacyFuturesSymbol(tickerAtSignal,h1.slice(0,i+1),closed4h,closed15);}catch{}
+    const candidates={current:currentCandidate,legacy:legacyCandidate};
+    for(const name of ["current","legacy"]){
       const c=candidates[name];
       for(const cap of ["uncapped","cap10"]){
         const state=modes[name+"_"+cap];
-        if(name==="combined"&&(c.quality<COMBINED_MIN_QUALITY||c.qualityOpposed)){state.qualityRejected++;if(c.side==="LONG")state.qualityRejectedLong++;else state.qualityRejectedShort++;continue;}
-        if(c.eligible!==true){state.rejected++;continue;}
+        if(!c||c.eligible!==true||!["LONG","SHORT"].includes(c.side)){state.rejected++;continue;}
         state.signals++;
         if(cap==="cap10"&&estimatedMarginLossPct(c.entry,c.stop)>MAX_MARGIN_LOSS_PCT){state.riskCapRejected++;if(c.side==="LONG")state.riskCapRejectedLong++;else state.riskCapRejectedShort++;continue;}
         const lockKey=ticker.symbol+"|"+c.side;
@@ -352,7 +349,7 @@ async function main(){
     catch(error){results.push({symbol:ticker.symbol,error:String(error?.message||error)});}
   }
   const variants={};
-  for(const key of ["current_uncapped","file_uncapped","combined_uncapped","current_cap10","file_cap10","combined_cap10"]){
+  for(const key of ["current_uncapped","legacy_uncapped","current_cap10","legacy_cap10"]){
     const trades=results.filter(r=>!r.error).flatMap(r=>r[key].trades).sort((a,b)=>a.signalCloseTime-b.signalCloseTime);
     variants[key]={signals:results.reduce((n,r)=>n+Number(r[key]?.signals||0),0),
       qualityRejected:results.reduce((n,r)=>n+Number(r[key]?.qualityRejected||0),0),
@@ -368,19 +365,19 @@ async function main(){
     period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,endOffsetDays:END_OFFSET_DAYS,warmupDays:WARMUP_DAYS},
     settings:{symbolsRequested:universe.length,symbolsTested:results.filter(r=>!r.error).length,leverage:LEVERAGE,
       feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,maxPlannedLossOnMarginPct:MAX_MARGIN_LOSS_PCT,
-      combinedQualityFloor:COMBINED_MIN_QUALITY,execution:"closed 1h/4h/15m signal; next 1h open; 5m staged exits at 1.5R/2.5R/3.5R; 1/3,1/3,remainder",
+      execution:"closed 1h/4h/15m signal; next 1h open; 5m staged exits at 1.5R/2.5R/3.5R; 1/3,1/3,remainder",
       lifecycle:"uses production evaluateStagedTradeCandle; no automatic break-even movement",
       stopTargetAmbiguity:"stop first on same 5m candle unless gap at open proves otherwise",
       funding:"excluded; fee and slippage are assumptions, not account-specific exchange rates",
       universe:"top current Kraken perpetuals by current quote volume; survivorship bias applies",
-      fileLogic:"attached pasted source: LONG structural low over 12 prior 1h candles minus 0.15 ATR; quality score weights and BTC 4h regime",
-      combinedLogic:"file logic plus hard gate quality >= 40 and no BTC regime opposition",
+      legacyEngine:"exact src/index.js from commit 4ac838a34e26ee0b96eaf5d793e649e017e4a610, copied without logic edits to src/legacy-engine-v112.js",
+      currentEngine:"main branch src/index.js at checkout commit",
       riskCapLogic:"at 10x, planned stop loss including estimated round-trip fee/slippage must be <=10% of used margin; otherwise signal excluded"},
-    variants,symbols:results.map(r=>{if(r.error)return r;const x={symbol:r.symbol,candles:r.candles};for(const k of ["current_uncapped","file_uncapped","combined_uncapped","current_cap10","file_cap10","combined_cap10"]){const {trades,...summary}=r[k];x[k]=summary;}return x;})};
+    variants,symbols:results.map(r=>{if(r.error)return r;const x={symbol:r.symbol,candles:r.candles};for(const k of ["current_uncapped","legacy_uncapped","current_cap10","legacy_cap10"]){const {trades,...summary}=r[k];x[k]=summary;}return x;})};
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/"+REPORT_TAG+".json",JSON.stringify(report,null,2));
-  const keys=["current_uncapped","file_uncapped","combined_uncapped","current_cap10","file_cap10","combined_cap10"];
-  const lines=["# Three-way Kraken Futures signal-engine backtest","",
+  const keys=["current_uncapped","legacy_uncapped","current_cap10","legacy_cap10"];
+  const lines=["# Two-engine Kraken Futures signal-engine backtest","",
     "Period: "+report.period.from+" to "+report.period.to+" ("+DAYS+" days)",
     "Symbols tested: "+report.settings.symbolsTested+"/"+report.settings.symbolsRequested,
     "Leverage: "+LEVERAGE+"x; fee/side: "+(FEE*100)+"%; slippage/side: "+(SLIPPAGE*100)+"%; funding excluded.",
@@ -392,7 +389,7 @@ async function main(){
     "- Historical funding is unavailable in this run and excluded.",
     "- 5m OHLC cannot reveal exact intrabar path; conservative stop-first rule is used.",
     "- Fees and slippage are explicit assumptions and actual fills can exceed the planned 10% margin-loss cap.",
-    "- The file-as-is variant labels quality but does not reject low-quality/opposed signals; the combined variant turns the file's weak-quality boundary (40) and BTC opposition into a hard gate.",
+    "- Current and legacy engines are called independently on the same historical candles and ticker snapshot; rejected signals are counted separately. Both use the same current staged-exit simulator to isolate signal-engine differences.",
     "- This is a historical simulation, not a live-performance guarantee.");
   await writeFile("artifacts/"+REPORT_TAG+".md",lines.join("\n"));
   console.log(JSON.stringify({ok:results.some(r=>!r.error),period:report.period,settings:report.settings,variants,symbolErrors:results.filter(r=>r.error).map(r=>({symbol:r.symbol,error:r.error}))},null,2));
