@@ -1216,7 +1216,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         );
       }
       lines.push("اگر حد ضرر واقعی صرافی با Tracked SL فرق دارد، ابتدا وضعیت صرافی را بررسی کنید و سپس با /confirm_stop <ID> <PRICE> همگام‌سازی کنید.");
-      await sendMessage(env, chatId, lines.join("\\n"));
+      await sendMessage(env, chatId, lines.join("\n"));
       return;
     }
 
