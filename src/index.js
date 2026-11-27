@@ -1979,11 +1979,17 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const reasons = [];
 
   const allowedSide = options.allowedSide === "LONG" || options.allowedSide === "SHORT" ? options.allowedSide : null;
-  // When a confirmed BTC regime is supplied, opposite-direction setups are not evaluated.
-  const strictLong = allowedSide !== "SHORT" && up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
-  const strictShort = allowedSide !== "LONG" && down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
-  const relaxedLong = allowedSide !== "SHORT" && up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
-  const relaxedShort = allowedSide !== "LONG" && down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
+  // Fail closed: without an explicit, confirmed BTC direction, no setup is permitted.
+  if (allowedSide === null) {
+    return {
+      symbol: ticker.symbol,
+      rejected: "جهت تأییدشده بیت‌کوین به تحلیل نماد ارسال نشده است؛ طبق سیاست fail-safe هیچ ستاپی مجاز نیست."
+    };
+  }
+  const strictLong = allowedSide === "LONG" && up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
+  const strictShort = allowedSide === "SHORT" && down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
+  const relaxedLong = allowedSide === "LONG" && up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
+  const relaxedShort = allowedSide === "SHORT" && down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
 
   if (strictLong || (!strictSetup && relaxedLong)) {
@@ -3214,6 +3220,38 @@ async function runAutomaticFuturesAlertScanInternal(env) {
 async function runFuturesEntryDiagnostics(env) {
   const startedAt = new Date().toISOString();
   const universe = await getKrakenFuturesUniverse();
+  const bitcoinTicker = universe.find(ticker =>
+    normalizeKrakenFuturesUnderlying(ticker.symbol) === "BTC");
+  if (!bitcoinTicker) {
+    return {
+      startedAt, finishedAt: new Date().toISOString(),
+      universeCount: universe.length, sampledCount: 0,
+      bitcoinMarketRegime: { direction: "UNAVAILABLE", confirmed: false, reason: "bitcoin_perpetual_not_found" },
+      stageCounts: { BLOCKED: 1 }, samples: []
+    };
+  }
+  const btcData = await getKrakenFuturesCandlesViaCoordinator(
+    env, bitcoinTicker.symbol, [FUTURES_CONFIG.CONFIRM_INTERVAL]
+  );
+  if (btcData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL]) {
+    return {
+      startedAt, finishedAt: new Date().toISOString(),
+      universeCount: universe.length, sampledCount: 0,
+      bitcoinMarketRegime: { direction: "UNAVAILABLE", confirmed: false, reason: btcData.errors[FUTURES_CONFIG.CONFIRM_INTERVAL] },
+      stageCounts: { BLOCKED: 1 }, samples: []
+    };
+  }
+  const bitcoinMarketRegime = determineBitcoinFourHourRegime(
+    btcData.candles?.[FUTURES_CONFIG.CONFIRM_INTERVAL] || []
+  );
+  if (!["LONG", "SHORT"].includes(bitcoinMarketRegime.direction)) {
+    return {
+      startedAt, finishedAt: new Date().toISOString(),
+      universeCount: universe.length, sampledCount: 0,
+      bitcoinMarketRegime, stageCounts: { BLOCKED: 1 }, samples: []
+    };
+  }
+  const analysisOptions = { allowedSide: bitcoinMarketRegime.direction };
   const analyzed = await mapLimit(
     universe.slice(0, 30),
     FUTURES_CONFIG.CONCURRENCY,
@@ -3233,7 +3271,7 @@ async function runFuturesEntryDiagnostics(env) {
             marketData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
             "Required Kraken candle data is missing.");
         }
-        const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute);
+        const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, analysisOptions);
         return {
           symbol: ticker.symbol,
           stage: result.eligible ? "ELIGIBLE" : result.rejected ? "REJECTED" : "UNKNOWN",
@@ -3256,7 +3294,7 @@ async function runFuturesEntryDiagnostics(env) {
   for (const item of analyzed) stageCounts[item.stage] = (stageCounts[item.stage] || 0) + 1;
   return {
     startedAt, finishedAt: new Date().toISOString(), universeCount: universe.length,
-    sampledCount: analyzed.length, stageCounts, samples: analyzed
+    sampledCount: analyzed.length, stageCounts, bitcoinMarketRegime, samples: analyzed
   };
 }
 
@@ -3324,11 +3362,19 @@ function classifyBitcoinFourHourCandle(candles, endIndex) {
 }
 
 function determineBitcoinFourHourRegime(candles) {
-  if (!Array.isArray(candles) || candles.length < FUTURES_CONFIG.MIN_CANDLES + 1) {
-    return { direction: "NEUTRAL", confirmed: false, reason: "insufficient_bitcoin_4h_candles" };
+  // Defense in depth: only fully closed 4h candles may determine BTC direction,
+  // even if an upstream caller accidentally supplies the currently forming candle.
+  const fourHourMs = 4 * 60 * 60 * 1000;
+  const now = Date.now();
+  const closedCandles = Array.isArray(candles)
+    ? candles.filter(c => Number.isFinite(Number(c?.time)) &&
+        Number(c.time) + fourHourMs <= now)
+    : [];
+  if (closedCandles.length < FUTURES_CONFIG.MIN_CANDLES + 1) {
+    return { direction: "NEUTRAL", confirmed: false, reason: "insufficient_closed_bitcoin_4h_candles" };
   }
-  const latest = classifyBitcoinFourHourCandle(candles, candles.length - 1);
-  const previous = classifyBitcoinFourHourCandle(candles, candles.length - 2);
+  const latest = classifyBitcoinFourHourCandle(closedCandles, closedCandles.length - 1);
+  const previous = classifyBitcoinFourHourCandle(closedCandles, closedCandles.length - 2);
   const confirmed = latest.direction !== "NEUTRAL" && latest.direction === previous.direction;
   return {
     direction: confirmed ? latest.direction : "NEUTRAL",
