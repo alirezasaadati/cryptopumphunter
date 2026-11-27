@@ -30,7 +30,7 @@ jobs:
       - name: Run full test suite (diagnostic)
         run: npm test
         continue-on-error: true
-      # Pull requests run focused production tests but never deploy production.
+      # Pull requests run focused production tests but never deploy production.\n      # Main-branch deployment is gated by both focused test suites.
       - name: Deploy Worker
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: cloudflare/wrangler-action@v3
