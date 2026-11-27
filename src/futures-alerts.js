@@ -78,7 +78,8 @@ function escapeTelegramHtml(value) {
 function formatSignalPrice(value) {
   const price = Number(value);
   if (!Number.isFinite(price)) return "—";
-  return price.toLocaleString("en-US", { useGrouping: true, minimumFractionDigits: price >= 1 ? 2 : 0, maximumFractionDigits: 2 });
+  const decimals = price < 1 ? 4 : 2;
+  return price.toLocaleString("en-US", { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: decimals });
 }
 
 export { ALERT_TTL_SECONDS };
