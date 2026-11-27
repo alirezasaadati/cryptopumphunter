@@ -310,9 +310,8 @@ test("mandatory BTC 4h alignment blocks LONG when BTC 4h is bearish",()=>{
   });
   assert.equal(result.eligible,undefined);
   assert.equal(result.side,"LONG");
-  assert.equal(result.entryDiagnostics.stage,"btc_4h_alignment");
-  assert.equal(result.entryDiagnostics.passed,false);
-  assert.match(result.rejected,/بیت‌کوین/);
+  assert.match(result.rejected,/Bitcoin.*4H trend is not aligned/i);
+  assert.equal(result.entryDiagnostics,undefined);
 });
 
 test("staged 15m preflight is a superset of standard and high-risk eligible signals",()=>{
@@ -360,55 +359,63 @@ test("mandatory BTC and symbol 4h trends must both match the signal direction",(
     requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
   });
   assert.equal(mismatch.eligible,undefined);
-  assert.equal(mismatch.entryDiagnostics.stage,"btc_4h_alignment");
+  assert.match(mismatch.rejected,/4H trend is not aligned/i);
 });
 
-test("15m momentum and pullback remain optional under mandatory BTC alignment",()=>{
+test("15m momentum and pullback remain required for LONG under mandatory BTC alignment",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const altered=fifteenMinute.map(c=>({...c}));
   altered.at(-1).open=altered.at(-1).close+0.5;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,altered,{
     requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
   });
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.momentumConfirmed,false);
-  assert.equal(result.pullbackConfirmed,true);
-  assert.equal(result.confirmationCount,1);
+  assert.equal(result.eligible,undefined,JSON.stringify(result));
+  assert.match(result.rejected,/15-minute momentum trigger has not fired/);
 });
 
-test("neutral 4h trend does not block a valid LONG and adds no 4h score",()=>{
+test("neutral 4h LONG recovery is HIGH_RISK only and requires BTC plus 15m confirmation",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const neutralFourHour=Array.from({length:120},(_,i)=>({
     time:Date.now()-(120-i)*4*60*60*1000,
     open:100,high:100.1,low:99.9,close:100,volume:100
   }));
-  const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute);
+  const result=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute,{
+    requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
+  });
   assert.equal(result.side,"LONG",JSON.stringify(result));
   assert.equal(result.eligible,true,JSON.stringify(result));
+  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.equal(result.highRiskEligible,true);
   assert.equal(result.fourHourTrend,"NEUTRAL");
-  assert.equal(result.fourHourScoreAdjustment,0);
+  assert.equal(result.fourHourScoreAdjustment,4);
+  assert.equal(result.momentumConfirmed,true);
+  assert.equal(result.pullbackConfirmed,true);
+
+  const baselineBypass=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute,{
+    skipEntryFilters:true,requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
+  });
+  assert.equal(baselineBypass.eligible,undefined);
+  assert.match(baselineBypass.rejected,/requires confirmed 15-minute/);
 });
 
-test("opposing 4h trend reduces SHORT score but does not block even HIGH_RISK",()=>{
+test("opposing 4h trend continues to block SHORT without changing SHORT rules",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
   fifteenMinute.at(-1).open=fifteenMinute.at(-1).close-0.05;
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
-  assert.equal(result.side,"SHORT",JSON.stringify(result));
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.equal(result.side,"SHORT");
+  assert.equal(result.eligible,undefined);
   assert.equal(result.fourHourTrend,"BULLISH");
-  assert.equal(result.fourHourScoreAdjustment,-8);
+  assert.match(result.rejected,/4H trend is not aligned/i);
 });
 
-test("opposing 4h trend does not block HIGH_RISK when 15m data is unavailable",()=>{
+test("opposing 4h trend still blocks SHORT when 15m data is unavailable",()=>{
   const {ticker,oneHour}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,[]);
-  assert.equal(result.side,"SHORT",JSON.stringify(result));
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.riskLevel,"HIGH_RISK");
-  assert.equal(result.fourHourScoreAdjustment,-8);
+  assert.equal(result.side,"SHORT");
+  assert.equal(result.eligible,undefined);
+  assert.match(result.rejected,/4H trend is not aligned/i);
 });
 
 
