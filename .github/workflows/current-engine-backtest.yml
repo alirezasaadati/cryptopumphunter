@@ -18,7 +18,7 @@ jobs:
           node-version: 22
       - name: Run historical backtest
         env:
-          BACKTEST_DAYS: "60"
+          BACKTEST_DAYS: "90"
           BACKTEST_SYMBOLS: "24"
           BACKTEST_FEE: "0.0005"
           BACKTEST_SLIPPAGE: "0.0003"
