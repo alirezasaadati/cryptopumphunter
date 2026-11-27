@@ -82,12 +82,13 @@ function historicalChange(rows, index) {
   const old = rows[index - 24], now = rows[index];
   return !old || old.close <= 0 ? 0 : (now.close / old.close - 1) * 100;
 }
-function futuresRegimeFromCandles(rows) {
-  if (!Array.isArray(rows) || rows.length < 55) return "UNKNOWN";
-  const closes = rows.map(c=>c.close), e20=ema(closes,20), e50=ema(closes,50), p=closes.at(-1);
-  if (![e20,e50,p].every(Number.isFinite)) return "UNKNOWN";
-  if (p > e50 && e20 > e50) return "BULL";
-  if (p < e50 && e20 < e50) return "BEAR";
+function legacyFourHourTrend(rows) {
+  if (!Array.isArray(rows) || rows.length < LEGACY_FUTURES_CONFIG.MIN_CANDLES) return null;
+  const closes = rows.map(c => c.close), lastClose = closes[closes.length - 1];
+  const fast = ema(closes, 20), prevFast = ema(closes.slice(0, -1), 20), slow = ema(closes, 50);
+  if (![fast, prevFast, slow, lastClose].every(Number.isFinite)) return null;
+  if (fast > slow && lastClose > fast && fast >= prevFast) return "BULLISH";
+  if (fast < slow && lastClose < fast && fast <= prevFast) return "BEARISH";
   return "NEUTRAL";
 }
 function roomToNearestLevelR(side, candles4h, entry, risk) {
@@ -301,7 +302,8 @@ async function backtestSymbol(ticker,btc4h,fromMs,toMs) {
       priceChangePercent:historicalChange(h1,i),premium:{lastFundingRate:null}};
     let currentCandidate=null, legacyCandidate=null;
     try{currentCandidate=analyzeFuturesSymbol(tickerAtSignal,h1.slice(0,i+1),closed4h,closed15);}catch{}
-    try{legacyCandidate=analyzeLegacyFuturesSymbol(tickerAtSignal,h1.slice(0,i+1),closed4h,closed15);}catch{}
+    const btcFourHourTrend=legacyFourHourTrend(closedBtc);
+    try{legacyCandidate=analyzeLegacyFuturesSymbol(tickerAtSignal,h1.slice(0,i+1),closed4h,closed15,{btcFourHourTrend,requireBtcFourHourAlignment:true});}catch{}
     const candidates={current:currentCandidate,legacy:legacyCandidate};
     for(const name of ["current","legacy"]){
       const c=candidates[name];
