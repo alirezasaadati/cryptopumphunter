@@ -37,51 +37,21 @@ export function displayEntryPrice(value, side) {
 }
 
 export function formatFuturesSignalAlert(signal, index = 1) {
-  const isHighRisk = signal?.riskLevel === "HIGH_RISK" || signal?.highRiskEligible === true;
-  const isLong = signal?.side === "LONG";
-  const direction = isLong ? "🟢 لانگ / Long" : "🔴 شورت / Short";
   const symbol = escapeTelegramHtml(formatFuturesSymbol(signal?.symbol));
-  const score = Number.isFinite(Number(signal?.score)) ? Math.round(Number(signal.score)) : "—";
-  const lines = isHighRisk ? [
-    "⚠️ <b>سیگنال پر ریسک</b>",
+  const side = signal?.side === "LONG" ? "LONG 🟢" : "SHORT 🔴";
+  const lines = [
+    `<b>${symbol}/USDT</b>`,
     "",
-    `⭐ امتیاز سیگنال: <b>${score}/100</b>`,
+    `<b>${side}</b>`,
     "",
-    `نماد: <b>${symbol}</b>`,
-    "",
-    `جهت معامله: ${direction}`,
-    "",
-    `نقطه ورود یک: <b>${formatSignalPrice(signal?.entry)}</b>`,
-    "",
-    `نقطه ورود دو: <b>${formatSignalPrice(displayEntryPrice(signal?.entry, signal?.side))}</b>`,
-    "",
-    `🎯 تارگت اول: <b>${formatSignalPrice(signal?.target1)}</b>`,
-    "",
-    `🎯 تارگت دوم: <b>${formatSignalPrice(signal?.target2)}</b>`,
-    "",
-    `🎯 تارگت سوم: <b>${formatSignalPrice(signal?.target3)}</b>`,
-    "",
-    `⛔ حد ضرر: <b>${formatSignalPrice(signal?.stop)}</b>`
-  ] : [
-    "⚪ <b>سیگنال معتبر</b>",
-    "",
-    `⭐ امتیاز سیگنال: <b>${score}/100</b>`,
-    "",
-    `نماد: <b>${symbol}</b>`,
-    "",
-    `جهت معامله: ${direction}`,
-    "",
-    `قیمت ورود: <b>${formatSignalPrice(signal?.entry)}</b>`,
-    "",
-    `🎯 تارگت اول (1.5R): <b>${formatSignalPrice(signal?.target1)}</b>`,
-    "",
-    `🎯 تارگت دوم (2.5R): <b>${formatSignalPrice(signal?.target2)}</b>`,
-    "",
-    `🎯 تارگت سوم (3.5R): <b>${formatSignalPrice(signal?.target3)}</b>`,
-    "",
-    `⛔ حد ضرر: <b>${formatSignalPrice(signal?.stop)}</b>`
+    `Entry Zone 1 : ${formatSignalPrice(signal?.entry)}`,
+    `Entry Zone 2 : ${formatSignalPrice(displayEntryPrice(signal?.entry, signal?.side))}`,
+    `🎯 TP 1 : ${formatSignalPrice(signal?.target1)}`,
+    `🎯 TP 2 : ${formatSignalPrice(signal?.target2)}`,
+    `🎯 TP 3 : ${formatSignalPrice(signal?.target3)}`,
+    `⛔ SL : ${formatSignalPrice(signal?.stop)}`
   ];
-  return lines.map(line => `\\u200E${line}`).join("\\n");
+  return lines.map(line => `\u200E${line}`).join("\n");
 }
 function formatFuturesSymbol(symbol) {
   const normalized = String(symbol || "—").trim().toUpperCase()
