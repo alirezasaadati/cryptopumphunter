@@ -135,65 +135,62 @@ const ABOUT_TEXT =
   "🔸هرگونه کپی‌برداری، بازنشر یا استفاده ، بدون اجازه ممنوع است.";
 
 const CAPITAL_MANAGEMENT_TEXT =
-  "🚨 <b>راهنمای مدیریت ریسک</b> 🚨\n\n" +
-  "لطفاً پیش از ورود به هر سیگنال، این دستورالعمل‌ها را با دقت مطالعه کنید.\n\n\n" +
-  "<b>1️⃣ ریسک هر معامله</b>\n\n\n" +
-  "🔹 در هر معامله، حداکثر <b>۱٪ از کل موجودی کیف پول</b> خود را در معرض ریسک قرار دهید.\n\n\n" +
-  "🔹 حجم موقعیت معاملاتی را به‌گونه‌ای افزایش ندهید که از این سقف ریسک فراتر برود.\n\n\n" +
-  "<b>2️⃣ مسئولیت معامله‌گری</b>\n\n\n" +
-  "🔹 تصمیم‌گیری درباره معاملات و زمان ورود، بر عهده خود شماست.\n\n\n" +
-  "🔹 هرگز با پولی که برای هزینه‌های ضروری زندگی نیاز دارید معامله نکنید.\n\n\n" +
-  "🔹 تا زمانی که ریسک‌ها را درک نکرده‌اید و تجربه کافی ندارید، وارد معامله نشوید.\n\n\n" +
-  "🔹 هیچ سیگنالی تضمین‌شده یا بدون ریسک نیست؛ احتمال زیان همیشه وجود دارد.\n\n\n" +
-  "<b>3️⃣ ورود پله‌ای</b>\n\n\n" +
-  "🔹 برای کاهش ریسک ورود در یک قیمت مشخص، می‌توانید سرمایه اختصاص‌یافته به معامله را میان دو سطح ورود تقسیم کنید.\n\n\n" +
-  "🔹 برای مثال، اگر ۱۰ دلار با اهرم ۱۰ برابر به معامله اختصاص داده‌اید، می‌توانید ۵ دلار را در نقطه ورود اول و ۵ دلار دیگر را در نقطه ورود دوم وارد کنید. به این ترتیب، تمام مبلغ را در یک قیمت وارد نمی‌کنید و ممکن است میانگین قیمت ورود بهتری به دست آورید.\n\n\n" +
-  "⚠️ ورود پله‌ای ریسک را از بین نمی‌برد. ورود دوم میزان درگیری سرمایه و ریسک کل را افزایش می‌دهد؛ بنابراین رعایت حد ضرر و مدیریت حجم معامله ضروری است.\n\n\n" +
-  "<b>4️⃣ اهرم و اجرای معامله</b>\n\n\n" +
-  "🔹 اهرم را متناسب با ریسک معامله و فاصله قیمت ورود تا حد ضرر انتخاب کنید.\n\n\n" +
-  "🔹 استفاده از حالت <b>ایزوله (Isolated)</b> و اهرم پایین‌تر، معمولاً ریسک لیکویید شدن را کاهش می‌دهد.\n\n\n" +
-  "🔹 اهرم ۱۰ برابر مانع لیکویید شدن نمی‌شود. همیشه حد ضرر درج‌شده در سیگنال را رعایت کنید.\n\n\n" +
-  "<b>5️⃣ ورود دیرهنگام</b>\n\n\n" +
-  "🔹 اگر قیمت به هدف اول رسیده است، دیگر به‌صورت دیرهنگام وارد آن سیگنال نشوید.\n\n\n" +
-  "<b>6️⃣ مدیریت سود و حد ضرر</b>\n\n\n" +
-  "🔹 در سطوح قیمتی اهداف، برداشت بخشی از سود را در نظر بگیرید.\n\n\n" +
-  "🔹 می‌توانید بخش قابل‌توجهی از موقعیت را در هدف اول (TP1) ببندید و باقی‌مانده را برای اهداف بعدی باز نگه دارید.\n\n\n" +
-  "🔹 پس از حرکت مطلوب قیمت، انتقال حد ضرر به نقطه ورود یا سطحی امن‌تر را بررسی کنید.\n\n\n" +
-  "🔹 مجموع حجم بسته‌شده در تمام اهداف نباید از ۱۰۰٪ موقعیت اولیه بیشتر شود.\n\n" +
-  "⚠️ <b>حفظ سرمایه بر کسب سود اولویت دارد.</b>\n" +
-  "برای جبران ضرر، هرگز حجم معامله را افزایش ندهید.";
+  "🚨 <b>RISK MANAGEMENT GUIDE</b> 🚨\n\n" +
+  "Read these guidelines carefully before entering any signal.\n\n" +
+  "<b>1️⃣ TRADE RISK</b>\n\n" +
+  "🔹 Risk no more than <b>1% of your total wallet balance</b> on a single trade.\n\n" +
+  "🔹 Size each position so the maximum planned loss stays within that limit.\n\n" +
+  "<b>2️⃣ TRADING RESPONSIBILITY</b>\n\n" +
+  "🔹 You are responsible for your own trading decisions and execution.\n\n" +
+  "🔹 Never trade with money needed for essential living expenses.\n\n" +
+  "🔹 Do not trade until you understand the risks and have sufficient experience.\n\n" +
+  "🔹 No signal is guaranteed or risk-free; losses are always possible.\n\n" +
+  "<b>3️⃣ SCALED ENTRIES</b>\n\n" +
+  "🔹 You may split your planned position across two entry levels instead of entering all at once.\n\n" +
+  "🔹 For example, if you allocate $10 to a trade, enter $5 at the first level and $5 at the second. This can improve your average entry, but it does not guarantee a better result.\n\n" +
+  "⚠️ Scaling in does not eliminate risk. The second entry increases your exposure; keep the stop loss and total position risk under control.\n\n" +
+  "<b>4️⃣ LEVERAGE &amp; EXECUTION</b>\n\n" +
+  "🔹 Choose leverage based on the stop distance and your maximum acceptable loss.\n\n" +
+  "🔹 Isolated margin and lower leverage can reduce liquidation risk, but cannot eliminate it.\n\n" +
+  "🔹 Always respect the stop loss shown in the signal.\n\n" +
+  "<b>5️⃣ LATE ENTRIES</b>\n\n" +
+  "🔹 If price has already reached TP1, do not enter that signal late.\n\n" +
+  "<b>6️⃣ PROFIT &amp; STOP MANAGEMENT</b>\n\n" +
+  "🔹 Consider taking partial profit at the target levels.\n\n" +
+  "🔹 You may close a portion at TP1 and manage the remainder toward later targets.\n\n" +
+  "🔹 After a favorable move, consider moving the stop to breakeven or a safer level.\n\n" +
+  "🔹 Total closed size across all targets must never exceed 100% of the original position.\n\n" +
+  "⚠️ <b>Protecting capital comes before making profit.</b> Never increase position size to recover a loss.";
 
 function mainMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
-    [
-      { text: "📈 سیگنال‌های فیوچرز", callback_data: "futures" }
-    ],
-    [{ text: "🛡️ راهنمای مدیریت ریسک", callback_data: "capital_guide" }],
+    [{ text: "📈 Futures Signals", callback_data: "futures" }],
+    [{ text: "🛡️ Risk Management Guide", callback_data: "capital_guide" }],
     owner
       ? [
-          { text: "📢 کانال سیگنال VIP", callback_data: "issued_signals" },
-          { text: "📊 گزارش سیگنال‌های اخیر", callback_data: "admin:signals" }
+          { text: "🗂 Signal Archive", callback_data: "issued_signals" },
+          { text: "📊 Recent Signal Report", callback_data: "admin:signals" }
         ]
       : [
-          { text: "🎧 پشتیبانی", url: "https://t.me/alirza_saadati" },
-          { text: "📊 رصد معاملات کاربران", callback_data: "invite" }
+          { text: "🎧 Support", url: "https://t.me/alirza_saadati" },
+          { text: "🔍 User Trade Monitor", callback_data: "invite" }
         ],
     ...(owner ? [[
-      { text: "👥 مدیریت اعضا", callback_data: "members:0" },
-      { text: "📊 رصد معاملات کاربران", callback_data: "invite" }
+      { text: "👥 Member Management", callback_data: "members:0" },
+      { text: "🔍 User Trade Monitor", callback_data: "invite" }
     ]] : []),
     [
-      { text: "📡 وضعیت ربات", callback_data: "status" },
-      { text: "🔌 تست اتصال", callback_data: "test" }
+      { text: "📡 Bot Status", callback_data: "status" },
+      { text: "🔌 Connection Test", callback_data: "test" }
     ],
     ...(owner ? [[
-      { text: "⚠️ ارسال‌های نامشخص", callback_data: "outbox:review" },
-      { text: "ℹ️ درباره ربات", callback_data: "about" }
+      { text: "⚠️ Uncertain Deliveries", callback_data: "outbox:review" },
+      { text: "ℹ️ About", callback_data: "about" }
     ]] : [[
-      { text: "ℹ️ درباره ربات", callback_data: "about" }
+      { text: "ℹ️ About", callback_data: "about" }
     ]]),
-    ...(owner ? [[{ text: "🎧 پشتیبانی", url: "https://t.me/alirza_saadati" }]] : [])
+    ...(owner ? [[{ text: "🎧 Support", url: "https://t.me/alirza_saadati" }]] : [])
   ];
   return { inline_keyboard: keyboard };
 }
@@ -345,11 +342,10 @@ async function fetchJson(url, label) {
 async function telegram(method, env, body) {
   if (!(env.TELEGRAM_BOT_TOKEN || env.BOT_TOKEN)) throw new Error("BOT_TOKEN is not configured.");
 
-  // Explicitly disable Telegram content protection in private chats so users can
-  // screenshot bot messages. Keep protection enabled for channel/group messages.
+  // Keep owner messages copyable; protect every non-owner message from forwarding.
   const chatId = body?.chat_id == null ? "" : String(body.chat_id);
   const protectedBody = method === "sendMessage" && chatId
-    ? { ...body, protect_content: chatId.startsWith("-") }
+    ? { ...body, protect_content: !isOwner(chatId, env) }
     : body;
 
   const response = await fetch(
@@ -931,43 +927,39 @@ async function changeMemberAccess(env,ownerId,id,allow) {
 function replyMenuForChat(env, chatId) {
   const owner = isOwner(chatId, env);
   const keyboard = [
-    [
-      { text: "📈 سیگنال‌های فیوچرز" }
-    ],
-    [
-      { text: "🛡️ راهنمای مدیریت ریسک" }
-    ],
+    [{ text: "📈 Futures Signals" }],
+    [{ text: "🛡️ Risk Management Guide" }],
     owner
       ? [
-          { text: "📢 کانال سیگنال VIP" },
-          { text: "📊 گزارش سیگنال‌های اخیر" }
+          { text: "🗂 Signal Archive" },
+          { text: "📊 Recent Signal Report" }
         ]
       : [
-          { text: "🎧 پشتیبانی" },
-          { text: "📊 رصد معاملات کاربران" }
+          { text: "🎧 Support" },
+          { text: "🔍 User Trade Monitor" }
         ],
     ...(owner ? [[
-      { text: "👥 مدیریت اعضا" },
-      { text: "📊 رصد معاملات کاربران" }
+      { text: "👥 Member Management" },
+      { text: "🔍 User Trade Monitor" }
     ]] : []),
     [
-      { text: "📡 وضعیت ربات" },
-      { text: "🔌 تست اتصال" }
+      { text: "📡 Bot Status" },
+      { text: "🔌 Connection Test" }
     ],
     owner
       ? [
-          { text: "⚠️ ارسال‌های نامشخص" },
-          { text: "ℹ️ درباره ربات" }
+          { text: "⚠️ Uncertain Deliveries" },
+          { text: "ℹ️ About" }
         ]
       : [
-          { text: "ℹ️ درباره ربات" }
+          { text: "ℹ️ About" }
         ]
   ];
   return {
     keyboard,
     resize_keyboard: true,
     one_time_keyboard: true,
-    input_field_placeholder: "یک گزینه از تریدیار انتخاب کنید"
+    input_field_placeholder: "Choose an option"
   };
 }
 
