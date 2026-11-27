@@ -4,7 +4,7 @@ import { createSerialExecutor } from "./serial-executor.js";
 import { evaluateStagedTradeCandle } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
-  VERSION: "11.3.0",
+  VERSION: "11.3.1",
   PENDING_TTL: 604800,
   TRADE_MONITOR_STUCK_AFTER_MS: 2 * 60 * 60 * 1000
 };
@@ -1978,10 +1978,12 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   let score = 0;
   const reasons = [];
 
-  const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
-  const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
-  const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
-  const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
+  const allowedSide = options.allowedSide === "LONG" || options.allowedSide === "SHORT" ? options.allowedSide : null;
+  // When a confirmed BTC regime is supplied, opposite-direction setups are not evaluated.
+  const strictLong = allowedSide !== "SHORT" && up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
+  const strictShort = allowedSide !== "LONG" && down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
+  const relaxedLong = allowedSide !== "SHORT" && up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
+  const relaxedShort = allowedSide !== "LONG" && down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
 
   if (strictLong || (!strictSetup && relaxedLong)) {
@@ -3443,7 +3445,7 @@ async function runFuturesSignalScan(env, options = {}) {
           "Required Kraken candle data is missing.");
       }
 
-      const analysisOptions = { ...options };
+      const analysisOptions = { ...options, allowedSide: bitcoinMarketRegime.direction };
       const preflight = analyzeFuturesSymbol(ticker, oneHour, fourHour, [], {
         ...analysisOptions, skipEntryFilters: true
       });
@@ -3496,6 +3498,13 @@ async function runFuturesSignalScan(env, options = {}) {
   const dominantDirection = bitcoinMarketRegime.direction;
   const directionFilteredCandidates = eligibleCandidates.filter(item => item.side === dominantDirection);
   const suppressedOppositeDirectionCount = eligibleCandidates.length - directionFilteredCandidates.length;
+  if (suppressedOppositeDirectionCount > 0) {
+    console.error("BTC_DIRECTION_INVARIANT_VIOLATION", JSON.stringify({
+      timestamp: new Date().toISOString(), version: CONFIG.VERSION,
+      allowedDirection: dominantDirection, suppressedOppositeDirectionCount,
+      symbols: eligibleCandidates.filter(item => item.side !== dominantDirection).map(item => ({ symbol: item.symbol, side: item.side }))
+    }));
+  }
 
   const generatedSignals = directionFilteredCandidates
     .slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
