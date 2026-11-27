@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { evaluateStagedTradeCandle } from "../src/futures-trade-lifecycle.js";
+import { evaluateStagedTradeCandle, validateConfirmedStopPrice } from "../src/futures-trade-lifecycle.js";
 
 const longTrade = {
   id: "L1", symbol: "BTC", side: "LONG", actualEntry: 100,
@@ -69,4 +69,18 @@ test("invalid levels and closed trades are not processed", () => {
   const invalid = { ...longTrade, initialStop: 0 };
   assert.equal(evaluateStagedTradeCandle(invalid, { open: 100, high: 101, low: 99 }).error, "INVALID_TRADE_LEVELS");
   assert.equal(evaluateStagedTradeCandle({ ...longTrade, status: "CLOSED_STOP" }, { open: 100, high: 101, low: 99 }).changed, false);
+});
+
+test("confirmed stop synchronization validates LONG and SHORT against latest tracked price", () => {
+  const long = { ...longTrade, lastPrice: 103 };
+  const short = { ...shortTrade, lastPrice: 97 };
+  assert.deepEqual(validateConfirmedStopPrice(long, 100.12), {
+    ok: true, stopPrice: 100.12, breakEvenActivated: true
+  });
+  assert.equal(validateConfirmedStopPrice(long, 103).ok, false);
+  assert.deepEqual(validateConfirmedStopPrice(short, 99.88), {
+    ok: true, stopPrice: 99.88, breakEvenActivated: true
+  });
+  assert.equal(validateConfirmedStopPrice(short, 97).ok, false);
+  assert.equal(validateConfirmedStopPrice({ ...long, status: "CLOSED_STOP" }, 100).ok, false);
 });
