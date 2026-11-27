@@ -2692,7 +2692,7 @@ export class SignalDeliveryCoordinator {
               remainingFraction:Number.isFinite(Number(candidate.remainingFraction))?Number(candidate.remainingFraction):existing.remainingFraction,
               realizedMarginReturnPct:Number.isFinite(Number(candidate.realizedMarginReturnPct))?Number(candidate.realizedMarginReturnPct):existing.realizedMarginReturnPct,
               currentStop:Number.isFinite(Number(candidate.currentStop))?Number(candidate.currentStop):existing.currentStop,
-              breakEvenActivated:candidate.breakEvenActivated===true||existing.breakEvenActivated===true,
+              breakEvenActivated:typeof candidate.breakEvenActivated==="boolean"?candidate.breakEvenActivated:existing.breakEvenActivated===true,
               stopConfirmedAt:candidate.stopConfirmedAt||existing.stopConfirmedAt,
               stopConfirmedBy:candidate.stopConfirmedBy||existing.stopConfirmedBy
             };
