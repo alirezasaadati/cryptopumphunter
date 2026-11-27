@@ -1,0 +1,43 @@
+name: Experimental three-engine backtest
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/backtest-three-engine-variants.mjs"
+      - ".github/workflows/backtest-experiment.yml"
+permissions:
+  contents: read
+jobs:
+  experimental-backtest:
+    if: startsWith(github.head_ref, 'exp/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out experimental branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Check experimental script syntax
+        run: node --check scripts/backtest-three-engine-variants.mjs
+      - name: Run focused production lifecycle tests
+        run: node --test scripts/futures-staged-lifecycle.test.mjs scripts/futures-trade-lifecycle.test.mjs
+      - name: Run three-way historical backtest
+        env:
+          BACKTEST_DAYS: "60"
+          BACKTEST_SYMBOLS: "10"
+          BACKTEST_FEE_PER_SIDE: "0.0005"
+          BACKTEST_SLIPPAGE_PER_SIDE: "0.0003"
+        run: node scripts/backtest-three-engine-variants.mjs
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: three-engine-backtest-report
+          path: |
+            artifacts/three-engine-backtest.json
+            artifacts/three-engine-backtest.md
+          if-no-files-found: warn
