@@ -312,7 +312,8 @@ test("mandatory BTC 4h alignment blocks LONG when BTC 4h is bearish",()=>{
   assert.equal(result.side,"LONG");
   assert.equal(result.entryDiagnostics.stage,"btc_4h_alignment");
   assert.equal(result.entryDiagnostics.passed,false);
-  assert.match(result.rejected,/بیت‌کوین/);
+  assert.equal(result.entryDiagnostics.expectedTrend,"BULLISH");
+  assert.equal(result.entryDiagnostics.btcFourHourTrend,"BEARISH");
 });
 
 test("staged 15m preflight is a superset of standard and high-risk eligible signals",()=>{
@@ -341,7 +342,7 @@ test("staged 15m preflight preserves the high-risk candidate path",()=>{
   assert.equal(preflight.highRiskEligible,true,JSON.stringify(preflight));
 });
 
-test("mandatory BTC and symbol 4h trends must both match the signal direction",()=>{
+test("BTC 4h must match the signal while symbol 4h only adjusts score",()=>{
   const long=makeSetup("LONG");
   const longOk=analyzeFuturesSymbol(long.ticker,long.oneHour,long.fourHour,long.fifteenMinute,{
     requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
@@ -359,21 +360,21 @@ test("mandatory BTC and symbol 4h trends must both match the signal direction",(
   const mismatch=analyzeFuturesSymbol(long.ticker,long.oneHour,opposingSymbol4h,long.fifteenMinute,{
     requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
   });
-  assert.equal(mismatch.eligible,undefined);
-  assert.equal(mismatch.entryDiagnostics.stage,"btc_4h_alignment");
+  assert.equal(mismatch.eligible,true,JSON.stringify(mismatch));
+  assert.equal(mismatch.fourHourTrend,"BEARISH");
+  assert.equal(mismatch.fourHourScoreAdjustment,-6);
+  assert.equal(mismatch.score,longOk.score-12);
 });
 
-test("15m momentum and pullback remain optional under mandatory BTC alignment",()=>{
+test("15m momentum remains mandatory under BTC alignment",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const altered=fifteenMinute.map(c=>({...c}));
   altered.at(-1).open=altered.at(-1).close+0.5;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,altered,{
     requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
   });
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.momentumConfirmed,false);
-  assert.equal(result.pullbackConfirmed,true);
-  assert.equal(result.confirmationCount,1);
+  assert.equal(result.eligible,undefined,JSON.stringify(result));
+  assert.match(result.rejected,/momentum trigger has not fired/i);
 });
 
 test("neutral 4h trend does not block a valid LONG and adds no 4h score",()=>{
@@ -398,7 +399,7 @@ test("opposing 4h trend reduces SHORT score but does not block even HIGH_RISK",(
   assert.equal(result.eligible,true,JSON.stringify(result));
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.equal(result.fourHourTrend,"BULLISH");
-  assert.equal(result.fourHourScoreAdjustment,-8);
+  assert.equal(result.fourHourScoreAdjustment,-6);
 });
 
 test("opposing 4h trend does not block HIGH_RISK when 15m data is unavailable",()=>{
