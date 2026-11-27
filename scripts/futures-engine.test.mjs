@@ -157,7 +157,7 @@ test("flat 1h and 4h conditions expose indicator-level rejection diagnostics",()
   assert.equal(result.entryDiagnostics.stage,"trend_rsi");
   assert.equal(result.entryDiagnostics.up1h,false);
   assert.equal(result.entryDiagnostics.up4h,false);
-  assert.match(result.rejected,/روند/);
+  assert.match(result.rejected,/trend/i);
 });
 
 test("admin signal listing endpoint rejects requests without the Durable Object secret",async()=>{
@@ -263,18 +263,15 @@ test("momentum and pullback provide 0/7/15 priority bonuses without changing qua
     return analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   };
   const both=evaluate("both"), one=evaluate("pullback_only"), none=evaluate("neither");
+  assert.equal(both.eligible,true,JSON.stringify(both));
   assert.equal(both.confirmationCount,2,JSON.stringify(both.entryDiagnostics));
   assert.equal(both.confirmationPriorityBonus,15);
-  assert.equal(one.confirmationCount,1,JSON.stringify(one.entryDiagnostics));
-  assert.equal(one.confirmationPriorityBonus,7);
-  assert.equal(none.confirmationCount,0,JSON.stringify(none.entryDiagnostics));
-  assert.equal(none.confirmationPriorityBonus,0);
   assert.equal(both.score,both.baseScore);
-  assert.equal(one.score,one.baseScore);
-  assert.equal(none.score,none.baseScore);
   assert.equal(both.priorityScore,both.baseScore+both.volumePriorityBonus+15);
-  assert.equal(one.priorityScore,one.baseScore+one.volumePriorityBonus+7);
-  assert.equal(none.priorityScore,none.baseScore+none.volumePriorityBonus);
+  assert.equal(one.eligible,undefined,JSON.stringify(one));
+  assert.match(one.rejected,/momentum trigger has not fired/i);
+  assert.equal(none.eligible,undefined,JSON.stringify(none));
+  assert.match(none.rejected,/momentum trigger has not fired/i);
 });
 
 test("trend-aligned setup with confirmed 15m pullback generates a LONG",()=>{
@@ -390,19 +387,19 @@ test("neutral 4h trend does not block a valid LONG and adds no 4h score",()=>{
   assert.equal(result.fourHourScoreAdjustment,0);
 });
 
-test("opposing 4h trend reduces SHORT score but does not block even HIGH_RISK",()=>{
+test("opposing symbol 4h applies a score penalty; mandatory 15m momentum still gates SHORT",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
   fifteenMinute.at(-1).open=fifteenMinute.at(-1).close-0.05;
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,fifteenMinute);
   assert.equal(result.side,"SHORT",JSON.stringify(result));
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.riskLevel,"HIGH_RISK");
+  assert.equal(result.eligible,undefined,JSON.stringify(result));
   assert.equal(result.fourHourTrend,"BULLISH");
   assert.equal(result.fourHourScoreAdjustment,-6);
+  assert.match(result.rejected,/momentum trigger has not fired/i);
 });
 
-test("opposing 4h trend does not block HIGH_RISK when 15m data is unavailable",()=>{
+test("opposing symbol 4h remains score-only when 15m data is unavailable, but entry is rejected",()=>{
   const {ticker,oneHour}=makeSetup("SHORT");
   const opposingFourHour=makeCandles({slope:0.04,base:100});
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,[]);
@@ -585,7 +582,7 @@ test("late-entry filter rejects an overextended price versus hourly EMA20",()=>{
   assert.match(result.rejected,/Entry is too late; price is too far from EMA20/);
 });
 
-test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=>{
+test("opposite 15m momentum blocks an entry and is returned as a rejection",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
   const altered=fifteenMinute.map(c=>({...c}));
   altered[altered.length-1].open=altered.at(-1).close+0.5;
@@ -599,7 +596,7 @@ test("opposite 15m momentum is diagnostic and does not suppress a candidate",()=
   assert.equal(result.momentumConfirmed,false);
 });
 
-test("missing 15m pullback is diagnostic and does not suppress a candidate",()=>{
+test("missing 15m pullback blocks an entry and is returned as a rejection",()=>{
   const {ticker,oneHour}=makeSetup("LONG");
   const altered=makeCandles({count:120,slope:0.1,base:100}).map(c=>({...c,low:c.close-0.001}));
   const priorEma9=testEma(altered.slice(0,-1).map(c=>c.close),9);
