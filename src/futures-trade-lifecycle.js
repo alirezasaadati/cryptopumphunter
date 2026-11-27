@@ -110,7 +110,7 @@ export function evaluateStagedTradeCandle(trade, candle, options = {}) {
   });
   const dir = tradeDir(trade.side);
   const open = Number(candle.open), high = Number(candle.high), low = Number(candle.low);
-  const stop = Number(trade.currentStop ?? initialStop);
+  // Historical currentStop values may have been moved internally without an exchange update.\n  // Trust a changed stop only after an owner has explicitly synchronized it.\n  const stop = Number(trade.stopConfirmedAt ? (trade.currentStop ?? initialStop) : initialStop);
   if (![entry, initialStop, ...targets, open, high, low].every(Number.isFinite) ||
       entry <= 0 || initialStop <= 0 || stop <= 0 || targets.some(x => x <= 0)) {
     return { changed: false, trade, error: "INVALID_TRADE_LEVELS" };
