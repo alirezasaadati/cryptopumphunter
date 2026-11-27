@@ -396,6 +396,12 @@ test("neutral 4h LONG recovery is HIGH_RISK only and requires BTC plus 15m confi
   });
   assert.equal(baselineBypass.eligible,undefined);
   assert.match(baselineBypass.rejected,/requires confirmed 15-minute/);
+
+  const strictBaseline=analyzeFuturesSymbol(ticker,oneHour,neutralFourHour,fifteenMinute,{
+    disableLongNeutralRecovery:true,requireBtcFourHourAlignment:true,btcFourHourTrend:"BULLISH"
+  });
+  assert.equal(strictBaseline.eligible,undefined);
+  assert.match(strictBaseline.rejected,/4H trend is not aligned/i);
 });
 
 test("opposing 4h trend continues to block SHORT without changing SHORT rules",()=>{
