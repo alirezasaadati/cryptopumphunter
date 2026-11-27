@@ -280,16 +280,16 @@ test("Kraken perpetual filter uses the 2.5M high-risk quote-volume floor",()=>{
   assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:2_500_000,last:50_000}),true);
   assert.equal(isKrakenPerpetualTicker({tag:"perpetual",symbol:"PF_XBTUSD",volumeQuote:2_499_999,last:50_000}),false);
 });
-test("11.2.0 high-risk path requires at least 0.65 relative volume",()=>{
+test("11.2.0 high-risk LONG path respects the 0.7 relative-volume direction guard",()=>{
   const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
   const averageVolume=oneHour.slice(-21,-1).reduce((sum,c)=>sum+c.volume,0)/20;
-  oneHour.at(-1).volume=averageVolume*0.65;
+  oneHour.at(-1).volume=averageVolume*0.7;
   ticker.priceChangePercent=0;
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.eligible,true,JSON.stringify(result));
   assert.equal(result.riskLevel,"HIGH_RISK");
   assert.ok(result.score>=62);
-  assert.ok(result.volumeRatio>=0.65);
+  assert.ok(result.volumeRatio>=0.7);
 });
 test("entry drift filter keeps the 0.45 percent standard limit",()=>{
   const {ticker,oneHour,fifteenMinute}=makeSetup("LONG");
