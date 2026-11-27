@@ -41,8 +41,16 @@ test("active staged lifecycle does not move the internal stop at 1R without owne
   assert.equal(next.trade.currentStop, 95);
 });
 
+test("legacy internal break-even stops are ignored until explicitly confirmed", () => {
+  const legacyTrade = {...longTrade, currentStop: 100.12, breakEvenActivated: true};
+  const result = evaluateStagedTradeCandle(legacyTrade, {open: 100.5, high: 101, low: 100.05, close: 100.4, time: 2});
+  assert.equal(result.closed, false);
+  assert.equal(result.trade.currentStop, 95);
+  assert.equal(result.trade.breakEvenActivated, true);
+});
+
 test("an owner-confirmed exchange stop is used by the active lifecycle", () => {
-  const confirmedTrade = {...longTrade, currentStop: 100.12, breakEvenActivated: true};
+  const confirmedTrade = {...longTrade, currentStop: 100.12, breakEvenActivated: true, stopConfirmedAt: "2026-11-27T00:00:00.000Z"};
   const result = evaluateStagedTradeCandle(confirmedTrade, {open: 100.5, high: 101, low: 100.05, close: 100.4, time: 3});
   assert.equal(result.closed, true);
   assert.equal(result.reason, "CLOSED_STOP");
