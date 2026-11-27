@@ -4,7 +4,7 @@ Telegram/Cloudflare Worker migration of the legacy Crypto Pump Hunter engine.
 
 ## Included features
 - Manual multi-coin spot market scan, market analysis, watchlist and connection status.
-- Kraken Derivatives perpetual futures scanner (LONG/SHORT) using 4H context, 1H market structure and 15M entry confirmation using Price Action only.
+- Kraken Derivatives perpetual futures scanner (LONG/SHORT) using 1H trend, 4H confirmation and 15M entry timing.
 - Original Telegram menus, membership approval, member administration, invite and about screens.
 - No exchange trading keys and no order placement.
 
@@ -13,22 +13,24 @@ Telegram/Cloudflare Worker migration of the legacy Crypto Pump Hunter engine.
 - A signal is rejected when the live ticker differs from the closed-candle reference by more than 0.35%.
 - Entry is not recorded until the user confirms the signal and sends the actual fill price using `/fill SIGNAL_ID ACTUAL_PRICE`.
 - Open trades are stored separately from new scan results. A rejected signal on a later scan cannot alter an existing trade.
-- Open trades are checked when a manual futures scan runs; this is not continuous real-time monitoring.
-- Model exits scale 40% / 35% / 25% at 1.5R / 2.2R / 3.0R. At +0.75R (halfway to TP1), the bot prompts the user to consider moving the remaining stop to entry; after TP1 it prompts again if needed. The user must move the stop manually in the exchange and confirm it in Telegram.
+- Open trades are checked by the scheduled futures scan using closed 5M candles; monitoring is periodic, not continuous or exchange-native.
+- Model exits scale one-third / one-third / remainder at 1.5R / 2.5R / 3.5R. The bot never moves an exchange stop automatically. After manually changing a stop in the exchange, the owner can synchronize the tracking record with `/confirm_stop <ID> <PRICE>`. This command only updates the bot's internal tracking; it does not place or modify exchange orders.
 - Reported R results are theoretical and exclude fees, funding, slippage and missed intrabar price touches.
 
-## Price Action strategy
-- Market Structure (HH/HL, LH/LL, BOS and CHOCH), support/resistance rejection, breakout and retest, and candlestick confirmation.
-- Futures entries are based on Price Action; RSI, EMA, MACD, ATR, volume and funding are not used as entry filters or scores.
+## Futures signal strategy
+- The current futures engine combines 1H/4H trend context with 15M entry confirmation.
+- EMA20/EMA50, RSI14 and ATR14 are used in trend, momentum, risk and entry evaluation. Volume ratio, 24H change and funding are also used in scoring or filters.
+- The scanner is not a Price-Action-only strategy; the live engine's technical-indicator rules are authoritative.
 - Kraken Derivatives is the only Futures data provider; there is no fallback provider.
 
 ## Runtime configuration
 Cloudflare Worker name: `cryptopumphunter`
 
 Required Worker secrets:
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_WEBHOOK_SECRET`
+- `BOT_TOKEN`
+- `WEBHOOK_SECRET`
 - `OWNER_TELEGRAM_ID`
+- `SIGNAL_DELIVERY_AUTH_SECRET`
 
 KV binding: `APP_KV`
 
