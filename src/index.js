@@ -1204,14 +1204,15 @@ async function handleTelegramCommand(command, chatId, env, message) {
       ];
       for (const trade of openTrades.slice(0, 20)) {
         const initialStop = Number(trade.initialStop ?? trade.stop);
-        const trackedStop = Number(trade.currentStop ?? initialStop);
+        const trackedStop = Number(trade.stopConfirmedAt ? (trade.currentStop ?? initialStop) : initialStop);
         lines.push(
           "ID: " + String(trade.id || "—"),
           formatFuturesSymbol(trade.symbol) + " | " + String(trade.side || "—"),
           "Entry: " + formatSignalPrice(trade.actualEntry || trade.plannedEntry || trade.entry),
-          "Initial SL: " + formatSignalPrice(initialStop) + " | Tracked SL: " + formatSignalPrice(trackedStop),
+          "Initial SL: " + formatSignalPrice(initialStop) + " | Effective tracked SL: " + formatSignalPrice(trackedStop),
+          "Stop sync: " + (trade.stopConfirmedAt ? "EXCHANGE CONFIRMED" : "NOT CONFIRMED; using initial SL"),
           "Last tracked price: " + formatSignalPrice(trade.lastPrice),
-          "Internal BE flag: " + (trade.breakEvenActivated === true ? "YES" : "NO"),
+          "Internal BE flag: " + (trade.stopConfirmedAt ? (trade.breakEvenActivated === true ? "YES" : "NO") : "UNCONFIRMED / IGNORED"),
           ""
         );
       }
@@ -1241,7 +1242,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
       }
       const entry = Number(trade.actualEntry || trade.plannedEntry || trade.entry);
       const initialStop = Number(trade.initialStop ?? trade.stop);
-      const currentStop = Number(trade.currentStop ?? initialStop);
+      const currentStop = Number(trade.stopConfirmedAt ? (trade.currentStop ?? initialStop) : initialStop);
       const lastPrice = Number(trade.lastPrice);
       // Allow the owner to reconcile a stale auto-BE stop back to the actual
       // exchange stop, but never allow a stop worse than the original risk.
