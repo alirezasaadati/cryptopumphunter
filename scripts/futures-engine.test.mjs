@@ -214,6 +214,8 @@ test("15m pullback to EMA21 is a required entry gate",()=>{
     candle.low=ema21+0.4;
     candle.high=Math.max(candle.high,candle.low+0.1);
   }
+  const previous15=fifteenMinute.at(-2);
+  previous15.low=Math.min(previous15.close-0.001,ema21+0.4);
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
   assert.equal(result.eligible,undefined,JSON.stringify(result));
   assert.match(result.rejected,/No 15-minute pullback to the EMA21 zone/);
