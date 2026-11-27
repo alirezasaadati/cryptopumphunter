@@ -1176,12 +1176,48 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/futures - دریافت سیگنال‌های فیوچرز\n" +
         "/diagfutures - گزارش عیب‌یابی فقط‌خواندنی (مالک)\n" +
         "/close_trade <ID> - بستن رکورد پیگیری داخلی (مالک؛ پوزیشن صرافی را نمی‌بندد)\n" +
+        "/set_stop <ID> <PRICE> - ثبت حد ضررِ از قبل تغییر‌یافته در صرافی (مالک؛ فقط همگام‌سازی داخلی)\n" +
         "/scan - اجرای اسکن دستی بازار اسپات\n" +
         "/status - بررسی وضعیت ربات\n" +
         "/help - نمایش این راهنما\n\n" +
         "اسکن‌ها فقط با درخواست دستی شما اجرا می‌شوند.",
         menuForChat(env, chatId)
       );
+      return;
+    }
+
+    if (command === "/set_stop") {
+      if (!isOwner(chatId, env)) {
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
+        return;
+      }
+      const parts = String(message?.text || "").trim().split(/\s+/);
+      const tradeId = parts[1] || "";
+      const stopPrice = Number(parts[2]);
+      if (!tradeId || !Number.isFinite(stopPrice) || stopPrice <= 0) {
+        await sendMessage(env, chatId, "فرمت دستور صحیح نیست.\n/set_stop <ID> <PRICE>");
+        return;
+      }
+      const openTrades = await getOpenFuturesTrades(env);
+      const trade = openTrades.find(item => String(item.id) === tradeId);
+      if (!trade) {
+        await sendMessage(env, chatId, "معاملهٔ باز با این شناسه پیدا نشد. هیچ تغییری اعمال نشد.");
+        return;
+      }
+      const validation = validateConfirmedStopPrice(trade, stopPrice);
+      if (!validation.ok) {
+        await sendMessage(env, chatId, "حد ضرر ثبت نشد: " + validation.reason + "\nقیمت مرجع آخرین پایش: " + formatSignalPrice(trade.lastPrice || trade.actualEntry));
+        return;
+      }
+      const confirmedAt = new Date().toISOString();
+      await persistFuturesTradeUpdates(env, [{
+        id: trade.id, currentStop: validation.stopPrice,
+        breakEvenActivated: validation.breakEvenActivated,
+        breakEvenConfirmedAt: confirmedAt
+      }]);
+      await sendMessage(env, chatId,
+        "✅ حد ضرر داخلی معامله با قیمت " + formatSignalPrice(validation.stopPrice) + " همگام شد.\n" +
+        "⚠️ این دستور فقط وضعیت پیگیری ربات را تغییر می‌دهد؛ سفارش حد ضرر صرافی را تغییر نمی‌دهد. مطمئن شو همین قیمت قبلاً در صرافی ثبت شده است.");
       return;
     }
 
@@ -2231,6 +2267,8 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
   const symbols = [...new Set(openTrades.map(t => t.symbol).filter(Boolean))];
   const updates = [];
   const errorDetails = [];
+  const breakEvenPrompts = [];
+  const breakEvenPromptIds = new Set();
   let checked = 0, closed = 0, errors = 0;
   const timestamp = new Date(now).toISOString();
   const recordError = (trade, stage, error) => {
@@ -2280,6 +2318,17 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
               lastCheckedCandleTime: Number(candle.time), lastMonitorAttemptAt: timestamp,
               lastMonitorError: null
             };
+          } else if (result.trade) {
+            trade = { ...result.trade, lastPrice: candle.close, lastCheckedAt: timestamp,
+              lastCheckedCandleTime: Number(candle.time), lastMonitorAttemptAt: timestamp,
+              lastMonitorError: null };
+          }
+          if (trade.breakEvenSuggested === true && !trade.breakEvenPromptedAt && !breakEvenPromptIds.has(String(trade.id))) {
+            breakEvenPromptIds.add(String(trade.id));
+            breakEvenPrompts.push({
+              id: trade.id, symbol: trade.symbol, side: trade.side,
+              suggestedStopPrice: Number(trade.suggestedStopPrice)
+            });
           }
           if (result.closed) {
             closed++;
@@ -2301,6 +2350,25 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
       persistenceError = String(error?.message || error).slice(0, 400);
       errorDetails.push({ stage: "PERSISTENCE", message: persistenceError, at: timestamp });
       console.error("FUTURES_TRADE_MONITOR_PERSISTENCE_ERROR", persistenceError);
+    }
+  }
+  const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
+  if (ownerId && breakEvenPrompts.length) {
+    for (const prompt of breakEvenPrompts) {
+      try {
+        await sendMessage(env, ownerId,
+          "📌 معامله " + prompt.symbol + " (" + prompt.side + ") به محدوده +1R رسیده است.\n" +
+          "حد ضرر پیشنهادی: " + formatSignalPrice(prompt.suggestedStopPrice) + "\n\n" +
+          "ربات حد ضرر صرافی را تغییر نداده است. اگر این حد ضرر را خودت در صرافی ثبت کردی، برای همگام‌سازی وضعیت داخلی بفرست:\n" +
+          "/set_stop " + prompt.id + " " + prompt.suggestedStopPrice + "\n\n" +
+          "این دستور فقط رکورد داخلی ربات را به‌روزرسانی می‌کند و هیچ سفارشی در صرافی ثبت یا ویرایش نمی‌کند.");
+        await persistFuturesTradeUpdates(env, [{ id: prompt.id, breakEvenPromptedAt: timestamp }]);
+      } catch (error) {
+        errors++;
+        const detail = { tradeId: String(prompt.id), symbol: String(prompt.symbol), stage: "BREAK_EVEN_PROMPT", message: String(error?.message || error).slice(0, 300), at: timestamp };
+        errorDetails.push(detail);
+        console.error("FUTURES_BREAK_EVEN_PROMPT_FAILED", JSON.stringify(detail));
+      }
     }
   }
   const stuckTrades = openTrades.filter(trade => {
@@ -2332,6 +2400,28 @@ async function registerPendingFuturesSignals(env, candidates) {
     }));
   }
   return payload.signals;
+}
+function validateConfirmedStopPrice(trade, value) {
+  const stopPrice = Number(value);
+  const lastPrice = Number(trade?.lastPrice ?? trade?.actualEntry ?? trade?.plannedEntry);
+  const entry = Number(trade?.actualEntry ?? trade?.plannedEntry);
+  if (!trade || trade.status !== "OPEN" || !["LONG", "SHORT"].includes(trade.side)) {
+    return { ok: false, reason: "رکورد معامله معتبر یا باز نیست." };
+  }
+  if (![stopPrice, lastPrice, entry].every(Number.isFinite) || stopPrice <= 0 || lastPrice <= 0 || entry <= 0) {
+    return { ok: false, reason: "قیمت حد ضرر یا قیمت مرجع معتبر نیست." };
+  }
+  if (trade.side === "LONG" && stopPrice >= lastPrice) {
+    return { ok: false, reason: "برای LONG حد ضرر باید پایین‌تر از آخرین قیمت ثبت‌شده باشد." };
+  }
+  if (trade.side === "SHORT" && stopPrice <= lastPrice) {
+    return { ok: false, reason: "برای SHORT حد ضرر باید بالاتر از آخرین قیمت ثبت‌شده باشد." };
+  }
+  return {
+    ok: true,
+    stopPrice,
+    breakEvenActivated: trade.side === "LONG" ? stopPrice >= entry : stopPrice <= entry
+  };
 }
 const tradeDir=side=>side==="LONG"?1:-1;
 const targetReached=(side,p,t)=>side==="LONG"?p>=t:p<=t;
@@ -2606,7 +2696,11 @@ export class SignalDeliveryCoordinator {
               remainingFraction:Number.isFinite(Number(candidate.remainingFraction))?Number(candidate.remainingFraction):existing.remainingFraction,
               realizedMarginReturnPct:Number.isFinite(Number(candidate.realizedMarginReturnPct))?Number(candidate.realizedMarginReturnPct):existing.realizedMarginReturnPct,
               currentStop:Number.isFinite(Number(candidate.currentStop))?Number(candidate.currentStop):existing.currentStop,
-              breakEvenActivated:candidate.breakEvenActivated===true||existing.breakEvenActivated===true
+              breakEvenActivated:candidate.breakEvenActivated===true||existing.breakEvenActivated===true,
+              breakEvenSuggested:candidate.breakEvenSuggested===true||existing.breakEvenSuggested===true,
+              suggestedStopPrice:Number.isFinite(Number(candidate.suggestedStopPrice))?Number(candidate.suggestedStopPrice):existing.suggestedStopPrice,
+              breakEvenPromptedAt:candidate.breakEvenPromptedAt||existing.breakEvenPromptedAt,
+              breakEvenConfirmedAt:candidate.breakEvenConfirmedAt||existing.breakEvenConfirmedAt
             };
             if(["CLOSED_PROFIT","CLOSED_STOP","CLOSED_MANUAL"].includes(candidate.status)){
               next.status=candidate.status;
