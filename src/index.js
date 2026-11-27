@@ -1988,11 +1988,19 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   else if (strictShort || (!strictSetup && relaxedShort)) { side = "SHORT"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "1H downtrend with negative EMA20 slope" : "High-risk 1H bearish setup"); score += rsiValue >= 38 && rsiValue <= 48 ? 15 : 8; }
   else return { symbol: ticker.symbol, fourHourTrend, rejected: "The 1H trend and optimal RSI zone were not confirmed together", entryDiagnostics: { stage: "trend_rsi", rsi: rsiValue, up1h, down1h, fourHourTrend } };
   const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
-  if (fourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 4H trend is not aligned with the signal" };
-  if (side === "SHORT" && options.requireBtcFourHourAlignment === true && options.btcFourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, rejected: "Bitcoin's 4H trend is not aligned with the signal" };
+  // The 1H symbol trend must align with Bitcoin's 4H trend for either side.
+  // The symbol's own 4H trend is contextual only: it adjusts score but never blocks.
+  if (options.requireBtcFourHourAlignment === true && options.btcFourHourTrend !== expectedTrend) {
+    return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, rejected: "The symbol's 1H trend is not aligned with Bitcoin's 4H trend" };
+  }
   if (options.btcFourHourTrend === expectedTrend) {
     score += 10;
-    reasons.push("The symbol and Bitcoin 4H trends are fully aligned");
+    reasons.push("The symbol's 1H trend is aligned with Bitcoin's 4H trend");
+  }
+  const symbolFourHourAdjustment = fourHourTrend === expectedTrend ? 6 : fourHourTrend === "NEUTRAL" ? 0 : -6;
+  score += symbolFourHourAdjustment;
+  if (symbolFourHourAdjustment) {
+    reasons.push("Symbol 4H trend " + fourHourTrend + "; score adjustment " + (symbolFourHourAdjustment > 0 ? "+" : "") + symbolFourHourAdjustment);
   }
   const change = Number(ticker.priceChangePercent) || 0;
   if (side === "LONG" && change < -1.5) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 24H change is negative; bullish-trap risk for LONG" };
@@ -3228,8 +3236,7 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const filteredUniverse = universe;
-  // BTC 4H alignment remains mandatory for SHORT only. LONG analysis continues
-  // even if BTC 4H data is unavailable; aligned BTC still earns the existing score bonus.
+  // BTC 4H alignment is mandatory for both sides; the symbol's own 4H trend is score-only.
   let btcFourHourTrend = null;
   try {
     const btcMarketData = await getKrakenFuturesCandlesViaCoordinator(
@@ -3239,10 +3246,10 @@ async function runFuturesSignalScan(env, options = {}) {
       btcMarketData.candles?.[FUTURES_CONFIG.CONFIRM_INTERVAL]
     );
   } catch (error) {
-    console.warn("BTC_4H_CONTEXT_UNAVAILABLE; LONG scans will continue and SHORT candidates will fail the BTC alignment check:", String(error?.message || error));
+    console.warn("BTC_4H_CONTEXT_UNAVAILABLE; both LONG and SHORT candidates will fail the BTC alignment check:", String(error?.message || error));
   }
   console.log("BTC_4H_ALIGNMENT_CONTEXT", JSON.stringify({
-    timestamp: new Date().toISOString(), btcFourHourTrend, requiredForLong: false, requiredForShort: true
+    timestamp: new Date().toISOString(), btcFourHourTrend, requiredForLong: true, requiredForShort: true
   }));
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   let analysisErrorCount = 0;
