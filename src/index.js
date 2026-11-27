@@ -1,7 +1,7 @@
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, displayEntryPrice, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
-import { evaluateStagedTradeCandle } from "./futures-trade-lifecycle.js";
+import { evaluateStagedTradeCandle, validateConfirmedStopPrice } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
   VERSION: "11.3.2",
@@ -2323,7 +2323,7 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
               lastCheckedCandleTime: Number(candle.time), lastMonitorAttemptAt: timestamp,
               lastMonitorError: null };
           }
-          if (trade.breakEvenSuggested === true && !trade.breakEvenPromptedAt && !breakEvenPromptIds.has(String(trade.id))) {
+          if (trade.status === "OPEN" && trade.breakEvenSuggested === true && !trade.breakEvenPromptedAt && !breakEvenPromptIds.has(String(trade.id))) {
             breakEvenPromptIds.add(String(trade.id));
             breakEvenPrompts.push({
               id: trade.id, symbol: trade.symbol, side: trade.side,
@@ -2400,28 +2400,6 @@ async function registerPendingFuturesSignals(env, candidates) {
     }));
   }
   return payload.signals;
-}
-function validateConfirmedStopPrice(trade, value) {
-  const stopPrice = Number(value);
-  const lastPrice = Number(trade?.lastPrice ?? trade?.actualEntry ?? trade?.plannedEntry);
-  const entry = Number(trade?.actualEntry ?? trade?.plannedEntry);
-  if (!trade || trade.status !== "OPEN" || !["LONG", "SHORT"].includes(trade.side)) {
-    return { ok: false, reason: "رکورد معامله معتبر یا باز نیست." };
-  }
-  if (![stopPrice, lastPrice, entry].every(Number.isFinite) || stopPrice <= 0 || lastPrice <= 0 || entry <= 0) {
-    return { ok: false, reason: "قیمت حد ضرر یا قیمت مرجع معتبر نیست." };
-  }
-  if (trade.side === "LONG" && stopPrice >= lastPrice) {
-    return { ok: false, reason: "برای LONG حد ضرر باید پایین‌تر از آخرین قیمت ثبت‌شده باشد." };
-  }
-  if (trade.side === "SHORT" && stopPrice <= lastPrice) {
-    return { ok: false, reason: "برای SHORT حد ضرر باید بالاتر از آخرین قیمت ثبت‌شده باشد." };
-  }
-  return {
-    ok: true,
-    stopPrice,
-    breakEvenActivated: trade.side === "LONG" ? stopPrice >= entry : stopPrice <= entry
-  };
 }
 const tradeDir=side=>side==="LONG"?1:-1;
 const targetReached=(side,p,t)=>side==="LONG"?p>=t:p<=t;
