@@ -1507,8 +1507,8 @@ const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
   CONCURRENCY: 5, MAX_SCAN_DURATION_MS: 180000, SCAN_FINALIZATION_RESERVE_MS: 45000,
-  REQUEST_TIMEOUT_MS: 12000, MAX_SIGNALS_PER_SCAN: 6,
-  MIN_QUOTE_VOLUME: 5_000_000, HIGH_RISK_MIN_QUOTE_VOLUME: 2_500_000,
+  REQUEST_TIMEOUT_MS: 12000, MAX_SIGNALS_PER_SCAN: 20,
+  MIN_QUOTE_VOLUME: 5_000_000, HIGH_RISK_MIN_QUOTE_VOLUME: 5_000_000,
   KLINE_LIMIT: 120, MIN_CANDLES: 60, MIN_SCORE: 72,
   INTERVAL: "1h", CONFIRM_INTERVAL: "4h", ENTRY_CONFIRM_INTERVAL: "15m",
   SIGNAL_TTL_MINUTES: 60, MAX_ENTRY_DRIFT_PCT: 0.35, LONG_MAX_ENTRY_DRIFT_PCT: 0.70,
@@ -1615,7 +1615,7 @@ function isKrakenPerpetualTicker(item) {
   if (!/^(PI|PF)_[A-Z0-9]+USD$/.test(symbol)) return false;
   const quoteVolume = Number(item.volumeQuote);
   const last = Number(item.last);
-  return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME &&
+  return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
     Number.isFinite(last) && last > 0;
 }
 
@@ -3324,21 +3324,6 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const filteredUniverse = universe;
-  // BTC 4H alignment is mandatory for both sides; the symbol's own 4H trend is score-only.
-  let btcFourHourTrend = null;
-  try {
-    const btcMarketData = await getKrakenFuturesCandlesViaCoordinator(
-      env, "PF_XBTUSD", [FUTURES_CONFIG.CONFIRM_INTERVAL]
-    );
-    btcFourHourTrend = calculateFourHourTrend(
-      btcMarketData.candles?.[FUTURES_CONFIG.CONFIRM_INTERVAL]
-    );
-  } catch (error) {
-    console.warn("BTC_4H_CONTEXT_UNAVAILABLE; both LONG and SHORT candidates will fail the BTC alignment check:", String(error?.message || error));
-  }
-  console.log("BTC_4H_ALIGNMENT_CONTEXT", JSON.stringify({
-    timestamp: new Date().toISOString(), btcFourHourTrend, requiredForLong: true, requiredForShort: true
-  }));
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   let analysisErrorCount = 0;
   let fifteenMinuteDataErrorCount = 0;
@@ -3358,9 +3343,7 @@ async function runFuturesSignalScan(env, options = {}) {
           "Required Kraken candle data is missing.");
       }
 
-      const analysisOptions = {
-        ...options, btcFourHourTrend, requireBtcFourHourAlignment: true
-      };
+      const analysisOptions = { ...options };
       const preflight = analyzeFuturesSymbol(ticker, oneHour, fourHour, [], {
         ...analysisOptions, skipEntryFilters: true
       });
