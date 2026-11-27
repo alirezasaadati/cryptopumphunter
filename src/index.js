@@ -1520,15 +1520,6 @@ const FUTURES_CONFIG = {
   CONFIRMATION_PRIORITY_BONUS_BOTH: 15, HIGH_RISK_LONG_RSI_MIN: 35, HIGH_RISK_LONG_RSI_MAX: 78,
   HIGH_RISK_SHORT_RSI_MIN: 22, HIGH_RISK_SHORT_RSI_MAX: 65, HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.75, HIGH_RISK_LONG_MAX_ENTRY_DRIFT_PCT: 0.90,
   HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 4.0, HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 4.0,
-  BTC_NEUTRAL_SPREAD_PCT: 0.20,
-  BTC_NEUTRAL_MIN_SLOPE_PCT: 0.01,
-  BTC_NEUTRAL_LEANING_REQUIRE_1H_ALIGNMENT: true,
-  BTC_NEUTRAL_LEANING_ALLOW_SINGLE_CANDLE: true,
-  BTC_ADX_PERIOD: 14,
-  BTC_ADX_RANGE_MAX: 20,
-  BTC_ADX_TRANSITION_MAX: 25,
-  BTC_NEUTRAL_LEANING_MIN_SCORE: 75,
-  BTC_NEUTRAL_LEANING_MIN_VOLUME_RATIO: 1.0
 };
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
 
@@ -1987,30 +1978,10 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   let score = 0;
   const reasons = [];
 
-  const allowedSide = options.allowedSide === "LONG" || options.allowedSide === "SHORT" ? options.allowedSide : null;
-  const btcRegime = options.btcRegime === "NEUTRAL_LEANING" ? "NEUTRAL_LEANING" : "TREND";
-  const isNeutralLeaning = btcRegime === "NEUTRAL_LEANING";
-  const effectiveMinScore = isNeutralLeaning
-    ? FUTURES_CONFIG.BTC_NEUTRAL_LEANING_MIN_SCORE : FUTURES_CONFIG.MIN_SCORE;
-  const effectiveMinVolumeRatio = isNeutralLeaning
-    ? FUTURES_CONFIG.BTC_NEUTRAL_LEANING_MIN_VOLUME_RATIO : 0.75;
-  // In leaning mode the high-risk path is held to the same strict score/volume
-  // floor, so it cannot bypass the experimental regime's additional safeguards.
-  const effectiveHighRiskMinScore = isNeutralLeaning
-    ? FUTURES_CONFIG.BTC_NEUTRAL_LEANING_MIN_SCORE : FUTURES_CONFIG.HIGH_RISK_MIN_SCORE;
-  const effectiveHighRiskMinVolumeRatio = isNeutralLeaning
-    ? FUTURES_CONFIG.BTC_NEUTRAL_LEANING_MIN_VOLUME_RATIO : FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
-  // Fail closed: without an explicit, confirmed BTC direction, no setup is permitted.
-  if (allowedSide === null) {
-    return {
-      symbol: ticker.symbol,
-      rejected: "جهت تأییدشده بیت‌کوین به تحلیل نماد ارسال نشده است؛ طبق سیاست fail-safe هیچ ستاپی مجاز نیست."
-    };
-  }
-  const strictLong = allowedSide === "LONG" && up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
-  const strictShort = allowedSide === "SHORT" && down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
-  const relaxedLong = allowedSide === "LONG" && up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
-  const relaxedShort = allowedSide === "SHORT" && down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
+  const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
+  const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
+  const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
+  const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
 
   if (strictLong || (!strictSetup && relaxedLong)) {
@@ -2052,8 +2023,8 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
 
   const fourHourOpposes = side === "LONG" ? down4h : up4h;
   const standardThresholdMet = strictSetup &&
-    score >= effectiveMinScore &&
-    volumeRatio >= effectiveMinVolumeRatio;
+    score >= FUTURES_CONFIG.MIN_SCORE &&
+    volumeRatio >= 0.75;
   let standardEntryPassed = false;
   let entryFilters;
 
@@ -2124,21 +2095,13 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   score = Math.max(0, Math.min(100, Math.round(score)));
   const eligible = standardEntryPassed;
   const highRiskEligible = !standardEntryPassed &&
-    score >= effectiveHighRiskMinScore &&
-    volumeRatio >= effectiveHighRiskMinVolumeRatio;
+    score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE &&
+    volumeRatio >= FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
   if (highRiskEligible) reasons.push("این سیگنال فقط از مسیر مستقل منعطف عبور کرده و پرریسک طبقه‌بندی شده است");
   return {
     symbol: ticker.symbol,
     side,
     score,
-    btcRegime,
-    btcRegimeLabel: isNeutralLeaning ? "BTC_NEUTRAL_LEANING" : "BTC_TREND",
-    effectiveThresholds: {
-      minScore: effectiveMinScore,
-      minVolumeRatio: effectiveMinVolumeRatio,
-      highRiskMinScore: effectiveHighRiskMinScore,
-      highRiskMinVolumeRatio: effectiveHighRiskMinVolumeRatio
-    },
     riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
     price: entry,
     entry,
@@ -3249,38 +3212,6 @@ async function runAutomaticFuturesAlertScanInternal(env) {
 async function runFuturesEntryDiagnostics(env) {
   const startedAt = new Date().toISOString();
   const universe = await getKrakenFuturesUniverse();
-  const bitcoinTicker = universe.find(ticker =>
-    normalizeKrakenFuturesUnderlying(ticker.symbol) === "BTC");
-  if (!bitcoinTicker) {
-    return {
-      startedAt, finishedAt: new Date().toISOString(),
-      universeCount: universe.length, sampledCount: 0,
-      bitcoinMarketRegime: { direction: "UNAVAILABLE", confirmed: false, reason: "bitcoin_perpetual_not_found" },
-      stageCounts: { BLOCKED: 1 }, samples: []
-    };
-  }
-  const btcData = await getKrakenFuturesCandlesViaCoordinator(
-    env, bitcoinTicker.symbol, [FUTURES_CONFIG.CONFIRM_INTERVAL]
-  );
-  if (btcData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL]) {
-    return {
-      startedAt, finishedAt: new Date().toISOString(),
-      universeCount: universe.length, sampledCount: 0,
-      bitcoinMarketRegime: { direction: "UNAVAILABLE", confirmed: false, reason: btcData.errors[FUTURES_CONFIG.CONFIRM_INTERVAL] },
-      stageCounts: { BLOCKED: 1 }, samples: []
-    };
-  }
-  const bitcoinMarketRegime = determineBitcoinFourHourRegime(
-    btcData.candles?.[FUTURES_CONFIG.CONFIRM_INTERVAL] || []
-  );
-  if (!["LONG", "SHORT"].includes(bitcoinMarketRegime.direction)) {
-    return {
-      startedAt, finishedAt: new Date().toISOString(),
-      universeCount: universe.length, sampledCount: 0,
-      bitcoinMarketRegime, stageCounts: { BLOCKED: 1 }, samples: []
-    };
-  }
-  const analysisOptions = { allowedSide: bitcoinMarketRegime.direction };
   const analyzed = await mapLimit(
     universe.slice(0, 30),
     FUTURES_CONFIG.CONCURRENCY,
@@ -3300,7 +3231,7 @@ async function runFuturesEntryDiagnostics(env) {
             marketData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
             "Required Kraken candle data is missing.");
         }
-        const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, analysisOptions);
+        const result = analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute);
         return {
           symbol: ticker.symbol,
           stage: result.eligible ? "ELIGIBLE" : result.rejected ? "REJECTED" : "UNKNOWN",
@@ -3323,7 +3254,7 @@ async function runFuturesEntryDiagnostics(env) {
   for (const item of analyzed) stageCounts[item.stage] = (stageCounts[item.stage] || 0) + 1;
   return {
     startedAt, finishedAt: new Date().toISOString(), universeCount: universe.length,
-    sampledCount: analyzed.length, stageCounts, bitcoinMarketRegime, samples: analyzed
+    sampledCount: analyzed.length, stageCounts, samples: analyzed
   };
 }
 
@@ -3350,105 +3281,6 @@ function formatFuturesEntryDiagnostics(d) {
   }
   lines.push("", "⛔ This report is read-only. No signal was registered or sent, and no trade was executed.");
   return lines.join("\n");
-}
-
-function calculateAdx(candles, period = 14) {
-  if (!Array.isArray(candles) || !Number.isInteger(period) || period < 2 ||
-      candles.length < period * 2 + 1) return null;
-  const trs = [], plusDM = [], minusDM = [];
-  for (let i = 1; i < candles.length; i++) {
-    const curr = candles[i], prev = candles[i - 1];
-    if (![curr?.high,curr?.low,curr?.close,prev?.high,prev?.low,prev?.close].every(Number.isFinite)) return null;
-    const upMove = curr.high - prev.high;
-    const downMove = prev.low - curr.low;
-    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
-    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
-    trs.push(Math.max(curr.high-curr.low,Math.abs(curr.high-prev.close),Math.abs(curr.low-prev.close)));
-  }
-  const wilder = values => {
-    if (values.length < period) return [];
-    let smoothed = values.slice(0,period).reduce((a,b)=>a+b,0);
-    const out=[smoothed];
-    for(let i=period;i<values.length;i++){
-      smoothed=smoothed-smoothed/period+values[i];
-      out.push(smoothed);
-    }
-    return out;
-  };
-  const tr=wilder(trs), plus=wilder(plusDM), minus=wilder(minusDM);
-  const dx=[];
-  for(let i=0;i<tr.length;i++){
-    if(!(tr[i]>0)) return null;
-    const pdi=100*plus[i]/tr[i], mdi=100*minus[i]/tr[i], sum=pdi+mdi;
-    dx.push(sum>0?100*Math.abs(pdi-mdi)/sum:0);
-  }
-  if(dx.length<period) return null;
-  let adx=dx.slice(0,period).reduce((a,b)=>a+b,0)/period;
-  for(let i=period;i<dx.length;i++) adx=((adx*(period-1))+dx[i])/period;
-  return Number.isFinite(adx)?adx:null;
-}
-
-function classifyBitcoinFourHourCandle(candles, endIndex, candles1h) {
-  const sample=candles.slice(0,endIndex+1);
-  if(sample.length<FUTURES_CONFIG.MIN_CANDLES)
-    return {direction:"NEUTRAL",regime:"RANGE",confirmed:false,reason:"insufficient_closed_candles"};
-  const closes=sample.map(c=>c.close), close=closes[closes.length-1];
-  const previousEma20=ema(closes.slice(0,-1),20), ema20=ema(closes,20), ema50=ema(closes,50);
-  if(![close,previousEma20,ema20,ema50].every(Number.isFinite)||close<=0)
-    return {direction:"NEUTRAL",regime:"RANGE",confirmed:false,reason:"invalid_indicators"};
-  const slopePct=((ema20-previousEma20)/previousEma20)*100;
-  const spreadPct=((ema20-ema50)/close)*100;
-  const nearNeutral=Math.abs(spreadPct)<=FUTURES_CONFIG.BTC_NEUTRAL_SPREAD_PCT;
-  const slopeUp=slopePct>=FUTURES_CONFIG.BTC_NEUTRAL_MIN_SLOPE_PCT;
-  const slopeDown=slopePct<=-FUTURES_CONFIG.BTC_NEUTRAL_MIN_SLOPE_PCT;
-  const adx4h=calculateAdx(sample,FUTURES_CONFIG.BTC_ADX_PERIOD);
-  const adxValid=Number.isFinite(adx4h);
-  const inTransition=adxValid&&adx4h>=FUTURES_CONFIG.BTC_ADX_RANGE_MAX&&adx4h<=FUTURES_CONFIG.BTC_ADX_TRANSITION_MAX;
-  let oneHourAligned=null;
-  if(Array.isArray(candles1h)&&candles1h.length>=FUTURES_CONFIG.MIN_CANDLES){
-    const c1=candles1h.map(c=>c.close), e20_1h=ema(c1,20), e50_1h=ema(c1,50), last1h=c1[c1.length-1];
-    if([e20_1h,e50_1h,last1h].every(Number.isFinite))
-      oneHourAligned={up:e20_1h>e50_1h&&last1h>e20_1h,down:e20_1h<e50_1h&&last1h<e20_1h};
-  }
-  if(ema20>ema50&&slopePct>0&&close>ema20)
-    return {direction:"LONG",regime:"TREND",confirmed:true,reason:"bullish_ema_alignment",close,ema20,ema50,emaSpreadPct:spreadPct,ema20SlopePct:slopePct,adx4h,candleTime:sample.at(-1).time};
-  if(ema20<ema50&&slopePct<0&&close<ema20)
-    return {direction:"SHORT",regime:"TREND",confirmed:true,reason:"bearish_ema_alignment",close,ema20,ema50,emaSpreadPct:spreadPct,ema20SlopePct:slopePct,adx4h,candleTime:sample.at(-1).time};
-  const require1h=FUTURES_CONFIG.BTC_NEUTRAL_LEANING_REQUIRE_1H_ALIGNMENT;
-  const oneHourBull=!require1h||(oneHourAligned?.up===true);
-  const oneHourBear=!require1h||(oneHourAligned?.down===true);
-  if(inTransition&&nearNeutral&&slopeUp&&close>=ema20&&oneHourBull)
-    return {direction:"LONG",regime:"NEUTRAL_LEANING",confirmed:true,reason:"neutral_leaning_bullish_1h_aligned_adx_transition",close,ema20,ema50,emaSpreadPct:spreadPct,ema20SlopePct:slopePct,adx4h,candleTime:sample.at(-1).time};
-  if(inTransition&&nearNeutral&&slopeDown&&close<=ema20&&oneHourBear)
-    return {direction:"SHORT",regime:"NEUTRAL_LEANING",confirmed:true,reason:"neutral_leaning_bearish_1h_aligned_adx_transition",close,ema20,ema50,emaSpreadPct:spreadPct,ema20SlopePct:slopePct,adx4h,candleTime:sample.at(-1).time};
-  return {direction:"NEUTRAL",regime:"RANGE",confirmed:false,
-    reason:!adxValid?"adx_unavailable":adx4h<FUTURES_CONFIG.BTC_ADX_RANGE_MAX?"adx_below_range_threshold":"no_directional_confirmation",
-    close,ema20,ema50,emaSpreadPct:spreadPct,ema20SlopePct:slopePct,adx4h,candleTime:sample.at(-1).time};
-}
-
-function determineBitcoinFourHourRegime(candles,candles1h) {
-  const now=Date.now(), fourHourMs=4*60*60*1000, oneHourMs=60*60*1000;
-  const closed4h=Array.isArray(candles)?candles.filter(c=>Number.isFinite(Number(c?.time))&&Number(c.time)+fourHourMs<=now):[];
-  const closed1h=Array.isArray(candles1h)?candles1h.filter(c=>Number.isFinite(Number(c?.time))&&Number(c.time)+oneHourMs<=now):[];
-  if(closed4h.length<FUTURES_CONFIG.MIN_CANDLES+1)
-    return {direction:"NEUTRAL",regime:"RANGE",confirmed:false,reason:"insufficient_closed_bitcoin_4h_candles"};
-  const latest=classifyBitcoinFourHourCandle(closed4h,closed4h.length-1,closed1h);
-  const previous=classifyBitcoinFourHourCandle(closed4h,closed4h.length-2,closed1h);
-  const trendConfirmed=latest.regime==="TREND"&&previous.regime==="TREND"&&latest.direction!=="NEUTRAL"&&latest.direction===previous.direction;
-  const leaningSingleConfirmed=FUTURES_CONFIG.BTC_NEUTRAL_LEANING_ALLOW_SINGLE_CANDLE&&latest.regime==="NEUTRAL_LEANING"&&latest.confirmed===true&&latest.direction!=="NEUTRAL"&&
-    !(previous.direction!=="NEUTRAL"&&previous.direction!==latest.direction);
-  const confirmed=trendConfirmed||leaningSingleConfirmed;
-  return {
-    direction:confirmed?latest.direction:"NEUTRAL",
-    regime:confirmed?latest.regime:"RANGE",
-    confirmed,
-    reason:confirmed?latest.reason:(latest.regime==="NEUTRAL_LEANING"?"leaning_not_confirmed":"last_two_closed_4h_candles_not_aligned"),
-    confirmation:{
-      previous:{direction:previous.direction,regime:previous.regime,reason:previous.reason,candleTime:previous.candleTime},
-      latest:{direction:latest.direction,regime:latest.regime,reason:latest.reason,candleTime:latest.candleTime}
-    },
-    metrics:{close:latest.close,ema20:latest.ema20,ema50:latest.ema50,emaSpreadPct:latest.emaSpreadPct,ema20SlopePct:latest.ema20SlopePct,adx4h:latest.adx4h}
-  };
 }
 
 async function runFuturesSignalScan(env, options = {}) {
@@ -3492,47 +3324,6 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const filteredUniverse = universe;
-  const bitcoinTicker = filteredUniverse
-    .filter(item => /^(?:PI|PF)_(?:XBT|BTC)USD$/.test(String(item.symbol || "").toUpperCase()))
-    .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))[0];
-  if (!bitcoinTicker) {
-    const diagnostics = {
-      startedAt: new Date(started).toISOString(), finishedAt: new Date().toISOString(),
-      durationMs: Date.now() - started, universeCount: filteredUniverse.length,
-      analyzedCount: 0, analysisErrorCount: 0, eligibleCount: 0, signalCount: 0,
-      registeredCount: 0, bitcoinMarketRegime: { direction: "UNAVAILABLE", reason: "bitcoin_perpetual_not_found" },
-      delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
-      topRejections: [{ reason: "Bitcoin perpetual market data was unavailable; scan safely skipped.", count: 1 }]
-    };
-    console.error("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
-    return { report: "⚠️ داده قرارداد دائمی بیت‌کوین در دسترس نیست؛ برای جلوگیری از صدور سیگنال خلاف جهت بازار، این اسکن متوقف شد.", signals: [], diagnostics };
-  }
-  let bitcoinMarketRegime;
-  try {
-    const btcData = await getKrakenFuturesCandlesViaCoordinator(env, bitcoinTicker.symbol, [
-      FUTURES_CONFIG.CONFIRM_INTERVAL, FUTURES_CONFIG.INTERVAL
-    ]);
-    const btcCandles4h = btcData.candles?.[FUTURES_CONFIG.CONFIRM_INTERVAL] || [];
-    const btcCandles1h = btcData.candles?.[FUTURES_CONFIG.INTERVAL] || [];
-    if (btcData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] || btcData.errors?.[FUTURES_CONFIG.INTERVAL]) {
-      throw new Error(btcData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] || btcData.errors?.[FUTURES_CONFIG.INTERVAL]);
-    }
-    bitcoinMarketRegime = determineBitcoinFourHourRegime(btcCandles4h, btcCandles1h);
-  } catch (error) {
-    bitcoinMarketRegime = { direction: "UNAVAILABLE", confirmed: false, reason: String(error?.message || error).slice(0, 300) };
-  }
-  if (!["LONG", "SHORT"].includes(bitcoinMarketRegime.direction)) {
-    const diagnostics = {
-      startedAt: new Date(started).toISOString(), finishedAt: new Date().toISOString(),
-      durationMs: Date.now() - started, universeCount: filteredUniverse.length,
-      analyzedCount: 0, analysisErrorCount: 0, eligibleCount: 0, signalCount: 0,
-      registeredCount: 0, bitcoinMarketRegime: { ...bitcoinMarketRegime, symbol: bitcoinTicker.symbol },
-      delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
-      topRejections: [{ reason: "Bitcoin 4h direction was neutral, unconfirmed, or unavailable; no signals were allowed.", count: 1 }]
-    };
-    console.log("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
-    return { report: "⏸ روند ۴ ساعته بیت‌کوین خنثی یا تأییدنشده است؛ در این اسکن هیچ سیگنالی صادر نمی‌شود.", signals: [], diagnostics };
-  }
 
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   let analysisErrorCount = 0;
@@ -3553,11 +3344,7 @@ async function runFuturesSignalScan(env, options = {}) {
           "Required Kraken candle data is missing.");
       }
 
-      const analysisOptions = {
-        ...options,
-        allowedSide: bitcoinMarketRegime.direction,
-        btcRegime: bitcoinMarketRegime.regime
-      };
+      const analysisOptions = { ...options };
       const preflight = analyzeFuturesSymbol(ticker, oneHour, fourHour, [], {
         ...analysisOptions, skipEntryFilters: true
       });
@@ -3603,20 +3390,12 @@ async function runFuturesSignalScan(env, options = {}) {
       a.symbol.localeCompare(b.symbol)
     );
 
-  // Bitcoin's confirmed 4h regime is the sole market-direction gate.
-  // The signal engine's scoring, setup, entry, stop and target calculations remain unchanged.
+  // Keep all eligible LONG and SHORT candidates, matching the supplied engine.
   const longEligibleCount = eligibleCandidates.filter(item => item.side === "LONG").length;
   const shortEligibleCount = eligibleCandidates.filter(item => item.side === "SHORT").length;
-  const dominantDirection = bitcoinMarketRegime.direction;
-  const directionFilteredCandidates = eligibleCandidates.filter(item => item.side === dominantDirection);
-  const suppressedOppositeDirectionCount = eligibleCandidates.length - directionFilteredCandidates.length;
-  if (suppressedOppositeDirectionCount > 0) {
-    console.error("BTC_DIRECTION_INVARIANT_VIOLATION", JSON.stringify({
-      timestamp: new Date().toISOString(), version: CONFIG.VERSION,
-      allowedDirection: dominantDirection, suppressedOppositeDirectionCount,
-      symbols: eligibleCandidates.filter(item => item.side !== dominantDirection).map(item => ({ symbol: item.symbol, side: item.side }))
-    }));
-  }
+  const dominantDirection = null;
+  const directionFilteredCandidates = eligibleCandidates;
+  const suppressedOppositeDirectionCount = 0;
 
   const generatedSignals = directionFilteredCandidates
     .slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
@@ -3664,8 +3443,6 @@ async function runFuturesSignalScan(env, options = {}) {
     eligibleCount: eligibleCandidates.length,
     longEligibleCount,
     shortEligibleCount,
-    dominantDirection,
-    bitcoinMarketRegime: { ...bitcoinMarketRegime, symbol: bitcoinTicker.symbol },
     suppressedOppositeDirectionCount,
     selectedEligibleCount: directionFilteredCandidates.length,
     standardEligibleCount: eligibleCandidates.filter(item => item.riskLevel !== "HIGH_RISK").length,
@@ -3680,16 +3457,6 @@ async function runFuturesSignalScan(env, options = {}) {
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count).slice(0, 8)
   };
-  console.log("BTC_REGIME_SCAN", JSON.stringify({
-    timestamp: new Date().toISOString(), version: CONFIG.VERSION,
-    btcDirection: bitcoinMarketRegime.direction, btcRegime: bitcoinMarketRegime.regime,
-    btcReason: bitcoinMarketRegime.reason, btcMetrics: bitcoinMarketRegime.metrics,
-    confirmation: bitcoinMarketRegime.confirmation, signalsCount: generatedSignals.length,
-    signalsByRegime: generatedSignals.map(signal => ({
-      symbol: signal.symbol, side: signal.side, score: signal.score,
-      btcRegimeLabel: signal.btcRegimeLabel, effectiveThresholds: signal.effectiveThresholds
-    }))
-  }));
   console.log("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
   const report =
     "📈 CRYPTO PUMP HUNTER — KRAKEN FUTURES 3.8.2\n" +
@@ -3871,7 +3638,7 @@ async function mapLimit(items, limit, callback, shouldContinue = () => true) {
 
 // Named exports expose pure strategy functions to Node's offline test suite.
 // They do not add HTTP routes or enable order execution.
-export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, calculateAdx, determineBitcoinFourHourRegime, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels, sendAndArchiveFuturesSignal, publishSignalToArchive, deliverFuturesSignalAlerts };
+export { FUTURES_CONFIG, mapLimit, passesLongDistanceThreshold, FUTURES_PROVIDER_ORDER, isKrakenPerpetualTicker, normalizeKrakenFuturesUnderlying, getKrakenFuturesUniverse, getKrakenFuturesCandles, calculateAtr, evaluateFuturesEntryFilters, analyzeFuturesSymbol, getFuturesUniverse, getFuturesCandles, tradeResultR, priceChangePercent, tradeOutcomePercent, targetReached, stopReached, getNewClosedFuturesCandles, ensureTradeTrackingCheckpoint, isValidFuturesSignalLevels, sendAndArchiveFuturesSignal, publishSignalToArchive, deliverFuturesSignalAlerts };
 // Experimental futures signal engine validation branch; Telegram and UI handlers remain from main.
 
 // Re-run the pinned comparison harness after switching to the current TP lifecycle.
