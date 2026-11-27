@@ -193,7 +193,24 @@ function summarize(trades) {
   };
 }
 
-async function backtestSymbol(ticker, fromMs, toMs) {
+function btcTrendAt(signalCloseTime, btcOneHour, btcFourHour, cache) {
+  if (cache.has(signalCloseTime)) return cache.get(signalCloseTime);
+  const closed1h = btcOneHour.filter(c => c.time + HOUR <= signalCloseTime);
+  const closed4h = btcFourHour.filter(c => c.time + FOUR_HOURS <= signalCloseTime);
+  if (closed1h.length < FUTURES_CONFIG.MIN_CANDLES || closed4h.length < FUTURES_CONFIG.MIN_CANDLES) {
+    cache.set(signalCloseTime, null);
+    return null;
+  }
+  const diagnostic = analyzeFuturesSymbol(
+    { symbol: "PF_XBTUSD", last: closed1h.at(-1).close, quoteVolume: 1e12, priceChangePercent: 0, premium: { lastFundingRate: null } },
+    closed1h, closed4h, []
+  );
+  const trend = diagnostic?.fourHourTrend || null;
+  cache.set(signalCloseTime, trend);
+  return trend;
+}
+
+async function backtestSymbol(ticker, fromMs, toMs, btcOneHour, btcFourHour, btcTrendCache) {
   const [oneHour,fourHour,fifteenMinute] = await Promise.all([
     fetchHistoricalCandles(ticker.symbol,"1h",fromMs,toMs,HOUR),
     fetchHistoricalCandles(ticker.symbol,"4h",fromMs,toMs,FOUR_HOURS),
@@ -204,7 +221,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   }
   const strategies = {
     baseline: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {} },
-    current: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {} },
+    current: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {}, neutralLongCandidates: 0, neutralLongAccepted: 0, neutralLongRejected: 0, neutralLongTrades: [] },
     currentMargin30: { trades: [] }
   };
   const nextAvailable = { baseline: 60, current: 60 };
@@ -222,11 +239,20 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       symbol:ticker.symbol,last:nextBar.open,quoteVolume:Number(ticker.volumeQuote)||0,
       priceChangePercent:historicalChange(oneHour,i),premium:{lastFundingRate:null}
     };
+    const btcFourHourTrend = btcTrendAt(signalCloseTime, btcOneHour, btcFourHour, btcTrendCache);
     for (const mode of ["baseline","current"]) {
       const state=strategies[mode];
-      const candidate = mode === "baseline"
-        ? analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m,{skipEntryFilters:true})
-        : analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m);
+      const options = {
+        requireBtcFourHourAlignment: true,
+        btcFourHourTrend,
+        ...(mode === "baseline" ? { disableLongNeutralRecovery: true } : {})
+      };
+      const candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m,options);
+      if (mode === "current" && candidate?.side === "LONG" && candidate.fourHourTrend === "NEUTRAL") {
+        state.neutralLongCandidates++;
+        if (candidate.eligible || candidate.experimentalEligible) state.neutralLongAccepted++;
+        else state.neutralLongRejected++;
+      }
       if (!candidate || (!candidate.eligible && !candidate.experimentalEligible)) {
         if (mode === "current" && candidate?.rejected &&
             /قیمت لحظه‌ای|ورود دیرهنگام|حرکت تأییدی/.test(candidate.rejected)) {
@@ -238,7 +264,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       // Count every hourly signal opportunity before applying trade-overlap rules.
       // This makes baseline/current signal frequency directly comparable at identical timestamps.
       state.signals++;
-      if (candidate.eligible) state.valid++; else state.risky++;
+      if (candidate.riskLevel === "HIGH_RISK") state.risky++; else state.valid++;
       if (i < nextAvailable[mode]) continue;
       const direction=candidate.side==="LONG"?1:-1;
       const entry = candidate.entry * (1 + direction * SLIPPAGE_PER_SIDE);
@@ -251,6 +277,7 @@ async function backtestSymbol(ticker, fromMs, toMs) {
       trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
       trade.entryModel=mode === "baseline" ? "last_1h_close" : "next_1h_open";
       state.trades.push(trade);
+      if (mode === "current" && candidate.side === "LONG" && candidate.fourHourTrend === "NEUTRAL") state.neutralLongTrades.push(trade);
       if (mode === "current") {
         const margin30Trade=simulateMargin30Trade({side:candidate.side,entry,stop:candidate.stop,candles:tradeCandles,startIndex:0,
           fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS,marginUsd:10,leverage:10,targetMarginPct:30});
@@ -264,9 +291,9 @@ async function backtestSymbol(ticker, fromMs, toMs) {
   return {
     symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,candles15m:fifteenMinute.length,
     baseline:{signals:strategies.baseline.signals,valid:strategies.baseline.valid,risky:strategies.baseline.risky,metrics:summarize(strategies.baseline.trades)},
-    current:{signals:strategies.current.signals,valid:strategies.current.valid,risky:strategies.current.risky,rejected:strategies.current.rejected,rejectReasons:strategies.current.rejectReasons,metrics:summarize(strategies.current.trades)},
+    current:{signals:strategies.current.signals,valid:strategies.current.valid,risky:strategies.current.risky,rejected:strategies.current.rejected,rejectReasons:strategies.current.rejectReasons,metrics:summarize(strategies.current.trades),neutralLong:{candidates:strategies.current.neutralLongCandidates,accepted:strategies.current.neutralLongAccepted,rejected:strategies.current.neutralLongRejected,executedTrades:strategies.current.neutralLongTrades.length,metrics:summarize(strategies.current.neutralLongTrades)}},
     currentMargin30:{metrics:summarizeMargin30(strategies.currentMargin30.trades)},
-    trades:{baseline:strategies.baseline.trades,current:strategies.current.trades,currentMargin30:strategies.currentMargin30.trades}
+    trades:{baseline:strategies.baseline.trades,current:strategies.current.trades,currentNeutralLong:strategies.current.neutralLongTrades,currentMargin30:strategies.currentMargin30.trades}
   };
 }
 async function main() {
@@ -279,14 +306,25 @@ async function main() {
     .filter(t => !process.env.BACKTEST_SYMBOL || String(t.symbol) === String(process.env.BACKTEST_SYMBOL))
     .sort((a,b)=>Number(b.volumeQuote)-Number(a.volumeQuote)).slice(0,SYMBOL_LIMIT);
   if (!universe.length) throw new Error("No eligible Kraken perpetual contracts found; XAUT ticker diagnostics: " + JSON.stringify(tickerData.tickers.filter(t=>String(t.symbol||"").includes("XAUT")).map(t=>({symbol:t.symbol,tag:t.tag,suspended:t.suspended,volumeQuote:t.volumeQuote,last:t.last,keys:Object.keys(t)}))));
+  const btcTicker = tickerData.tickers.find(t => t.symbol === "PF_XBTUSD") || tickerData.tickers.find(t => t.symbol === "PI_XBTUSD");
+  if (!btcTicker) throw new Error("BTC USD perpetual ticker is unavailable; mandatory historical BTC 4H alignment cannot be tested.");
+  const [btcOneHour, btcFourHour] = await Promise.all([
+    fetchHistoricalCandles(btcTicker.symbol,"1h",fromMs,endMs,HOUR),
+    fetchHistoricalCandles(btcTicker.symbol,"4h",fromMs,endMs,FOUR_HOURS)
+  ]);
+  if (btcOneHour.length < FUTURES_CONFIG.MIN_CANDLES || btcFourHour.length < FUTURES_CONFIG.MIN_CANDLES) {
+    throw new Error("Insufficient BTC historical candles for mandatory 4H alignment.");
+  }
+  const btcTrendCache = new Map();
   const results=[];
   for (const ticker of universe) {
-    try { results.push(await backtestSymbol(ticker,fromMs,endMs)); }
+    try { results.push(await backtestSymbol(ticker,fromMs,endMs,btcOneHour,btcFourHour,btcTrendCache)); }
     catch(error) { results.push({symbol:ticker.symbol,error:error.message,baseline:{signals:0,metrics:summarize([])},current:{signals:0,metrics:summarize([])}}); }
   }
   const allBaseline=results.flatMap(r=>r.trades?.baseline||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const allCurrent=results.flatMap(r=>r.trades?.current||[]).sort((a,b)=>a.entryTime-b.entryTime);
   const allMargin30=results.flatMap(r=>r.trades?.currentMargin30||[]);
+  const allNeutralLong=results.flatMap(r=>r.trades?.currentNeutralLong||[]);
   const sum=(mode,key)=>results.reduce((n,r)=>n+Number(r[mode]?.[key]||0),0);
   const report={
     generatedAt:new Date().toISOString(),venue:"Kraken Derivatives public historical candles",
@@ -295,10 +333,11 @@ async function main() {
       slippagePerSidePct:SLIPPAGE_PER_SIDE*100,maxHoldHours:MAX_HOLD_HOURS,targetWeightsPct:[40,35,25],
       sameCandleStopTargetRule:"stop first (conservative)",funding:"excluded",
       baselineEntry:"signal candle close",currentEntry:"next 1h candle open, adverse slippage applied",
-      currentFilters:"0.35% live/reference drift; 1.25 ATR max distance to 1h EMA20; 1.25 ATR max 15m reclaim extension; 15m momentum/pullback advisory only",
+      comparison:"Same entry filters, next-1h-open execution, fees, slippage, and historical BTC 4H alignment in both modes; baseline disables only the neutral-4H LONG exception",
+      currentFilters:"Mandatory historical BTC 4H directional alignment; 15m momentum and pullback required on neutral-4H LONG recovery; standard/high-risk volume and entry-distance filters",
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
     baseline:{signals:sum("baseline","signals"),valid:sum("baseline","valid"),risky:sum("baseline","risky"),metrics:summarize(allBaseline)},
-    current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent)},
+    current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent),neutralLong:{candidates:sum("current","neutralLongCandidates"),accepted:sum("current","neutralLongAccepted"),rejected:sum("current","neutralLongRejected"),executedTrades:allNeutralLong.length,metrics:summarize(allNeutralLong)}},
     currentMargin30:summarizeMargin30(allMargin30),
     signalCountChangePct:sum("baseline","signals")?((sum("current","signals")/sum("baseline","signals"))-1)*100:0,
     symbols:results.map(({trades,...r})=>r),trades:{baseline:allBaseline,current:allCurrent}
@@ -321,6 +360,12 @@ async function main() {
     "| Net R | "+report.baseline.metrics.netR.toFixed(2)+"R | "+report.current.metrics.netR.toFixed(2)+"R |",
     "| Max drawdown | "+report.baseline.metrics.maxDrawdownR.toFixed(2)+"R | "+report.current.metrics.maxDrawdownR.toFixed(2)+"R |",
     "| Current filter rejections | — | "+report.current.rejected+" |",
+    "| Neutral-4H LONG candidates | — | "+report.current.neutralLong.candidates+" |",
+    "| Neutral-4H LONG accepted | — | "+report.current.neutralLong.accepted+" |",
+    "| Neutral-4H LONG rejected | — | "+report.current.neutralLong.rejected+" |",
+    "| Neutral-4H LONG executed trades | — | "+report.current.neutralLong.executedTrades+" |",
+    "| Neutral-4H LONG win rate | — | "+report.current.neutralLong.metrics.winRatePct.toFixed(2)+"% |",
+    "| Neutral-4H LONG net R | — | "+report.current.neutralLong.metrics.netR.toFixed(2)+"R |",
     "| Signal count change | — | "+report.signalCountChangePct.toFixed(2)+"% |","",
     "Assumptions: 0.05% fee and 0.03% slippage per side; 72h maximum hold; 40/35/25 partial exits; stop-first same-candle ambiguity.",
     "Funding excluded. Current universe is selected using present-day volume and therefore has survivorship/universe bias. This is a comparative simulation, not a guarantee of live fills.","",
