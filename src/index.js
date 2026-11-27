@@ -1175,7 +1175,8 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/menu - باز کردن منوی اصلی\n" +
         "/futures - دریافت سیگنال‌های فیوچرز\n" +
         "/diagfutures - گزارش عیب‌یابی فقط‌خواندنی (مالک)\n" +
-        "/confirm_stop <ID> <PRICE> - تأیید حد ضرری که قبلاً در صرافی تغییر داده‌اید\n" +
+        "/open_trades - نمایش رکوردهای معاملات باز برای همگام‌سازی حد ضرر (مالک)\n" +
+        "/confirm_stop <ID> <PRICE> - همگام‌سازی حد ضرری که قبلاً در صرافی تغییر داده‌اید\n" +
         "/close_trade <ID> - بستن رکورد پیگیری داخلی (مالک؛ پوزیشن صرافی را نمی‌بندد)\n" +
         "/scan - اجرای اسکن دستی بازار اسپات\n" +
         "/status - بررسی وضعیت ربات\n" +
@@ -1183,6 +1184,39 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "اسکن‌ها فقط با درخواست دستی شما اجرا می‌شوند.",
         menuForChat(env, chatId)
       );
+      return;
+    }
+
+    if (command === "/open_trades") {
+      if (!isOwner(chatId, env)) {
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
+        return;
+      }
+      const openTrades = await getOpenFuturesTrades(env);
+      if (!openTrades.length) {
+        await sendMessage(env, chatId, "در حال حاضر هیچ رکورد معاملهٔ بازی در پیگیری داخلی ربات وجود ندارد.");
+        return;
+      }
+      const lines = [
+        "📋 رکوردهای معاملات باز در پیگیری داخلی",
+        "این اطلاعات از ربات است؛ وضعیت و حد ضرر واقعی را در صرافی بررسی کنید.",
+        ""
+      ];
+      for (const trade of openTrades.slice(0, 20)) {
+        const initialStop = Number(trade.initialStop ?? trade.stop);
+        const trackedStop = Number(trade.currentStop ?? initialStop);
+        lines.push(
+          "ID: " + String(trade.id || "—"),
+          formatFuturesSymbol(trade.symbol) + " | " + String(trade.side || "—"),
+          "Entry: " + formatSignalPrice(trade.actualEntry || trade.plannedEntry || trade.entry),
+          "Initial SL: " + formatSignalPrice(initialStop) + " | Tracked SL: " + formatSignalPrice(trackedStop),
+          "Last tracked price: " + formatSignalPrice(trade.lastPrice),
+          "Internal BE flag: " + (trade.breakEvenActivated === true ? "YES" : "NO"),
+          ""
+        );
+      }
+      lines.push("اگر حد ضرر واقعی صرافی با Tracked SL فرق دارد، ابتدا وضعیت صرافی را بررسی کنید و سپس با /confirm_stop <ID> <PRICE> همگام‌سازی کنید.");
+      await sendMessage(env, chatId, lines.join("\\n"));
       return;
     }
 
