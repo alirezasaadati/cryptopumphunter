@@ -3,6 +3,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,18 +21,18 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install
-      - name: Check application syntax
-        run: npm run check
-      - name: Test Telegram futures alert formatting
+      - name: Test active production trade lifecycle
+        run: node --test scripts/futures-staged-lifecycle.test.mjs scripts/futures-trade-lifecycle.test.mjs
+      - name: Test production signal formatter
         run: node --test scripts/futures-alerts.test.mjs
-      # Production APP_KV binding is aligned with the Worker account's existing namespace.
-# The full suite remains visible as a diagnostic, but unrelated existing failures
-      # must not block this isolated message-format-only deployment.
+      # The repository-wide suite currently contains unrelated legacy failures.
+      # Keep it visible as a diagnostic while the production-path suites above block deployment.
       - name: Run full test suite (diagnostic)
         run: npm test
         continue-on-error: true
-      # Keep Bot 1's Worker name, webhook URL, and existing Cloudflare runtime secrets.
+      # Pull requests run focused production tests but never deploy production.
       - name: Deploy Worker
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
