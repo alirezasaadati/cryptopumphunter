@@ -1521,16 +1521,6 @@ const FUTURES_CONFIG = {
   HIGH_RISK_SHORT_RSI_MIN: 22, HIGH_RISK_SHORT_RSI_MAX: 65, HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.75, HIGH_RISK_LONG_MAX_ENTRY_DRIFT_PCT: 0.90,
   HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 4.0, HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 4.0
 };
-function calculateFourHourTrend(candles4h) {
-  if (!Array.isArray(candles4h) || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) return null;
-  const closes = candles4h.map(c => c.close), lastClose = closes[closes.length - 1];
-  const fast = ema(closes, 20), prevFast = ema(closes.slice(0, -1), 20), slow = ema(closes, 50);
-  if (![fast, prevFast, slow, lastClose].every(Number.isFinite)) return null;
-  if (fast > slow && lastClose > fast && fast >= prevFast) return "BULLISH";
-  if (fast < slow && lastClose < fast && fast <= prevFast) return "BEARISH";
-  return "NEUTRAL";
-}
-
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
 
 async function krakenFuturesJson(path, label, baseUrl = FUTURES_CONFIG.BASE_URL) {
@@ -2134,7 +2124,6 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     eligible: eligible || highRiskEligible,
     highRiskEligible,
     fourHourTrend,
-    btcFourHourTrend: options.btcFourHourTrend || null,
     momentumConfirmed: Boolean(entryFilters.momentumConfirmed),
     pullbackConfirmed: Boolean(entryFilters.pullbackConfirmed),
     baseScore: score,
