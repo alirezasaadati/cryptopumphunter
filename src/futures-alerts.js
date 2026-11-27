@@ -134,10 +134,9 @@ function formatSignalPrice(value) {
   const negative = expanded.startsWith("-");
   const unsigned = negative ? expanded.slice(1) : expanded;
   const [wholePart, fractionPart = ""] = unsigned.split(".");
-  const truncated = decimals === 0 ? "" : fractionPart.slice(0, decimals);
-  const whole = wholePart.replace(/\\B(?=(\\d{3})+(?!\\d))/g, ",");
-  const fraction = truncated.replace(/0+$/, "");
-  return (negative ? "-" : "") + whole + (fraction ? "." + fraction : "");
+  const truncated = decimals === 0 ? "" : fractionPart.slice(0, decimals).padEnd(decimals, "0");
+  const whole = wholePart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return (negative ? "-" : "") + whole + (decimals ? "." + truncated : "");
 }
 
 export { ALERT_TTL_SECONDS };
