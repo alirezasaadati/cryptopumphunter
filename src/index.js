@@ -1511,14 +1511,14 @@ const FUTURES_CONFIG = {
   MIN_QUOTE_VOLUME: 5_000_000, HIGH_RISK_MIN_QUOTE_VOLUME: 2_500_000,
   KLINE_LIMIT: 120, MIN_CANDLES: 60, MIN_SCORE: 70,
   INTERVAL: "1h", CONFIRM_INTERVAL: "4h", ENTRY_CONFIRM_INTERVAL: "15m",
-  SIGNAL_TTL_MINUTES: 60, MAX_ENTRY_DRIFT_PCT: 0.45, LONG_MAX_ENTRY_DRIFT_PCT: 0.55,
+  SIGNAL_TTL_MINUTES: 60, MAX_ENTRY_DRIFT_PCT: 0.45, LONG_MAX_ENTRY_DRIFT_PCT: 0.70,
   MAX_ENTRY_EMA_DISTANCE_ATR: 2.0, MAX_PULLBACK_DISTANCE_ATR: 0.45, LONG_MAX_PULLBACK_DISTANCE_ATR: 0.60,
   MAX_RECLAIM_EXTENSION_ATR: 1.5, HIGH_RISK_MIN_SCORE: 62, LONG_MIN_SCORE: 67, HIGH_RISK_LONG_MIN_SCORE: 60,
   HIGH_RISK_MIN_VOLUME_RATIO: 0.65, HIGH_RISK_LONG_MIN_VOLUME_RATIO: 0.60, VOLUME_PRIORITY_TIER_1: 0.8,
   VOLUME_PRIORITY_TIER_2: 1.3, VOLUME_PRIORITY_BONUS_TIER_1: 5,
   VOLUME_PRIORITY_BONUS_TIER_2: 10, CONFIRMATION_PRIORITY_BONUS_ONE: 7,
-  CONFIRMATION_PRIORITY_BONUS_BOTH: 15, HIGH_RISK_LONG_RSI_MIN: 43, HIGH_RISK_LONG_RSI_MAX: 70,
-  HIGH_RISK_SHORT_RSI_MIN: 30, HIGH_RISK_SHORT_RSI_MAX: 57, HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.6, HIGH_RISK_LONG_MAX_ENTRY_DRIFT_PCT: 0.70,
+  CONFIRMATION_PRIORITY_BONUS_BOTH: 15, HIGH_RISK_LONG_RSI_MIN: 43, HIGH_RISK_LONG_RSI_MAX: 75,
+  HIGH_RISK_SHORT_RSI_MIN: 30, HIGH_RISK_SHORT_RSI_MAX: 57, HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.6, HIGH_RISK_LONG_MAX_ENTRY_DRIFT_PCT: 0.90,
   HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 2.4, HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 1.8
 };
 function calculateFourHourTrend(candles4h) {
@@ -1974,12 +1974,13 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const e20_4h = ema(closes4h, 20), e50_4h = ema(closes4h, 50), rsiValue = rsi(closes1h, 14), atr = calculateAtr(candles1h, 14);
   if ([e20, prevE20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) throw new Error("Indicator calculation is invalid.");
   const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume)), volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
-  const up1h = e20 > e50 && e20 > prevE20 && referencePrice > e20 && last.close >= prev.low;
+  const ema20SlopePct = ((e20 - prevE20) / prevE20) * 100;
+  const up1h = e20 > e50 && ema20SlopePct > 0.02 && referencePrice > e20 && last.close >= prev.low;
   const down1h = e20 < e50 && e20 < prevE20 && referencePrice < e20 && last.close <= prev.high;
   const up4h = e20_4h > e50_4h && candles4h.at(-1).close > e20_4h, down4h = e20_4h < e50_4h && candles4h.at(-1).close < e20_4h;
   const fourHourTrend = up4h ? "BULLISH" : down4h ? "BEARISH" : "NEUTRAL";
   let side = null, score = 0; const reasons = [];
-  const strictLong = up1h && rsiValue >= 46 && rsiValue <= 72, strictShort = down1h && rsiValue >= 34 && rsiValue <= 52;
+  const strictLong = up1h && rsiValue >= 46 && rsiValue <= 75, strictShort = down1h && rsiValue >= 34 && rsiValue <= 52;
   const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
   const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
