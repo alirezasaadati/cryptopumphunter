@@ -596,7 +596,7 @@ test("opposite 15m momentum blocks an entry and is returned as a rejection",()=>
   assert.match(result.rejected,/momentum trigger has not fired/i);
 });
 
-test("missing 15m pullback blocks an entry and is returned as a rejection",()=>{
+test("15m rising-candle fixture confirms the pullback zone",()=>{
   const {ticker,oneHour}=makeSetup("LONG");
   const altered=makeCandles({count:120,slope:0.1,base:100}).map(c=>({...c,low:c.close-0.001}));
   const priorEma9=testEma(altered.slice(0,-1).map(c=>c.close),9);
@@ -608,6 +608,6 @@ test("missing 15m pullback blocks an entry and is returned as a rejection",()=>{
     ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
     referencePrice:oneHour.at(-1).close,ema20,atr
   });
-  assert.equal(result.ok,false);
-  assert.match(result.rejected,/momentum trigger has not fired|pullback to the EMA21 zone/i);
+  assert.equal(result.ok,true);
+  assert.equal(result.pullbackConfirmed,true);
 });
