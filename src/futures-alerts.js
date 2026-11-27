@@ -103,10 +103,41 @@ function escapeTelegramHtml(value) {
   return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function expandPriceExponent(value) {
+  const text = String(value);
+  if (!/[eE]/.test(text)) return text;
+  const [coefficient, exponentText] = text.toLowerCase().split("e");
+  const exponent = Number(exponentText);
+  const negative = coefficient.startsWith("-");
+  const unsigned = negative ? coefficient.slice(1) : coefficient;
+  const [whole, fraction = ""] = unsigned.split(".");
+  const digits = whole + fraction;
+  const decimalPosition = whole.length + exponent;
+  let expanded;
+  if (decimalPosition <= 0) {
+    expanded = "0." + "0".repeat(-decimalPosition) + digits;
+  } else if (decimalPosition >= digits.length) {
+    expanded = digits + "0".repeat(decimalPosition - digits.length);
+  } else {
+    expanded = digits.slice(0, decimalPosition) + "." + digits.slice(decimalPosition);
+  }
+  return (negative ? "-" : "") + expanded;
+}
+
 function formatSignalPrice(value) {
   const price = Number(value);
   if (!Number.isFinite(price)) return "—";
-  return price.toLocaleString("en-US", { useGrouping: true, minimumFractionDigits: price >= 1 ? 2 : 0, maximumFractionDigits: 8 });
+
+  // Truncate the display string only; never round or alter the underlying price.
+  const decimals = price > 1000 ? 0 : price >= 1 ? 2 : price >= 0.01 ? 4 : 5;
+  const expanded = expandPriceExponent(value);
+  const negative = expanded.startsWith("-");
+  const unsigned = negative ? expanded.slice(1) : expanded;
+  const [wholePart, fractionPart = ""] = unsigned.split(".");
+  const truncated = decimals === 0 ? "" : fractionPart.slice(0, decimals);
+  const whole = wholePart.replace(/\\B(?=(\\d{3})+(?!\\d))/g, ",");
+  const fraction = truncated.replace(/0+$/, "");
+  return (negative ? "-" : "") + whole + (fraction ? "." + fraction : "");
 }
 
 export { ALERT_TTL_SECONDS };
