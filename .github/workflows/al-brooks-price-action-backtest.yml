@@ -1,0 +1,31 @@
+name: Al Brooks inspired price action backtest
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/al-brooks-price-action.js"
+      - "scripts/al-brooks-price-action-backtest.mjs"
+      - "scripts/al-brooks-price-action.test.mjs"
+      - ".github/workflows/al-brooks-price-action-backtest.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run unit tests
+        run: node --test scripts/al-brooks-price-action.test.mjs
+      - name: Run 90d and 180d Kraken Futures backtests
+        run: node scripts/al-brooks-price-action-backtest.mjs
+      - name: Upload research report
+        uses: actions/upload-artifact@v4
+        with:
+          name: al-brooks-price-action-backtest
+          path: artifacts/al-brooks-price-action-backtest.json
+          if-no-files-found: error
