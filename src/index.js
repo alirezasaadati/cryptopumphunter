@@ -1175,6 +1175,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/menu - باز کردن منوی اصلی\n" +
         "/futures - دریافت سیگنال‌های فیوچرز\n" +
         "/diagfutures - گزارش عیب‌یابی فقط‌خواندنی (مالک)\n" +
+        "/open_trades - نمایش معاملات باز و حد ضررهای ثبت‌شده در ربات (مالک؛ فقط‌خواندنی)\n" +
         "/close_trade <ID> - بستن رکورد پیگیری داخلی (مالک؛ پوزیشن صرافی را نمی‌بندد)\n" +
         "/set_stop <ID> <PRICE> - ثبت حد ضررِ از قبل تغییر‌یافته در صرافی (مالک؛ فقط همگام‌سازی داخلی)\n" +
         "/scan - اجرای اسکن دستی بازار اسپات\n" +
@@ -1183,6 +1184,44 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "اسکن‌ها فقط با درخواست دستی شما اجرا می‌شوند.",
         menuForChat(env, chatId)
       );
+      return;
+    }
+
+    if (command === "/open_trades") {
+      if (!isOwner(chatId, env)) {
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
+        return;
+      }
+      const trades = await getOpenFuturesTrades(env);
+      if (!trades.length) {
+        await sendMessage(env, chatId, "در حال حاضر هیچ رکورد معاملهٔ بازی برای پیگیری داخلی وجود ندارد.");
+        return;
+      }
+      const lines = [
+        "📊 معاملات باز در پیگیری داخلی ربات",
+        "⚠️ این اطلاعات وضعیت سفارش صرافی را نشان نمی‌دهد؛ حد ضرر هر معامله را با صرافی تطبیق بده.",
+        ""
+      ];
+      for (const trade of trades.slice(0, 30)) {
+        const beState = trade.breakEvenActivated
+          ? "در رکورد ربات تأیید شده"
+          : trade.breakEvenSuggested
+            ? "پیشنهاد شده، هنوز تأیید نشده"
+            : "هنوز پیشنهاد نشده";
+        lines.push(
+          "شناسه: " + trade.id,
+          formatFuturesSymbol(trade.symbol) + " | " + trade.side,
+          "ورود ثبت‌شده: " + formatSignalPrice(trade.actualEntry || trade.plannedEntry),
+          "حد ضرر اولیه: " + formatSignalPrice(trade.initialStop),
+          "حد ضرر فعلی در ربات: " + formatSignalPrice(trade.currentStop),
+          "آخرین قیمت پایش: " + formatSignalPrice(trade.lastPrice),
+          "وضعیت سربه‌سر: " + beState,
+          trade.suggestedStopPrice ? "حد ضرر پیشنهادی: " + formatSignalPrice(trade.suggestedStopPrice) : "",
+          "برای ثبت حد ضرر واقعی پس از تغییر دستی در صرافی: /set_stop " + trade.id + " PRICE",
+          "━━━━━━━━━━━━━━━━━━"
+        );
+      }
+      await sendLongMessage(env, chatId, lines.filter(Boolean).join("\n"));
       return;
     }
 
