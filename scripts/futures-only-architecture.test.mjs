@@ -23,7 +23,8 @@ test("the live Futures scan is routed through the Kraken Futures analyzer", () =
   assert.ok(source.includes("return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, analysisOptions)"));
   assert.ok(source.includes("const analysisOptions = {"));
   assert.ok(source.includes("const analysisOptions = { ...options, btcFourHourTrend, requireBtcFourHourAlignment: true };"));
-  assert.doesNotMatch(source, /requireBtcFourHourAlignment|btcFourHourTrend|calculateFourHourTrend/);
+  assert.ok(source.includes("requireBtcFourHourAlignment: true"));
+  assert.ok(source.includes("function calculateFourHourTrend"));
   assert.ok(source.includes("skipEntryFilters: true"));
   assert.ok(source.includes("preflight?.eligible !== true && preflight?.highRiskEligible !== true"));
   assert.doesNotMatch(source, /analyzePriceAction|TREND_SHORT|RALLY_FADE/);
