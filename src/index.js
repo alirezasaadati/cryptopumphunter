@@ -1986,7 +1986,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const strictSetup = strictLong || strictShort;
   if (strictLong || (!strictSetup && relaxedLong)) { side = "LONG"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "1H uptrend with positive EMA20 slope" : "High-risk 1H bullish setup"); score += rsiValue >= 52 && rsiValue <= 62 ? 15 : 8; }
   else if (strictShort || (!strictSetup && relaxedShort)) { side = "SHORT"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "1H downtrend with negative EMA20 slope" : "High-risk 1H bearish setup"); score += rsiValue >= 38 && rsiValue <= 48 ? 15 : 8; }
-  else return { symbol: ticker.symbol, fourHourTrend, rejected: "The 1H trend and optimal RSI zone were not confirmed together", entryDiagnostics: { stage: "trend_rsi", rsi: rsiValue, up1h, down1h, fourHourTrend } };
+  else return { symbol: ticker.symbol, fourHourTrend, rejected: "The 1H trend and optimal RSI zone were not confirmed together", entryDiagnostics: { stage: "trend_rsi", rsi: rsiValue, up1h, down1h, up4h, down4h, fourHourTrend } };
   const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
   // The 1H symbol trend must align with Bitcoin's 4H trend for either side.
   // The symbol's own 4H trend is contextual only: it adjusts score but never blocks.
@@ -2031,7 +2031,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     }
   }
   else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true });
-  if (!entryFilters.ok) return { symbol: ticker.symbol, fourHourTrend, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
+  if (!entryFilters.ok) return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, score: Math.max(0, Math.min(100, Math.round(score))), fourHourScoreAdjustment: symbolFourHourAdjustment, rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
   if (!standardEntryPassed && quoteVolume < FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "24H volume is below the safety threshold" };
   const minimumHighRiskVolumeRatio = side === "LONG" ? FUTURES_CONFIG.HIGH_RISK_LONG_MIN_VOLUME_RATIO : FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
   if (!standardEntryPassed && volumeRatio < minimumHighRiskVolumeRatio) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The latest candle's relative volume is insufficient" };
