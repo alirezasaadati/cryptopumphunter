@@ -1,3 +1,4 @@
+import { isAllowedSignalDirection, filterAllowedSignals } from "./signal-direction-policy.js";
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, displayEntryPrice, formatSignalDisplayPrice, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
@@ -387,6 +388,7 @@ async function sendMessage(env, chatId, text, replyMarkup = null, parseMode = nu
 }
 
 async function sendSignalCardOrText(env, chatId, signal, messageText, replyMarkup, parseMode) {
+  if (signal && !isAllowedSignalDirection(signal)) throw new Error("LONG signals are disabled by the SHORT-only policy.");
   // Signal alerts are intentionally delivered as text for readability and easy copying.
   return sendMessage(env, chatId, messageText, replyMarkup, parseMode);
 }
@@ -2192,6 +2194,7 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
 }
 
 async function registerPendingFuturesSignals(env, candidates) {
+  candidates = filterAllowedSignals(candidates);
   if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) throw new Error("Durable signal storage is required.");
   const stub = env.SIGNAL_DELIVERY.get(env.SIGNAL_DELIVERY.idFromName("global:active-futures-signals"));
   const response = await stub.fetch("https://signal-delivery.internal/signals/register", {
@@ -2240,6 +2243,7 @@ async function signalDeliveryRequest(env, stub, path, body) {
 }
 
 async function publishSignalToArchive(env, signal, messageText, parseMode = "HTML", options = {}) {
+  if (!isAllowedSignalDirection(signal)) throw new Error("LONG signals are disabled; archive publication blocked.");
   const channelId = archiveChannelId(env);
   if (!channelId) throw new Error("SIGNAL_ARCHIVE_CHANNEL_ID is missing or invalid; signal was not published.");
   if (!env.SIGNAL_DELIVERY || !getSignalDeliverySecret(env)) throw new Error("Archive publishing requires SIGNAL_DELIVERY coordination.");
@@ -2284,6 +2288,7 @@ async function publishSignalToArchive(env, signal, messageText, parseMode = "HTM
 }
 
 async function sendAndArchiveFuturesSignal(env, chatId, signal, messageText, replyMarkup = null, parseMode = "HTML", options = {}) {
+  if (!isAllowedSignalDirection(signal)) throw new Error("LONG signals are disabled; signal delivery blocked.");
   if (!signal?.id || !signal?.symbol || !["LONG", "SHORT"].includes(signal?.side)) {
     throw new Error("Signal is missing a valid id, symbol, or direction.");
   }
@@ -3300,7 +3305,7 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const eligibleCandidates = analyzed
-    .filter(item => item?.eligible === true)
+    .filter(item => item?.eligible === true && isAllowedSignalDirection(item))
     // Preserve every standard candidate ahead of experimental high-risk candidates.
     .sort((a, b) =>
       Number(a.riskLevel === "HIGH_RISK") - Number(b.riskLevel === "HIGH_RISK") ||
@@ -3484,6 +3489,7 @@ async function runFuturesSignalsForChat(env, chatId) {
 }
 
 async function deliverFuturesSignalAlerts(env, signals, excludeChatId = null) {
+  signals = filterAllowedSignals(signals);
   if (!Array.isArray(signals) || !signals.length) {
     return { newSignals: 0, recipients: 0, delivered: 0, failed: 0 };
   }
