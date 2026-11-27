@@ -159,7 +159,7 @@ function applyFileLogic(candidate,candles1h,candles4h,regime) {
 
 function estimatedMarginLossPct(entry,stop) {
   const riskPct=Math.abs(entry-stop)/entry;
-  const roundTripCostFraction=2*(FEE+SLIPPAGE);
+  const roundTripCostFraction=(FEE+SLIPPAGE)*(entry+stop)/entry;
   return (riskPct+roundTripCostFraction)*LEVERAGE*100;
 }
 function priceReturnMarginPct(side,entry,exit) {
@@ -258,7 +258,7 @@ function summarize(trades) {
 function simulatePortfolio(trades,initialCapital=100,marginPerTrade=10) {
   const events=[];
   for(const t of trades){events.push({time:t.signalCloseTime,type:"ENTRY",trade:t});if(t.status!=="OPEN_AT_BACKTEST_END")events.push({time:t.closedAtMs,type:"EXIT",trade:t});}
-  events.sort((a,b)=>a.time-b.time||(a.type==="EXIT"?-1:1));
+  events.sort((a,b)=>a.time-b.time||(a.type===b.type?0:a.type==="EXIT"?-1:1));
   let free=initialCapital,used=0,peak=initialCapital,maxDD=0,realized=0,accepted=0,skipped=0,maxConcurrent=0;
   const active=new Map();
   for(const e of events){const t=e.trade;if(e.type==="ENTRY"){if(free+1e-9<marginPerTrade){skipped++;continue;}free-=marginPerTrade;used+=marginPerTrade;active.set(t, t);accepted++;maxConcurrent=Math.max(maxConcurrent,active.size);}
