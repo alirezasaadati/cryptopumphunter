@@ -1,0 +1,27 @@
+name: Channel structure fixed 30 percent margin target backtest
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/channel-structure-fixed-target-backtest.mjs"
+      - ".github/workflows/channel-structure-fixed-target-backtest.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run fixed 30 percent margin target 90d and 180d backtests
+        run: node scripts/channel-structure-fixed-target-backtest.mjs
+      - name: Upload fixed target backtest report
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-structure-fixed-30pct-target
+          path: artifacts/channel-structure-backtest.json
+          if-no-files-found: error
