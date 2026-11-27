@@ -143,18 +143,11 @@ export function evaluateStagedTradeCandle(trade, candle, options = {}) {
   // Same conservative intrabar policy as the staged-exit backtest: active stop first.
   if (stopHit) return closeStop();
 
-  let currentStop = stop;
-  let breakEvenActivated = trade.breakEvenActivated === true;
-  const oneR = entry + dir * risk;
-  const reachedOneR = trade.side === "LONG" ? high >= oneR : low <= oneR;
-  if (!breakEvenActivated && risk > 0 && reachedOneR) {
-    const feeBuffer = entry * 0.0012;
-    const beStop = entry + dir * feeBuffer;
-    if ((dir === 1 && beStop > currentStop) || (dir === -1 && beStop < currentStop)) {
-      currentStop = beStop;
-      breakEvenActivated = true;
-    }
-  }
+  // Never move the tracked stop automatically: the Worker cannot modify the
+  // exchange order. currentStop changes only after the owner confirms an
+  // already-completed manual stop update with /confirm_stop.
+  const currentStop = stop;
+  const breakEvenActivated = trade.breakEvenActivated === true;
 
   for (let i = 0; i < 3; i++) {
     const name = "TP" + (i + 1);
