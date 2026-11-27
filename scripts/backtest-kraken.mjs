@@ -245,7 +245,7 @@ async function backtestSymbol(ticker, fromMs, toMs, btcOneHour, btcFourHour, btc
       const options = {
         requireBtcFourHourAlignment: true,
         btcFourHourTrend,
-        ...(mode === "baseline" ? { disableLongNeutralRecovery: true } : {})
+        ...(mode === "baseline" ? { disableLongNeutralRecovery: true, legacyLongFilters: true } : {})
       };
       const candidate = analyzeFuturesSymbol(tickerAtSignal,oneHour.slice(0,i+1),closed4h,closed15m,options);
       if (mode === "current" && candidate?.side === "LONG" && candidate.fourHourTrend === "NEUTRAL") {
