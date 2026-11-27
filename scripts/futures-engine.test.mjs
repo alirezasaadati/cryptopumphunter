@@ -147,17 +147,14 @@ test("open trade older than four hours still blocks a fresh signal for the same 
   assert.equal(result.signals.length,0);
 });
 
-test("flat 1h and 4h conditions expose indicator-level rejection diagnostics",()=>{
-  const {ticker,oneHour}=makeSetup("LONG");
+test("flat 1h and 4h conditions are rejected by the 3.8.2 trend/RSI setup",()=>{
+  const {ticker}=makeSetup("LONG");
   const flat=Array.from({length:120},(_,i)=>({
     time:Date.now()-(120-i)*60*60*1000,open:100,high:100.1,low:99.9,close:100,volume:100
   }));
   const result=analyzeFuturesSymbol({...ticker,last:100},flat,flat,[]);
   assert.equal(result.eligible,undefined);
-  assert.equal(result.entryDiagnostics.stage,"trend_rsi");
-  assert.equal(result.entryDiagnostics.up1h,false);
-  assert.equal(result.entryDiagnostics.up4h,false);
-  assert.match(result.rejected,/trend/i);
+  assert.match(result.rejected,/شرایط منعطف آزمایشی روند و RSI/);
 });
 
 test("admin signal listing endpoint rejects requests without the Durable Object secret",async()=>{
