@@ -14,7 +14,7 @@ Telegram/Cloudflare Worker migration of the legacy Crypto Pump Hunter engine.
 - Entry is not recorded until the user confirms the signal and sends the actual fill price using `/fill SIGNAL_ID ACTUAL_PRICE`.
 - Open trades are stored separately from new scan results. A rejected signal on a later scan cannot alter an existing trade.
 - Open trades are checked by the scheduled futures scan using closed 5M candles; monitoring is periodic, not continuous or exchange-native.
-- Model exits scale one-third / one-third / remainder at 1.5R / 2.5R / 3.5R. The bot never moves an exchange stop automatically. After manually changing a stop in the exchange, the owner can synchronize the tracking record with `/confirm_stop <ID> <PRICE>`. This command only updates the bot's internal tracking; it does not place or modify exchange orders.
+- Model exits scale one-third / one-third / remainder at 1.5R / 2.5R / 3.5R. The bot never moves an exchange stop automatically. Until an owner confirms an exchange stop update, monitoring uses the original stop and ignores any unconfirmed historical internal stop adjustment. Use `/open_trades` to inspect records, then after verifying/changing the actual stop in the exchange, use `/confirm_stop <ID> <PRICE>` to synchronize it. These commands only update internal tracking; they do not place or modify exchange orders.
 - Reported R results are theoretical and exclude fees, funding, slippage and missed intrabar price touches.
 
 ## Futures signal strategy
