@@ -3317,27 +3317,33 @@ async function runFuturesSignalScan(env, options = {}) {
   let fifteenMinuteDataErrorCount = 0;
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
-      // Match the supplied 3.8.2 scan path: fetch all three timeframes for
-      // each symbol, then run the original analyzer once on the complete data.
-      const marketData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
-        FUTURES_CONFIG.INTERVAL,
-        FUTURES_CONFIG.CONFIRM_INTERVAL,
-        FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL
+      // 11.2.0 staged path: 1H/4H and BTC direction first; request 15m only
+      // for candidates that survive trend, score, volume, and risk preflight.
+      const baseData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
+        FUTURES_CONFIG.INTERVAL, FUTURES_CONFIG.CONFIRM_INTERVAL
       ]);
-      const oneHour = marketData.candles[FUTURES_CONFIG.INTERVAL];
-      const fourHour = marketData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
-      const fifteenMinute = marketData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
+      const oneHour = baseData.candles[FUTURES_CONFIG.INTERVAL];
+      const fourHour = baseData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
       if (!Array.isArray(oneHour) || !Array.isArray(fourHour)) {
-        throw new Error(
-          marketData.errors?.[FUTURES_CONFIG.INTERVAL] ||
-          marketData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
-          "Required Kraken 1h/4h candle data is missing."
-        );
+        throw new Error(baseData.errors?.[FUTURES_CONFIG.INTERVAL] ||
+          baseData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
+          "Required Kraken candle data is missing.");
       }
-      if (marketData.errors?.[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]) {
+
+      const preflight = analyzeFuturesSymbol(ticker, oneHour, fourHour, [], {
+        ...analysisOptions, skipEntryFilters: true
+      });
+      if (preflight?.eligible !== true && preflight?.highRiskEligible !== true) {
+        return preflight;
+      }
+
+      const entryData = await getKrakenFuturesCandlesViaCoordinator(
+        env, ticker.symbol, [FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]
+      );
+      const fifteenMinute = entryData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
+      if (entryData.errors?.[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]) {
         fifteenMinuteDataErrorCount++;
-        console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol,
-          marketData.errors[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]);
+        console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol, entryData.errors[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]);
       }
       return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, analysisOptions);
     } catch (error) {
