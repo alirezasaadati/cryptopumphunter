@@ -4,7 +4,7 @@ import { createSerialExecutor } from "./serial-executor.js";
 import { evaluateStagedTradeCandle } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
-  VERSION: "11.2.0",
+  VERSION: "11.2.1",
   PENDING_TTL: 604800,
   TRADE_MONITOR_STUCK_AFTER_MS: 2 * 60 * 60 * 1000
 };
@@ -1985,9 +1985,20 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   else if (strictShort || (!strictSetup && relaxedShort)) { side = "SHORT"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "1H downtrend with negative EMA20 slope" : "High-risk 1H bearish setup"); score += rsiValue >= 38 && rsiValue <= 48 ? 15 : 8; }
   else return { symbol: ticker.symbol, fourHourTrend, rejected: "The 1H trend and optimal RSI zone were not confirmed together", entryDiagnostics: { stage: "trend_rsi", rsi: rsiValue, up1h, down1h, fourHourTrend } };
   const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
-  if (fourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 4H trend is not aligned with the signal" };
+  // Experimental LONG-only recovery path: accept a NEUTRAL 4H structure only
+  // when the 4H EMA20 is at/above EMA50 and price is holding above EMA50.
+  // A BEARISH 4H trend remains a hard rejection; SHORT logic is unchanged.
+  const longNeutralRecovery = side === "LONG" && fourHourTrend === "NEUTRAL" &&
+    e20_4h >= e50_4h && closes4h.at(-1) >= e50_4h;
+  if (fourHourTrend !== expectedTrend && !longNeutralRecovery) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 4H trend is not aligned with the signal" };
   if (options.requireBtcFourHourAlignment === true && options.btcFourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, rejected: "Bitcoin's 4H trend is not aligned with the signal" };
-  score += 10; reasons.push("The symbol and Bitcoin 4H trends are fully aligned");
+  if (longNeutralRecovery) {
+    score += 4;
+    reasons.push("Experimental LONG recovery: neutral 4H structure with EMA20 and price holding above EMA50");
+  } else {
+    score += 10;
+    reasons.push("The symbol and Bitcoin 4H trends are fully aligned");
+  }
   const change = Number(ticker.priceChangePercent) || 0;
   if (side === "LONG") { if (change < -1.5) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 24H change is negative; bullish-trap risk for LONG" }; if (volumeRatio < 0.7) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "Relative volume is insufficient to confirm LONG" }; }
   score += ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) ? 8 : 2;
@@ -1995,12 +2006,21 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const funding = Number(ticker.premium?.lastFundingRate);
   if (Number.isFinite(funding)) { if (side === "LONG" && funding > 0.0008) { score -= 6; reasons.push("High positive funding; crowded-LONG risk"); } else if (side === "SHORT" && funding < -0.0008) { score -= 6; reasons.push("High negative funding; crowded-SHORT risk"); } }
   const priorityBaseScore = score, quoteVolume = Number(ticker.quoteVolume) || 0;
-  const standardThresholdMet = strictSetup && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.85;
+  // Neutral-4H recovery LONGs must use the HIGH_RISK path, never STANDARD.
+  const standardThresholdMet = strictSetup && fourHourTrend === expectedTrend &&
+    quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.85;
   let standardEntryPassed = false, entryFilters;
   if (options.skipEntryFilters) { entryFilters = { ok: true, skippedForBaseline: true, momentumConfirmed: true, pullbackConfirmed: true }; standardEntryPassed = standardThresholdMet; }
   else if (standardThresholdMet) { const strictEntry = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: false }); if (strictEntry.ok) { entryFilters = strictEntry; standardEntryPassed = true; } else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true }); }
   else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true });
   if (!entryFilters.ok) return { symbol: ticker.symbol, fourHourTrend, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
+  // The experimental LONG recovery path requires BOTH real 15m momentum and
+  // pullback confirmation. Missing 15m confirmation is a hard rejection.
+  if (longNeutralRecovery && (entryFilters.momentumConfirmed !== true || entryFilters.pullbackConfirmed !== true)) {
+    return { symbol: ticker.symbol, fourHourTrend, side, score: Math.max(0, Math.min(100, Math.round(score))),
+      rejected: "Neutral-4H LONG recovery requires confirmed 15-minute momentum and pullback",
+      entryDiagnostics: entryFilters };
+  }
   if (!standardEntryPassed && quoteVolume < FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "24H volume is below the safety threshold" };
   if (!standardEntryPassed && volumeRatio < FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The latest candle's relative volume is insufficient" };
   const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
