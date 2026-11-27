@@ -139,4 +139,4 @@ function formatSignalPrice(value) {
   return (negative ? "-" : "") + whole + (decimals ? "." + truncated : "");
 }
 
-export { ALERT_TTL_SECONDS };
+export { ALERT_TTL_SECONDS, formatSignalPrice as formatSignalDisplayPrice };
