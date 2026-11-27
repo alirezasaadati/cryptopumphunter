@@ -1,5 +1,5 @@
-// Experimental futures trade lifecycle. This module evaluates signal-level candles only;
-// it does not place orders or claim exchange execution.
+// Futures trade lifecycle evaluation for internal signal tracking only.
+// This module never places, modifies, or cancels exchange orders.
 export const FUTURES_TRADE_LEVERAGE = 10;
 export const FUTURES_MARGIN_PROFIT_TARGET_PERCENT = 30;
 export const FUTURES_PRICE_MOVE_TARGET_PERCENT =
@@ -93,9 +93,6 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
   };
   return { changed: true, reason, trade: updatedTrade };
 }
-
-// The current production TP/SL lifecycle is intentionally retained for this experiment.
-
 
 export function evaluateStagedTradeCandle(trade, candle, options = {}) {
   if (!trade || trade.status !== "OPEN" || !["LONG", "SHORT"].includes(trade.side)) {
