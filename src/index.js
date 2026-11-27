@@ -1509,17 +1509,17 @@ const FUTURES_CONFIG = {
   CONCURRENCY: 5, MAX_SCAN_DURATION_MS: 180000, SCAN_FINALIZATION_RESERVE_MS: 45000,
   REQUEST_TIMEOUT_MS: 12000, MAX_SIGNALS_PER_SCAN: 6,
   MIN_QUOTE_VOLUME: 5_000_000, HIGH_RISK_MIN_QUOTE_VOLUME: 2_500_000,
-  KLINE_LIMIT: 120, MIN_CANDLES: 60, MIN_SCORE: 70,
+  KLINE_LIMIT: 120, MIN_CANDLES: 60, MIN_SCORE: 72,
   INTERVAL: "1h", CONFIRM_INTERVAL: "4h", ENTRY_CONFIRM_INTERVAL: "15m",
-  SIGNAL_TTL_MINUTES: 60, MAX_ENTRY_DRIFT_PCT: 0.45, LONG_MAX_ENTRY_DRIFT_PCT: 0.70,
-  MAX_ENTRY_EMA_DISTANCE_ATR: 2.0, MAX_PULLBACK_DISTANCE_ATR: 0.45, LONG_MAX_PULLBACK_DISTANCE_ATR: 0.60,
-  MAX_RECLAIM_EXTENSION_ATR: 1.5, HIGH_RISK_MIN_SCORE: 62, LONG_MIN_SCORE: 67, HIGH_RISK_LONG_MIN_SCORE: 60,
-  HIGH_RISK_MIN_VOLUME_RATIO: 0.65, HIGH_RISK_LONG_MIN_VOLUME_RATIO: 0.60, VOLUME_PRIORITY_TIER_1: 0.8,
+  SIGNAL_TTL_MINUTES: 60, MAX_ENTRY_DRIFT_PCT: 0.35, LONG_MAX_ENTRY_DRIFT_PCT: 0.70,
+  MAX_ENTRY_EMA_DISTANCE_ATR: 3.0, MAX_PULLBACK_DISTANCE_ATR: 0.35, LONG_MAX_PULLBACK_DISTANCE_ATR: 0.60,
+  MAX_RECLAIM_EXTENSION_ATR: 3.0, HIGH_RISK_MIN_SCORE: 55, LONG_MIN_SCORE: 67, HIGH_RISK_LONG_MIN_SCORE: 60,
+  HIGH_RISK_MIN_VOLUME_RATIO: 0.5, HIGH_RISK_LONG_MIN_VOLUME_RATIO: 0.60, VOLUME_PRIORITY_TIER_1: 0.8,
   VOLUME_PRIORITY_TIER_2: 1.3, VOLUME_PRIORITY_BONUS_TIER_1: 5,
   VOLUME_PRIORITY_BONUS_TIER_2: 10, CONFIRMATION_PRIORITY_BONUS_ONE: 7,
-  CONFIRMATION_PRIORITY_BONUS_BOTH: 15, HIGH_RISK_LONG_RSI_MIN: 43, HIGH_RISK_LONG_RSI_MAX: 75,
-  HIGH_RISK_SHORT_RSI_MIN: 30, HIGH_RISK_SHORT_RSI_MAX: 57, HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.6, HIGH_RISK_LONG_MAX_ENTRY_DRIFT_PCT: 0.90,
-  HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 2.4, HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 1.8
+  CONFIRMATION_PRIORITY_BONUS_BOTH: 15, HIGH_RISK_LONG_RSI_MIN: 35, HIGH_RISK_LONG_RSI_MAX: 78,
+  HIGH_RISK_SHORT_RSI_MIN: 22, HIGH_RISK_SHORT_RSI_MAX: 65, HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.75, HIGH_RISK_LONG_MAX_ENTRY_DRIFT_PCT: 0.90,
+  HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 4.0, HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 4.0
 };
 function calculateFourHourTrend(candles4h) {
   if (!Array.isArray(candles4h) || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) return null;
@@ -1849,36 +1849,52 @@ function calculateEntryTimingScore({ side, rsi: rsiValue, rsiSlope, emaDistanceA
   return { raw, normalized, details, availableFactorCount: Object.values(details).filter(v => v !== null).length };
 }
 
-function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr, isHighRisk = false }) {
+function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr }) {
   const marketPrice = Number(ticker?.last);
-  if (!Number.isFinite(marketPrice) || marketPrice <= 0) return { ok: false, rejected: "Live market price is invalid" };
-  const maxDrift = side === "LONG"
-    ? (isHighRisk ? FUTURES_CONFIG.HIGH_RISK_LONG_MAX_ENTRY_DRIFT_PCT : FUTURES_CONFIG.LONG_MAX_ENTRY_DRIFT_PCT)
-    : (isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT : FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT);
+  if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
+    return { ok: false, rejected: "قیمت لحظه‌ای بازار معتبر نیست" };
+  }
   const driftPct = Math.abs(marketPrice - referencePrice) / referencePrice * 100;
-  if (driftPct > maxDrift) return { ok: false, rejected: "Live price is too far from the analytical reference", driftPct };
-  const maxEmaDist = isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR : FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR;
-  const emaDistanceAtr = Math.abs(marketPrice - ema20) / atr;
-  if (emaDistanceAtr > maxEmaDist) return { ok: false, rejected: "Entry is too late; price is too far from EMA20", driftPct, emaDistanceAtr };
-  if (!Array.isArray(candles15m) || candles15m.length < 30) return { ok: false, rejected: "Insufficient 15-minute data to confirm the entry" };
-  const closes15m = candles15m.map(c => c.close), ema9_15m = ema(closes15m, 9), ema21_15m = ema(closes15m, 21);
-  const atr15m = calculateAtr(candles15m, 14), last15m = candles15m[candles15m.length - 1], prev15m = candles15m[candles15m.length - 2];
-  const recentPullback = side === "LONG" ? candles15m.slice(-13, -1) : candles15m.slice(-10, -1);
-  if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) return { ok: false, rejected: "15-minute indicator calculation is invalid" };
-  const momentumConfirmed = side === "LONG"
-    ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open
-    : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open && last15m.close < prev15m.low;
-  const pullbackConfirmed = side === "LONG"
-    ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.LONG_MAX_PULLBACK_DISTANCE_ATR)
-    : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
-  if (!momentumConfirmed) return { ok: false, rejected: "The 15-minute momentum trigger has not fired", driftPct, emaDistanceAtr };
-  if (!pullbackConfirmed) return { ok: false, rejected: "No 15-minute pullback to the EMA21 zone yet", driftPct, emaDistanceAtr };
-  const maxReclaim = isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR : FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR;
-  const reclaimExtensionAtr = side === "LONG" ? (last15m.close - ema9_15m) / atr15m : (ema9_15m - last15m.close) / atr15m;
-  if (reclaimExtensionAtr > maxReclaim) return { ok: false, rejected: "The 15-minute confirmation candle is overextended", driftPct, emaDistanceAtr, reclaimExtensionAtr };
-  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m, momentumConfirmed: true, pullbackConfirmed: true };
-}
+  if (driftPct > FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT) {
+    return { ok: false, rejected: "فاصله قیمت لحظه‌ای تا قیمت تحلیلی بیش از حد مجاز است", driftPct };
+  }
 
+  const emaDistanceAtr = Math.abs(marketPrice - ema20) / atr;
+  if (emaDistanceAtr > FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR) {
+    return { ok: false, rejected: "ورود دیرهنگام است؛ قیمت بیش از حد از EMA20 فاصله دارد", driftPct, emaDistanceAtr };
+  }
+
+  const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
+  if (!has15mData) {
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+  }
+  const closes15m = candles15m.map(c => c.close);
+  const ema9_15m = ema(closes15m, 9);
+  const ema21_15m = ema(closes15m, 21);
+  const atr15m = calculateAtr(candles15m, 14);
+  const last15m = candles15m[candles15m.length - 1];
+  const recentPullback = candles15m.slice(-9, -1);
+  if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) {
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+  }
+
+  const aligned = side === "LONG"
+    ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open
+    : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open;
+  const touchedPullbackZone = side === "LONG"
+    ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR)
+    : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
+
+  const reclaimExtensionAtr = side === "LONG"
+    ? (last15m.close - ema9_15m) / atr15m
+    : (ema9_15m - last15m.close) / atr15m;
+  if (reclaimExtensionAtr > FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR) {
+    return { ok: false, rejected: "قیمت پس از حرکت تأییدی بیش از حد از محدوده ورود فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
+  }
+
+  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
+    momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
+}
 function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
   // Retained as a pure compatibility utility for historical tests only.
   // The restored Kraken Futures 3.8.2 analyzer does not call this LONG-only filter.
@@ -1895,22 +1911,24 @@ function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
 function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr, fourHourOpposes }) {
   const marketPrice = Number(ticker?.last);
   if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
-    return { ok: false, rejected: "Live market price is invalid" };
+    return { ok: false, rejected: "قیمت لحظه‌ای بازار معتبر نیست" };
   }
   const driftPct = Math.abs(marketPrice - referencePrice) / referencePrice * 100;
-  if (driftPct > (side === "LONG" ? FUTURES_CONFIG.HIGH_RISK_LONG_MAX_ENTRY_DRIFT_PCT : FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT)) {
-    return { ok: false, rejected: "Live price deviation is too large even for the high-risk path", driftPct };
+  if (driftPct > FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT) {
+    return { ok: false, rejected: "فاصله قیمت لحظه‌ای برای مسیر پرریسک نیز بیش از حد مجاز است", driftPct };
   }
 
   const emaDistanceAtr = Math.abs(marketPrice - ema20) / atr;
   if (emaDistanceAtr > FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR) {
-    return { ok: false, rejected: "Price is too far from EMA20 even for a high-risk entry", driftPct, emaDistanceAtr };
+    return { ok: false, rejected: "قیمت برای ورود پرریسک نیز بیش از حد از EMA20 فاصله دارد", driftPct, emaDistanceAtr };
   }
 
   const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
   if (!has15mData) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes,
-      eqsMomentumState: "UNAVAILABLE", eqsPullbackState: "UNAVAILABLE" };
+    if (fourHourOpposes) {
+      return { ok: false, rejected: "روند ۴ساعته مخالف است و داده ۱۵دقیقه‌ای برای تأیید مسیر پرریسک موجود نیست", driftPct, emaDistanceAtr };
+    }
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
   }
 
   const closes15m = candles15m.map(c => c.close);
@@ -1919,144 +1937,214 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
   const atr15m = calculateAtr(candles15m, 14);
   const last15m = candles15m[candles15m.length - 1];
   if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes,
-      eqsMomentumState: "UNAVAILABLE", eqsPullbackState: "UNAVAILABLE" };
+    if (fourHourOpposes) {
+      return { ok: false, rejected: "روند ۴ساعته مخالف است و اندیکاتورهای ۱۵دقیقه‌ای معتبر نیستند", driftPct, emaDistanceAtr };
+    }
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
   }
 
   const momentumConfirmed = side === "LONG"
     ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open
     : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open;
-  const recentPullback = side === "LONG" ? candles15m.slice(-13, -1) : candles15m.slice(-9, -1);
-  const touchedPullbackZone = side === "LONG"
-    ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.LONG_MAX_PULLBACK_DISTANCE_ATR)
-    : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
   const reclaimExtensionAtr = side === "LONG"
     ? (last15m.close - ema9_15m) / atr15m
     : (ema9_15m - last15m.close) / atr15m;
-  const eqsIsReversal = side === "LONG"
-    ? last15m.close > last15m.open && last15m.close > ema9_15m
-    : last15m.close < last15m.open && last15m.close < ema9_15m;
-  const eqsMomentumState = momentumConfirmed ? "CONFIRMED" : "NOT_CONFIRMED";
-  const eqsPullbackState = touchedPullbackZone
-    ? (eqsIsReversal ? "RECLAIM_CONFIRMED" : "TOUCHED_ZONE")
-    : "NONE";
-  // Strict diagnostic-only reclaim/momentum states for EQS v2.
-  const previous15m = candles15m[candles15m.length - 2];
-  const previousEma9 = ema(closes15m.slice(0, -1), 9);
-  const candleRange = Math.max(0, last15m.high - last15m.low);
-  const closeLocation = candleRange > 0
-    ? (side === "LONG" ? (last15m.close - last15m.low) / candleRange : (last15m.high - last15m.close) / candleRange)
-    : null;
-  const ema9Slope = Number.isFinite(previousEma9) ? ema9_15m - previousEma9 : null;
-  const eqsMomentumStateV2 = momentumConfirmed && Number.isFinite(ema9Slope) &&
-    (side === "LONG" ? ema9Slope > 0 : ema9Slope < 0)
-    ? "CONFIRMED" : "NOT_CONFIRMED";
-  const crossedEma9 = previous15m && (side === "LONG"
-    ? previous15m.close <= previousEma9 && last15m.close > ema9_15m
-    : previous15m.close >= previousEma9 && last15m.close < ema9_15m);
-  const eqsPullbackStateV2 = touchedPullbackZone
-    ? (eqsIsReversal && crossedEma9 && Number.isFinite(closeLocation) &&
-      closeLocation >= 0.65 && reclaimExtensionAtr <= 1.5
-      ? "RECLAIM_CONFIRMED" : "TOUCHED_ZONE")
-    : "NONE";
-  // Momentum and pullback are confirmations for ranking, never hard eligibility gates.
-  // Drift and EMA/ATR distance remain hard safety limits.
-  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
-    momentumConfirmed, pullbackConfirmed: touchedPullbackZone, fourHourOpposes,
-    eqsMomentumState, eqsPullbackState, eqsMomentumStateV2, eqsPullbackStateV2 };
-}
+  if (reclaimExtensionAtr > FUTURES_CONFIG.HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR) {
+    return { ok: false, rejected: "قیمت پس از حرکت ۱۵دقیقه‌ای بیش از حد از محدوده ورود فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
+  }
+  if (fourHourOpposes && !momentumConfirmed) {
+    return { ok: false, rejected: "روند ۴ساعته مخالف است و مومنتوم ۱۵دقیقه‌ای هم‌جهت تأیید نشد", driftPct, emaDistanceAtr, reclaimExtensionAtr, momentumConfirmed };
+  }
 
+  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
+    momentumConfirmed, pullbackConfirmed: false, fourHourOpposes };
+}
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
-  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error("Not enough closed candles for 1H/4H analysis.");
-  const closes1h = candles1h.map(c => c.close), closes4h = candles4h.map(c => c.close);
-  const last = candles1h[candles1h.length - 1], prev = candles1h[candles1h.length - 2], referencePrice = last.close;
-  const e20 = ema(closes1h, 20), prevE20 = ema(closes1h.slice(0, -1), 20), e50 = ema(closes1h, 50);
-  const e20_4h = ema(closes4h, 20), e50_4h = ema(closes4h, 50), rsiValue = rsi(closes1h, 14), atr = calculateAtr(candles1h, 14);
-  if ([e20, prevE20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) throw new Error("Indicator calculation is invalid.");
-  const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume)), volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
-  const ema20SlopePct = ((e20 - prevE20) / prevE20) * 100;
-  const up1h = e20 > e50 && ema20SlopePct > 0.02 && referencePrice > e20 && last.close >= prev.low;
-  const down1h = e20 < e50 && e20 < prevE20 && referencePrice < e20 && last.close <= prev.high;
-  const up4h = e20_4h > e50_4h && candles4h.at(-1).close > e20_4h, down4h = e20_4h < e50_4h && candles4h.at(-1).close < e20_4h;
+  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
+    throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
+  }
+  const closes1h = candles1h.map(c => c.close);
+  const closes4h = candles4h.map(c => c.close);
+  const last = candles1h[candles1h.length - 1];
+  const referencePrice = last.close;
+  const e20 = ema(closes1h, 20);
+  const e50 = ema(closes1h, 50);
+  const e20_4h = ema(closes4h, 20);
+  const e50_4h = ema(closes4h, 50);
+  const rsiValue = rsi(closes1h, 14);
+  const atr = calculateAtr(candles1h, 14);
+  if ([e20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) {
+    throw new Error("محاسبه اندیکاتورها معتبر نیست.");
+  }
+
+  const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume));
+  const volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
+  const up1h = e20 > e50 && referencePrice > e20;
+  const down1h = e20 < e50 && referencePrice < e20;
+  const up4h = e20_4h > e50_4h;
+  const down4h = e20_4h < e50_4h;
   const fourHourTrend = up4h ? "BULLISH" : down4h ? "BEARISH" : "NEUTRAL";
-  let side = null, score = 0; const reasons = [];
-  const strictLong = up1h && rsiValue >= 46 && rsiValue <= 75, strictShort = down1h && rsiValue >= 34 && rsiValue <= 52;
+  let side = null;
+  let score = 0;
+  const reasons = [];
+
+  const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
+  const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
   const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
   const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
-  if (strictLong || (!strictSetup && relaxedLong)) { side = "LONG"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "1H uptrend with positive EMA20 slope" : "High-risk 1H bullish setup"); score += rsiValue >= 52 && rsiValue <= 62 ? 15 : 8; }
-  else if (strictShort || (!strictSetup && relaxedShort)) { side = "SHORT"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "1H downtrend with negative EMA20 slope" : "High-risk 1H bearish setup"); score += rsiValue >= 38 && rsiValue <= 48 ? 15 : 8; }
-  else return { symbol: ticker.symbol, fourHourTrend, rejected: "The 1H trend and optimal RSI zone were not confirmed together", entryDiagnostics: { stage: "trend_rsi", rsi: rsiValue, up1h, down1h, up4h, down4h, fourHourTrend } };
-  const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
-  // The 1H symbol trend must align with Bitcoin's 4H trend for either side.
-  // The symbol's own 4H trend is contextual only: it adjusts score but never blocks.
-  if (options.requireBtcFourHourAlignment === true && options.btcFourHourTrend !== expectedTrend) {
-    return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, rejected: "The symbol's 1H trend is not aligned with Bitcoin's 4H trend", entryDiagnostics: { stage: "btc_4h_alignment", passed: false, expectedTrend, btcFourHourTrend: options.btcFourHourTrend || null, up1h, down1h, fourHourTrend } };
-  }
-  if (options.btcFourHourTrend === expectedTrend) {
-    score += 10;
-    reasons.push("The symbol's 1H trend is aligned with Bitcoin's 4H trend");
-  }
-  const symbolFourHourAdjustment = fourHourTrend === expectedTrend ? 6 : fourHourTrend === "NEUTRAL" ? 0 : -6;
-  score += symbolFourHourAdjustment;
-  if (symbolFourHourAdjustment) {
-    reasons.push("Symbol 4H trend " + fourHourTrend + "; score adjustment " + (symbolFourHourAdjustment > 0 ? "+" : "") + symbolFourHourAdjustment);
-  }
-  const change = Number(ticker.priceChangePercent) || 0;
-  if (side === "LONG" && change < -1.5) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 24H change is negative; bullish-trap risk for LONG" };
-  score += ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) ? 8 : 2;
-  const volumePriorityBonus = volumeRatio >= FUTURES_CONFIG.VOLUME_PRIORITY_TIER_2 ? FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_2 : volumeRatio >= FUTURES_CONFIG.VOLUME_PRIORITY_TIER_1 ? FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_1 : 0;
-  const funding = Number(ticker.premium?.lastFundingRate);
-  if (Number.isFinite(funding)) { if (side === "LONG" && funding > 0.0008) { score -= 6; reasons.push("High positive funding; crowded-LONG risk"); } else if (side === "SHORT" && funding < -0.0008) { score -= 6; reasons.push("High negative funding; crowded-SHORT risk"); } }
-  const priorityBaseScore = score, quoteVolume = Number(ticker.quoteVolume) || 0;
-  const minimumStandardScore = side === "LONG" ? FUTURES_CONFIG.LONG_MIN_SCORE : FUTURES_CONFIG.MIN_SCORE;
-  const minimumStandardVolumeRatio = side === "LONG" ? 0.75 : 0.85;
-  const standardThresholdMet = strictSetup && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
-    score >= minimumStandardScore && volumeRatio >= minimumStandardVolumeRatio;
-  let standardEntryPassed = false, entryFilters;
-  if (options.skipEntryFilters) { entryFilters = { ok: true, skippedForBaseline: true, momentumConfirmed: true, pullbackConfirmed: true }; standardEntryPassed = standardThresholdMet; }
-  else if (standardThresholdMet) {
-    const strictEntry = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: false });
-    if (strictEntry.ok) { entryFilters = strictEntry; standardEntryPassed = true; }
-    else {
-      if (side === "LONG") console.log("FUTURES_LONG_STANDARD_ENTRY_REJECTION_DIAGNOSTICS", JSON.stringify({
-        timestamp: new Date().toISOString(), symbol: ticker.symbol, side,
-        rejected: strictEntry.rejected || "Unknown standard-entry rejection",
-        momentumConfirmed: strictEntry.momentumConfirmed ?? null,
-        pullbackConfirmed: strictEntry.pullbackConfirmed ?? null,
-        driftPct: strictEntry.driftPct ?? null,
-        emaDistanceAtr: strictEntry.emaDistanceAtr ?? null
-      }));
-      entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true });
-    }
-  }
-  else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true });
-  if (!entryFilters.ok) return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, score: Math.max(0, Math.min(100, Math.round(score))), fourHourScoreAdjustment: symbolFourHourAdjustment, rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
-  if (!standardEntryPassed && quoteVolume < FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "24H volume is below the safety threshold" };
-  const minimumHighRiskVolumeRatio = side === "LONG" ? FUTURES_CONFIG.HIGH_RISK_LONG_MIN_VOLUME_RATIO : FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
-  if (!standardEntryPassed && volumeRatio < minimumHighRiskVolumeRatio) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The latest candle's relative volume is insufficient" };
-  const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
-  const swing = candles1h.slice(-13, -1), swingLow = Math.min(...swing.map(c => c.low)), swingHigh = Math.max(...swing.map(c => c.high)), liquidityBuffer = atr * 0.25;
-  const stop = side === "LONG" ? Math.min(swingLow - liquidityBuffer, entry - atr * 1.6) : Math.max(swingHigh + liquidityBuffer, entry + atr * 1.6);
-  const risk = side === "LONG" ? entry - stop : stop - entry, riskPct = risk / entry;
-  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.004 || riskPct > 0.035) return { symbol: ticker.symbol, fourHourTrend, rejected: "Stop distance is outside the standard range (0.4% to 3.5%)." };
-  const direction = side === "LONG" ? 1 : -1, target1 = entry + direction * risk * 1.5, target2 = entry + direction * risk * 2.5, target3 = entry + direction * risk * 3.5;
-  score = Math.max(0, Math.min(100, Math.round(score)));
-  const minimumHighRiskScore = side === "LONG" ? FUTURES_CONFIG.HIGH_RISK_LONG_MIN_SCORE : FUTURES_CONFIG.HIGH_RISK_MIN_SCORE;
-  const eligible = standardEntryPassed, highRiskEligible = !standardEntryPassed && score >= minimumHighRiskScore;
-  if (!eligible && !highRiskEligible) return { symbol: ticker.symbol, fourHourTrend, side, score, rejected: "Final score did not reach the minimum threshold" };
-  const confirmationPriorityBonus = FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_BOTH, priorityScore = Math.min(125, priorityBaseScore + volumePriorityBonus + confirmationPriorityBonus);
-  reasons.push("EMA21 pullback and 15-minute momentum trigger confirmed");
-  if (highRiskEligible) reasons.push("Signal passed the flexible high-risk path with full 15-minute confirmation");
-  return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side,
-    momentumConfirmed: true, pullbackConfirmed: true, score, baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
-    priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))), volumePriorityBonus, fourHourScoreAdjustment: symbolFourHourAdjustment,
-    confirmationPriorityBonus, confirmationCount: 2, riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
-    price: entry, entry, stop, target1, target2, target3, rewardRisk: 1.5, rsi: rsiValue,
-    ema20: e20, ema50: e50, atr, volumeRatio, funding: Number.isFinite(funding) ? funding : null,
-    quoteVolume, change24h: change, candleTime: last.time, reasons, entryDiagnostics: entryFilters, eligible: true, highRiskEligible };
-}
 
+  if (strictLong || (!strictSetup && relaxedLong)) {
+    side = "LONG";
+    score = strictSetup ? 45 : 40;
+    reasons.push(strictSetup
+      ? "روند ۱ساعته و ۴ساعته صعودی است"
+      : "ستاپ آزمایشی: روند ۱ساعته صعودی و روند ۴ساعته مخالف نیست",
+      "قیمت بالای EMA20 قرار دارد");
+    score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
+  } else if (strictShort || (!strictSetup && relaxedShort)) {
+    side = "SHORT";
+    score = strictSetup ? 45 : 40;
+    reasons.push(strictSetup
+      ? "روند ۱ساعته و ۴ساعته نزولی است"
+      : "ستاپ آزمایشی: روند ۱ساعته نزولی و روند ۴ساعته مخالف نیست",
+      "قیمت زیر EMA20 قرار دارد");
+    score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
+  } else {
+    return { symbol: ticker.symbol, rejected: "حتی شرایط منعطف آزمایشی روند و RSI نیز تأیید نشد" };
+  }
+
+  if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
+  else if (volumeRatio >= 1.0) { score += 12; reasons.push("حجم نزدیک یا بالاتر از میانگین است"); }
+  else { score += 4; reasons.push("حجم کمتر از میانگین است"); }
+
+  const change = Number(ticker.priceChangePercent) || 0;
+  if ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) score += 8;
+  else score += 3;
+
+  const funding = Number(ticker.premium?.lastFundingRate);
+  if (Number.isFinite(funding)) {
+    if (side === "LONG" && funding > 0.001) { score -= 5; reasons.push("فاندینگ مثبت و نسبتاً بالا؛ ریسک ازدحام لانگ"); }
+    else if (side === "SHORT" && funding < -0.001) { score -= 5; reasons.push("فاندینگ منفی و نسبتاً پایین؛ ریسک ازدحام شورت"); }
+    else reasons.push("فاندینگ در محدوده افراطی نیست");
+  } else {
+    reasons.push("داده فاندینگ در دسترس نبود");
+  }
+
+  const fourHourOpposes = side === "LONG" ? down4h : up4h;
+  const standardThresholdMet = strictSetup &&
+    score >= FUTURES_CONFIG.MIN_SCORE &&
+    volumeRatio >= 0.75;
+  let standardEntryPassed = false;
+  let entryFilters;
+
+  if (options.skipEntryFilters) {
+    entryFilters = { ok: true, skippedForBaseline: true };
+    standardEntryPassed = standardThresholdMet;
+  } else if (standardThresholdMet) {
+    const strictEntryFilters = evaluateFuturesEntryFilters({
+      ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr
+    });
+    if (strictEntryFilters.ok) {
+      entryFilters = strictEntryFilters;
+      standardEntryPassed = true;
+    } else {
+      // A strict candidate that misses the standard entry rules may still qualify
+      // through the independent high-risk path, for both LONG and SHORT.
+      const flexibleEntryFilters = evaluateHighRiskFuturesEntryFilters({
+        ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, fourHourOpposes
+      });
+      entryFilters = flexibleEntryFilters.ok
+        ? { ...flexibleEntryFilters, strictEntryRejected: strictEntryFilters.rejected, highRiskFallback: true }
+        : { ...flexibleEntryFilters, strictEntryRejected: strictEntryFilters.rejected };
+    }
+  } else {
+    // Do not let strictSetup alone block a candidate from the relaxed path:
+    // score/volume misses and strict-vs-flexible entry differences are fallback cases.
+    entryFilters = evaluateHighRiskFuturesEntryFilters({
+      ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, fourHourOpposes
+    });
+  }
+
+  if (!entryFilters.ok) {
+    return {
+      symbol: ticker.symbol,
+      side,
+      score: Math.max(0, Math.min(100, Math.round(score))),
+      rejected: entryFilters.rejected,
+      entryDiagnostics: entryFilters
+    };
+  }
+  reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
+  reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
+  if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
+    reasons.push("مومنتوم و پولبک ۱۵دقیقه‌ای تأیید شدند");
+  } else if (!strictSetup && fourHourOpposes && entryFilters.momentumConfirmed) {
+    reasons.push("با وجود مخالفت روند ۴ساعته، مومنتوم ۱۵دقیقه‌ای هم‌جهت تأیید شد");
+  } else {
+    reasons.push("تأیید ۱۵دقیقه‌ای کامل نبود؛ مسیر پرریسک با محدودیت‌های مستقل ارزیابی شد");
+  }
+
+  const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
+  const swing = candles1h.slice(-8, -1);
+  const swingLow = Math.min(...swing.map(c => c.low));
+  const swingHigh = Math.max(...swing.map(c => c.high));
+  let stop = side === "LONG"
+    ? Math.min(swingLow, entry - atr * 1.5)
+    : Math.max(swingHigh, entry + atr * 1.5);
+  const risk = side === "LONG" ? entry - stop : stop - entry;
+  const riskPct = risk / entry;
+  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
+    return { symbol: ticker.symbol, rejected: "فاصله حد ضرر غیرمنطقی است؛ سیگنال صادر نشد" };
+  }
+
+  const direction = side === "LONG" ? 1 : -1;
+  const target1 = entry + direction * risk * 1.5;
+  const target2 = entry + direction * risk * 2.5;
+  const target3 = entry + direction * risk * 3.5;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const eligible = standardEntryPassed;
+  const highRiskEligible = !standardEntryPassed &&
+    score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE &&
+    volumeRatio >= FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
+  if (highRiskEligible) reasons.push("این سیگنال فقط از مسیر مستقل منعطف عبور کرده و پرریسک طبقه‌بندی شده است");
+  return {
+    symbol: ticker.symbol,
+    side,
+    score,
+    riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
+    price: entry,
+    entry,
+    stop,
+    target1,
+    target2,
+    target3,
+    rewardRisk: 1.5,
+    rsi: rsiValue,
+    ema20: e20,
+    ema50: e50,
+    atr,
+    volumeRatio,
+    funding: Number.isFinite(funding) ? funding : null,
+    quoteVolume: Number(ticker.quoteVolume) || 0,
+    change24h: change,
+    candleTime: last.time,
+    reasons,
+    entryDiagnostics: entryFilters,
+    eligible: eligible || highRiskEligible,
+    highRiskEligible,
+    fourHourTrend,
+    btcFourHourTrend: options.btcFourHourTrend || null,
+    momentumConfirmed: Boolean(entryFilters.momentumConfirmed),
+    pullbackConfirmed: Boolean(entryFilters.pullbackConfirmed),
+    baseScore: score,
+    priorityScore: score,
+    volumePriorityBonus: 0,
+    fourHourScoreAdjustment: 0,
+    confirmationPriorityBonus: 0,
+    confirmationCount: Number(Boolean(entryFilters.momentumConfirmed)) + Number(Boolean(entryFilters.pullbackConfirmed))
+  };
+}
 function formatPrice(value) {
   const price = Number(value);
   if (!Number.isFinite(price)) return "—";
