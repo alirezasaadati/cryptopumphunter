@@ -4,7 +4,7 @@ import { createSerialExecutor } from "./serial-executor.js";
 import { evaluateStagedTradeCandle } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
-  VERSION: "11.2.0",
+  VERSION: "11.3.0",
   PENDING_TTL: 604800,
   TRADE_MONITOR_STUCK_AFTER_MS: 2 * 60 * 60 * 1000
 };
@@ -3283,6 +3283,69 @@ function formatFuturesEntryDiagnostics(d) {
   return lines.join("\n");
 }
 
+function classifyBitcoinFourHourCandle(candles, endIndex) {
+  const sample = candles.slice(0, endIndex + 1);
+  if (sample.length < FUTURES_CONFIG.MIN_CANDLES) return { direction: "NEUTRAL", reason: "insufficient_closed_candles" };
+  const closes = sample.map(c => c.close);
+  const close = closes[closes.length - 1];
+  const previousEma20 = ema(closes.slice(0, -1), 20);
+  const ema20 = ema(closes, 20);
+  const ema50 = ema(closes, 50);
+  if (![close, previousEma20, ema20, ema50].every(Number.isFinite) || close <= 0) {
+    return { direction: "NEUTRAL", reason: "invalid_indicators" };
+  }
+  const slopePct = ((ema20 - previousEma20) / previousEma20) * 100;
+  const spreadPct = ((ema20 - ema50) / close) * 100;
+  const nearNeutral = Math.abs(spreadPct) <= 0.20;
+  let direction = "NEUTRAL";
+  let reason = "no_directional_confirmation";
+  if (ema20 > ema50 && slopePct > 0 && close > ema20) {
+    direction = "LONG";
+    reason = "bullish_ema_alignment";
+  } else if (ema20 < ema50 && slopePct < 0 && close < ema20) {
+    direction = "SHORT";
+    reason = "bearish_ema_alignment";
+  } else if (nearNeutral && slopePct > 0 && close >= ema20) {
+    direction = "LONG";
+    reason = "neutral_leaning_bullish";
+  } else if (nearNeutral && slopePct < 0 && close <= ema20) {
+    direction = "SHORT";
+    reason = "neutral_leaning_bearish";
+  }
+  return {
+    direction, reason,
+    close, ema20, ema50,
+    emaSpreadPct: spreadPct,
+    ema20SlopePct: slopePct,
+    candleTime: sample[sample.length - 1].time
+  };
+}
+
+function determineBitcoinFourHourRegime(candles) {
+  if (!Array.isArray(candles) || candles.length < FUTURES_CONFIG.MIN_CANDLES + 1) {
+    return { direction: "NEUTRAL", confirmed: false, reason: "insufficient_bitcoin_4h_candles" };
+  }
+  const latest = classifyBitcoinFourHourCandle(candles, candles.length - 1);
+  const previous = classifyBitcoinFourHourCandle(candles, candles.length - 2);
+  const confirmed = latest.direction !== "NEUTRAL" && latest.direction === previous.direction;
+  return {
+    direction: confirmed ? latest.direction : "NEUTRAL",
+    confirmed,
+    reason: confirmed ? latest.reason : "last_two_closed_4h_candles_not_aligned",
+    confirmation: {
+      previous: { direction: previous.direction, reason: previous.reason, candleTime: previous.candleTime },
+      latest: { direction: latest.direction, reason: latest.reason, candleTime: latest.candleTime }
+    },
+    metrics: {
+      close: latest.close,
+      ema20: latest.ema20,
+      ema50: latest.ema50,
+      emaSpreadPct: latest.emaSpreadPct,
+      ema20SlopePct: latest.ema20SlopePct
+    }
+  };
+}
+
 async function runFuturesSignalScan(env, options = {}) {
   const started = Date.now();
   let universe;
@@ -3324,6 +3387,43 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const filteredUniverse = universe;
+  const bitcoinTicker = filteredUniverse
+    .filter(item => /^(?:PI|PF)_(?:XBT|BTC)USD$/.test(String(item.symbol || "").toUpperCase()))
+    .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))[0];
+  if (!bitcoinTicker) {
+    const diagnostics = {
+      startedAt: new Date(started).toISOString(), finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - started, universeCount: filteredUniverse.length,
+      analyzedCount: 0, analysisErrorCount: 0, eligibleCount: 0, signalCount: 0,
+      registeredCount: 0, bitcoinMarketRegime: { direction: "UNAVAILABLE", reason: "bitcoin_perpetual_not_found" },
+      delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
+      topRejections: [{ reason: "Bitcoin perpetual market data was unavailable; scan safely skipped.", count: 1 }]
+    };
+    console.error("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
+    return { report: "⚠️ داده قرارداد دائمی بیت‌کوین در دسترس نیست؛ برای جلوگیری از صدور سیگنال خلاف جهت بازار، این اسکن متوقف شد.", signals: [], diagnostics };
+  }
+  let bitcoinMarketRegime;
+  try {
+    const btcData = await getKrakenFuturesCandlesViaCoordinator(env, bitcoinTicker.symbol, [FUTURES_CONFIG.CONFIRM_INTERVAL]);
+    const btcCandles = btcData.candles?.[FUTURES_CONFIG.CONFIRM_INTERVAL] || [];
+    if (btcData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL]) throw new Error(btcData.errors[FUTURES_CONFIG.CONFIRM_INTERVAL]);
+    bitcoinMarketRegime = determineBitcoinFourHourRegime(btcCandles);
+  } catch (error) {
+    bitcoinMarketRegime = { direction: "UNAVAILABLE", confirmed: false, reason: String(error?.message || error).slice(0, 300) };
+  }
+  if (!["LONG", "SHORT"].includes(bitcoinMarketRegime.direction)) {
+    const diagnostics = {
+      startedAt: new Date(started).toISOString(), finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - started, universeCount: filteredUniverse.length,
+      analyzedCount: 0, analysisErrorCount: 0, eligibleCount: 0, signalCount: 0,
+      registeredCount: 0, bitcoinMarketRegime: { ...bitcoinMarketRegime, symbol: bitcoinTicker.symbol },
+      delivery: { newSignals: 0, recipients: 0, delivered: 0, failed: 0 },
+      topRejections: [{ reason: "Bitcoin 4h direction was neutral, unconfirmed, or unavailable; no signals were allowed.", count: 1 }]
+    };
+    console.log("AUTOMATIC_FUTURES_SCAN_DIAGNOSTICS", JSON.stringify(diagnostics));
+    return { report: "⏸ روند ۴ ساعته بیت‌کوین خنثی یا تأییدنشده است؛ در این اسکن هیچ سیگنالی صادر نمی‌شود.", signals: [], diagnostics };
+  }
+
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   let analysisErrorCount = 0;
   let fifteenMinuteDataErrorCount = 0;
@@ -3389,16 +3489,12 @@ async function runFuturesSignalScan(env, options = {}) {
       a.symbol.localeCompare(b.symbol)
     );
 
-  // Keep each scan directionally consistent: when one side has more eligible
-  // candidates, suppress all candidates from the minority side for this scan.
-  // A tie intentionally keeps both directions; no strategy scores or filters change.
+  // Bitcoin's confirmed 4h regime is the sole market-direction gate.
+  // The signal engine's scoring, setup, entry, stop and target calculations remain unchanged.
   const longEligibleCount = eligibleCandidates.filter(item => item.side === "LONG").length;
   const shortEligibleCount = eligibleCandidates.filter(item => item.side === "SHORT").length;
-  const dominantDirection = longEligibleCount > shortEligibleCount ? "LONG"
-    : shortEligibleCount > longEligibleCount ? "SHORT" : null;
-  const directionFilteredCandidates = dominantDirection
-    ? eligibleCandidates.filter(item => item.side === dominantDirection)
-    : eligibleCandidates;
+  const dominantDirection = bitcoinMarketRegime.direction;
+  const directionFilteredCandidates = eligibleCandidates.filter(item => item.side === dominantDirection);
   const suppressedOppositeDirectionCount = eligibleCandidates.length - directionFilteredCandidates.length;
 
   const generatedSignals = directionFilteredCandidates
@@ -3448,6 +3544,7 @@ async function runFuturesSignalScan(env, options = {}) {
     longEligibleCount,
     shortEligibleCount,
     dominantDirection,
+    bitcoinMarketRegime: { ...bitcoinMarketRegime, symbol: bitcoinTicker.symbol },
     suppressedOppositeDirectionCount,
     selectedEligibleCount: directionFilteredCandidates.length,
     standardEligibleCount: eligibleCandidates.filter(item => item.riskLevel !== "HIGH_RISK").length,
