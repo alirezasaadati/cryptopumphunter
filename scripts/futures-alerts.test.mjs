@@ -63,24 +63,27 @@ test("per-chat storage keys are distinct and stable", () => {
   assert.notEqual(futuresAlertStorageKey("123", fp), futuresAlertStorageKey("456", fp));
 });
 
-test("signal alert matches the approved left-aligned plain-text template", () => {
+test("signal alert matches the current Persian production template", () => {
   const signal = {...base, symbol:"PF_BTCUSD", entry:65000, stop:64500, target1:65800, target2:66400, target3:67200, score:82};
   const short = formatFuturesSignalAlert(signal, 1);
   const long = formatFuturesSignalAlert({...signal, symbol:"PF_ETHUSD", side:"LONG"}, 2);
-  assert.match(short, /^\u200E<b>BTC\/USDT<\/b>/);
-  assert.match(short, /\u200E<b>SHORT 🔴<\/b>/);
-  assert.match(short, /\u200EEntry Zone 1 : 65000/);
-  assert.match(short, /\u200EEntry Zone 2 : 65650/);
-  assert.match(short, /\u200E🎯 TP 1 : 65800/);
-  assert.match(short, /\u200E🎯 TP 2 : 66400/);
-  assert.match(short, /\u200E🎯 TP 3 : 67200/);
-  assert.match(short, /\u200E⛔ SL : 64500/);
-  assert.match(long, /\u200E<b>LONG 🟢<\/b>/);
-  assert.match(long, /\u200EEntry Zone 2 : 64025/);
-  assert.doesNotMatch(short, /PREMIUM SIGNALS|RISK|Score:|LEVERAGE|10x/);
-  assert.doesNotMatch(short, /[\u0600-\u06FF]/);
+  assert.equal(short, [
+    "⚪ <b>سیگنال معتبر</b>",
+    "⭐ امتیاز سیگنال: <b>82/100</b>",
+    "نماد: <b>BTC</b>",
+    "جهت معامله: 🔴 شورت / Short",
+    "قیمت ورود: <b>65,000</b>",
+    "🎯 تارگت اول (1.5R): <b>65,800</b>",
+    "🎯 تارگت دوم (2.5R): <b>66,400</b>",
+    "🎯 تارگت سوم (3.5R): <b>67,200</b>",
+    "⛔ حد ضرر: <b>64,500</b>"
+  ].join("\\n\\n"));
+  assert.match(long, /جهت معامله: 🟢 لانگ \\/ Long/);
+  assert.match(formatFuturesSignalAlert({...signal, riskLevel:"HIGH_RISK"}), /⚠️ <b>سیگنال پر ریسک<\\/b>/);
+  assert.doesNotMatch(short, /PREMIUM SIGNALS|RISK|Entry Zone|LEVERAGE|10x/);
   assert.doesNotMatch(short, /PF_|BTCUSD/);
 });
+
 test("numeric candle timestamps in seconds and milliseconds produce the same identity", () => {
   const seconds = 1794906900;
   const milliseconds = seconds * 1000;
