@@ -53,7 +53,7 @@ test("an owner-confirmed exchange stop is used by the active lifecycle", () => {
 test("LONG staged exits use 1.5R, 2.5R and 3.5R with one-third partials", () => {
   const first = evaluateStagedTradeCandle(longTrade, {open: 106, high: 108, low: 101, close: 107.5, time: 4});
   assert.equal(first.trade.tpHits.join(","), "TP1");
-  assert.equal(first.trade.remainingFraction, 2 / 3);
+  assert.ok(Math.abs(first.trade.remainingFraction - 2 / 3) < 1e-9);
   assert.equal(first.trade.currentStop, 95);
   assert.ok(Math.abs(first.trade.realizedMarginReturnPct - 25) < 1e-9);
 
