@@ -1206,12 +1206,16 @@ async function handleTelegramCommand(command, chatId, env, message) {
         return;
       }
       const entry = Number(trade.actualEntry || trade.plannedEntry || trade.entry);
-      const currentStop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
+      const initialStop = Number(trade.initialStop ?? trade.stop);
+      const currentStop = Number(trade.currentStop ?? initialStop);
       const lastPrice = Number(trade.lastPrice);
-      const validLong = trade.side === "LONG" && newStop > currentStop && newStop < lastPrice;
-      const validShort = trade.side === "SHORT" && newStop < currentStop && newStop > lastPrice;
-      if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(currentStop) ||
-          !Number.isFinite(lastPrice) || lastPrice <= 0 || !(validLong || validShort)) {
+      // Allow the owner to reconcile a stale auto-BE stop back to the actual
+      // exchange stop, but never allow a stop worse than the original risk.
+      const validLong = trade.side === "LONG" && newStop >= initialStop && newStop < lastPrice;
+      const validShort = trade.side === "SHORT" && newStop <= initialStop && newStop > lastPrice;
+      if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(initialStop) || initialStop <= 0 ||
+          !Number.isFinite(currentStop) || !Number.isFinite(lastPrice) || lastPrice <= 0 ||
+          !(validLong || validShort)) {
         await sendMessage(env, chatId,
           "❌ حد ضرر جدید معتبر نیست. باید در جهت کاهش ریسک نسبت به حد ضرر قبلی جابه‌جا شده باشد و در سمت امن قیمت فعلی قرار بگیرد. هیچ تغییری ثبت نشد.");
         return;
