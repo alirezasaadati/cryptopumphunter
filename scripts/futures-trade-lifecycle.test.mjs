@@ -14,7 +14,7 @@ const shortTrade = {
 };
 
 test("active LONG lifecycle takes one third at 1.5R and only suggests break-even", () => {
-  const result = evaluateStagedTradeCandle(longTrade, { open: 100, high: 108, low: 99, time: 1 });
+  const result = evaluateStagedTradeCandle(longTrade, { open: 100, high: 108, low: 99, close: 106, time: 1 });
   assert.equal(result.changed, true);
   assert.equal(result.closed, false);
   assert.deepEqual(result.trade.tpHits, ["TP1"]);
@@ -27,7 +27,7 @@ test("active LONG lifecycle takes one third at 1.5R and only suggests break-even
 });
 
 test("active SHORT lifecycle suggests a fee-buffered stop without moving the tracked stop", () => {
-  const result = evaluateStagedTradeCandle(shortTrade, { open: 100, high: 101, low: 92, time: 2 });
+  const result = evaluateStagedTradeCandle(shortTrade, { open: 100, high: 101, low: 92, close: 93, time: 2 });
   assert.equal(result.trade.currentStop, 105);
   assert.equal(result.trade.breakEvenActivated, false);
   assert.equal(result.trade.breakEvenSuggested, true);
@@ -37,11 +37,11 @@ test("active SHORT lifecycle suggests a fee-buffered stop without moving the tra
 });
 
 test("staged exits use 1.5R, 2.5R and 3.5R with one-third portions", () => {
-  const first = evaluateStagedTradeCandle(longTrade, { open: 100, high: 108, low: 99, time: 3 }).trade;
-  const second = evaluateStagedTradeCandle(first, { open: 108, high: 113, low: 107, time: 4 }).trade;
+  const first = evaluateStagedTradeCandle(longTrade, { open: 100, high: 108, low: 99, close: 106, time: 3 }).trade;
+  const second = evaluateStagedTradeCandle(first, { open: 108, high: 113, low: 107, close: 112, time: 4 }).trade;
   assert.deepEqual(second.tpHits, ["TP1", "TP2"]);
   assert.ok(Math.abs(second.remainingFraction - 1 / 3) < 1e-9);
-  const third = evaluateStagedTradeCandle(second, { open: 113, high: 118, low: 112, time: 5 });
+  const third = evaluateStagedTradeCandle(second, { open: 113, high: 118, low: 112, close: 117, time: 5 });
   assert.equal(third.closed, true);
   assert.equal(third.reason, "CLOSED_PROFIT");
   assert.deepEqual(third.trade.tpHits, ["TP1", "TP2", "TP3"]);
@@ -50,7 +50,7 @@ test("staged exits use 1.5R, 2.5R and 3.5R with one-third portions", () => {
 });
 
 test("the active stop is evaluated conservatively before targets", () => {
-  const result = evaluateStagedTradeCandle(longTrade, { open: 100, high: 120, low: 94, time: 6 });
+  const result = evaluateStagedTradeCandle(longTrade, { open: 100, high: 120, low: 94, close: 110, time: 6 });
   assert.equal(result.closed, true);
   assert.equal(result.reason, "CLOSED_STOP");
   assert.equal(result.trade.exitPrice, 95);
@@ -59,7 +59,7 @@ test("the active stop is evaluated conservatively before targets", () => {
 
 test("a manually confirmed stop is the stop used by the active lifecycle", () => {
   const confirmed = { ...longTrade, currentStop: 100.12, breakEvenActivated: true };
-  const result = evaluateStagedTradeCandle(confirmed, { open: 101, high: 102, low: 100, time: 7 });
+  const result = evaluateStagedTradeCandle(confirmed, { open: 101, high: 102, low: 100, close: 101, time: 7 });
   assert.equal(result.closed, true);
   assert.equal(result.reason, "CLOSED_STOP");
   assert.equal(result.trade.exitPrice, 100.12);
@@ -67,8 +67,8 @@ test("a manually confirmed stop is the stop used by the active lifecycle", () =>
 
 test("invalid levels and closed trades are not processed", () => {
   const invalid = { ...longTrade, initialStop: 0 };
-  assert.equal(evaluateStagedTradeCandle(invalid, { open: 100, high: 101, low: 99 }).error, "INVALID_TRADE_LEVELS");
-  assert.equal(evaluateStagedTradeCandle({ ...longTrade, status: "CLOSED_STOP" }, { open: 100, high: 101, low: 99 }).changed, false);
+  assert.equal(evaluateStagedTradeCandle(invalid, { open: 100, high: 101, low: 99, close: 100 }).error, "INVALID_TRADE_LEVELS");
+  assert.equal(evaluateStagedTradeCandle({ ...longTrade, status: "CLOSED_STOP" }, { open: 100, high: 101, low: 99, close: 100 }).changed, false);
 });
 
 test("confirmed stop synchronization validates LONG and SHORT against latest tracked price", () => {
