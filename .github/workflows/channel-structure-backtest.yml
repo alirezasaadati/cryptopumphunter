@@ -1,0 +1,28 @@
+name: Channel structure strategy backtest
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/channel-structure-engine.js"
+      - "scripts/channel-structure-backtest.mjs"
+      - ".github/workflows/channel-structure-backtest.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run channel strategy 90d and 180d backtests
+        run: node scripts/channel-structure-backtest.mjs
+      - name: Upload channel backtest report
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-structure-backtest
+          path: artifacts/channel-structure-backtest.json
+          if-no-files-found: error
