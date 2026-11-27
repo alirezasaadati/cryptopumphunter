@@ -1,4 +1,4 @@
-import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, displayEntryPrice, ALERT_TTL_SECONDS } from "./futures-alerts.js";
+import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, displayEntryPrice, formatSignalDisplayPrice, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
 import { evaluateStagedTradeCandle } from "./futures-trade-lifecycle.js";
@@ -2047,13 +2047,6 @@ function formatFuturesSignal(item, index = 1) {
     `⛔ SL : ${formatSignalDisplayPrice(item.stop)}`
   ];
   return lines.map(line => `\u200E${line}`).join("\n");
-}
-
-function formatSignalDisplayPrice(value) {
-  const price = Number(value);
-  return Number.isFinite(price)
-    ? price.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 8 })
-    : "—";
 }
 
 function formatSignalPrice(value) {
