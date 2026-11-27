@@ -2010,13 +2010,13 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const standardThresholdMet = strictSetup && fourHourTrend === expectedTrend &&
     quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.85;
   let standardEntryPassed = false, entryFilters;
-  if (options.skipEntryFilters) { entryFilters = { ok: true, skippedForBaseline: true, momentumConfirmed: true, pullbackConfirmed: true }; standardEntryPassed = standardThresholdMet; }
+  if (options.skipEntryFilters && !longNeutralRecovery) { entryFilters = { ok: true, skippedForBaseline: true, momentumConfirmed: true, pullbackConfirmed: true }; standardEntryPassed = standardThresholdMet; }
   else if (standardThresholdMet) { const strictEntry = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: false }); if (strictEntry.ok) { entryFilters = strictEntry; standardEntryPassed = true; } else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true }); }
   else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true });
   if (!entryFilters.ok) return { symbol: ticker.symbol, fourHourTrend, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
   // The experimental LONG recovery path requires BOTH real 15m momentum and
   // pullback confirmation. Missing 15m confirmation is a hard rejection.
-  if (longNeutralRecovery && (entryFilters.momentumConfirmed !== true || entryFilters.pullbackConfirmed !== true)) {
+  if (longNeutralRecovery && (options.skipEntryFilters || entryFilters.momentumConfirmed !== true || entryFilters.pullbackConfirmed !== true)) {
     return { symbol: ticker.symbol, fourHourTrend, side, score: Math.max(0, Math.min(100, Math.round(score))),
       rejected: "Neutral-4H LONG recovery requires confirmed 15-minute momentum and pullback",
       entryDiagnostics: entryFilters };
@@ -2037,7 +2037,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   if (highRiskEligible) reasons.push("Signal passed the flexible high-risk path with full 15-minute confirmation");
   return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side,
     momentumConfirmed: true, pullbackConfirmed: true, score, baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
-    priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))), volumePriorityBonus, fourHourScoreAdjustment: 10,
+    priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))), volumePriorityBonus, fourHourScoreAdjustment: longNeutralRecovery ? 4 : 10,
     confirmationPriorityBonus, confirmationCount: 2, riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
     price: entry, entry, stop, target1, target2, target3, rewardRisk: 1.5, rsi: rsiValue,
     ema20: e20, ema50: e50, atr, volumeRatio, funding: Number.isFinite(funding) ? funding : null,
