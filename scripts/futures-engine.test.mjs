@@ -207,6 +207,18 @@ test("15m momentum breakout is a required entry gate",()=>{
   assert.equal(result.eligible,undefined,JSON.stringify(result));
   assert.match(result.rejected,/15-minute momentum trigger/);
 });
+test("15m pullback to EMA21 is a required entry gate",()=>{
+  const {ticker,oneHour,fourHour,fifteenMinute}=makeSetup("LONG");
+  const ema21=testEma(fifteenMinute.map(c=>c.close),21);
+  for(const candle of fifteenMinute.slice(-10,-1)){
+    candle.low=ema21+0.4;
+    candle.high=Math.max(candle.high,candle.low+0.1);
+  }
+  const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,fifteenMinute);
+  assert.equal(result.eligible,undefined,JSON.stringify(result));
+  assert.match(result.rejected,/No 15-minute pullback to the EMA21 zone/);
+});
+
 test("11.2.0 rejects candidates when 15m entry data is unavailable",()=>{
   const {ticker,oneHour,fourHour}=makeSetup("LONG");
   const result=analyzeFuturesSymbol(ticker,oneHour,fourHour,[]);
