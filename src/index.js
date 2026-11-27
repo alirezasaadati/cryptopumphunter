@@ -2007,7 +2007,21 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
     score >= minimumStandardScore && volumeRatio >= minimumStandardVolumeRatio;
   let standardEntryPassed = false, entryFilters;
   if (options.skipEntryFilters) { entryFilters = { ok: true, skippedForBaseline: true, momentumConfirmed: true, pullbackConfirmed: true }; standardEntryPassed = standardThresholdMet; }
-  else if (standardThresholdMet) { const strictEntry = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: false }); if (strictEntry.ok) { entryFilters = strictEntry; standardEntryPassed = true; } else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true }); }
+  else if (standardThresholdMet) {
+    const strictEntry = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: false });
+    if (strictEntry.ok) { entryFilters = strictEntry; standardEntryPassed = true; }
+    else {
+      if (side === "LONG") console.log("FUTURES_LONG_STANDARD_ENTRY_REJECTION_DIAGNOSTICS", JSON.stringify({
+        timestamp: new Date().toISOString(), symbol: ticker.symbol, side,
+        rejected: strictEntry.rejected || "Unknown standard-entry rejection",
+        momentumConfirmed: strictEntry.momentumConfirmed ?? null,
+        pullbackConfirmed: strictEntry.pullbackConfirmed ?? null,
+        driftPct: strictEntry.driftPct ?? null,
+        emaDistanceAtr: strictEntry.emaDistanceAtr ?? null
+      }));
+      entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true });
+    }
+  }
   else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true });
   if (!entryFilters.ok) return { symbol: ticker.symbol, fourHourTrend, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
   if (!standardEntryPassed && quoteVolume < FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "24H volume is below the safety threshold" };
