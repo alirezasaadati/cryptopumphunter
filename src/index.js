@@ -1196,7 +1196,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
       const newStop = Number(parts[2]);
       if (!tradeId || !Number.isFinite(newStop) || newStop <= 0) {
         await sendMessage(env, chatId,
-          "فرمت دستور نادرست است. ابتدا حد ضرر را در صرافی تغییر دهید، سپس ارسال کنید:\\n/confirm_stop <ID> <PRICE>");
+          "فرمت دستور نادرست است. ابتدا حد ضرر را در صرافی تغییر دهید، سپس ارسال کنید:\n/confirm_stop <ID> <PRICE>");
         return;
       }
       const openTrades = await getOpenFuturesTrades(env);
@@ -1225,10 +1225,10 @@ async function handleTelegramCommand(command, chatId, env, message) {
         stopConfirmedBy: String(chatId)
       }]);
       await sendMessage(env, chatId,
-        "✅ حد ضرر جدید در پیگیری داخلی ربات ثبت شد.\\n" +
-        "نماد: " + formatFuturesSymbol(trade.symbol) + " | " + trade.side + "\\n" +
-        "حد ضرر قبلی: " + formatSignalPrice(currentStop) + "\\n" +
-        "حد ضرر تأییدشده: " + formatSignalPrice(newStop) + "\\n" +
+        "✅ حد ضرر جدید در پیگیری داخلی ربات ثبت شد.\n" +
+        "نماد: " + formatFuturesSymbol(trade.symbol) + " | " + trade.side + "\n" +
+        "حد ضرر قبلی: " + formatSignalPrice(currentStop) + "\n" +
+        "حد ضرر تأییدشده: " + formatSignalPrice(newStop) + "\n" +
         "⚠️ این دستور هیچ سفارشی را در صرافی ایجاد یا ویرایش نمی‌کند؛ فقط پس از تغییر دستی شما، وضعیت پیگیری ربات را هماهنگ می‌کند.");
       return;
     }
