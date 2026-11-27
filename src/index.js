@@ -1979,7 +1979,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   const up4h = e20_4h > e50_4h && candles4h.at(-1).close > e20_4h, down4h = e20_4h < e50_4h && candles4h.at(-1).close < e20_4h;
   const fourHourTrend = up4h ? "BULLISH" : down4h ? "BEARISH" : "NEUTRAL";
   let side = null, score = 0; const reasons = [];
-  const strictLong = up1h && rsiValue >= 46 && rsiValue <= 68, strictShort = down1h && rsiValue >= 34 && rsiValue <= 52;
+  const strictLong = up1h && rsiValue >= 46 && rsiValue <= 70, strictShort = down1h && rsiValue >= 34 && rsiValue <= 52;
   const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
   const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
