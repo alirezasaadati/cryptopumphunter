@@ -3381,6 +3381,7 @@ async function runFuturesSignalScan(env, options = {}) {
     highRiskSignalCount: signals.filter(item => item.riskLevel === "HIGH_RISK").length,
     registeredCount: signals.length,
     delivery, deliveryError,
+    momentum15mRejectedCount: analyzed.filter(item => item && item.rejected === "The 15-minute momentum trigger has not fired").length,
     topRejections: [...rejectionCounts.entries()].map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count).slice(0, 8)
   };
