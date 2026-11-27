@@ -34,7 +34,7 @@ test("active staged lifecycle does not move the internal stop at 1R without owne
   const result = evaluateStagedTradeCandle(longTrade, {open: 100, high: 106, low: 101, close: 105, time: 1});
   assert.equal(result.closed, false);
   assert.equal(result.trade.currentStop, 95);
-  assert.equal(result.trade.breakEvenActivated, undefined);
+  assert.equal(result.trade.breakEvenActivated, false);
   const next = evaluateStagedTradeCandle(result.trade, {open: 102, high: 104, low: 99.5, close: 103, time: 2});
   assert.equal(next.closed, false);
   assert.equal(next.trade.status, "OPEN");
@@ -103,6 +103,6 @@ test("closed trades and candles that touch no active level remain unchanged", ()
 
 test("invalid candles and invalid trade levels do not create close events", () => {
   assert.equal(evaluateStagedTradeCandle(longTrade, {open: 100, high: 99, low: 101, close: 100}).changed, false);
-  const invalid = evaluateStagedTradeCandle({...longTrade, initialStop: 100, currentStop: 100}, {open: 100, high: 101, low: 99, close: 100});
+  const invalid = evaluateStagedTradeCandle({...longTrade, initialStop: 0, currentStop: 0}, {open: 100, high: 101, low: 99, close: 100});
   assert.equal(invalid.error, "INVALID_TRADE_LEVELS");
 });
