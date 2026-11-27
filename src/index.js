@@ -3380,44 +3380,12 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const createdAt = Date.now();
-  // Classify overall 4h market breadth. This affects ranking only; it never blocks a side.
-  const regimeSamples = analyzed.filter(item => ["BULLISH", "BEARISH", "NEUTRAL"].includes(item?.fourHourTrend));
-  const regimeCount = {
-    bullish: regimeSamples.filter(item => item.fourHourTrend === "BULLISH").length,
-    bearish: regimeSamples.filter(item => item.fourHourTrend === "BEARISH").length,
-    neutral: regimeSamples.filter(item => item.fourHourTrend === "NEUTRAL").length
-  };
-  const regimeTotal = regimeSamples.length || 1;
-  const bullishShare = regimeCount.bullish / regimeTotal;
-  const bearishShare = regimeCount.bearish / regimeTotal;
-  let marketRegime = "NEUTRAL";
-  if (bullishShare >= 0.65) marketRegime = "BULLISH";
-  else if (bearishShare >= 0.65) marketRegime = "BEARISH";
-  else if (bullishShare - bearishShare >= 0.10) marketRegime = "LEAN_BULLISH";
-  else if (bearishShare - bullishShare >= 0.10) marketRegime = "LEAN_BEARISH";
-  for (const item of analyzed) {
-    if (item?.eligible !== true || !item.side) continue;
-    const aligned = (marketRegime === "BULLISH" && item.side === "LONG") ||
-      (marketRegime === "BEARISH" && item.side === "SHORT");
-    const leaningAligned = (marketRegime === "LEAN_BULLISH" && item.side === "LONG") ||
-      (marketRegime === "LEAN_BEARISH" && item.side === "SHORT");
-    const opposing = (marketRegime === "BULLISH" && item.side === "SHORT") ||
-      (marketRegime === "BEARISH" && item.side === "LONG");
-    const leaningOpposing = (marketRegime === "LEAN_BULLISH" && item.side === "SHORT") ||
-      (marketRegime === "LEAN_BEARISH" && item.side === "LONG");
-    const adjustment = aligned ? 8 : leaningAligned ? 5 : opposing ? -8 : leaningOpposing ? -5 : 0;
-    item.marketRegime = marketRegime;
-    item.marketRegimeAdjustment = adjustment;
-    item.priorityScore = Math.max(0, Math.min(125, Math.round(Number(item.priorityScore ?? item.score) + adjustment)));
-    if (adjustment) item.reasons = [...(item.reasons || []), "Overall market regime: " + marketRegime + "; priority score adjustment " + (adjustment > 0 ? "+" : "") + adjustment];
-  }
-
   const eligibleCandidates = analyzed
     .filter(item => item?.eligible === true)
     // Preserve every standard candidate ahead of experimental high-risk candidates.
     .sort((a, b) =>
       Number(a.riskLevel === "HIGH_RISK") - Number(b.riskLevel === "HIGH_RISK") ||
-      Number(b.priorityScore ?? b.score) - Number(a.priorityScore ?? a.score) ||
+      Number(b.score) - Number(a.score) ||
       a.symbol.localeCompare(b.symbol)
     );
   const generatedSignals = eligibleCandidates
