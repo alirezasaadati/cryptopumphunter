@@ -3,6 +3,7 @@ import { analyzeFuturesSymbol, FUTURES_CONFIG } from "../src/index.js";
 import { analyzeFuturesSymbol as analyzeLegacyFuturesSymbol, FUTURES_CONFIG as LEGACY_FUTURES_CONFIG } from "../src/legacy-engine-v112.js";
 import { evaluateStagedTradeCandle, FUTURES_TRADE_LEVERAGE } from "../src/futures-trade-lifecycle.js";
 
+// Exact v11.2.0 analyzer is imported from the isolated source snapshot, not reimplemented.
 const BASE = "https://futures.kraken.com";
 const MS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
 const DAYS = Math.max(30, Math.min(90, Number(process.env.BACKTEST_DAYS || 60)));
