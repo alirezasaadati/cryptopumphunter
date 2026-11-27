@@ -7,6 +7,8 @@ const MS = { "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 };
 const DAYS = Math.max(30, Math.min(90, Number(process.env.BACKTEST_DAYS || 60)));
 const SYMBOL_LIMIT = Math.max(3, Math.min(12, Number(process.env.BACKTEST_SYMBOLS || 10)));
 const WARMUP_DAYS = 20;
+const END_OFFSET_DAYS = Math.max(0, Math.min(180, Number(process.env.BACKTEST_END_OFFSET_DAYS || 0)));
+const REPORT_TAG = String(process.env.BACKTEST_REPORT_TAG || "three-engine-backtest").replace(/[^a-z0-9_-]/gi, "-");
 const LEVERAGE = FUTURES_TRADE_LEVERAGE;
 const FEE = Math.max(0, Number(process.env.BACKTEST_FEE_PER_SIDE || 0.0005));
 const SLIPPAGE = Math.max(0, Number(process.env.BACKTEST_SLIPPAGE_PER_SIDE || 0.0003));
@@ -281,7 +283,7 @@ async function backtestSymbol(ticker,btc4h,fromMs,toMs) {
     throw new Error("insufficient candles: 1h="+h1.length+", 4h="+h4.length+", 15m="+m15.length+", 5m="+m5.length);
   const modes={};
   for(const name of ["current","file","combined"])for(const cap of ["uncapped","cap10"]){
-    modes[name+"_"+cap]={name,cap,signals:0,qualityRejected:0,riskCapRejected:0,skippedByLock:0,rejected:0,trades:[],lockUntil:new Map()};
+    modes[name+"_"+cap]={name,cap,signals:0,qualityRejected:0,qualityRejectedLong:0,qualityRejectedShort:0,riskCapRejected:0,riskCapRejectedLong:0,riskCapRejectedShort:0,skippedByLock:0,rejected:0,trades:[],lockUntil:new Map()};
   }
   let h4Index=0,m15Index=0,btcIndex=0;
   const testStart=toMs-DAYS*86400000;
@@ -306,10 +308,10 @@ async function backtestSymbol(ticker,btc4h,fromMs,toMs) {
       const c=candidates[name];
       for(const cap of ["uncapped","cap10"]){
         const state=modes[name+"_"+cap];
-        if(name==="combined"&&(c.quality<COMBINED_MIN_QUALITY||c.qualityOpposed)){state.qualityRejected++;continue;}
+        if(name==="combined"&&(c.quality<COMBINED_MIN_QUALITY||c.qualityOpposed)){state.qualityRejected++;if(c.side==="LONG")state.qualityRejectedLong++;else state.qualityRejectedShort++;continue;}
         if(c.eligible!==true){state.rejected++;continue;}
         state.signals++;
-        if(cap==="cap10"&&estimatedMarginLossPct(c.entry,c.stop)>MAX_MARGIN_LOSS_PCT){state.riskCapRejected++;continue;}
+        if(cap==="cap10"&&estimatedMarginLossPct(c.entry,c.stop)>MAX_MARGIN_LOSS_PCT){state.riskCapRejected++;if(c.side==="LONG")state.riskCapRejectedLong++;else state.riskCapRejectedShort++;continue;}
         const lockKey=ticker.symbol+"|"+c.side;
         if((state.lockUntil.get(lockKey)||0)>signalCloseTime){state.skippedByLock++;continue;}
         const trade=simulateTrade(c,m5,signalCloseTime,toMs);
@@ -325,7 +327,7 @@ async function backtestSymbol(ticker,btc4h,fromMs,toMs) {
   const output={symbol:ticker.symbol,candles:{h1:h1.length,h4:h4.length,m15:m15.length,m5:m5.length}};
   for(const key of Object.keys(modes)){
     const s=modes[key];
-    output[key]={signals:s.signals,qualityRejected:s.qualityRejected,riskCapRejected:s.riskCapRejected,
+    output[key]={signals:s.signals,qualityRejected:s.qualityRejected,qualityRejectedLong:s.qualityRejectedLong,qualityRejectedShort:s.qualityRejectedShort,riskCapRejected:s.riskCapRejected,riskCapRejectedLong:s.riskCapRejectedLong,riskCapRejectedShort:s.riskCapRejectedShort,
       skippedByLock:s.skippedByLock,rejected:s.rejected,metrics:summarize(s.trades),portfolio:simulatePortfolio(s.trades),
       trades:s.trades};
   }
@@ -333,7 +335,7 @@ async function backtestSymbol(ticker,btc4h,fromMs,toMs) {
 }
 
 async function main(){
-  const endMs=Number(process.env.BACKTEST_END_MS||Date.now()),startMs=endMs-DAYS*86400000,fromMs=startMs-WARMUP_DAYS*86400000;
+  const endMs=Number(process.env.BACKTEST_END_MS|| (Date.now()-END_OFFSET_DAYS*86400000)),startMs=endMs-DAYS*86400000,fromMs=startMs-WARMUP_DAYS*86400000;
   const tickersData=await getJson(BASE+"/derivatives/api/v3/tickers");
   if(!Array.isArray(tickersData?.tickers))throw new Error("Kraken tickers response invalid");
   const eligible=tickersData.tickers.filter(t=>t?.tag==="perpetual"&&t.suspended!==true&&/^(PI|PF)_[A-Z0-9]+USD$/.test(String(t.symbol||""))&&Number(t.volumeQuote)>=FUTURES_CONFIG.MIN_QUOTE_VOLUME&&Number(t.last)>0);
@@ -359,7 +361,7 @@ async function main(){
       metrics:summarize(trades),portfolio:simulatePortfolio(trades)};
   }
   const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures historical OHLC",
-    period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,warmupDays:WARMUP_DAYS},
+    period:{from:new Date(startMs).toISOString(),to:new Date(endMs).toISOString(),days:DAYS,endOffsetDays:END_OFFSET_DAYS,warmupDays:WARMUP_DAYS},
     settings:{symbolsRequested:universe.length,symbolsTested:results.filter(r=>!r.error).length,leverage:LEVERAGE,
       feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,maxPlannedLossOnMarginPct:MAX_MARGIN_LOSS_PCT,
       combinedQualityFloor:COMBINED_MIN_QUALITY,execution:"closed 1h/4h/15m signal; next 1h open; 5m staged exits at 1.5R/2.5R/3.5R; 1/3,1/3,remainder",
@@ -370,9 +372,9 @@ async function main(){
       fileLogic:"attached pasted source: LONG structural low over 12 prior 1h candles minus 0.15 ATR; quality score weights and BTC 4h regime",
       combinedLogic:"file logic plus hard gate quality >= 40 and no BTC regime opposition",
       riskCapLogic:"at 10x, planned stop loss including estimated round-trip fee/slippage must be <=10% of used margin; otherwise signal excluded"},
-    variants,symbols:results.map(r=>{const x={...r};for(const k of Object.keys(x))if(k.endsWith("_uncapped")||k.endsWith("_cap10"))delete x[k];return x;})};
+    variants,symbols:results.map(r=>{if(r.error)return r;const x={symbol:r.symbol,candles:r.candles};for(const k of ["current_uncapped","file_uncapped","combined_uncapped","current_cap10","file_cap10","combined_cap10"]){const {trades,...summary}=r[k];x[k]=summary;}return x;})};
   await mkdir("artifacts",{recursive:true});
-  await writeFile("artifacts/three-engine-backtest.json",JSON.stringify(report,null,2));
+  await writeFile("artifacts/"+REPORT_TAG+".json",JSON.stringify(report,null,2));
   const keys=["current_uncapped","file_uncapped","combined_uncapped","current_cap10","file_cap10","combined_cap10"];
   const lines=["# Three-way Kraken Futures signal-engine backtest","",
     "Period: "+report.period.from+" to "+report.period.to+" ("+DAYS+" days)",
@@ -388,7 +390,7 @@ async function main(){
     "- Fees and slippage are explicit assumptions and actual fills can exceed the planned 10% margin-loss cap.",
     "- The file-as-is variant labels quality but does not reject low-quality/opposed signals; the combined variant turns the file's weak-quality boundary (40) and BTC opposition into a hard gate.",
     "- This is a historical simulation, not a live-performance guarantee.");
-  await writeFile("artifacts/three-engine-backtest.md",lines.join("\n"));
+  await writeFile("artifacts/"+REPORT_TAG+".md",lines.join("\n"));
   console.log(JSON.stringify({ok:results.some(r=>!r.error),period:report.period,settings:report.settings,variants,symbolErrors:results.filter(r=>r.error).map(r=>({symbol:r.symbol,error:r.error}))},null,2));
   if(!results.some(r=>!r.error))process.exitCode=1;
 }
