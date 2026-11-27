@@ -314,7 +314,7 @@ async function backtestSymbol(ticker,btc4h,fromMs,toMs) {
         const trade=simulateTrade(c,m5,signalCloseTime,toMs);
         trade.id=ticker.symbol+":"+c.side+":"+signalCloseTime;
         trade.symbol=ticker.symbol;trade.side=c.side;trade.score=c.score;trade.quality=c.quality??null;
-        trade.regime=regime;trade.riskPct=Math.abs(c.entry-c.stop)/c.entry*100;
+        trade.regime=c.fourHourTrend??null;trade.riskPct=Math.abs(c.entry-c.stop)/c.entry*100;
         trade.entryTime=signalCloseTime;
         state.trades.push(trade);
         state.lockUntil.set(lockKey,trade.status==="OPEN_AT_BACKTEST_END"?toMs:trade.closedAtMs);
