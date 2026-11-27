@@ -78,8 +78,10 @@ function escapeTelegramHtml(value) {
 function formatSignalPrice(value) {
   const price = Number(value);
   if (!Number.isFinite(price)) return "—";
-  const decimals = price < 1 ? 4 : 2;
-  return price.toLocaleString("en-US", { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: decimals });
+  const decimals = price >= 1 ? 2 : price >= 0.01 ? 4 : 6;
+  const factor = 10 ** decimals;
+  const truncated = Math.trunc(price * factor + Number.EPSILON * Math.max(1, Math.abs(price * factor))) / factor;
+  return truncated.toLocaleString("en-US", { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: decimals });
 }
 
 export { ALERT_TTL_SECONDS };
