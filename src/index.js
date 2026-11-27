@@ -1990,7 +1990,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   // A BEARISH 4H trend remains a hard rejection; SHORT logic is unchanged.
   const longNeutralRecovery = side === "LONG" && fourHourTrend === "NEUTRAL" &&
     e20_4h >= e50_4h && closes4h.at(-1) >= e50_4h;
-  if (fourHourTrend !== expectedTrend && !longNeutralRecovery) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 4H trend is not aligned with the signal" };
+  if (fourHourTrend !== expectedTrend && (!longNeutralRecovery || options.disableLongNeutralRecovery === true)) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 4H trend is not aligned with the signal" };
   if (options.requireBtcFourHourAlignment === true && options.btcFourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, rejected: "Bitcoin's 4H trend is not aligned with the signal" };
   if (longNeutralRecovery) {
     score += 4;
