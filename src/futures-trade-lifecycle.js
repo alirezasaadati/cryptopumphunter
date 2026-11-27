@@ -1,3 +1,26 @@
+export function validateConfirmedStopPrice(trade, value) {
+  const stopPrice = Number(value);
+  const lastPrice = Number(trade?.lastPrice ?? trade?.actualEntry ?? trade?.plannedEntry);
+  const entry = Number(trade?.actualEntry ?? trade?.plannedEntry);
+  if (!trade || trade.status !== "OPEN" || !["LONG", "SHORT"].includes(trade.side)) {
+    return { ok: false, reason: "Trade is not an open LONG/SHORT record." };
+  }
+  if (![stopPrice, lastPrice, entry].every(Number.isFinite) || stopPrice <= 0 || lastPrice <= 0 || entry <= 0) {
+    return { ok: false, reason: "Stop price or reference price is invalid." };
+  }
+  if (trade.side === "LONG" && stopPrice >= lastPrice) {
+    return { ok: false, reason: "A LONG stop must be below the latest tracked price." };
+  }
+  if (trade.side === "SHORT" && stopPrice <= lastPrice) {
+    return { ok: false, reason: "A SHORT stop must be above the latest tracked price." };
+  }
+  return {
+    ok: true,
+    stopPrice,
+    breakEvenActivated: trade.side === "LONG" ? stopPrice >= entry : stopPrice <= entry
+  };
+}
+
 // Experimental futures trade lifecycle. This module evaluates signal-level candles only;
 // it does not place orders or claim exchange execution.
 export const FUTURES_TRADE_LEVERAGE = 10;
