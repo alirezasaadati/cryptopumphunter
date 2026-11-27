@@ -3377,7 +3377,20 @@ async function runFuturesSignalScan(env, options = {}) {
       Number(b.score) - Number(a.score) ||
       a.symbol.localeCompare(b.symbol)
     );
-  const generatedSignals = eligibleCandidates
+
+  // Keep each scan directionally consistent: when one side has more eligible
+  // candidates, suppress all candidates from the minority side for this scan.
+  // A tie intentionally keeps both directions; no strategy scores or filters change.
+  const longEligibleCount = eligibleCandidates.filter(item => item.side === "LONG").length;
+  const shortEligibleCount = eligibleCandidates.filter(item => item.side === "SHORT").length;
+  const dominantDirection = longEligibleCount > shortEligibleCount ? "LONG"
+    : shortEligibleCount > longEligibleCount ? "SHORT" : null;
+  const directionFilteredCandidates = dominantDirection
+    ? eligibleCandidates.filter(item => item.side === dominantDirection)
+    : eligibleCandidates;
+  const suppressedOppositeDirectionCount = eligibleCandidates.length - directionFilteredCandidates.length;
+
+  const generatedSignals = directionFilteredCandidates
     .slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
     .map(item => ({
       ...item, id: crypto.randomUUID(), createdAt,
@@ -3421,6 +3434,11 @@ async function runFuturesSignalScan(env, options = {}) {
     analysisErrorCount, fifteenMinuteDataErrorCount,
     rejectedCount: analyzed.filter(item => item && item.eligible !== true).length,
     eligibleCount: eligibleCandidates.length,
+    longEligibleCount,
+    shortEligibleCount,
+    dominantDirection,
+    suppressedOppositeDirectionCount,
+    selectedEligibleCount: directionFilteredCandidates.length,
     standardEligibleCount: eligibleCandidates.filter(item => item.riskLevel !== "HIGH_RISK").length,
     highRiskEligibleCount: eligibleCandidates.filter(item => item.riskLevel === "HIGH_RISK").length,
     signalCount: signals.length,
