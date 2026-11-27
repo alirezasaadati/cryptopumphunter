@@ -3305,7 +3305,7 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const eligibleCandidates = analyzed
-    .filter(item => item?.eligible === true && isAllowedSignalDirection(item))
+    .filter(item => item?.eligible === true)
     // Preserve every standard candidate ahead of experimental high-risk candidates.
     .sort((a, b) =>
       Number(a.riskLevel === "HIGH_RISK") - Number(b.riskLevel === "HIGH_RISK") ||
