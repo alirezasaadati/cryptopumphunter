@@ -356,7 +356,11 @@ async function main(){
     const trades=results.filter(r=>!r.error).flatMap(r=>r[key].trades).sort((a,b)=>a.signalCloseTime-b.signalCloseTime);
     variants[key]={signals:results.reduce((n,r)=>n+Number(r[key]?.signals||0),0),
       qualityRejected:results.reduce((n,r)=>n+Number(r[key]?.qualityRejected||0),0),
+      qualityRejectedLong:results.reduce((n,r)=>n+Number(r[key]?.qualityRejectedLong||0),0),
+      qualityRejectedShort:results.reduce((n,r)=>n+Number(r[key]?.qualityRejectedShort||0),0),
       riskCapRejected:results.reduce((n,r)=>n+Number(r[key]?.riskCapRejected||0),0),
+      riskCapRejectedLong:results.reduce((n,r)=>n+Number(r[key]?.riskCapRejectedLong||0),0),
+      riskCapRejectedShort:results.reduce((n,r)=>n+Number(r[key]?.riskCapRejectedShort||0),0),
       skippedByLock:results.reduce((n,r)=>n+Number(r[key]?.skippedByLock||0),0),
       metrics:summarize(trades),portfolio:simulatePortfolio(trades)};
   }
