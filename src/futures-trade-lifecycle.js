@@ -1,5 +1,5 @@
-// Experimental futures trade lifecycle. This module evaluates signal-level candles only;
-// it does not place orders or claim exchange execution.
+// Futures trade lifecycle evaluation for internal signal tracking only.
+// This module never places, modifies, or cancels exchange orders.
 export const FUTURES_TRADE_LEVERAGE = 10;
 export const FUTURES_MARGIN_PROFIT_TARGET_PERCENT = 30;
 export const FUTURES_PRICE_MOVE_TARGET_PERCENT =
@@ -94,9 +94,6 @@ export function evaluateTradeCandle(trade, candle, options = {}) {
   return { changed: true, reason, trade: updatedTrade };
 }
 
-// The current production TP/SL lifecycle is intentionally retained for this experiment.
-
-
 export function evaluateStagedTradeCandle(trade, candle, options = {}) {
   if (!trade || trade.status !== "OPEN" || !["LONG", "SHORT"].includes(trade.side)) {
     return { changed: false, trade };
@@ -113,7 +110,9 @@ export function evaluateStagedTradeCandle(trade, candle, options = {}) {
   });
   const dir = tradeDir(trade.side);
   const open = Number(candle.open), high = Number(candle.high), low = Number(candle.low);
-  const stop = Number(trade.currentStop ?? initialStop);
+  // Historical currentStop values may have been moved internally without an exchange update.
+  // Trust a changed stop only after an owner has explicitly synchronized it.
+  const stop = Number(trade.stopConfirmedAt ? (trade.currentStop ?? initialStop) : initialStop);
   if (![entry, initialStop, ...targets, open, high, low].every(Number.isFinite) ||
       entry <= 0 || initialStop <= 0 || stop <= 0 || targets.some(x => x <= 0)) {
     return { changed: false, trade, error: "INVALID_TRADE_LEVELS" };
@@ -143,18 +142,11 @@ export function evaluateStagedTradeCandle(trade, candle, options = {}) {
   // Same conservative intrabar policy as the staged-exit backtest: active stop first.
   if (stopHit) return closeStop();
 
-  let currentStop = stop;
-  let breakEvenActivated = trade.breakEvenActivated === true;
-  const oneR = entry + dir * risk;
-  const reachedOneR = trade.side === "LONG" ? high >= oneR : low <= oneR;
-  if (!breakEvenActivated && risk > 0 && reachedOneR) {
-    const feeBuffer = entry * 0.0012;
-    const beStop = entry + dir * feeBuffer;
-    if ((dir === 1 && beStop > currentStop) || (dir === -1 && beStop < currentStop)) {
-      currentStop = beStop;
-      breakEvenActivated = true;
-    }
-  }
+  // Never move the tracked stop automatically: the Worker cannot modify the
+  // exchange order. currentStop changes only after the owner confirms an
+  // already-completed manual stop update with /confirm_stop.
+  const currentStop = stop;
+  const breakEvenActivated = trade.breakEvenActivated === true;
 
   for (let i = 0; i < 3; i++) {
     const name = "TP" + (i + 1);
