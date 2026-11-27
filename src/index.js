@@ -1175,6 +1175,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/menu - باز کردن منوی اصلی\n" +
         "/futures - دریافت سیگنال‌های فیوچرز\n" +
         "/diagfutures - گزارش عیب‌یابی فقط‌خواندنی (مالک)\n" +
+        "/confirm_stop <ID> <PRICE> - تأیید حد ضرری که قبلاً در صرافی تغییر داده‌اید\n" +
         "/close_trade <ID> - بستن رکورد پیگیری داخلی (مالک؛ پوزیشن صرافی را نمی‌بندد)\n" +
         "/scan - اجرای اسکن دستی بازار اسپات\n" +
         "/status - بررسی وضعیت ربات\n" +
@@ -1182,6 +1183,53 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "اسکن‌ها فقط با درخواست دستی شما اجرا می‌شوند.",
         menuForChat(env, chatId)
       );
+      return;
+    }
+
+    if (command === "/confirm_stop") {
+      if (!isOwner(chatId, env)) {
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
+        return;
+      }
+      const parts = String(message?.text || "").trim().split(/\\s+/);
+      const tradeId = parts[1] || "";
+      const newStop = Number(parts[2]);
+      if (!tradeId || !Number.isFinite(newStop) || newStop <= 0) {
+        await sendMessage(env, chatId,
+          "فرمت دستور نادرست است. ابتدا حد ضرر را در صرافی تغییر دهید، سپس ارسال کنید:\\n/confirm_stop <ID> <PRICE>");
+        return;
+      }
+      const openTrades = await getOpenFuturesTrades(env);
+      const trade = openTrades.find(item => String(item.id) === tradeId);
+      if (!trade) {
+        await sendMessage(env, chatId, "No OPEN trade was found with this ID. No changes were made.");
+        return;
+      }
+      const entry = Number(trade.actualEntry || trade.plannedEntry || trade.entry);
+      const currentStop = Number(trade.currentStop ?? trade.initialStop ?? trade.stop);
+      const lastPrice = Number(trade.lastPrice);
+      const validLong = trade.side === "LONG" && newStop > currentStop && newStop < lastPrice;
+      const validShort = trade.side === "SHORT" && newStop < currentStop && newStop > lastPrice;
+      if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(currentStop) ||
+          !Number.isFinite(lastPrice) || lastPrice <= 0 || !(validLong || validShort)) {
+        await sendMessage(env, chatId,
+          "❌ حد ضرر جدید معتبر نیست. باید در جهت کاهش ریسک نسبت به حد ضرر قبلی جابه‌جا شده باشد و در سمت امن قیمت فعلی قرار بگیرد. هیچ تغییری ثبت نشد.");
+        return;
+      }
+      const breakEvenActivated = trade.side === "LONG" ? newStop >= entry : newStop <= entry;
+      await persistFuturesTradeUpdates(env, [{
+        id: trade.id,
+        currentStop: newStop,
+        breakEvenActivated,
+        stopConfirmedAt: new Date().toISOString(),
+        stopConfirmedBy: String(chatId)
+      }]);
+      await sendMessage(env, chatId,
+        "✅ حد ضرر جدید در پیگیری داخلی ربات ثبت شد.\\n" +
+        "نماد: " + formatFuturesSymbol(trade.symbol) + " | " + trade.side + "\\n" +
+        "حد ضرر قبلی: " + formatSignalPrice(currentStop) + "\\n" +
+        "حد ضرر تأییدشده: " + formatSignalPrice(newStop) + "\\n" +
+        "⚠️ این دستور هیچ سفارشی را در صرافی ایجاد یا ویرایش نمی‌کند؛ فقط پس از تغییر دستی شما، وضعیت پیگیری ربات را هماهنگ می‌کند.");
       return;
     }
 
@@ -2606,7 +2654,9 @@ export class SignalDeliveryCoordinator {
               remainingFraction:Number.isFinite(Number(candidate.remainingFraction))?Number(candidate.remainingFraction):existing.remainingFraction,
               realizedMarginReturnPct:Number.isFinite(Number(candidate.realizedMarginReturnPct))?Number(candidate.realizedMarginReturnPct):existing.realizedMarginReturnPct,
               currentStop:Number.isFinite(Number(candidate.currentStop))?Number(candidate.currentStop):existing.currentStop,
-              breakEvenActivated:candidate.breakEvenActivated===true||existing.breakEvenActivated===true
+              breakEvenActivated:candidate.breakEvenActivated===true||existing.breakEvenActivated===true,
+              stopConfirmedAt:candidate.stopConfirmedAt||existing.stopConfirmedAt,
+              stopConfirmedBy:candidate.stopConfirmedBy||existing.stopConfirmedBy
             };
             if(["CLOSED_PROFIT","CLOSED_STOP","CLOSED_MANUAL"].includes(candidate.status)){
               next.status=candidate.status;
