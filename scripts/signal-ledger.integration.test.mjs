@@ -54,8 +54,8 @@ function memoryStorage() {
 }
 
 const signal = (id, symbol = "BTC-PERP") => ({
-  id, symbol, side: "LONG", entry: 100, stop: 95,
-  target1: 105, target2: 110, target3: 115, createdAt: Date.now()
+  id, symbol, side: "SHORT", entry: 100, stop: 105,
+  target1: 95, target2: 90, target3: 85, createdAt: Date.now()
 });
 
 test("archive listing paginates across KV pages and remains isolated by chat", async () => {
