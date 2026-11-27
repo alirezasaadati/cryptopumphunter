@@ -3,7 +3,9 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
 permissions:
   contents: read
 jobs:
@@ -22,6 +24,8 @@ jobs:
         run: npm run check
       - name: Test Telegram futures alert formatting
         run: node --test scripts/futures-alerts.test.mjs
+      - name: Test active futures trade lifecycle
+        run: node --test scripts/futures-trade-lifecycle.test.mjs
       # Production APP_KV binding is aligned with the Worker account's existing namespace.
 # The full suite remains visible as a diagnostic, but unrelated existing failures
       # must not block this isolated message-format-only deployment.
@@ -30,6 +34,7 @@ jobs:
         continue-on-error: true
       # Keep Bot 1's Worker name, webhook URL, and existing Cloudflare runtime secrets.
       - name: Deploy Worker
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
