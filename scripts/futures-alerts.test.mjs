@@ -98,3 +98,17 @@ test("manual Futures signal formatter matches the approved plain-text layout", a
   assert.ok(source.includes("`⛔ SL : ${formatSignalDisplayPrice(item.stop)}`"));
   assert.ok(source.includes('lines.map(line => `\\u200E${line}`).join("\\n")'));
 });
+
+
+test("signal prices use fixed precision tiers and truncate without rounding", () => {
+  const render = value => formatFuturesSignalAlert({
+    ...base, side:"LONG", entry:value, stop:value, target1:value, target2:value, target3:value
+  });
+  assert.match(render(0.935678), /0\\.9356/);
+  assert.match(render(0.0035784), /0\\.00357/);
+  assert.match(render(0.000123456), /0\\.00012/);
+  assert.match(render(125.678), /125\\.67/);
+  assert.match(render(1000), /1,000\\.00/);
+  assert.match(render(1000.99), /1,000/);
+  assert.doesNotMatch(render(1000.99), /1,000\\.99/);
+});
