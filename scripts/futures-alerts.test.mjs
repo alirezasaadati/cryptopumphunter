@@ -78,8 +78,8 @@ test("signal alert matches the current Persian production template", () => {
     "🎯 تارگت سوم (3.5R): <b>67,200</b>",
     "⛔ حد ضرر: <b>64,500</b>"
   ].join("\n\n"));
-  assert.match(long, /جهت معامله: 🟢 لانگ \\/ Long/);
-  assert.match(formatFuturesSignalAlert({...signal, riskLevel:"HIGH_RISK"}), /⚠️ <b>سیگنال پر ریسک<\\/b>/);
+  assert.ok(long.includes("جهت معامله: 🟢 لانگ / Long"));
+  assert.ok(formatFuturesSignalAlert({...signal, riskLevel:"HIGH_RISK"}).includes("⚠️ <b>سیگنال پر ریسک</b>"));
   assert.doesNotMatch(short, /PREMIUM SIGNALS|RISK|Entry Zone|LEVERAGE|10x/);
   assert.doesNotMatch(short, /PF_|BTCUSD/);
 });
