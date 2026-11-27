@@ -2048,6 +2048,7 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
   return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
     momentumConfirmed, pullbackConfirmed: false, fourHourOpposes };
 }
+// Historical replay passes the same optional BTC 4H gate used by the live scanner.
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
   if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error("Not enough closed candles for 1H/4H analysis.");
   const closes1h = candles1h.map(c => c.close), closes4h = candles4h.map(c => c.close);
