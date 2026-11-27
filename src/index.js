@@ -1723,7 +1723,7 @@ function isKrakenPerpetualTicker(item) {
   if (!/^(PI|PF)_[A-Z0-9]+USD$/.test(symbol)) return false;
   const quoteVolume = Number(item.volumeQuote);
   const last = Number(item.last);
-  return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
+  return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME &&
     Number.isFinite(last) && last > 0;
 }
 
