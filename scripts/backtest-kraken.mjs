@@ -325,7 +325,7 @@ async function main() {
     "| Net R | "+report.current.metrics.netR.toFixed(2)+"R |",
     "| Max drawdown | "+report.current.metrics.maxDrawdownR.toFixed(2)+"R |",
     "| Current filter rejections | "+report.current.rejected+" |",
-    "Side filter: "+SIDE_FILTER+". Baseline mode was not executed.",","",
+    "Side filter: "+SIDE_FILTER+". Baseline mode was not executed.","",
     "Assumptions: 0.05% fee and 0.03% slippage per side; 72h maximum hold; 40/35/25 partial exits; stop-first same-candle ambiguity.",
     "Funding excluded. Current universe is selected using present-day volume and therefore has survivorship/universe bias. This is a comparative simulation, not a guarantee of live fills.","",
     "| Symbol | Current SHORT signals | Valid | Risky | Rejected |",
