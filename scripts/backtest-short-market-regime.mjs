@@ -110,6 +110,15 @@ function classify(btc,alts,time){
   if(b.weeklyNeutral)return {regime:"WEEKLY_NEUTRAL",btc:b,alts:a};
   return null;
 }
+function calculateFourHourTrend(candles4h){
+  if(!Array.isArray(candles4h)||candles4h.length<FUTURES_CONFIG.MIN_CANDLES)return null;
+  const closes=candles4h.map(c=>c.close),lastClose=closes.at(-1);
+  const fast=ema(closes,20),prevFast=ema(closes.slice(0,-1),20),slow=ema(closes,50);
+  if(![fast,prevFast,slow,lastClose].every(Number.isFinite))return null;
+  if(fast>slow&&lastClose>fast&&fast>=prevFast)return "BULLISH";
+  if(fast<slow&&lastClose<fast&&fast<=prevFast)return "BEARISH";
+  return "NEUTRAL";
+}
 function summarize(trades,signals,lockSkips){
   const closed=trades.filter(t=>t.status==="CLOSED_PROFIT"||t.status==="CLOSED_STOP");
   const wins=closed.filter(t=>t.status==="CLOSED_PROFIT"),stops=closed.filter(t=>t.status==="CLOSED_STOP");
@@ -123,7 +132,7 @@ function summarize(trades,signals,lockSkips){
 function simulate(side,entry,stop,targets,bars,startIndex,signalTime,symbol,score){
   const trade={id:symbol+":"+signalTime, symbol,side,status:"OPEN",entry,initialStop:stop,stop,
     signalTime,entryTime:signalTime,score,ambiguousCandles:0};
-  const end=Math.min(bars.length-1,startIndex+MAX_HOLD_HOURS*12);
+  const end=Math.min(bars.length-1,startIndex+MAX_HOLD_HOURS*4);
   for(let i=startIndex;i<=end;i++){
     const bar=bars[i];
     const target=side==="SHORT"?entry*(1-FUTURES_MARGIN_PROFIT_TARGET_PERCENT/FUTURES_TRADE_LEVERAGE/100):entry*(1+FUTURES_MARGIN_PROFIT_TARGET_PERCENT/FUTURES_TRADE_LEVERAGE/100);
@@ -132,7 +141,7 @@ function simulate(side,entry,stop,targets,bars,startIndex,signalTime,symbol,scor
     const stopAtOpen=side==="SHORT"?bar.open>=trade.stop:bar.open<=trade.stop;
     const targetAtOpen=side==="SHORT"?bar.open<=target:bar.open>=target;
     if(stopHit&&targetHit&&!stopAtOpen&&!targetAtOpen)trade.ambiguousCandles++;
-    const evaluated=evaluateTradeCandle(trade,{...bar,time:bar.time+300000});
+    const evaluated=evaluateTradeCandle(trade,{...bar,time:bar.time+900000});
     if(evaluated.changed){Object.assign(trade,evaluated.trade);trade.closedAtMs=bar.time+300000;return trade;}
   }
   trade.status="OPEN_AT_BACKTEST_END";
@@ -157,29 +166,29 @@ async function main(){
   }
   const btcRaw=dataMap.get(btcTicker.symbol);
   const btc=btcRaw?prepareSeries(btcRaw):null;
+  const btcFourHour=await fetchCandles(btcTicker.symbol,"4h",warmStart,end,4*HOUR);
   if(!btc||btc.length<500)throw new Error("BTC hourly history unavailable");
   const altSeries=alts.map(x=>dataMap.get(x.symbol)).filter(x=>x&&x.length>500).map(prepareSeries);
   const results=[];
   for(const ticker of tradeUniverse){
     try{
-      const [one,four,fifteen,five]=await Promise.all([
+      const [one,four,fifteen]=await Promise.all([
         dataMap.get(ticker.symbol)?Promise.resolve(dataMap.get(ticker.symbol)):fetchCandles(ticker.symbol,"1h",warmStart,end,HOUR),
         fetchCandles(ticker.symbol,"4h",warmStart,end,4*HOUR),
-        fetchCandles(ticker.symbol,"15m",warmStart,end,900000),
-        fetchCandles(ticker.symbol,"5m",maxStart-4*DAY,end,300000)
+        fetchCandles(ticker.symbol,"15m",warmStart,end,900000)
       ]);
-      results.push({symbol:ticker.symbol,ticker,one,four,fifteen,five});
+      results.push({symbol:ticker.symbol,ticker,one,four,fifteen});
     }catch(e){results.push({symbol:ticker.symbol,error:String(e?.message||e)});}
   }
   const successful=results.filter(x=>!x.error);
-  const regimeCache=new Map();
+  const regimeCache=new Map(),btcTrendCache=new Map();
   const outputs={};
   for(const days of WINDOWS){
     const start=end-days*DAY;
     const cohorts={WEEKLY_STRONG_BEAR:{trades:[],signals:0,skips:0},WEEKLY_NEUTRAL:{trades:[],signals:0,skips:0}};
     const locks={WEEKLY_STRONG_BEAR:new Map(),WEEKLY_NEUTRAL:new Map()};
     for(const item of successful){
-      const {symbol,ticker,one,four,fifteen,five}=item;
+      const {symbol,ticker,one,four,fifteen}=item;
       let fi=0,pi=0;
       for(let i=60;i<one.length-1;i++){
         const signalBar=one[i],time=signalBar.time+HOUR;
@@ -191,20 +200,29 @@ async function main(){
         let regime=regimeCache.get(time);
         if(regime===undefined){regime=classify(btc,altSeries,time)||false;regimeCache.set(time,regime);}
         if(!regime||!["WEEKLY_STRONG_BEAR","WEEKLY_NEUTRAL"].includes(regime.regime))continue;
+        let btcTrend=btcTrendCache.get(time);
+        if(btcTrend===undefined){
+          const btcClosed=btcFourHour.slice(0,lowerBound(btcFourHour,time));
+          btcTrend=calculateFourHourTrend(btcClosed);
+          btcTrendCache.set(time,btcTrend||null);
+        }
+        if(btcTrend!=="BEARISH")continue;
         const next=one[i+1];
         const tickerAt={symbol,last:next.open,quoteVolume:Number(ticker.volumeQuote)||0,
           priceChangePercent:i>=24?((one[i].close/one[i-24].close)-1)*100:0,premium:{lastFundingRate:null}};
         let candidate;
-        try{candidate=analyzeFuturesSymbol(tickerAt,one.slice(0,i+1),closed4,closed15);}
+        try{candidate=analyzeFuturesSymbol(tickerAt,one.slice(0,i+1),closed4,closed15,{
+          requireBtcFourHourAlignment:true,btcFourHourTrend:btcTrend
+        });}
         catch{continue;}
         if(candidate?.eligible!==true||candidate.side!=="SHORT")continue;
         const cohort=cohorts[regime.regime];cohort.signals++;
         const lockKey=symbol+"|SHORT";
         if((locks[regime.regime].get(lockKey)||0)>time){cohort.skips++;continue;}
         const entry=Number(candidate.entry),stop=Number(candidate.stop);
-        const start5=lowerBound(five,time);
-        if(start5>=five.length)continue;
-        const trade=simulate("SHORT",entry,stop,[candidate.target1,candidate.target2,candidate.target3],five,start5,time,symbol,candidate.score);
+        const start15=lowerBound(fifteen,time);
+        if(start15>=fifteen.length)continue;
+        const trade=simulate("SHORT",entry,stop,[candidate.target1,candidate.target2,candidate.target3],fifteen,start15,time,symbol,candidate.score);
         trade.regime=regime.regime;trade.weeklyReturnPct=regime.btc.weeklyReturn;trade.dailyReturnPct=regime.btc.dailyReturn;
         trade.altBearishBreadthPct=regime.alts.breadthPct;
         cohort.trades.push(trade);
@@ -219,7 +237,7 @@ async function main(){
       trades:Object.fromEntries(Object.entries(cohorts).map(([k,v])=>[k,v.trades]))};
   }
   const report={generatedAt:new Date().toISOString(),source:"Kraken Futures historical OHLC; current production source commit 5fb9555216b3dde4936cbee87266d3e647305f85",
-    engine:"analyzeFuturesSymbol from src/index.js, SHORT candidates only; no strategy thresholds changed",
+    engine:"analyzeFuturesSymbol from this branch src/index.js, SHORT candidates only; mandatory BTC 4H alignment enabled; no strategy thresholds changed",
     regimeDefinitions:{
       weeklyStrongBear:"BTC rolling 7d return <= -5%, partial weekly close below EMA20W, EMA20W slope over four weekly observations <= -1%",
       weeklyNeutral:"BTC rolling 7d return in [-3%,+3%], partial weekly close within +/-3% of EMA20W, EMA20W slope over four weekly observations in [-1%,+1%]",
@@ -227,10 +245,11 @@ async function main(){
       altsBroadlyBearish:"at least 60% of at least 10 sampled non-BTC top-volume Kraken perpetual altcoins have partial daily close below prior completed daily EMA20 and negative rolling 24h return",
       timing:"all market regime measurements use only candles completed by each signal timestamp; current UTC day/week are partial snapshots, no future candles"
     },
-    execution:{entry:"candidate.entry at next 1h open timestamp as in lifecycle replay",exit:"production evaluateTradeCandle on subsequent 5m candles",leverage:FUTURES_TRADE_LEVERAGE,targetMarginReturnPct:FUTURES_MARGIN_PROFIT_TARGET_PERCENT,
+    execution:{entry:"candidate.entry at next 1h open timestamp as in lifecycle replay",exit:"production evaluateTradeCandle on subsequent completed 15m candles",leverage:FUTURES_TRADE_LEVERAGE,targetMarginReturnPct:FUTURES_MARGIN_PROFIT_TARGET_PERCENT,
       maxHoldHours:MAX_HOLD_HOURS,sameSideLock:"per symbol+SHORT, separately inside each disjoint regime cohort",
+      btcDirection:"mandatory 4H BTC trend alignment, using only 4H candles closed by signal time",
       fees:"excluded by existing lifecycle gross return model",funding:"excluded",slippage:"excluded",
-      ambiguous5m:"conservative stop-first behavior delegated to evaluateTradeCandle",universe:"top current-volume Kraken perpetuals; survivorship bias applies"},
+      ambiguous15m:"conservative stop-first behavior delegated to evaluateTradeCandle",universe:"top current-volume Kraken perpetuals; survivorship bias applies"},
     regimeResults:outputs};
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/short-market-regime-backtest.json",JSON.stringify(report,null,2));
@@ -238,6 +257,7 @@ async function main(){
     "Engine source commit: 5fb9555216b3dde4936cbee87266d3e647305f85","",
     "Regime definitions:",...Object.entries(report.regimeDefinitions).map(([k,v])=>"- "+k+": "+v),"",
     "Execution: "+JSON.stringify(report.execution),"",
+    "Note: 15m OHLC is used for exit simulation across the full lookback; results are less granular than 5m execution.","",
     ...WINDOWS.flatMap(days=>{const r=outputs[days];return ["## "+days+" days","",
       "| Metric | Strong bearish weekly | Neutral weekly |",
       "|---|---:|---:|",
