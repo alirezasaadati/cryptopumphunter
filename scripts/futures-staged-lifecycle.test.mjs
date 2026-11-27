@@ -42,7 +42,7 @@ test("reaching +1R does not move the stop until the owner confirms the exchange 
 
   // This state represents an owner confirming that the stop was already
   // moved manually in the exchange with /confirm_stop.
-  current = {...current, currentStop: 100.12, breakEvenActivated: true};
+  current = {...current, currentStop: 100.12, breakEvenActivated: true, stopConfirmedAt: "2026-01-01T00:06:00Z"};
   result = evaluateStagedTradeCandle(current, { open: 101, high: 101.2, low: 100.1, close: 100.2, time: "2026-01-01T00:10:00Z" });
   assert.equal(result.closed, true);
   assert.equal(result.trade.status, "CLOSED_STOP");
