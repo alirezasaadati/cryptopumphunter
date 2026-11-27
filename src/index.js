@@ -1191,7 +1191,7 @@ async function handleTelegramCommand(command, chatId, env, message) {
         await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
         return;
       }
-      const parts = String(message?.text || "").trim().split(/\\s+/);
+      const parts = String(message?.text || "").trim().split(/\s+/);
       const tradeId = parts[1] || "";
       const newStop = Number(parts[2]);
       if (!tradeId || !Number.isFinite(newStop) || newStop <= 0) {
