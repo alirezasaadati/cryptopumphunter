@@ -81,7 +81,7 @@ export function formatFuturesSignalAlert(signal, index = 1) {
     "",
     `⛔ حد ضرر: <b>${formatSignalPrice(signal?.stop)}</b>`
   ];
-  return lines.map(line => `\\u200E${line}`).join("\\n");
+  return lines.map(line => `\u200E${line}`).join("\n");
 }
 function formatFuturesSymbol(symbol) {
   const normalized = String(symbol || "—").trim().toUpperCase()
