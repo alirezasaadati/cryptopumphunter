@@ -25,7 +25,7 @@ jobs:
         run: npm test
       # Pull requests run the complete test suite but never deploy production.
       - name: Deploy Worker
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
