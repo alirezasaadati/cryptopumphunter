@@ -9,17 +9,19 @@ Telegram/Cloudflare Worker migration of the legacy Crypto Pump Hunter engine.
 - No exchange trading keys and no order placement.
 
 ## Signal and trade lifecycle safeguards
-- Futures signals are valid for 60 minutes for a new entry.
-- A signal is rejected when the live ticker differs from the closed-candle reference by more than 0.35%.
-- Entry is not recorded until the user confirms the signal and sends the actual fill price using `/fill SIGNAL_ID ACTUAL_PRICE`.
-- Open trades are stored separately from new scan results. A rejected signal on a later scan cannot alter an existing trade.
-- Open trades are checked when a manual futures scan runs; this is not continuous real-time monitoring.
-- Model exits scale 40% / 35% / 25% at 1.5R / 2.2R / 3.0R. At +0.75R (halfway to TP1), the bot prompts the user to consider moving the remaining stop to entry; after TP1 it prompts again if needed. The user must move the stop manually in the exchange and confirm it in Telegram.
-- Reported R results are theoretical and exclude fees, funding, slippage and missed intrabar price touches.
+- The scanner creates an internal signal-evaluation tracking record; it does not read exchange positions or confirm actual fills.
+- Open tracking records are monitored automatically using closed 5-minute candles. This is simulated lifecycle tracking, not exchange order execution or live position reconciliation.
+- Staged exits use 1/3 of the initial position at 1.5R, another 1/3 at 2.5R, and the remainder at 3.5R.
+- At +1R the bot only suggests a fee-buffered break-even stop; it does not change the tracked stop automatically. After manually changing the stop in the exchange, the owner must synchronize the actual stop with `/set_stop TRADE_ID PRICE`.
+- `/open_trades` displays internal open-trade records, IDs and tracked stop levels for owner-only reconciliation.
+- `/set_stop` updates only the bot's internal tracking record. It never places, modifies or cancels an exchange order.
+- The owner can close an internal tracking record with `/close_trade TRADE_ID`; this does not close an exchange position.
+- Reported R and return results are theoretical and exclude fees, funding, slippage and missed intrabar price touches.
 
-## Price Action strategy
-- Market Structure (HH/HL, LH/LL, BOS and CHOCH), support/resistance rejection, breakout and retest, and candlestick confirmation.
-- Futures entries are based on Price Action; RSI, EMA, MACD, ATR, volume and funding are not used as entry filters or scores.
+## Futures signal strategy
+- 1H trend and structure, 4H directional confirmation, and 15M entry confirmation.
+- EMA20/EMA50, RSI14 and ATR14 are used alongside volume ratio, 24-hour price change, funding and liquidity filters.
+- The engine includes standard and high-risk eligibility paths; a high-risk candidate is not equivalent to a standard setup.
 - Kraken Derivatives is the only Futures data provider; there is no fallback provider.
 
 ## Runtime configuration

@@ -1,10 +1,10 @@
 import { futuresSignalFingerprint, selectUnnotifiedFuturesSignals, futuresAlertStorageKey, formatFuturesSignalAlert, displayEntryPrice, ALERT_TTL_SECONDS } from "./futures-alerts.js";
 import { signalOutboxKey, signalOutboxAction } from "./signal-outbox.js";
 import { createSerialExecutor } from "./serial-executor.js";
-import { evaluateStagedTradeCandle } from "./futures-trade-lifecycle.js";
+import { evaluateStagedTradeCandle, validateConfirmedStopPrice } from "./futures-trade-lifecycle.js";
 
 const CONFIG = {
-  VERSION: "11.2.0",
+  VERSION: "11.3.2",
   PENDING_TTL: 604800,
   TRADE_MONITOR_STUCK_AFTER_MS: 2 * 60 * 60 * 1000
 };
@@ -130,7 +130,7 @@ export function withQuotaAwareKV(env) {
 const ABOUT_TEXT =
   "<b>🔵 درباره ربات</b>\n\n" +
   "🔸تریدیار | دستیار معاملات فیوچرز\n\n" +
-  "🔸 طراحی و توسعه: علیرضا سعادتی\n\n" +
+  "🔸 طراحی و توسعه: ع.س\n\n" +
   "🔸 تمامی حقوق مربوط به ربات برای صاحب اثر محفوظ است.\n" +
   "🔸هرگونه کپی‌برداری، بازنشر یا استفاده ، بدون اجازه ممنوع است.";
 
@@ -1175,13 +1175,88 @@ async function handleTelegramCommand(command, chatId, env, message) {
         "/menu - باز کردن منوی اصلی\n" +
         "/futures - دریافت سیگنال‌های فیوچرز\n" +
         "/diagfutures - گزارش عیب‌یابی فقط‌خواندنی (مالک)\n" +
+        "/open_trades - نمایش معاملات باز و حد ضررهای ثبت‌شده در ربات (مالک؛ فقط‌خواندنی)\n" +
         "/close_trade <ID> - بستن رکورد پیگیری داخلی (مالک؛ پوزیشن صرافی را نمی‌بندد)\n" +
+        "/set_stop <ID> <PRICE> - ثبت حد ضررِ از قبل تغییر‌یافته در صرافی (مالک؛ فقط همگام‌سازی داخلی)\n" +
         "/scan - اجرای اسکن دستی بازار اسپات\n" +
         "/status - بررسی وضعیت ربات\n" +
         "/help - نمایش این راهنما\n\n" +
         "اسکن‌ها فقط با درخواست دستی شما اجرا می‌شوند.",
         menuForChat(env, chatId)
       );
+      return;
+    }
+
+    if (command === "/open_trades") {
+      if (!isOwner(chatId, env)) {
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
+        return;
+      }
+      const trades = await getOpenFuturesTrades(env);
+      if (!trades.length) {
+        await sendMessage(env, chatId, "در حال حاضر هیچ رکورد معاملهٔ بازی برای پیگیری داخلی وجود ندارد.");
+        return;
+      }
+      const lines = [
+        "📊 معاملات باز در پیگیری داخلی ربات",
+        "⚠️ این اطلاعات وضعیت سفارش صرافی را نشان نمی‌دهد؛ حد ضرر هر معامله را با صرافی تطبیق بده.",
+        ""
+      ];
+      for (const trade of trades.slice(0, 30)) {
+        const beState = trade.breakEvenActivated
+          ? "در رکورد ربات تأیید شده"
+          : trade.breakEvenSuggested
+            ? "پیشنهاد شده، هنوز تأیید نشده"
+            : "هنوز پیشنهاد نشده";
+        lines.push(
+          "شناسه: " + trade.id,
+          formatFuturesSymbol(trade.symbol) + " | " + trade.side,
+          "ورود ثبت‌شده: " + formatSignalPrice(trade.actualEntry || trade.plannedEntry),
+          "حد ضرر اولیه: " + formatSignalPrice(trade.initialStop),
+          "حد ضرر فعلی در ربات: " + formatSignalPrice(trade.currentStop),
+          "آخرین قیمت پایش: " + formatSignalPrice(trade.lastPrice),
+          "وضعیت سربه‌سر: " + beState,
+          trade.suggestedStopPrice ? "حد ضرر پیشنهادی: " + formatSignalPrice(trade.suggestedStopPrice) : "",
+          "برای ثبت حد ضرر واقعی پس از تغییر دستی در صرافی: /set_stop " + trade.id + " PRICE",
+          "━━━━━━━━━━━━━━━━━━"
+        );
+      }
+      await sendLongMessage(env, chatId, lines.filter(Boolean).join("\n"));
+      return;
+    }
+
+    if (command === "/set_stop") {
+      if (!isOwner(chatId, env)) {
+        await sendMessage(env, chatId, "⛔ This command is available to the bot owner only.");
+        return;
+      }
+      const parts = String(message?.text || "").trim().split(/\s+/);
+      const tradeId = parts[1] || "";
+      const stopPrice = Number(parts[2]);
+      if (!tradeId || !Number.isFinite(stopPrice) || stopPrice <= 0) {
+        await sendMessage(env, chatId, "فرمت دستور صحیح نیست.\n/set_stop <ID> <PRICE>");
+        return;
+      }
+      const openTrades = await getOpenFuturesTrades(env);
+      const trade = openTrades.find(item => String(item.id) === tradeId);
+      if (!trade) {
+        await sendMessage(env, chatId, "معاملهٔ باز با این شناسه پیدا نشد. هیچ تغییری اعمال نشد.");
+        return;
+      }
+      const validation = validateConfirmedStopPrice(trade, stopPrice);
+      if (!validation.ok) {
+        await sendMessage(env, chatId, "حد ضرر ثبت نشد: " + validation.reason + "\nقیمت مرجع آخرین پایش: " + formatSignalPrice(trade.lastPrice || trade.actualEntry));
+        return;
+      }
+      const confirmedAt = new Date().toISOString();
+      await persistFuturesTradeUpdates(env, [{
+        id: trade.id, currentStop: validation.stopPrice,
+        breakEvenActivated: validation.breakEvenActivated,
+        breakEvenConfirmedAt: confirmedAt
+      }]);
+      await sendMessage(env, chatId,
+        "✅ حد ضرر داخلی معامله با قیمت " + formatSignalPrice(validation.stopPrice) + " همگام شد.\n" +
+        "⚠️ این دستور فقط وضعیت پیگیری ربات را تغییر می‌دهد؛ سفارش حد ضرر صرافی را تغییر نمی‌دهد. مطمئن شو همین قیمت قبلاً در صرافی ثبت شده است.");
       return;
     }
 
@@ -1506,30 +1581,35 @@ function average(values) {
 const FUTURES_CONFIG = {
   BASE_URL: "https://futures.kraken.com/derivatives/api/v3",
   CHARTS_URL: "https://futures.kraken.com/api/charts/v1",
-  CONCURRENCY: 5, MAX_SCAN_DURATION_MS: 180000, SCAN_FINALIZATION_RESERVE_MS: 45000,
-  REQUEST_TIMEOUT_MS: 12000, MAX_SIGNALS_PER_SCAN: 6,
-  MIN_QUOTE_VOLUME: 5_000_000, HIGH_RISK_MIN_QUOTE_VOLUME: 2_500_000,
-  KLINE_LIMIT: 120, MIN_CANDLES: 60, MIN_SCORE: 70,
-  INTERVAL: "1h", CONFIRM_INTERVAL: "4h", ENTRY_CONFIRM_INTERVAL: "15m",
-  SIGNAL_TTL_MINUTES: 60, MAX_ENTRY_DRIFT_PCT: 0.45,
-  MAX_ENTRY_EMA_DISTANCE_ATR: 2.0, MAX_PULLBACK_DISTANCE_ATR: 0.45,
-  MAX_RECLAIM_EXTENSION_ATR: 1.5, HIGH_RISK_MIN_SCORE: 62,
-  HIGH_RISK_MIN_VOLUME_RATIO: 0.65, VOLUME_PRIORITY_TIER_1: 0.8,
-  VOLUME_PRIORITY_TIER_2: 1.3, VOLUME_PRIORITY_BONUS_TIER_1: 5,
-  VOLUME_PRIORITY_BONUS_TIER_2: 10, CONFIRMATION_PRIORITY_BONUS_ONE: 7,
-  CONFIRMATION_PRIORITY_BONUS_BOTH: 15, HIGH_RISK_LONG_RSI_MIN: 43, HIGH_RISK_LONG_RSI_MAX: 70,
-  HIGH_RISK_SHORT_RSI_MIN: 30, HIGH_RISK_SHORT_RSI_MAX: 57, HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.6,
-  HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 2.4, HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 1.8
+  // Scan all liquid perpetuals, stopping only when the safe execution budget is reached.
+  CONCURRENCY: 3,
+  MAX_SCAN_DURATION_MS: 180000,
+  SCAN_FINALIZATION_RESERVE_MS: 45000,
+  REQUEST_TIMEOUT_MS: 12000,
+  MAX_SIGNALS_PER_SCAN: 20,
+  MIN_QUOTE_VOLUME: 5_000_000,
+  KLINE_LIMIT: 120,
+  MIN_CANDLES: 60,
+  MIN_SCORE: 72,
+  INTERVAL: "1h",
+  CONFIRM_INTERVAL: "4h",
+  ENTRY_CONFIRM_INTERVAL: "15m",
+  SIGNAL_TTL_MINUTES: 60,
+  MAX_ENTRY_DRIFT_PCT: 0.35,
+  MAX_ENTRY_EMA_DISTANCE_ATR: 3.0,
+  MAX_PULLBACK_DISTANCE_ATR: 0.35,
+  MAX_RECLAIM_EXTENSION_ATR: 3.0,
+  // Separate experimental path. These values never affect the standard setup.
+  HIGH_RISK_MIN_SCORE: 55,
+  HIGH_RISK_MIN_VOLUME_RATIO: 0.5,
+  HIGH_RISK_LONG_RSI_MIN: 35,
+  HIGH_RISK_LONG_RSI_MAX: 78,
+  HIGH_RISK_SHORT_RSI_MIN: 22,
+  HIGH_RISK_SHORT_RSI_MAX: 65,
+  HIGH_RISK_MAX_ENTRY_DRIFT_PCT: 0.75,
+  HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR: 4.0,
+  HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR: 4.0
 };
-function calculateFourHourTrend(candles4h) {
-  if (!Array.isArray(candles4h) || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) return null;
-  const closes = candles4h.map(c => c.close), lastClose = closes[closes.length - 1];
-  const fast = ema(closes, 20), prevFast = ema(closes.slice(0, -1), 20), slow = ema(closes, 50);
-  if (![fast, prevFast, slow, lastClose].every(Number.isFinite)) return null;
-  if (fast > slow && lastClose > fast && fast >= prevFast) return "BULLISH";
-  if (fast < slow && lastClose < fast && fast <= prevFast) return "BEARISH";
-  return "NEUTRAL";
-}
 
 const FUTURES_PROVIDER_ORDER = ["Kraken"];
 
@@ -1615,7 +1695,7 @@ function isKrakenPerpetualTicker(item) {
   if (!/^(PI|PF)_[A-Z0-9]+USD$/.test(symbol)) return false;
   const quoteVolume = Number(item.volumeQuote);
   const last = Number(item.last);
-  return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME &&
+  return Number.isFinite(quoteVolume) && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME &&
     Number.isFinite(last) && last > 0;
 }
 
@@ -1788,11 +1868,11 @@ function calculateEntryQualityScore({ side, rsi: rsiValue, rsiSlope, emaDistance
   else if (momentumState === "NOT_CONFIRMED") { rawScore -= 5; details.momentum = -5; }
 
   const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
-  if (fourHourTrend === expectedTrend) { rawScore += 10; details.trend4h = 10; }
+  if (fourHourTrend === expectedTrend) { rawScore += 6; details.trend4h = 6; }
   else if (fourHourTrend === "NEUTRAL") details.trend4h = 0;
   else if (fourHourTrend === "BULLISH" || fourHourTrend === "BEARISH") {
-    rawScore -= 15;
-    details.trend4h = -15;
+    rawScore -= 6;
+    details.trend4h = -6;
   }
 
   const normalized = Math.max(0, Math.min(100, Math.round(((rawScore + 70) / 155) * 100)));
@@ -1849,34 +1929,52 @@ function calculateEntryTimingScore({ side, rsi: rsiValue, rsiSlope, emaDistanceA
   return { raw, normalized, details, availableFactorCount: Object.values(details).filter(v => v !== null).length };
 }
 
-function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr, isHighRisk = false }) {
+function evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr }) {
   const marketPrice = Number(ticker?.last);
-  if (!Number.isFinite(marketPrice) || marketPrice <= 0) return { ok: false, rejected: "Live market price is invalid" };
-  const maxDrift = isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT : FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT;
+  if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
+    return { ok: false, rejected: "قیمت لحظه‌ای بازار معتبر نیست" };
+  }
   const driftPct = Math.abs(marketPrice - referencePrice) / referencePrice * 100;
-  if (driftPct > maxDrift) return { ok: false, rejected: "Live price is too far from the analytical reference", driftPct };
-  const maxEmaDist = isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR : FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR;
+  if (driftPct > FUTURES_CONFIG.MAX_ENTRY_DRIFT_PCT) {
+    return { ok: false, rejected: "فاصله قیمت لحظه‌ای تا قیمت تحلیلی بیش از حد مجاز است", driftPct };
+  }
+
   const emaDistanceAtr = Math.abs(marketPrice - ema20) / atr;
-  if (emaDistanceAtr > maxEmaDist) return { ok: false, rejected: "Entry is too late; price is too far from EMA20", driftPct, emaDistanceAtr };
-  if (!Array.isArray(candles15m) || candles15m.length < 30) return { ok: false, rejected: "Insufficient 15-minute data to confirm the entry" };
-  const closes15m = candles15m.map(c => c.close), ema9_15m = ema(closes15m, 9), ema21_15m = ema(closes15m, 21);
-  const atr15m = calculateAtr(candles15m, 14), last15m = candles15m[candles15m.length - 1], prev15m = candles15m[candles15m.length - 2];
-  const recentPullback = candles15m.slice(-10, -1);
-  if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) return { ok: false, rejected: "15-minute indicator calculation is invalid" };
-  const momentumConfirmed = side === "LONG"
-    ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open && last15m.close > prev15m.high
-    : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open && last15m.close < prev15m.low;
-  const pullbackConfirmed = side === "LONG"
+  if (emaDistanceAtr > FUTURES_CONFIG.MAX_ENTRY_EMA_DISTANCE_ATR) {
+    return { ok: false, rejected: "ورود دیرهنگام است؛ قیمت بیش از حد از EMA20 فاصله دارد", driftPct, emaDistanceAtr };
+  }
+
+  const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
+  if (!has15mData) {
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+  }
+  const closes15m = candles15m.map(c => c.close);
+  const ema9_15m = ema(closes15m, 9);
+  const ema21_15m = ema(closes15m, 21);
+  const atr15m = calculateAtr(candles15m, 14);
+  const last15m = candles15m[candles15m.length - 1];
+  const recentPullback = candles15m.slice(-9, -1);
+  if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0 || !recentPullback.length) {
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
+  }
+
+  const aligned = side === "LONG"
+    ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open
+    : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open;
+  const touchedPullbackZone = side === "LONG"
     ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR)
     : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
-  if (!momentumConfirmed) return { ok: false, rejected: "The 15-minute momentum trigger has not fired", driftPct, emaDistanceAtr };
-  if (!pullbackConfirmed) return { ok: false, rejected: "No 15-minute pullback to the EMA21 zone yet", driftPct, emaDistanceAtr };
-  const maxReclaim = isHighRisk ? FUTURES_CONFIG.HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR : FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR;
-  const reclaimExtensionAtr = side === "LONG" ? (last15m.close - ema9_15m) / atr15m : (ema9_15m - last15m.close) / atr15m;
-  if (reclaimExtensionAtr > maxReclaim) return { ok: false, rejected: "The 15-minute confirmation candle is overextended", driftPct, emaDistanceAtr, reclaimExtensionAtr };
-  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m, momentumConfirmed: true, pullbackConfirmed: true };
-}
 
+  const reclaimExtensionAtr = side === "LONG"
+    ? (last15m.close - ema9_15m) / atr15m
+    : (ema9_15m - last15m.close) / atr15m;
+  if (reclaimExtensionAtr > FUTURES_CONFIG.MAX_RECLAIM_EXTENSION_ATR) {
+    return { ok: false, rejected: "قیمت پس از حرکت تأییدی بیش از حد از محدوده ورود فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
+  }
+
+  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
+    momentumConfirmed: aligned, pullbackConfirmed: touchedPullbackZone };
+}
 function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
   // Retained as a pure compatibility utility for historical tests only.
   // The restored Kraken Futures 3.8.2 analyzer does not call this LONG-only filter.
@@ -1893,22 +1991,24 @@ function passesLongDistanceThreshold(side, candles1h, threshold = 0.005) {
 function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20, atr, fourHourOpposes }) {
   const marketPrice = Number(ticker?.last);
   if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
-    return { ok: false, rejected: "Live market price is invalid" };
+    return { ok: false, rejected: "قیمت لحظه‌ای بازار معتبر نیست" };
   }
   const driftPct = Math.abs(marketPrice - referencePrice) / referencePrice * 100;
   if (driftPct > FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_DRIFT_PCT) {
-    return { ok: false, rejected: "Live price deviation is too large even for the high-risk path", driftPct };
+    return { ok: false, rejected: "فاصله قیمت لحظه‌ای برای مسیر پرریسک نیز بیش از حد مجاز است", driftPct };
   }
 
   const emaDistanceAtr = Math.abs(marketPrice - ema20) / atr;
   if (emaDistanceAtr > FUTURES_CONFIG.HIGH_RISK_MAX_ENTRY_EMA_DISTANCE_ATR) {
-    return { ok: false, rejected: "Price is too far from EMA20 even for a high-risk entry", driftPct, emaDistanceAtr };
+    return { ok: false, rejected: "قیمت برای ورود پرریسک نیز بیش از حد از EMA20 فاصله دارد", driftPct, emaDistanceAtr };
   }
 
   const has15mData = Array.isArray(candles15m) && candles15m.length >= 30;
   if (!has15mData) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes,
-      eqsMomentumState: "UNAVAILABLE", eqsPullbackState: "UNAVAILABLE" };
+    if (fourHourOpposes) {
+      return { ok: false, rejected: "روند ۴ساعته مخالف است و داده ۱۵دقیقه‌ای برای تأیید مسیر پرریسک موجود نیست", driftPct, emaDistanceAtr };
+    }
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
   }
 
   const closes15m = candles15m.map(c => c.close);
@@ -1917,111 +2017,202 @@ function evaluateHighRiskFuturesEntryFilters({ ticker, candles1h, candles15m, si
   const atr15m = calculateAtr(candles15m, 14);
   const last15m = candles15m[candles15m.length - 1];
   if (![ema9_15m, ema21_15m, atr15m].every(Number.isFinite) || atr15m <= 0) {
-    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true, fourHourOpposes,
-      eqsMomentumState: "UNAVAILABLE", eqsPullbackState: "UNAVAILABLE" };
+    if (fourHourOpposes) {
+      return { ok: false, rejected: "روند ۴ساعته مخالف است و اندیکاتورهای ۱۵دقیقه‌ای معتبر نیستند", driftPct, emaDistanceAtr };
+    }
+    return { ok: true, driftPct, emaDistanceAtr, momentumConfirmed: false, pullbackConfirmed: false, confirmationUnavailable: true };
   }
 
   const momentumConfirmed = side === "LONG"
     ? ema9_15m > ema21_15m && last15m.close > ema9_15m && last15m.close > last15m.open
     : ema9_15m < ema21_15m && last15m.close < ema9_15m && last15m.close < last15m.open;
-  const recentPullback = candles15m.slice(-9, -1);
-  const touchedPullbackZone = side === "LONG"
-    ? recentPullback.some(c => c.low <= ema21_15m + atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR)
-    : recentPullback.some(c => c.high >= ema21_15m - atr15m * FUTURES_CONFIG.MAX_PULLBACK_DISTANCE_ATR);
   const reclaimExtensionAtr = side === "LONG"
     ? (last15m.close - ema9_15m) / atr15m
     : (ema9_15m - last15m.close) / atr15m;
-  const eqsIsReversal = side === "LONG"
-    ? last15m.close > last15m.open && last15m.close > ema9_15m
-    : last15m.close < last15m.open && last15m.close < ema9_15m;
-  const eqsMomentumState = momentumConfirmed ? "CONFIRMED" : "NOT_CONFIRMED";
-  const eqsPullbackState = touchedPullbackZone
-    ? (eqsIsReversal ? "RECLAIM_CONFIRMED" : "TOUCHED_ZONE")
-    : "NONE";
-  // Strict diagnostic-only reclaim/momentum states for EQS v2.
-  const previous15m = candles15m[candles15m.length - 2];
-  const previousEma9 = ema(closes15m.slice(0, -1), 9);
-  const candleRange = Math.max(0, last15m.high - last15m.low);
-  const closeLocation = candleRange > 0
-    ? (side === "LONG" ? (last15m.close - last15m.low) / candleRange : (last15m.high - last15m.close) / candleRange)
-    : null;
-  const ema9Slope = Number.isFinite(previousEma9) ? ema9_15m - previousEma9 : null;
-  const eqsMomentumStateV2 = momentumConfirmed && Number.isFinite(ema9Slope) &&
-    (side === "LONG" ? ema9Slope > 0 : ema9Slope < 0)
-    ? "CONFIRMED" : "NOT_CONFIRMED";
-  const crossedEma9 = previous15m && (side === "LONG"
-    ? previous15m.close <= previousEma9 && last15m.close > ema9_15m
-    : previous15m.close >= previousEma9 && last15m.close < ema9_15m);
-  const eqsPullbackStateV2 = touchedPullbackZone
-    ? (eqsIsReversal && crossedEma9 && Number.isFinite(closeLocation) &&
-      closeLocation >= 0.65 && reclaimExtensionAtr <= 1.5
-      ? "RECLAIM_CONFIRMED" : "TOUCHED_ZONE")
-    : "NONE";
-  // Momentum and pullback are confirmations for ranking, never hard eligibility gates.
-  // Drift and EMA/ATR distance remain hard safety limits.
-  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
-    momentumConfirmed, pullbackConfirmed: touchedPullbackZone, fourHourOpposes,
-    eqsMomentumState, eqsPullbackState, eqsMomentumStateV2, eqsPullbackStateV2 };
-}
+  if (reclaimExtensionAtr > FUTURES_CONFIG.HIGH_RISK_MAX_RECLAIM_EXTENSION_ATR) {
+    return { ok: false, rejected: "قیمت پس از حرکت ۱۵دقیقه‌ای بیش از حد از محدوده ورود فاصله گرفته است", driftPct, emaDistanceAtr, reclaimExtensionAtr };
+  }
+  if (fourHourOpposes && !momentumConfirmed) {
+    return { ok: false, rejected: "روند ۴ساعته مخالف است و مومنتوم ۱۵دقیقه‌ای هم‌جهت تأیید نشد", driftPct, emaDistanceAtr, reclaimExtensionAtr, momentumConfirmed };
+  }
 
+  return { ok: true, driftPct, emaDistanceAtr, reclaimExtensionAtr, ema9_15m, ema21_15m, atr15m,
+    momentumConfirmed, pullbackConfirmed: false, fourHourOpposes };
+}
 function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options = {}) {
-  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) throw new Error("Not enough closed candles for 1H/4H analysis.");
-  const closes1h = candles1h.map(c => c.close), closes4h = candles4h.map(c => c.close);
-  const last = candles1h[candles1h.length - 1], prev = candles1h[candles1h.length - 2], referencePrice = last.close;
-  const e20 = ema(closes1h, 20), prevE20 = ema(closes1h.slice(0, -1), 20), e50 = ema(closes1h, 50);
-  const e20_4h = ema(closes4h, 20), e50_4h = ema(closes4h, 50), rsiValue = rsi(closes1h, 14), atr = calculateAtr(candles1h, 14);
-  if ([e20, prevE20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) throw new Error("Indicator calculation is invalid.");
-  const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume)), volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
-  const up1h = e20 > e50 && e20 > prevE20 && referencePrice > e20 && last.close >= prev.low;
-  const down1h = e20 < e50 && e20 < prevE20 && referencePrice < e20 && last.close <= prev.high;
-  const up4h = e20_4h > e50_4h && candles4h.at(-1).close > e20_4h, down4h = e20_4h < e50_4h && candles4h.at(-1).close < e20_4h;
-  const fourHourTrend = up4h ? "BULLISH" : down4h ? "BEARISH" : "NEUTRAL";
-  let side = null, score = 0; const reasons = [];
-  const strictLong = up1h && rsiValue >= 48 && rsiValue <= 66, strictShort = down1h && rsiValue >= 34 && rsiValue <= 52;
+  if (candles1h.length < FUTURES_CONFIG.MIN_CANDLES || candles4h.length < FUTURES_CONFIG.MIN_CANDLES) {
+    throw new Error("تعداد کندل بسته‌شده برای تحلیل ۱ساعته/۴ساعته کافی نیست.");
+  }
+  const closes1h = candles1h.map(c => c.close);
+  const closes4h = candles4h.map(c => c.close);
+  const last = candles1h[candles1h.length - 1];
+  const referencePrice = last.close;
+  const e20 = ema(closes1h, 20);
+  const e50 = ema(closes1h, 50);
+  const e20_4h = ema(closes4h, 20);
+  const e50_4h = ema(closes4h, 50);
+  const rsiValue = rsi(closes1h, 14);
+  const atr = calculateAtr(candles1h, 14);
+  if ([e20, e50, e20_4h, e50_4h, rsiValue, atr].some(v => !Number.isFinite(v)) || atr <= 0) {
+    throw new Error("محاسبه اندیکاتورها معتبر نیست.");
+  }
+
+  const avgVol = average(candles1h.slice(-21, -1).map(c => c.volume));
+  const volumeRatio = avgVol > 0 ? last.volume / avgVol : 0;
+  const up1h = e20 > e50 && referencePrice > e20;
+  const down1h = e20 < e50 && referencePrice < e20;
+  const up4h = e20_4h > e50_4h;
+  const down4h = e20_4h < e50_4h;
+  let side = null;
+  let score = 0;
+  const reasons = [];
+
+  const strictLong = up1h && up4h && rsiValue >= 48 && rsiValue <= 69;
+  const strictShort = down1h && down4h && rsiValue >= 31 && rsiValue <= 52;
   const relaxedLong = up1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_LONG_RSI_MAX;
   const relaxedShort = down1h && rsiValue >= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MIN && rsiValue <= FUTURES_CONFIG.HIGH_RISK_SHORT_RSI_MAX;
   const strictSetup = strictLong || strictShort;
-  if (strictLong || (!strictSetup && relaxedLong)) { side = "LONG"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "1H uptrend with positive EMA20 slope" : "High-risk 1H bullish setup"); score += rsiValue >= 52 && rsiValue <= 62 ? 15 : 8; }
-  else if (strictShort || (!strictSetup && relaxedShort)) { side = "SHORT"; score = strictSetup ? 48 : 42; reasons.push(strictSetup ? "1H downtrend with negative EMA20 slope" : "High-risk 1H bearish setup"); score += rsiValue >= 38 && rsiValue <= 48 ? 15 : 8; }
-  else return { symbol: ticker.symbol, fourHourTrend, rejected: "The 1H trend and optimal RSI zone were not confirmed together", entryDiagnostics: { stage: "trend_rsi", rsi: rsiValue, up1h, down1h, fourHourTrend } };
-  const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
-  if (fourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 4H trend is not aligned with the signal" };
-  if (options.requireBtcFourHourAlignment === true && options.btcFourHourTrend !== expectedTrend) return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, rejected: "Bitcoin's 4H trend is not aligned with the signal" };
-  score += 10; reasons.push("The symbol and Bitcoin 4H trends are fully aligned");
+
+  if (strictLong || (!strictSetup && relaxedLong)) {
+    side = "LONG";
+    score = strictSetup ? 45 : 40;
+    reasons.push(strictSetup
+      ? "روند ۱ساعته و ۴ساعته صعودی است"
+      : "ستاپ آزمایشی: روند ۱ساعته صعودی و روند ۴ساعته مخالف نیست",
+      "قیمت بالای EMA20 قرار دارد");
+    score += rsiValue >= 52 && rsiValue <= 65 ? 15 : 9;
+  } else if (strictShort || (!strictSetup && relaxedShort)) {
+    side = "SHORT";
+    score = strictSetup ? 45 : 40;
+    reasons.push(strictSetup
+      ? "روند ۱ساعته و ۴ساعته نزولی است"
+      : "ستاپ آزمایشی: روند ۱ساعته نزولی و روند ۴ساعته مخالف نیست",
+      "قیمت زیر EMA20 قرار دارد");
+    score += rsiValue >= 35 && rsiValue <= 48 ? 15 : 9;
+  } else {
+    return { symbol: ticker.symbol, rejected: "حتی شرایط منعطف آزمایشی روند و RSI نیز تأیید نشد" };
+  }
+
+  if (volumeRatio >= 1.5) { score += 18; reasons.push("حجم بالاتر از میانگین است"); }
+  else if (volumeRatio >= 1.0) { score += 12; reasons.push("حجم نزدیک یا بالاتر از میانگین است"); }
+  else { score += 4; reasons.push("حجم کمتر از میانگین است"); }
+
   const change = Number(ticker.priceChangePercent) || 0;
-  if (side === "LONG") { if (change < -1.5) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The symbol's 24H change is negative; bullish-trap risk for LONG" }; if (volumeRatio < 0.7) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "Relative volume is insufficient to confirm LONG" }; }
-  score += ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) ? 8 : 2;
-  const volumePriorityBonus = volumeRatio >= FUTURES_CONFIG.VOLUME_PRIORITY_TIER_2 ? FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_2 : volumeRatio >= FUTURES_CONFIG.VOLUME_PRIORITY_TIER_1 ? FUTURES_CONFIG.VOLUME_PRIORITY_BONUS_TIER_1 : 0;
+  if ((side === "LONG" && change > 0) || (side === "SHORT" && change < 0)) score += 8;
+  else score += 3;
+
   const funding = Number(ticker.premium?.lastFundingRate);
-  if (Number.isFinite(funding)) { if (side === "LONG" && funding > 0.0008) { score -= 6; reasons.push("High positive funding; crowded-LONG risk"); } else if (side === "SHORT" && funding < -0.0008) { score -= 6; reasons.push("High negative funding; crowded-SHORT risk"); } }
-  const priorityBaseScore = score, quoteVolume = Number(ticker.quoteVolume) || 0;
-  const standardThresholdMet = strictSetup && quoteVolume >= FUTURES_CONFIG.MIN_QUOTE_VOLUME && score >= FUTURES_CONFIG.MIN_SCORE && volumeRatio >= 0.85;
-  let standardEntryPassed = false, entryFilters;
-  if (options.skipEntryFilters) { entryFilters = { ok: true, skippedForBaseline: true, momentumConfirmed: true, pullbackConfirmed: true }; standardEntryPassed = standardThresholdMet; }
-  else if (standardThresholdMet) { const strictEntry = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: false }); if (strictEntry.ok) { entryFilters = strictEntry; standardEntryPassed = true; } else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true }); }
-  else entryFilters = evaluateFuturesEntryFilters({ ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, isHighRisk: true });
-  if (!entryFilters.ok) return { symbol: ticker.symbol, fourHourTrend, side, score: Math.max(0, Math.min(100, Math.round(score))), rejected: entryFilters.rejected, entryDiagnostics: entryFilters };
-  if (!standardEntryPassed && quoteVolume < FUTURES_CONFIG.HIGH_RISK_MIN_QUOTE_VOLUME) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "24H volume is below the safety threshold" };
-  if (!standardEntryPassed && volumeRatio < FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO) return { symbol: ticker.symbol, fourHourTrend, side, rejected: "The latest candle's relative volume is insufficient" };
+  if (Number.isFinite(funding)) {
+    if (side === "LONG" && funding > 0.001) { score -= 5; reasons.push("فاندینگ مثبت و نسبتاً بالا؛ ریسک ازدحام لانگ"); }
+    else if (side === "SHORT" && funding < -0.001) { score -= 5; reasons.push("فاندینگ منفی و نسبتاً پایین؛ ریسک ازدحام شورت"); }
+    else reasons.push("فاندینگ در محدوده افراطی نیست");
+  } else {
+    reasons.push("داده فاندینگ در دسترس نبود");
+  }
+
+  const fourHourOpposes = side === "LONG" ? down4h : up4h;
+  const standardThresholdMet = strictSetup &&
+    score >= FUTURES_CONFIG.MIN_SCORE &&
+    volumeRatio >= 0.75;
+  let standardEntryPassed = false;
+  let entryFilters;
+
+  if (options.skipEntryFilters) {
+    entryFilters = { ok: true, skippedForBaseline: true };
+    standardEntryPassed = standardThresholdMet;
+  } else if (standardThresholdMet) {
+    const strictEntryFilters = evaluateFuturesEntryFilters({
+      ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr
+    });
+    if (strictEntryFilters.ok) {
+      entryFilters = strictEntryFilters;
+      standardEntryPassed = true;
+    } else {
+      // A strict candidate that misses the standard entry rules may still qualify
+      // through the independent high-risk path, for both LONG and SHORT.
+      const flexibleEntryFilters = evaluateHighRiskFuturesEntryFilters({
+        ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, fourHourOpposes
+      });
+      entryFilters = flexibleEntryFilters.ok
+        ? { ...flexibleEntryFilters, strictEntryRejected: strictEntryFilters.rejected, highRiskFallback: true }
+        : { ...flexibleEntryFilters, strictEntryRejected: strictEntryFilters.rejected };
+    }
+  } else {
+    // Do not let strictSetup alone block a candidate from the relaxed path:
+    // score/volume misses and strict-vs-flexible entry differences are fallback cases.
+    entryFilters = evaluateHighRiskFuturesEntryFilters({
+      ticker, candles1h, candles15m, side, referencePrice, ema20: e20, atr, fourHourOpposes
+    });
+  }
+
+  if (!entryFilters.ok) {
+    return {
+      symbol: ticker.symbol,
+      side,
+      score: Math.max(0, Math.min(100, Math.round(score))),
+      rejected: entryFilters.rejected,
+      entryDiagnostics: entryFilters
+    };
+  }
+  reasons.push("قیمت لحظه‌ای در محدوده مجاز قیمت تحلیلی است");
+  reasons.push("فاصله قیمت از EMA20 برای ورود قابل‌قبول است");
+  if (entryFilters.momentumConfirmed && entryFilters.pullbackConfirmed) {
+    reasons.push("مومنتوم و پولبک ۱۵دقیقه‌ای تأیید شدند");
+  } else if (!strictSetup && fourHourOpposes && entryFilters.momentumConfirmed) {
+    reasons.push("با وجود مخالفت روند ۴ساعته، مومنتوم ۱۵دقیقه‌ای هم‌جهت تأیید شد");
+  } else {
+    reasons.push("تأیید ۱۵دقیقه‌ای کامل نبود؛ مسیر پرریسک با محدودیت‌های مستقل ارزیابی شد");
+  }
+
   const entry = options.skipEntryFilters ? referencePrice : Number(ticker.last);
-  const swing = candles1h.slice(-13, -1), swingLow = Math.min(...swing.map(c => c.low)), swingHigh = Math.max(...swing.map(c => c.high)), liquidityBuffer = atr * 0.25;
-  const stop = side === "LONG" ? Math.min(swingLow - liquidityBuffer, entry - atr * 1.6) : Math.max(swingHigh + liquidityBuffer, entry + atr * 1.6);
-  const risk = side === "LONG" ? entry - stop : stop - entry, riskPct = risk / entry;
-  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.004 || riskPct > 0.035) return { symbol: ticker.symbol, fourHourTrend, rejected: "Stop distance is outside the standard range (0.4% to 3.5%)." };
-  const direction = side === "LONG" ? 1 : -1, target1 = entry + direction * risk * 1.5, target2 = entry + direction * risk * 2.5, target3 = entry + direction * risk * 3.5;
+  const swing = candles1h.slice(-8, -1);
+  const swingLow = Math.min(...swing.map(c => c.low));
+  const swingHigh = Math.max(...swing.map(c => c.high));
+  let stop = side === "LONG"
+    ? Math.min(swingLow, entry - atr * 1.5)
+    : Math.max(swingHigh, entry + atr * 1.5);
+  const risk = side === "LONG" ? entry - stop : stop - entry;
+  const riskPct = risk / entry;
+  if (!Number.isFinite(risk) || risk <= 0 || riskPct < 0.002 || riskPct > 0.08) {
+    return { symbol: ticker.symbol, rejected: "فاصله حد ضرر غیرمنطقی است؛ سیگنال صادر نشد" };
+  }
+
+  const direction = side === "LONG" ? 1 : -1;
+  const target1 = entry + direction * risk * 1.5;
+  const target2 = entry + direction * risk * 2.5;
+  const target3 = entry + direction * risk * 3.5;
   score = Math.max(0, Math.min(100, Math.round(score)));
-  const eligible = standardEntryPassed, highRiskEligible = !standardEntryPassed && score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE;
-  if (!eligible && !highRiskEligible) return { symbol: ticker.symbol, fourHourTrend, side, score, rejected: "Final score did not reach the minimum threshold" };
-  const confirmationPriorityBonus = FUTURES_CONFIG.CONFIRMATION_PRIORITY_BONUS_BOTH, priorityScore = Math.min(125, priorityBaseScore + volumePriorityBonus + confirmationPriorityBonus);
-  reasons.push("EMA21 pullback and 15-minute momentum trigger confirmed");
-  if (highRiskEligible) reasons.push("Signal passed the flexible high-risk path with full 15-minute confirmation");
-  return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side,
-    momentumConfirmed: true, pullbackConfirmed: true, score, baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
-    priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))), volumePriorityBonus, fourHourScoreAdjustment: 10,
-    confirmationPriorityBonus, confirmationCount: 2, riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
-    price: entry, entry, stop, target1, target2, target3, rewardRisk: 1.5, rsi: rsiValue,
-    ema20: e20, ema50: e50, atr, volumeRatio, funding: Number.isFinite(funding) ? funding : null,
-    quoteVolume, change24h: change, candleTime: last.time, reasons, entryDiagnostics: entryFilters, eligible: true, highRiskEligible };
+  const eligible = standardEntryPassed;
+  const highRiskEligible = !standardEntryPassed &&
+    score >= FUTURES_CONFIG.HIGH_RISK_MIN_SCORE &&
+    volumeRatio >= FUTURES_CONFIG.HIGH_RISK_MIN_VOLUME_RATIO;
+  if (highRiskEligible) reasons.push("این سیگنال فقط از مسیر مستقل منعطف عبور کرده و پرریسک طبقه‌بندی شده است");
+  return {
+    symbol: ticker.symbol,
+    side,
+    score,
+    riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
+    price: entry,
+    entry,
+    stop,
+    target1,
+    target2,
+    target3,
+    rewardRisk: 1.5,
+    rsi: rsiValue,
+    ema20: e20,
+    ema50: e50,
+    atr,
+    volumeRatio,
+    funding: Number.isFinite(funding) ? funding : null,
+    quoteVolume: Number(ticker.quoteVolume) || 0,
+    change24h: change,
+    candleTime: last.time,
+    reasons,
+    entryDiagnostics: entryFilters,
+    eligible: eligible || highRiskEligible,
+    highRiskEligible
+  };
 }
 
 function formatPrice(value) {
@@ -2115,6 +2306,8 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
   const symbols = [...new Set(openTrades.map(t => t.symbol).filter(Boolean))];
   const updates = [];
   const errorDetails = [];
+  const breakEvenPrompts = [];
+  const breakEvenPromptIds = new Set();
   let checked = 0, closed = 0, errors = 0;
   const timestamp = new Date(now).toISOString();
   const recordError = (trade, stage, error) => {
@@ -2164,6 +2357,17 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
               lastCheckedCandleTime: Number(candle.time), lastMonitorAttemptAt: timestamp,
               lastMonitorError: null
             };
+          } else if (result.trade) {
+            trade = { ...result.trade, lastPrice: candle.close, lastCheckedAt: timestamp,
+              lastCheckedCandleTime: Number(candle.time), lastMonitorAttemptAt: timestamp,
+              lastMonitorError: null };
+          }
+          if (trade.status === "OPEN" && trade.breakEvenSuggested === true && !trade.breakEvenPromptedAt && !breakEvenPromptIds.has(String(trade.id))) {
+            breakEvenPromptIds.add(String(trade.id));
+            breakEvenPrompts.push({
+              id: trade.id, symbol: trade.symbol, side: trade.side,
+              suggestedStopPrice: Number(trade.suggestedStopPrice)
+            });
           }
           if (result.closed) {
             closed++;
@@ -2187,6 +2391,25 @@ async function monitorOpenFuturesTrades(env, now = Date.now()) {
       console.error("FUTURES_TRADE_MONITOR_PERSISTENCE_ERROR", persistenceError);
     }
   }
+  const ownerId = env.OWNER_TELEGRAM_ID || env.OWNER_ID;
+  if (ownerId && breakEvenPrompts.length) {
+    for (const prompt of breakEvenPrompts) {
+      try {
+        await sendMessage(env, ownerId,
+          "📌 معامله " + prompt.symbol + " (" + prompt.side + ") به محدوده +1R رسیده است.\n" +
+          "حد ضرر پیشنهادی: " + formatSignalPrice(prompt.suggestedStopPrice) + "\n\n" +
+          "ربات حد ضرر صرافی را تغییر نداده است. اگر این حد ضرر را خودت در صرافی ثبت کردی، برای همگام‌سازی وضعیت داخلی بفرست:\n" +
+          "/set_stop " + prompt.id + " " + prompt.suggestedStopPrice + "\n\n" +
+          "این دستور فقط رکورد داخلی ربات را به‌روزرسانی می‌کند و هیچ سفارشی در صرافی ثبت یا ویرایش نمی‌کند.");
+        await persistFuturesTradeUpdates(env, [{ id: prompt.id, breakEvenPromptedAt: timestamp }]);
+      } catch (error) {
+        errors++;
+        const detail = { tradeId: String(prompt.id), symbol: String(prompt.symbol), stage: "BREAK_EVEN_PROMPT", message: String(error?.message || error).slice(0, 300), at: timestamp };
+        errorDetails.push(detail);
+        console.error("FUTURES_BREAK_EVEN_PROMPT_FAILED", JSON.stringify(detail));
+      }
+    }
+  }
   const stuckTrades = openTrades.filter(trade => {
     const lastChecked = Date.parse(trade.lastCheckedAt || trade.createdAt || 0);
     return !Number.isFinite(lastChecked) || now - lastChecked >= CONFIG.TRADE_MONITOR_STUCK_AFTER_MS;
@@ -2207,6 +2430,14 @@ async function registerPendingFuturesSignals(env, candidates) {
   });
   const payload = await response.json();
   if (!response.ok || !payload?.ok || !Array.isArray(payload.signals)) throw new Error(payload?.error || "Durable pending-signal registration failed.");
+  if (payload.registrationDiagnostics) {
+    console.log("FUTURES_SIGNAL_REGISTRATION_DIAGNOSTICS", JSON.stringify({
+      timestamp: new Date().toISOString(),
+      received: Array.isArray(candidates) ? candidates.length : 0,
+      registered: payload.signals.length,
+      ...payload.registrationDiagnostics
+    }));
+  }
   return payload.signals;
 }
 const tradeDir=side=>side==="LONG"?1:-1;
@@ -2482,7 +2713,11 @@ export class SignalDeliveryCoordinator {
               remainingFraction:Number.isFinite(Number(candidate.remainingFraction))?Number(candidate.remainingFraction):existing.remainingFraction,
               realizedMarginReturnPct:Number.isFinite(Number(candidate.realizedMarginReturnPct))?Number(candidate.realizedMarginReturnPct):existing.realizedMarginReturnPct,
               currentStop:Number.isFinite(Number(candidate.currentStop))?Number(candidate.currentStop):existing.currentStop,
-              breakEvenActivated:candidate.breakEvenActivated===true||existing.breakEvenActivated===true
+              breakEvenActivated:candidate.breakEvenActivated===true||existing.breakEvenActivated===true,
+              breakEvenSuggested:candidate.breakEvenSuggested===true||existing.breakEvenSuggested===true,
+              suggestedStopPrice:Number.isFinite(Number(candidate.suggestedStopPrice))?Number(candidate.suggestedStopPrice):existing.suggestedStopPrice,
+              breakEvenPromptedAt:candidate.breakEvenPromptedAt||existing.breakEvenPromptedAt,
+              breakEvenConfirmedAt:candidate.breakEvenConfirmedAt||existing.breakEvenConfirmedAt
             };
             if(["CLOSED_PROFIT","CLOSED_STOP","CLOSED_MANUAL"].includes(candidate.status)){
               next.status=candidate.status;
@@ -2554,15 +2789,18 @@ export class SignalDeliveryCoordinator {
           const seen=new Set();
           const fresh=[];
           const newTrades=[];
+          const registrationDiagnostics={invalid:0,blockedByOpenOpposite:0,blockedByDailyDirectionLock:0,blockedByActiveSameSide:0,blockedByOpenSameSide:0,duplicateInBatch:0,expired:0};
           for(const signal of Array.isArray(payload.signals)?payload.signals:[]){
-            if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal))continue;
+            if(!signal?.id||!signal?.symbol||!["LONG","SHORT"].includes(signal?.side)||!isValidFuturesSignalLevels(signal)){registrationDiagnostics.invalid++;continue;}
             const symbol=String(signal.symbol).trim().toUpperCase();
             const key=symbol+"|"+signal.side;
             // Never allow an opposite signal while a trade is OPEN or after the symbol
             // has already emitted the other direction during this UTC day.
-            if((openDirectionBySymbol.has(symbol)&&openDirectionBySymbol.get(symbol)!==signal.side)||
-              (directionLocks[symbol]&&directionLocks[symbol]!==signal.side))continue;
-            if(activeKeys.has(key)||openTradeKeys.has(key)||seen.has(key))continue;
+            if(openDirectionBySymbol.has(symbol)&&openDirectionBySymbol.get(symbol)!==signal.side){registrationDiagnostics.blockedByOpenOpposite++;continue;}
+            if(directionLocks[symbol]&&directionLocks[symbol]!==signal.side){registrationDiagnostics.blockedByDailyDirectionLock++;continue;}
+            if(activeKeys.has(key)){registrationDiagnostics.blockedByActiveSameSide++;continue;}
+            if(openTradeKeys.has(key)){registrationDiagnostics.blockedByOpenSameSide++;continue;}
+            if(seen.has(key)){registrationDiagnostics.duplicateInBatch++;continue;}
             const suppliedCreatedAt=Number(signal.createdAt);
             const createdAt=Number.isFinite(suppliedCreatedAt)&&suppliedCreatedAt>0?suppliedCreatedAt:now;
             const suppliedExpiry=Number(signal.expiresAt);
@@ -2571,7 +2809,7 @@ export class SignalDeliveryCoordinator {
             const expiresAt=Number.isFinite(suppliedExpiry)&&signal.expiresAt!=null&&signal.expiresAt!==""
               ? suppliedExpiry
               : createdAt+FUTURES_CONFIG.SIGNAL_TTL_MINUTES*60000;
-            if(!Number.isFinite(expiresAt)||expiresAt<=now)continue;
+            if(!Number.isFinite(expiresAt)||expiresAt<=now){registrationDiagnostics.expired++;continue;}
             const normalizedSignal={...signal,createdAt,expiresAt};
             seen.add(key);fresh.push(normalizedSignal);
             directionLocks[symbol]=signal.side;
@@ -2592,7 +2830,7 @@ export class SignalDeliveryCoordinator {
               await transaction.put("daily-signal-direction-locks",{day:today,symbols:directionLocks});
             }
           });
-          return Response.json({ok:true,signals:fresh,trackedTrades:newTrades.length});
+          return Response.json({ok:true,signals:fresh,trackedTrades:newTrades.length,registrationDiagnostics});
         }
         if(url.pathname==="/scan-lock/acquire"){
           const current=await this.ctx.storage.get("automatic-futures-scan-lock");
@@ -3203,60 +3441,35 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const filteredUniverse = universe;
-  // Fetch BTC 4h once per scan. Fail closed: never emit signals without a valid BTC trend.
-  const btcMarketData = await getKrakenFuturesCandlesViaCoordinator(
-    env, "PF_XBTUSD", [FUTURES_CONFIG.CONFIRM_INTERVAL]
-  );
-  const btcFourHourTrend = calculateFourHourTrend(
-    btcMarketData.candles?.[FUTURES_CONFIG.CONFIRM_INTERVAL]
-  );
-  if (!btcFourHourTrend) {
-    throw new Error("Bitcoin's 4H trend could not be calculated. The scan stopped to avoid issuing signals without BTC confirmation.");
-  }
-  console.log("BTC_4H_ALIGNMENT_CONTEXT", JSON.stringify({
-    timestamp: new Date().toISOString(), btcFourHourTrend, required: true
-  }));
+
   const analysisDeadline = started + FUTURES_CONFIG.MAX_SCAN_DURATION_MS - FUTURES_CONFIG.SCAN_FINALIZATION_RESERVE_MS;
   let analysisErrorCount = 0;
   let fifteenMinuteDataErrorCount = 0;
   const analyzed = await mapLimit(filteredUniverse, FUTURES_CONFIG.CONCURRENCY, async ticker => {
     try {
-      // Stage 1: fetch only the 1h/4h inputs and run the unchanged engine with
-      // entry filters skipped. This is a conservative preflight: any symbol
-      // that can become eligible in the full analysis must pass this stage.
-      const baseData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
-        FUTURES_CONFIG.INTERVAL, FUTURES_CONFIG.CONFIRM_INTERVAL
+      // Match the supplied 3.8.2 scan path: fetch all three timeframes for
+      // each symbol, then run the original analyzer once on the complete data.
+      const marketData = await getKrakenFuturesCandlesViaCoordinator(env, ticker.symbol, [
+        FUTURES_CONFIG.INTERVAL,
+        FUTURES_CONFIG.CONFIRM_INTERVAL,
+        FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL
       ]);
-      const oneHour = baseData.candles[FUTURES_CONFIG.INTERVAL];
-      const fourHour = baseData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
+      const oneHour = marketData.candles[FUTURES_CONFIG.INTERVAL];
+      const fourHour = marketData.candles[FUTURES_CONFIG.CONFIRM_INTERVAL];
+      const fifteenMinute = marketData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
       if (!Array.isArray(oneHour) || !Array.isArray(fourHour)) {
-        throw new Error(baseData.errors?.[FUTURES_CONFIG.INTERVAL] ||
-          baseData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
-          "Required Kraken candle data is missing.");
+        throw new Error(
+          marketData.errors?.[FUTURES_CONFIG.INTERVAL] ||
+          marketData.errors?.[FUTURES_CONFIG.CONFIRM_INTERVAL] ||
+          "Required Kraken 1h/4h candle data is missing."
+        );
       }
-
-      const analysisOptions = {
-        ...options, btcFourHourTrend, requireBtcFourHourAlignment: true
-      };
-      const preflight = analyzeFuturesSymbol(ticker, oneHour, fourHour, [], {
-        ...analysisOptions, skipEntryFilters: true
-      });
-      if (preflight?.eligible !== true && preflight?.highRiskEligible !== true) {
-        return preflight;
-      }
-
-      // Stage 2: only symbols surviving every 1h/4h/BTC/volume/score/risk
-      // prerequisite request 15m candles. Final qualification still runs the
-      // original, unchanged entry-filter implementation on the real 15m data.
-      const entryData = await getKrakenFuturesCandlesViaCoordinator(
-        env, ticker.symbol, [FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]
-      );
-      const fifteenMinute = entryData.candles[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL] || [];
-      if (entryData.errors?.[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]) {
+      if (marketData.errors?.[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]) {
         fifteenMinuteDataErrorCount++;
-        console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol, entryData.errors[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]);
+        console.error("FUTURES_15M_CANDLE_FETCH_FAILED", ticker.symbol,
+          marketData.errors[FUTURES_CONFIG.ENTRY_CONFIRM_INTERVAL]);
       }
-      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, analysisOptions);
+      return analyzeFuturesSymbol(ticker, oneHour, fourHour, fifteenMinute, options);
     } catch (error) {
       analysisErrorCount++;
       return { symbol: ticker.symbol, rejected: error?.message || "Analysis error", diagnosticType: "data_or_analysis_error" };
@@ -3274,47 +3487,23 @@ async function runFuturesSignalScan(env, options = {}) {
   }
 
   const createdAt = Date.now();
-  // Classify overall 4h market breadth. This affects ranking only; it never blocks a side.
-  const regimeSamples = analyzed.filter(item => ["BULLISH", "BEARISH", "NEUTRAL"].includes(item?.fourHourTrend));
-  const regimeCount = {
-    bullish: regimeSamples.filter(item => item.fourHourTrend === "BULLISH").length,
-    bearish: regimeSamples.filter(item => item.fourHourTrend === "BEARISH").length,
-    neutral: regimeSamples.filter(item => item.fourHourTrend === "NEUTRAL").length
-  };
-  const regimeTotal = regimeSamples.length || 1;
-  const bullishShare = regimeCount.bullish / regimeTotal;
-  const bearishShare = regimeCount.bearish / regimeTotal;
-  let marketRegime = "NEUTRAL";
-  if (bullishShare >= 0.65) marketRegime = "BULLISH";
-  else if (bearishShare >= 0.65) marketRegime = "BEARISH";
-  else if (bullishShare - bearishShare >= 0.10) marketRegime = "LEAN_BULLISH";
-  else if (bearishShare - bullishShare >= 0.10) marketRegime = "LEAN_BEARISH";
-  for (const item of analyzed) {
-    if (item?.eligible !== true || !item.side) continue;
-    const aligned = (marketRegime === "BULLISH" && item.side === "LONG") ||
-      (marketRegime === "BEARISH" && item.side === "SHORT");
-    const leaningAligned = (marketRegime === "LEAN_BULLISH" && item.side === "LONG") ||
-      (marketRegime === "LEAN_BEARISH" && item.side === "SHORT");
-    const opposing = (marketRegime === "BULLISH" && item.side === "SHORT") ||
-      (marketRegime === "BEARISH" && item.side === "LONG");
-    const leaningOpposing = (marketRegime === "LEAN_BULLISH" && item.side === "SHORT") ||
-      (marketRegime === "LEAN_BEARISH" && item.side === "LONG");
-    const adjustment = aligned ? 8 : leaningAligned ? 5 : opposing ? -8 : leaningOpposing ? -5 : 0;
-    item.marketRegime = marketRegime;
-    item.marketRegimeAdjustment = adjustment;
-    item.priorityScore = Math.max(0, Math.min(125, Math.round(Number(item.priorityScore ?? item.score) + adjustment)));
-    if (adjustment) item.reasons = [...(item.reasons || []), "Overall market regime: " + marketRegime + "; priority score adjustment " + (adjustment > 0 ? "+" : "") + adjustment];
-  }
-
   const eligibleCandidates = analyzed
     .filter(item => item?.eligible === true)
     // Preserve every standard candidate ahead of experimental high-risk candidates.
     .sort((a, b) =>
       Number(a.riskLevel === "HIGH_RISK") - Number(b.riskLevel === "HIGH_RISK") ||
-      Number(b.priorityScore ?? b.score) - Number(a.priorityScore ?? a.score) ||
+      Number(b.score) - Number(a.score) ||
       a.symbol.localeCompare(b.symbol)
     );
-  const generatedSignals = eligibleCandidates
+
+  // Keep all eligible LONG and SHORT candidates, matching the supplied engine.
+  const longEligibleCount = eligibleCandidates.filter(item => item.side === "LONG").length;
+  const shortEligibleCount = eligibleCandidates.filter(item => item.side === "SHORT").length;
+  const dominantDirection = null;
+  const directionFilteredCandidates = eligibleCandidates;
+  const suppressedOppositeDirectionCount = 0;
+
+  const generatedSignals = directionFilteredCandidates
     .slice(0, FUTURES_CONFIG.MAX_SIGNALS_PER_SCAN)
     .map(item => ({
       ...item, id: crypto.randomUUID(), createdAt,
@@ -3358,6 +3547,10 @@ async function runFuturesSignalScan(env, options = {}) {
     analysisErrorCount, fifteenMinuteDataErrorCount,
     rejectedCount: analyzed.filter(item => item && item.eligible !== true).length,
     eligibleCount: eligibleCandidates.length,
+    longEligibleCount,
+    shortEligibleCount,
+    suppressedOppositeDirectionCount,
+    selectedEligibleCount: directionFilteredCandidates.length,
     standardEligibleCount: eligibleCandidates.filter(item => item.riskLevel !== "HIGH_RISK").length,
     highRiskEligibleCount: eligibleCandidates.filter(item => item.riskLevel === "HIGH_RISK").length,
     signalCount: signals.length,

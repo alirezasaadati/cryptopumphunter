@@ -32,13 +32,17 @@ test("staged lifecycle takes one third at TP1 and TP2, then remainder at TP3", (
   assert.ok(Math.abs(result.trade.marginReturnPercent - 50) < 1e-8);
 });
 
-test("break-even activates at +1R and closes the remaining fraction at the fee-buffer stop", () => {
+test("at +1R the lifecycle suggests break-even but waits for confirmed exchange stop", () => {
   let current = trade();
   let result = evaluateStagedTradeCandle(current, { open: 100, high: 102.1, low: 100.5, close: 101.8, time: "2026-01-01T00:05:00Z" });
   current = result.trade;
-  assert.equal(current.breakEvenActivated, true);
-  assert.ok(current.currentStop > 100);
+  assert.equal(current.breakEvenActivated, false);
+  assert.equal(current.breakEvenSuggested, true);
+  assert.equal(current.currentStop, 98);
+  assert.ok(Math.abs(current.suggestedStopPrice - 100.12) < 1e-9);
 
+  // Simulate the owner manually changing the exchange stop and confirming it to the bot.
+  current = { ...current, currentStop: current.suggestedStopPrice, breakEvenActivated: true };
   result = evaluateStagedTradeCandle(current, { open: 101, high: 101.2, low: 100.1, close: 100.2, time: "2026-01-01T00:10:00Z" });
   assert.equal(result.closed, true);
   assert.equal(result.trade.status, "CLOSED_STOP");
