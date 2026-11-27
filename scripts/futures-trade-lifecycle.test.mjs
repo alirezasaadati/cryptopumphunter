@@ -1,70 +1,72 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  FUTURES_TRADE_LEVERAGE,
-  FUTURES_MARGIN_PROFIT_TARGET_PERCENT,
-  FUTURES_PRICE_MOVE_TARGET_PERCENT,
-  marginReturnPercent,
-  profitTargetPrice,
-  evaluateTradeCandle
-} from "../src/futures-trade-lifecycle.js";
+import { evaluateStagedTradeCandle } from "../src/futures-trade-lifecycle.js";
 
-const longTrade = { id:"L1", symbol:"BTC", side:"LONG", actualEntry:100, currentStop:95, status:"OPEN", tpHits:["TP1"] };
-const shortTrade = { id:"S1", symbol:"BTC", side:"SHORT", actualEntry:100, currentStop:105, status:"OPEN", tpHits:["TP1","TP2"] };
+const longTrade = {
+  id: "L1", symbol: "BTC", side: "LONG", actualEntry: 100,
+  initialStop: 95, currentStop: 95, status: "OPEN",
+  remainingFraction: 1, tpHits: []
+};
+const shortTrade = {
+  id: "S1", symbol: "BTC", side: "SHORT", actualEntry: 100,
+  initialStop: 105, currentStop: 105, status: "OPEN",
+  remainingFraction: 1, tpHits: []
+};
 
-test("10x leverage converts 3% favorable price movement into 30% margin return", () => {
-  assert.equal(FUTURES_TRADE_LEVERAGE, 10);
-  assert.equal(FUTURES_MARGIN_PROFIT_TARGET_PERCENT, 30);
-  assert.equal(FUTURES_PRICE_MOVE_TARGET_PERCENT, 3);
-  assert.equal(profitTargetPrice("LONG", 100), 103);
-  assert.equal(profitTargetPrice("SHORT", 100), 97);
-  assert.equal(marginReturnPercent("LONG", 100, 103), 30);
-  assert.equal(marginReturnPercent("SHORT", 100, 97), 30);
+test("active LONG lifecycle takes one third at 1.5R and only suggests break-even", () => {
+  const result = evaluateStagedTradeCandle(longTrade, { open: 100, high: 108, low: 99, time: 1 });
+  assert.equal(result.changed, true);
+  assert.equal(result.closed, false);
+  assert.deepEqual(result.trade.tpHits, ["TP1"]);
+  assert.ok(Math.abs(result.trade.remainingFraction - 2 / 3) < 1e-9);
+  assert.equal(result.trade.currentStop, 95);
+  assert.equal(result.trade.breakEvenActivated, false);
+  assert.equal(result.trade.breakEvenSuggested, true);
+  assert.ok(Math.abs(result.trade.suggestedStopPrice - 100.12) < 1e-9);
+  assert.ok(Math.abs(result.trade.realizedMarginReturnPct - 25) < 1e-9);
 });
 
-test("LONG closes only when 30% margin target or stop is reached", () => {
-  assert.equal(evaluateTradeCandle(longTrade, {open:100, high:102.9, low:99, time:1}).changed, false);
-  const result = evaluateTradeCandle(longTrade, {open:102, high:103.2, low:101, time:2});
-  assert.equal(result.reason, "CLOSED_PROFIT");
-  assert.equal(result.trade.exitPrice, 103);
-  assert.equal(result.trade.marginReturnPercent, 30);
-  assert.equal(result.trade.lockReleaseEligible, true);
+test("active SHORT lifecycle suggests a fee-buffered stop without moving the tracked stop", () => {
+  const result = evaluateStagedTradeCandle(shortTrade, { open: 100, high: 101, low: 92, time: 2 });
+  assert.equal(result.trade.currentStop, 105);
+  assert.equal(result.trade.breakEvenActivated, false);
+  assert.equal(result.trade.breakEvenSuggested, true);
+  assert.ok(Math.abs(result.trade.suggestedStopPrice - 99.88) < 1e-9);
+  assert.deepEqual(result.trade.tpHits, ["TP1"]);
+  assert.ok(Math.abs(result.trade.remainingFraction - 2 / 3) < 1e-9);
 });
 
-test("SHORT closes only when 30% margin target or stop is reached", () => {
-  const result = evaluateTradeCandle(shortTrade, {open:98, high:99, low:96.8, time:3});
-  assert.equal(result.reason, "CLOSED_PROFIT");
-  assert.equal(result.trade.exitPrice, 97);
-  assert.equal(result.trade.marginReturnPercent, 30);
+test("staged exits use 1.5R, 2.5R and 3.5R with one-third portions", () => {
+  const first = evaluateStagedTradeCandle(longTrade, { open: 100, high: 108, low: 99, time: 3 }).trade;
+  const second = evaluateStagedTradeCandle(first, { open: 108, high: 113, low: 107, time: 4 }).trade;
+  assert.deepEqual(second.tpHits, ["TP1", "TP2"]);
+  assert.ok(Math.abs(second.remainingFraction - 1 / 3) < 1e-9);
+  const third = evaluateStagedTradeCandle(second, { open: 113, high: 118, low: 112, time: 5 });
+  assert.equal(third.closed, true);
+  assert.equal(third.reason, "CLOSED_PROFIT");
+  assert.deepEqual(third.trade.tpHits, ["TP1", "TP2", "TP3"]);
+  assert.equal(third.trade.remainingFraction, 0);
+  assert.equal(third.trade.lockReleaseEligible, true);
 });
 
-test("stop closes the trade even if TP milestones were previously reached", () => {
-  const result = evaluateTradeCandle(longTrade, {open:97, high:99, low:94, time:4});
+test("the active stop is evaluated conservatively before targets", () => {
+  const result = evaluateStagedTradeCandle(longTrade, { open: 100, high: 120, low: 94, time: 6 });
+  assert.equal(result.closed, true);
   assert.equal(result.reason, "CLOSED_STOP");
   assert.equal(result.trade.exitPrice, 95);
-  assert.equal(result.trade.marginReturnPercent, -50);
+  assert.equal(result.trade.currentStop, 95);
 });
 
-test("ambiguous candle touching both stop and profit is resolved as stop", () => {
-  const result = evaluateTradeCandle(longTrade, {open:100, high:104, low:94, time:5});
+test("a manually confirmed stop is the stop used by the active lifecycle", () => {
+  const confirmed = { ...longTrade, currentStop: 100.12, breakEvenActivated: true };
+  const result = evaluateStagedTradeCandle(confirmed, { open: 101, high: 102, low: 100, time: 7 });
+  assert.equal(result.closed, true);
   assert.equal(result.reason, "CLOSED_STOP");
-  assert.equal(result.trade.exitPrice, 95);
+  assert.equal(result.trade.exitPrice, 100.12);
 });
 
-test("a candle opening beyond profit closes at the known opening price even if it later reaches stop", () => {
-  const result = evaluateTradeCandle(longTrade, {open:104, high:105, low:94, time:6});
-  assert.equal(result.reason, "CLOSED_PROFIT");
-  assert.equal(result.trade.exitPrice, 104);
-  assert.ok(Math.abs(result.trade.marginReturnPercent - 40) < 1e-9);
-});
-
-test("closed trades and candles that touch neither boundary are unchanged", () => {
-  const closed = {...longTrade, status:"CLOSED_PROFIT"};
-  assert.equal(evaluateTradeCandle(closed, {open:100, high:110, low:90}).changed, false);
-  assert.equal(evaluateTradeCandle(longTrade, {open:100, high:102, low:96}).changed, false);
-});
-
-test("invalid inputs do not create a close event", () => {
-  assert.equal(evaluateTradeCandle(longTrade, {open:100, high:99, low:101}).changed, false);
-  assert.equal(profitTargetPrice("BUY", 100), null);
+test("invalid levels and closed trades are not processed", () => {
+  const invalid = { ...longTrade, initialStop: 0 };
+  assert.equal(evaluateStagedTradeCandle(invalid, { open: 100, high: 101, low: 99 }).error, "INVALID_TRADE_LEVELS");
+  assert.equal(evaluateStagedTradeCandle({ ...longTrade, status: "CLOSED_STOP" }, { open: 100, high: 101, low: 99 }).changed, false);
 });
