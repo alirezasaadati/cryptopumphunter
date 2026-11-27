@@ -144,16 +144,16 @@ export function evaluateStagedTradeCandle(trade, candle, options = {}) {
   if (stopHit) return closeStop();
 
   let currentStop = stop;
-  let breakEvenActivated = trade.breakEvenActivated === true;
+  const breakEvenActivated = trade.breakEvenActivated === true;
+  let breakEvenSuggested = trade.breakEvenSuggested === true;
+  let suggestedStopPrice = Number(trade.suggestedStopPrice);
   const oneR = entry + dir * risk;
   const reachedOneR = trade.side === "LONG" ? high >= oneR : low <= oneR;
-  if (!breakEvenActivated && risk > 0 && reachedOneR) {
-    const feeBuffer = entry * 0.0012;
-    const beStop = entry + dir * feeBuffer;
-    if ((dir === 1 && beStop > currentStop) || (dir === -1 && beStop < currentStop)) {
-      currentStop = beStop;
-      breakEvenActivated = true;
-    }
+  // Reaching +1R only creates a suggestion. The monitor must never pretend
+  // that the exchange stop moved until the owner confirms the actual exchange price.
+  if (!breakEvenActivated && !breakEvenSuggested && risk > 0 && reachedOneR) {
+    suggestedStopPrice = entry + dir * (entry * 0.0012);
+    breakEvenSuggested = true;
   }
 
   for (let i = 0; i < 3; i++) {
@@ -177,14 +177,14 @@ export function evaluateStagedTradeCandle(trade, candle, options = {}) {
       exitPrice: targets[2], closePriceChangePercent: priceChangePercent(trade.side, entry, targets[2]),
       tpHits, remainingFraction: 0, realizedMarginReturnPct: realized,
       marginReturnPercent: realized, closedAt: updatedAt, currentStop,
-      breakEvenActivated, lockReleaseEligible: true
+      breakEvenActivated, breakEvenSuggested, suggestedStopPrice, lockReleaseEligible: true
     }};
   }
 
   const changed = tpHits.length !== (trade.tpHits || []).length ||
-    currentStop !== stop || breakEvenActivated !== (trade.breakEvenActivated === true);
-  return { changed, stopMoved: currentStop !== stop, closed: false, trade: {
+    currentStop !== stop || breakEvenSuggested !== (trade.breakEvenSuggested === true);
+  return { changed, stopMoved: currentStop !== stop, breakEvenSuggested: breakEvenSuggested && trade.breakEvenSuggested !== true, suggestedStopPrice, closed: false, trade: {
     ...trade, tpHits, remainingFraction: remaining, realizedMarginReturnPct: realized,
-    currentStop, breakEvenActivated
+    currentStop, breakEvenActivated, breakEvenSuggested, suggestedStopPrice
   }};
 }
