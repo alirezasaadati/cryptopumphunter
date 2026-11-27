@@ -404,9 +404,9 @@ test("opposing symbol 4h remains score-only when 15m data is unavailable, but en
   const opposingFourHour=makeCandles({slope:0.04,base:100});
   const result=analyzeFuturesSymbol(ticker,oneHour,opposingFourHour,[]);
   assert.equal(result.side,"SHORT",JSON.stringify(result));
-  assert.equal(result.eligible,true,JSON.stringify(result));
-  assert.equal(result.riskLevel,"HIGH_RISK");
-  assert.equal(result.fourHourScoreAdjustment,-8);
+  assert.equal(result.eligible,undefined,JSON.stringify(result));
+  assert.equal(result.fourHourTrend,"BULLISH");
+  assert.match(result.rejected,/Insufficient 15-minute data/i);
 });
 
 
@@ -592,8 +592,8 @@ test("opposite 15m momentum blocks an entry and is returned as a rejection",()=>
     ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
     referencePrice:oneHour.at(-1).close,ema20,atr
   });
-  assert.equal(result.ok,true);
-  assert.equal(result.momentumConfirmed,false);
+  assert.equal(result.ok,false);
+  assert.match(result.rejected,/momentum trigger has not fired/i);
 });
 
 test("missing 15m pullback blocks an entry and is returned as a rejection",()=>{
@@ -608,6 +608,6 @@ test("missing 15m pullback blocks an entry and is returned as a rejection",()=>{
     ticker,candles1h:oneHour,candles15m:altered,side:"LONG",
     referencePrice:oneHour.at(-1).close,ema20,atr
   });
-  assert.equal(result.ok,true);
-  assert.equal(result.pullbackConfirmed,false);
+  assert.equal(result.ok,false);
+  assert.match(result.rejected,/momentum trigger has not fired|pullback to the EMA21 zone/i);
 });
