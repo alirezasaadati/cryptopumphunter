@@ -221,7 +221,7 @@ async function backtestSymbol(ticker, fromMs, toMs, btcOneHour, btcFourHour, btc
   }
   const strategies = {
     baseline: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {} },
-    current: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {}, neutralLongCandidates: 0, neutralLongAccepted: 0, neutralLongRejected: 0, neutralLongTrades: [] },
+    current: { trades: [], signals: 0, valid: 0, risky: 0, rejected: 0, rejectReasons: {}, neutralLongCandidates: 0, neutralLongAccepted: 0, neutralLongRejected: 0, neutralLongOverlapBlocked: 0, neutralLongRejectReasons: {}, neutralLongTrades: [] },
     currentMargin30: { trades: [] }
   };
   const nextAvailable = { baseline: 60, current: 60 };
@@ -251,7 +251,11 @@ async function backtestSymbol(ticker, fromMs, toMs, btcOneHour, btcFourHour, btc
       if (mode === "current" && candidate?.side === "LONG" && candidate.fourHourTrend === "NEUTRAL") {
         state.neutralLongCandidates++;
         if (candidate.eligible || candidate.experimentalEligible) state.neutralLongAccepted++;
-        else state.neutralLongRejected++;
+        else {
+          state.neutralLongRejected++;
+          const reason = candidate.rejected || "Unspecified rejection";
+          state.neutralLongRejectReasons[reason] = (state.neutralLongRejectReasons[reason] || 0) + 1;
+        }
       }
       if (!candidate || (!candidate.eligible && !candidate.experimentalEligible)) {
         if (mode === "current" && candidate?.rejected &&
@@ -265,7 +269,11 @@ async function backtestSymbol(ticker, fromMs, toMs, btcOneHour, btcFourHour, btc
       // This makes baseline/current signal frequency directly comparable at identical timestamps.
       state.signals++;
       if (candidate.riskLevel === "HIGH_RISK") state.risky++; else state.valid++;
-      if (i < nextAvailable[mode]) continue;
+      if (i < nextAvailable[mode]) {
+        if (mode === "current" && candidate.side === "LONG" && candidate.fourHourTrend === "NEUTRAL" &&
+            (candidate.eligible || candidate.experimentalEligible)) state.neutralLongOverlapBlocked++;
+        continue;
+      }
       const direction=candidate.side==="LONG"?1:-1;
       const entry = candidate.entry * (1 + direction * SLIPPAGE_PER_SIDE);
       const tradeCandles=oneHour.slice(i+1,Math.min(oneHour.length,i+1+MAX_HOLD_HOURS+1));
@@ -275,7 +283,7 @@ async function backtestSymbol(ticker, fromMs, toMs, btcOneHour, btcFourHour, btc
         candles:tradeCandles,startIndex:0,fee:FEE_PER_SIDE,slippage:SLIPPAGE_PER_SIDE,maxHoldHours:MAX_HOLD_HOURS
       });
       trade.symbol=ticker.symbol; trade.score=candidate.score; trade.signalTime=signalBar.time;
-      trade.entryModel=mode === "baseline" ? "last_1h_close" : "next_1h_open";
+      trade.entryModel="next_1h_open";
       state.trades.push(trade);
       if (mode === "current" && candidate.side === "LONG" && candidate.fourHourTrend === "NEUTRAL") state.neutralLongTrades.push(trade);
       if (mode === "current") {
@@ -291,7 +299,7 @@ async function backtestSymbol(ticker, fromMs, toMs, btcOneHour, btcFourHour, btc
   return {
     symbol:ticker.symbol,candles1h:oneHour.length,candles4h:fourHour.length,candles15m:fifteenMinute.length,
     baseline:{signals:strategies.baseline.signals,valid:strategies.baseline.valid,risky:strategies.baseline.risky,metrics:summarize(strategies.baseline.trades)},
-    current:{signals:strategies.current.signals,valid:strategies.current.valid,risky:strategies.current.risky,rejected:strategies.current.rejected,rejectReasons:strategies.current.rejectReasons,metrics:summarize(strategies.current.trades),neutralLong:{candidates:strategies.current.neutralLongCandidates,accepted:strategies.current.neutralLongAccepted,rejected:strategies.current.neutralLongRejected,executedTrades:strategies.current.neutralLongTrades.length,metrics:summarize(strategies.current.neutralLongTrades)}},
+    current:{signals:strategies.current.signals,valid:strategies.current.valid,risky:strategies.current.risky,rejected:strategies.current.rejected,rejectReasons:strategies.current.rejectReasons,metrics:summarize(strategies.current.trades),neutralLong:{candidates:strategies.current.neutralLongCandidates,accepted:strategies.current.neutralLongAccepted,rejected:strategies.current.neutralLongRejected,overlapBlocked:strategies.current.neutralLongOverlapBlocked,rejectReasons:strategies.current.neutralLongRejectReasons,executedTrades:strategies.current.neutralLongTrades.length,metrics:summarize(strategies.current.neutralLongTrades)}},
     currentMargin30:{metrics:summarizeMargin30(strategies.currentMargin30.trades)},
     trades:{baseline:strategies.baseline.trades,current:strategies.current.trades,currentNeutralLong:strategies.current.neutralLongTrades,currentMargin30:strategies.currentMargin30.trades}
   };
@@ -337,7 +345,7 @@ async function main() {
       currentFilters:"Mandatory historical BTC 4H directional alignment; 15m momentum and pullback required on neutral-4H LONG recovery; standard/high-risk volume and entry-distance filters",
       universe:"top current Kraken perpetuals by current quote volume; survivorship/universe bias applies"},
     baseline:{signals:sum("baseline","signals"),valid:sum("baseline","valid"),risky:sum("baseline","risky"),metrics:summarize(allBaseline)},
-    current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent),neutralLong:{candidates:sum("current","neutralLongCandidates"),accepted:sum("current","neutralLongAccepted"),rejected:sum("current","neutralLongRejected"),executedTrades:allNeutralLong.length,metrics:summarize(allNeutralLong)}},
+    current:{signals:sum("current","signals"),valid:sum("current","valid"),risky:sum("current","risky"),rejected:sum("current","rejected"),metrics:summarize(allCurrent),neutralLong:{candidates:sum("current","neutralLongCandidates"),accepted:sum("current","neutralLongAccepted"),rejected:sum("current","neutralLongRejected"),overlapBlocked:results.reduce((n,r)=>n+(r.current?.neutralLong?.overlapBlocked||0),0),rejectReasons:results.reduce((acc,r)=>{for(const [reason,count] of Object.entries(r.current?.neutralLong?.rejectReasons||{}))acc[reason]=(acc[reason]||0)+count;return acc;},{}),executedTrades:allNeutralLong.length,metrics:summarize(allNeutralLong)}},
     currentMargin30:summarizeMargin30(allMargin30),
     signalCountChangePct:sum("baseline","signals")?((sum("current","signals")/sum("baseline","signals"))-1)*100:0,
     symbols:results.map(({trades,...r})=>r),trades:{baseline:allBaseline,current:allCurrent}
@@ -363,6 +371,7 @@ async function main() {
     "| Neutral-4H LONG candidates | — | "+report.current.neutralLong.candidates+" |",
     "| Neutral-4H LONG accepted | — | "+report.current.neutralLong.accepted+" |",
     "| Neutral-4H LONG rejected | — | "+report.current.neutralLong.rejected+" |",
+    "| Neutral-4H LONG blocked by overlap | — | "+report.current.neutralLong.overlapBlocked+" |",
     "| Neutral-4H LONG executed trades | — | "+report.current.neutralLong.executedTrades+" |",
     "| Neutral-4H LONG win rate | — | "+report.current.neutralLong.metrics.winRatePct.toFixed(2)+"% |",
     "| Neutral-4H LONG net R | — | "+report.current.neutralLong.metrics.netR.toFixed(2)+"R |",
