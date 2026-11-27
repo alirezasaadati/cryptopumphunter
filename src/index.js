@@ -1788,11 +1788,11 @@ function calculateEntryQualityScore({ side, rsi: rsiValue, rsiSlope, emaDistance
   else if (momentumState === "NOT_CONFIRMED") { rawScore -= 5; details.momentum = -5; }
 
   const expectedTrend = side === "LONG" ? "BULLISH" : "BEARISH";
-  if (fourHourTrend === expectedTrend) { rawScore += 10; details.trend4h = 10; }
+  if (fourHourTrend === expectedTrend) { rawScore += 6; details.trend4h = 6; }
   else if (fourHourTrend === "NEUTRAL") details.trend4h = 0;
   else if (fourHourTrend === "BULLISH" || fourHourTrend === "BEARISH") {
-    rawScore -= 15;
-    details.trend4h = -15;
+    rawScore -= 6;
+    details.trend4h = -6;
   }
 
   const normalized = Math.max(0, Math.min(100, Math.round(((rawScore + 70) / 155) * 100)));
@@ -1991,7 +1991,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   // The 1H symbol trend must align with Bitcoin's 4H trend for either side.
   // The symbol's own 4H trend is contextual only: it adjusts score but never blocks.
   if (options.requireBtcFourHourAlignment === true && options.btcFourHourTrend !== expectedTrend) {
-    return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, rejected: "The symbol's 1H trend is not aligned with Bitcoin's 4H trend" };
+    return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side, rejected: "The symbol's 1H trend is not aligned with Bitcoin's 4H trend", entryDiagnostics: { stage: "btc_4h_alignment", passed: false, expectedTrend, btcFourHourTrend: options.btcFourHourTrend || null, up1h, down1h, fourHourTrend } };
   }
   if (options.btcFourHourTrend === expectedTrend) {
     score += 10;
@@ -2050,7 +2050,7 @@ function analyzeFuturesSymbol(ticker, candles1h, candles4h, candles15m, options 
   if (highRiskEligible) reasons.push("Signal passed the flexible high-risk path with full 15-minute confirmation");
   return { symbol: ticker.symbol, fourHourTrend, btcFourHourTrend: options.btcFourHourTrend || null, side,
     momentumConfirmed: true, pullbackConfirmed: true, score, baseScore: Math.max(0, Math.min(100, Math.round(priorityBaseScore))),
-    priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))), volumePriorityBonus, fourHourScoreAdjustment: 10,
+    priorityScore: Math.max(0, Math.min(125, Math.round(priorityScore))), volumePriorityBonus, fourHourScoreAdjustment: symbolFourHourAdjustment,
     confirmationPriorityBonus, confirmationCount: 2, riskLevel: highRiskEligible ? "HIGH_RISK" : "STANDARD",
     price: entry, entry, stop, target1, target2, target3, rewardRisk: 1.5, rsi: rsiValue,
     ema20: e20, ema50: e50, atr, volumeRatio, funding: Number.isFinite(funding) ? funding : null,
