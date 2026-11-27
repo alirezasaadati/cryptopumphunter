@@ -1,0 +1,21 @@
+name: BTC SMC Genuine CHOCH Backtest
+on:
+  push:
+    branches: [experiment/smc-liquidity-choch-fvg-engine]
+  workflow_dispatch:
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run BTC one-year SMC backtest
+        run: node scripts/smc-backtest.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: btc-smc-one-year-backtest-v2
+          path: artifacts/
+          if-no-files-found: error
