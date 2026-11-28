@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 
-const BASE = "https://fapi.binance.com";
+const BASE = "https://api.bybit.com";
 const SYMBOL = "BTCUSDT";
 const INTERVAL = "1m";
 const DAYS = 30;
@@ -33,22 +33,24 @@ async function loadCandles() {
   let cursor = warmupStart;
   while (cursor < end) {
     const url = new URL(BASE + "/fapi/v1/klines");
+    url.searchParams.set("category", "linear");
     url.searchParams.set("symbol", SYMBOL);
-    url.searchParams.set("interval", INTERVAL);
-    url.searchParams.set("startTime", String(cursor));
-    url.searchParams.set("endTime", String(end));
-    url.searchParams.set("limit", "1500");
+    url.searchParams.set("interval", "1");
+    url.searchParams.set("start", String(cursor));
+    url.searchParams.set("end", String(end));
+    url.searchParams.set("limit", "1000");
     const batch = await getJson(url);
-    if (!Array.isArray(batch)) throw new Error("Unexpected Binance klines response: " + JSON.stringify(batch).slice(0, 300));
-    if (!batch.length) break;
-    rows.push(...batch);
-    const lastOpen = Number(batch[batch.length - 1][0]);
+    if (batch?.retCode !== 0 || !Array.isArray(batch?.result?.list)) throw new Error("Unexpected Bybit kline response: " + JSON.stringify(batch).slice(0, 500));
+    const candles = batch.result.list;
+    if (!candles.length) break;
+    rows.push(...candles);
+    const lastOpen = Math.max(...candles.map(x => Number(x[0])));
     cursor = lastOpen + MINUTE;
-    if (batch.length < 1500) break;
+    if (candles.length < 1000) break;
   }
   const unique = new Map();
   for (const r of rows) {
-    const c = { time: Number(r[0]), open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5], closeTime: Number(r[6]) };
+    const c = { time: Number(r[0]), open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5], closeTime: Number(r[0]) + MINUTE - 1 };
     if (c.time + MINUTE <= end && [c.open,c.high,c.low,c.close,c.volume].every(Number.isFinite)) unique.set(c.time, c);
   }
   return { candles: [...unique.values()].sort((a,b)=>a.time-b.time), start, end, warmupStart };
@@ -208,7 +210,7 @@ async function main() {
   const trades=runBacktest(candles,start);
   const long=trades.filter(t=>t.side==="LONG"), short=trades.filter(t=>t.side==="SHORT");
   const report={
-    generatedAt:new Date().toISOString(),venue:"Binance USDⓈ-M Futures public klines",
+    generatedAt:new Date().toISOString(),venue:"Bybit USDT linear perpetual public klines",
     market:SYMBOL,interval:"1m",period:{from:new Date(start).toISOString(),to:new Date(end).toISOString(),days:DAYS},
     data:{candles: candles.length,first:new Date(candles[0].time).toISOString(),last:new Date(candles[candles.length-1].time).toISOString(),warmupCandles:candles.filter(x=>x.time<start).length},
     strategy:{emaLength:EMA_LEN,pivotLength:PIVOT_LEN,volumeMultiplier:VOL_MULT,rrRatio:RR,stopBufferPct:SL_BUFFER*100,positionSizePct:POSITION_PCT*100,initialCapitalUSD:INITIAL_EQUITY,feesPct:0,slippagePct:0},
