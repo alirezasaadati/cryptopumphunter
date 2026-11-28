@@ -128,7 +128,7 @@ export function isBullish15mRegime(candles) {
  * Evaluates only fully closed candles. Call after each 5m close with the latest
  * fully closed 15m candle set. btcRegimeBullish must be computed from closed BTC data.
  */
-export function evaluateLongSetup({fiveMin,fifteenMin,btcRegimeBullish=false}) {
+export function evaluateLongSetup({fiveMin,fifteenMin,btcRegimeBullish=false,setupId=null}) {
   const diagnostics=[];
   if(!validateLongCandles(fiveMin,LONG_CONFIG.MIN_5M_CANDLES) ||
      !validateLongCandles(fifteenMin,LONG_CONFIG.MIN_15M_CANDLES)) {
@@ -173,7 +173,7 @@ export function evaluateLongSetup({fiveMin,fifteenMin,btcRegimeBullish=false}) {
     {ok:retest,id:"breakout_retest",name:"Breakout retest",reason:"Retest held above broken 5m resistance."},
     {ok:pullback,id:"trend_pullback",name:"Trend pullback",reason:"Bullish 5m EMA alignment and confirmed rebound."}
   ];
-  const setup=setups.find(x=>x.ok);
+  const setup=setups.find(x=>x.ok && (!setupId || x.id===setupId));
   if(!setup) {
     diagnostics.push({status:"no_setup",reason:"No approved 5m entry setup."});
     return {candidate:null,diagnostics,hardGates};
