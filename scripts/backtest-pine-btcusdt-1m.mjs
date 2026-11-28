@@ -1,7 +1,14 @@
-const BASE = "https://futures.kraken.com";
-const MIN = 60_000, FIFTEEN = 15 * MIN, DAYS = 30;
-const END = Date.now(), START = END - DAYS * 86_400_000, WARMUP = START - 20 * 86_400_000;
-const SYMBOL = "PI_XBTUSD"; // Kraken Futures BTC perpetual, same venue family used by the live signal engine.
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const BASE = "https://data.binance.vision/data/futures/um/daily/klines";
+const MIN = 60_000, FIFTEEN = 15 * MIN, DAY = 86_400_000, DAYS = 30;
+const END = Math.floor(Date.now() / DAY) * DAY; // last fully completed UTC day boundary
+const START = END - DAYS * DAY, WARMUP = START - 20 * DAY;
+const SYMBOL = "BTCUSDT"; // Binance USDⓈ-M perpetual historical archive.
 const FEE = Number(process.env.FEE_RATE ?? 0.0005);
 const SLIP = Number(process.env.SLIPPAGE ?? 0.0002);
 const INITIAL = 10_000, SIZE = 0.10;
@@ -16,38 +23,78 @@ async function getJson(url) {
   return data;
 }
 
-async function fetchChunk(fromMs, toMs) {
-  const url = new URL(BASE + "/api/charts/v1/trade/" + SYMBOL + "/1m");
-  url.searchParams.set("from", String(Math.floor(fromMs / 1000)));
-  url.searchParams.set("to", String(Math.floor(toMs / 1000)));
-  url.searchParams.set("count", "600");
-  const data = await getJson(url);
-  if (!Array.isArray(data?.candles)) throw new Error("Kraken response has no candles array: " + JSON.stringify(data).slice(0, 300));
-  if (data.more_candles === true) throw new Error("Kraken returned more candles than requested for chunk " + new Date(fromMs).toISOString());
-  return data.candles.map(c => ({
-    time: Number(c.time), open: Number(c.open), high: Number(c.high),
-    low: Number(c.low), close: Number(c.close), volume: Number(c.volume)
-  })).filter(c => Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.high) &&
-    Number.isFinite(c.low) && Number.isFinite(c.close) && Number.isFinite(c.volume) &&
-    c.open > 0 && c.close > 0 && c.low > 0 && c.high >= c.low && c.volume >= 0 &&
-    c.time + MIN <= END);
+function utcDate(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+async function fetchDay(dayMs, tempDir) {
+  const date = utcDate(dayMs);
+  const filename = `${SYMBOL}-1m-${date}.zip`;
+  const url = `${BASE}/${SYMBOL}/1m/${filename}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  if (!response.ok) throw new Error(`Binance historical archive unavailable: ${filename} (HTTP ${response.status})`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+
+  const checksumResponse = await fetch(url + ".CHECKSUM", { signal: AbortSignal.timeout(30_000) });
+  if (!checksumResponse.ok) throw new Error(`Binance checksum unavailable for ${filename} (HTTP ${checksumResponse.status})`);
+  const checksumText = await checksumResponse.text();
+  const expectedHash = checksumText.trim().split(/\\s+/)[0].toLowerCase();
+  const actualHash = createHash("sha256").update(bytes).digest("hex");
+  if (!/^[a-f0-9]{64}$/.test(expectedHash) || actualHash !== expectedHash) {
+    throw new Error(`SHA-256 checksum mismatch for ${filename}`);
+  }
+
+  const zipPath = join(tempDir, filename);
+  await writeFile(zipPath, bytes);
+  let csv;
+  try {
+    csv = execFileSync("unzip", ["-p", zipPath], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  } catch (error) {
+    throw new Error(`Could not extract ${filename}: ${error.message}`);
+  }
+  const rows = [];
+  for (const line of csv.split(/\\r?\\n/)) {
+    if (!line || !/^\\d/.test(line)) continue; // skip the USD-M CSV header
+    const fields = line.split(",");
+    if (fields.length < 6) continue;
+    const c = { time: Number(fields[0]), open: Number(fields[1]), high: Number(fields[2]),
+      low: Number(fields[3]), close: Number(fields[4]), volume: Number(fields[5]) };
+    if (Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.high) &&
+        Number.isFinite(c.low) && Number.isFinite(c.close) && Number.isFinite(c.volume) &&
+        c.open > 0 && c.close > 0 && c.low > 0 && c.high >= c.low && c.volume >= 0 &&
+        c.time >= dayMs && c.time < dayMs + DAY) rows.push(c);
+  }
+  rows.sort((a, b) => a.time - b.time);
+  if (rows.length !== 1440) {
+    throw new Error(`Incomplete ${date} archive: received ${rows.length}/1440 one-minute candles`);
+  }
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i].time - rows[i - 1].time !== MIN) {
+      throw new Error(`Missing/duplicate minute in ${date} archive near ${new Date(rows[i - 1].time).toISOString()}`);
+    }
+  }
+  console.log(`Historical archive ${date}: ${rows.length} candles; SHA-256 verified`);
+  return rows;
 }
 
 async function load() {
-  const byTime = new Map();
-  const chunkMs = 600 * MIN;
-  let pages = 0;
-  for (let from = WARMUP; from < END; from += chunkMs) {
-    const to = Math.min(END, from + chunkMs - MIN);
-    const rows = await fetchChunk(from, to);
-    for (const candle of rows) byTime.set(candle.time, candle);
-    pages++;
-    await new Promise(resolve => setTimeout(resolve, 120));
+  const tempDir = await mkdtemp(join(tmpdir(), "btc-historical-"));
+  try {
+    const rows = [];
+    let days = 0;
+    for (let day = WARMUP; day < END; day += DAY) {
+      rows.push(...await fetchDay(day, tempDir));
+      days++;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const testRows = rows.filter(c => c.time >= START && c.time < END);
+    if (testRows.length !== DAYS * 1440) {
+      throw new Error(`Historical test window incomplete: ${testRows.length}/${DAYS * 1440} candles`);
+    }
+    return { rows, days, testRows: testRows.length };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
   }
-  const rows = [...byTime.values()].sort((a, b) => a.time - b.time);
-  const testRows = rows.filter(c => c.time >= START);
-  if (testRows.length < 40_000) throw new Error("Insufficient Kraken 1m history: " + testRows.length + " candles in test window; expected at least 40,000.");
-  return { rows, pages, testRows: testRows.length };
 }
 
 function ema(a, n) {
@@ -148,8 +195,8 @@ async function main() {
   const baseline = runTest(candles, false), improved = runTest(candles, true);
   const period = { from: new Date(START).toISOString(), to: new Date(END).toISOString(), days: DAYS };
   const report = {
-    venue: "Kraken Futures", symbol: SYMBOL, timeframe: "1m", priceFeed: "trade candles",
-    period, data: { candlesInTestWindow: loaded.testRows, totalWithWarmup: candles.length, chunks: loaded.pages },
+    venue: "Binance USDⓈ-M Futures", symbol: SYMBOL, timeframe: "1m", priceFeed: "official daily historical kline archives",
+    period, data: { candlesInTestWindow: loaded.testRows, totalWithWarmup: candles.length, dailyArchives: loaded.days, archiveIntegrity: "SHA-256 verified; 1440 contiguous candles required per UTC day" },
     assumptions: { entry: "next 1m candle open", stopTarget: "levels calculated from signal candle close",
       sizing: "10% equity notional", feePerSide: FEE, slippagePerSide: SLIP, funding: "excluded",
       intrabar: "stop-first if stop and target both touched in one candle",
@@ -165,8 +212,8 @@ async function main() {
   await mkdir("artifacts", { recursive: true });
   await writeFile("artifacts/pine-btcusdt-1m-improved-30d.json", JSON.stringify(report, null, 2));
   const lines = ["# BTC 1m Pine backtest: baseline vs improved", "",
-    "Venue: Kraken Futures (" + SYMBOL + "), trade candles", "Period: " + period.from + " to " + period.to,
-    "Test candles: " + loaded.testRows, "Fees/slippage included as stated assumptions; funding excluded.",
+    "Venue: Binance USDⓈ-M Futures (" + SYMBOL + "), official historical 1m kline archives", "Period: " + period.from + " to " + period.to,
+    "Test candles: " + loaded.testRows + " across " + loaded.days + " verified UTC daily archives", "Fees/slippage included as stated assumptions; funding excluded.",
     "Stop-first intrabar assumption. Break-even excluded because it is not implemented in supplied Pine code.", "",
     "| Variant | Side | Trades | Win rate | PF | Net PnL | Return | Max DD |",
     "|---|---|---:|---:|---:|---:|---:|---:|"];
