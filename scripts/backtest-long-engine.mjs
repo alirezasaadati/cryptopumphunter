@@ -69,33 +69,36 @@ function metrics(trades) {
 async function runSymbol(ticker,btc15,from,to) {
   const [five,fifteen]=await Promise.all([candles(ticker.symbol,"5m",from,to),candles(ticker.symbol,"15m",from,to)]);
   if(five.length<1500||fifteen.length<300) throw new Error("Insufficient history: 5m="+five.length+", 15m="+fifteen.length);
-  const trades=[];let nextAvailable=80,btcIndex=0,signalCount=0,accepted=0;
-  const startTime=to-DAYS*86400000;
-  for(let i=80;i<five.length-1;i++) {
-    const closeTime=five[i].time+MS["5m"];
-    if(closeTime<startTime) continue;
-    while(btcIndex<btc15.length&&btc15[btcIndex].time+MS["15m"]<=closeTime) btcIndex++;
-    const btcWindow=btc15.slice(Math.max(0,btcIndex-100),btcIndex);
-    const own15End=lowerBound(fifteen,closeTime);
-    const own15=fifteen.slice(Math.max(0,own15End-100),own15End);
-    const own5=five.slice(Math.max(0,i-119),i+1);
-    const btcBull=isBullish15mRegime(btcWindow);
-    const result=evaluateLongSetup({fiveMin:own5,fifteenMin:own15,btcRegimeBullish:btcBull});
-    if(!result.candidate) continue;
-    signalCount++;
-    if(i+1<nextAvailable) continue;
-    const next=five[i+1],entry=next.open;
-    const stop=result.candidate.stop;
-    const risk=entry-stop;
-    if(!(risk>0)||risk/entry>0.025) continue;
-    const target=entry+risk*1.5;
-    const trade=simulate(five,i+1,entry,stop,target);
-    trade.symbol=ticker.symbol;trade.setupId=result.candidate.setupId;trade.score=result.candidate.score;
-    trades.push(trade);accepted++;
-    const exitIndex=five.findIndex((c,j)=>j>=i+1&&c.time===trade.exitTime);
-    nextAvailable=Math.max(i+2,exitIndex+1);
+  const setupIds=["breakout","breakout_retest","trend_pullback"];
+  const bySetup={};
+  for(const setupId of setupIds) {
+    const trades=[];let nextAvailable=80,btcIndex=0,signalCount=0;
+    const startTime=to-DAYS*86400000;
+    for(let i=80;i<five.length-1;i++) {
+      const closeTime=five[i].time+MS["5m"];
+      if(closeTime<startTime) continue;
+      while(btcIndex<btc15.length&&btc15[btcIndex].time+MS["15m"]<=closeTime) btcIndex++;
+      const btcWindow=btc15.slice(Math.max(0,btcIndex-100),btcIndex);
+      const own15End=lowerBound(fifteen,closeTime);
+      const own15=fifteen.slice(Math.max(0,own15End-100),own15End);
+      const own5=five.slice(Math.max(0,i-119),i+1);
+      const btcBull=isBullish15mRegime(btcWindow);
+      const result=evaluateLongSetup({fiveMin:own5,fifteenMin:own15,btcRegimeBullish:btcBull,setupId});
+      if(!result.candidate) continue;
+      signalCount++;
+      if(i+1<nextAvailable) continue;
+      const next=five[i+1],entry=next.open,stop=result.candidate.stop,risk=entry-stop;
+      if(!(risk>0)||risk/entry>0.025) continue;
+      const target=entry+risk*1.5;
+      const trade=simulate(five,i+1,entry,stop,target);
+      trade.symbol=ticker.symbol;trade.setupId;trade.score=result.candidate.score;
+      trades.push(trade);
+      const exitIndex=five.findIndex((c,j)=>j>=i+1&&c.time===trade.exitTime);
+      nextAvailable=Math.max(i+2,exitIndex+1);
+    }
+    bySetup[setupId]={signalOpportunities:signalCount,executed:trades.length,metrics:metrics(trades),trades};
   }
-  return {symbol:ticker.symbol,candles5m:five.length,candles15m:fifteen.length,signalOpportunities:signalCount,executed:accepted,metrics:metrics(trades),trades};
+  return {symbol:ticker.symbol,candles5m:five.length,candles15m:fifteen.length,bySetup};
 }
 async function main() {
   const end=Date.now(),start=end-DAYS*86400000,from=start-15*86400000;
@@ -114,27 +117,31 @@ async function main() {
     try {results.push(await runSymbol(ticker,btc15,from,end));}
     catch(error){results.push({symbol:ticker.symbol,error:String(error?.message||error)});}
   }
-  const trades=results.flatMap(r=>r.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
-  const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures public historical OHLC",period:{from:new Date(start).toISOString(),to:new Date(end).toISOString(),days:DAYS,warmupDays:15},
-    execution:"signal at closed 5m candle; entry at next 5m open; stop-first intrabar ordering",
+  const setupIds=["breakout","breakout_retest","trend_pullback"];
+  const bySetup={};
+  for(const id of setupIds) {
+    const trades=results.flatMap(r=>r.bySetup?.[id]?.trades||[]).sort((a,b)=>a.entryTime-b.entryTime);
+    bySetup[id]={signalOpportunities:results.reduce((n,r)=>n+(r.bySetup?.[id]?.signalOpportunities||0),0),
+      executed:trades.length,metrics:metrics(trades),trades};
+  }
+  const report={generatedAt:new Date().toISOString(),venue:"Kraken Futures public historical OHLC",
+    period:{from:new Date(start).toISOString(),to:new Date(end).toISOString(),days:DAYS,warmupDays:15},
+    execution:"Each setup is backtested independently; signal at closed 5m candle; entry at next 5m open; stop-first intrabar ordering",
     assumptions:{feePerSidePct:FEE*100,slippagePerSidePct:SLIPPAGE*100,funding:"excluded",maxHoldMinutes:MAX_HOLD_BARS*5,initialRR:1.5,
       btcFilter:"BTC 15m EMA20>EMA50, rising EMA50, ADX>=18, +DI>-DI",universe:"current top perpetuals by quote volume; survivorship bias applies"},
-    symbolsTested:results.filter(r=>!r.error).length,symbolErrors:results.filter(r=>r.error),signalOpportunities:results.reduce((s,r)=>s+(r.signalOpportunities||0),0),
-    portfolioMetrics:metrics(trades),bySymbol:results.map(({trades,...r})=>r),trades};
+    symbolsTested:results.filter(r=>!r.error).length,symbolErrors:results.filter(r=>r.error),
+    bySetup:Object.fromEntries(setupIds.map(id=>[id,{signalOpportunities:bySetup[id].signalOpportunities,executed:bySetup[id].executed,metrics:bySetup[id].metrics}])),
+    bySymbol:results.map(({bySetup,...r})=>({...r,bySetup:Object.fromEntries(setupIds.map(id=>[id,{signalOpportunities:bySetup?.[id]?.signalOpportunities||0,executed:bySetup?.[id]?.executed||0,metrics:bySetup?.[id]?.metrics||metrics([])}]))}))};
   await mkdir("artifacts",{recursive:true});
   await writeFile("artifacts/long-engine-backtest.json",JSON.stringify(report,null,2));
-  const lines=["# Isolated conservative LONG engine backtest","", "Period: "+report.period.from+" to "+report.period.to,
-    "Symbols tested: "+report.symbolsTested+"/"+selected.length,"","| Metric | Result |","|---|---:|",
-    "| Signal opportunities | "+report.signalOpportunities+" |","| Executed trades | "+report.portfolioMetrics.trades+" |",
-    "| Win rate | "+report.portfolioMetrics.winRatePct.toFixed(2)+"% |","| Expectancy | "+report.portfolioMetrics.expectancyR.toFixed(3)+"R |",
-    "| Profit factor | "+report.portfolioMetrics.profitFactor+" |","| Net R | "+report.portfolioMetrics.netR.toFixed(2)+"R |",
-    "| Max drawdown | "+report.portfolioMetrics.maxDrawdownR.toFixed(2)+"R |","",
-    "Fees and slippage are modelled per side; funding is excluded. Current-volume universe selection creates survivorship bias. OHLC cannot reveal intrabar path; stop-first is assumed when both stop and target are touched.",
-    "","| Symbol | Signals | Trades | Win rate | PF | Net R |","|---|---:|---:|---:|---:|---:|",
-    ...results.map(r=>"| "+r.symbol+" | "+(r.signalOpportunities||0)+" | "+(r.metrics?.trades||0)+" | "+(r.metrics?.winRatePct||0).toFixed(2)+"% | "+(r.metrics?.profitFactor??"n/a")+" | "+(r.metrics?.netR||0).toFixed(2)+" |"),
+  const lines=["# Isolated conservative LONG setup comparison","", "Period: "+report.period.from+" to "+report.period.to,
+    "Symbols tested: "+report.symbolsTested+"/"+selected.length,"","| Setup | Signals | Trades | Win rate | Expectancy | PF | Net R | Max DD R |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ...setupIds.map(id=>{const x=bySetup[id];return "| "+id+" | "+x.signalOpportunities+" | "+x.metrics.trades+" | "+x.metrics.winRatePct.toFixed(2)+"% | "+x.metrics.expectancyR.toFixed(3)+"R | "+x.metrics.profitFactor+" | "+x.metrics.netR.toFixed(2)+"R | "+x.metrics.maxDrawdownR.toFixed(2)+"R |";}),
+    "","Fees and slippage are modelled per side; funding is excluded. Current-volume universe selection creates survivorship bias. OHLC cannot reveal intrabar path; stop-first is assumed when both stop and target are touched.",
     "","Symbol errors:",...report.symbolErrors.map(r=>"- "+r.symbol+": "+r.error)];
   await writeFile("artifacts/long-engine-backtest.md",lines.join("\n"));
-  console.log(JSON.stringify({ok:report.symbolsTested>0,period:report.period,portfolioMetrics:report.portfolioMetrics,signalOpportunities:report.signalOpportunities,bySymbol:report.bySymbol,symbolErrors:report.symbolErrors},null,2));
+  console.log(JSON.stringify({ok:report.symbolsTested>0,period:report.period,bySetup:report.bySetup,bySymbol:report.bySymbol,symbolErrors:report.symbolErrors},null,2));
   if(!report.symbolsTested) process.exitCode=1;
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
