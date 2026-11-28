@@ -1,0 +1,30 @@
+name: Pine BTCUSDT 1m Improved Backtest
+on:
+  push:
+    branches:
+      - research/pine-btcusdt-1m-improved-20261128
+    paths:
+      - 'scripts/backtest-pine-btcusdt-1m.mjs'
+      - '.github/workflows/pine-btcusdt-1m-improved.yml'
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/pine-btcusdt-1m-improved-20261128
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run BTCUSDT 1m baseline and improved backtests
+        run: node scripts/backtest-pine-btcusdt-1m.mjs
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pine-btcusdt-1m-improved-30d
+          path: artifacts/pine-btcusdt-1m-improved-30d.*
+          if-no-files-found: warn
