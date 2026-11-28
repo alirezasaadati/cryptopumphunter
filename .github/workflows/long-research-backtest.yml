@@ -1,6 +1,14 @@
 name: LONG Research Backtest
 
 on:
+  push:
+    branches:
+      - research/long-engine-5m-15m-conservative-20261128
+    paths:
+      - 'src/long-engine/**'
+      - 'scripts/long-engine.test.mjs'
+      - 'scripts/backtest-long-engine.mjs'
+      - '.github/workflows/long-research-backtest.yml'
   workflow_dispatch:
     inputs:
       days:
