@@ -2048,7 +2048,7 @@ function formatFuturesSignal(item, index = 1) {
     "",
     `⛔ SL : ${formatSignalDisplayPrice(item.stop)}`
   ];
-  return lines.map(line => `\u200E${line}`).join("\n");
+  return lines.join("\n");
 }
 
 function formatSignalPrice(value) {
