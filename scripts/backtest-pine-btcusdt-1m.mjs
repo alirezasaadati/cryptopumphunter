@@ -138,7 +138,7 @@ function stats(trades) {
     profitFactor: grossLoss ? grossWin / grossLoss : grossWin ? null : 0, netPnl: equity - INITIAL,
     returnPct: (equity / INITIAL - 1) * 100, maxDrawdownPct: maxDD * 100, endingEquity: equity };
 }
-function runTest(a, improved, v2 = false) {
+function runTest(a, improved, v2 = false, allowLong = true) {
   const close = a.map(x => x.close), ema20 = ema(close, 20), avgVol = sma(a.map(x => x.volume), 20), pv = pivots(a, 10);
   const htf = aggregate15(a), ema50 = ema(htf.map(x => x.close), 50);
   let resistance = null, support = null, htfIndex = -1, position = null;
@@ -177,7 +177,7 @@ function runTest(a, improved, v2 = false) {
     const nearSupport = support !== null && c.low <= support * 1.001 && c.close > support;
     const nearResistance = resistance !== null && c.high >= resistance * 0.999 && c.close < resistance;
     const inTimeWindow = !v2 || (new Date(c.time).getUTCHours() >= 8 && new Date(c.time).getUTCHours() < 22);
-    const longSignal = nearSupport && c.close > ema20[i] && (!(improved || v2) || c.close > ema50[htfIndex]) && bullish && volumeOK && inTimeWindow;
+    const longSignal = allowLong && nearSupport && c.close > ema20[i] && (!(improved || v2) || c.close > ema50[htfIndex]) && bullish && volumeOK && inTimeWindow;
     const shortSignal = nearResistance && c.close < ema20[i] && (!(improved || v2) || c.close < ema50[htfIndex]) && bearish && volumeOK && inTimeWindow;
     const buffer = (improved || v2) ? 0.002 : 0.001, rr = (improved || v2) ? 2.5 : 2, next = a[i + 1];
     if (longSignal) {
@@ -193,7 +193,7 @@ function runTest(a, improved, v2 = false) {
 }
 async function main() {
   const loaded = await load(), candles = loaded.rows;
-  const baseline = runTest(candles, false), improved = runTest(candles, true), v2 = runTest(candles, false, true);
+  const baseline = runTest(candles, false), improved = runTest(candles, true), v2 = runTest(candles, false, true), v2ShortOnly = runTest(candles, false, true, false);
   const period = { from: new Date(START).toISOString(), to: new Date(END).toISOString(), days: DAYS };
   const report = {
     venue: "Binance USDⓈ-M Futures", symbol: SYMBOL, timeframe: "1m", priceFeed: "official daily historical kline archives",
@@ -209,7 +209,9 @@ async function main() {
       breakEven: "not implemented in supplied Pine code" },
     v2: { settings: { volumeMultiplier: 2, rr: 2.5, slBuffer: 0.002, htf: "15m EMA50", timeFilterUTC: "08:00-22:00", commissionPerSide: 0.0004 },
       combined: v2.combined, long: v2.long, short: v2.short },
-    trades: { baseline: baseline.trades, improved: improved.trades, v2: v2.trades }
+    v2ShortOnly: { settings: { ...{ volumeMultiplier: 2, rr: 2.5, slBuffer: 0.002, htf: "15m EMA50", timeFilterUTC: "08:00-22:00", commissionPerSide: 0.0004 }, longEntries: false },
+      combined: v2ShortOnly.combined, long: v2ShortOnly.long, short: v2ShortOnly.short },
+    trades: { baseline: baseline.trades, improved: improved.trades, v2: v2.trades, v2ShortOnly: v2ShortOnly.trades }
   };
   const { mkdir, writeFile } = await import("node:fs/promises");
   await mkdir("artifacts", { recursive: true });
@@ -220,7 +222,7 @@ async function main() {
     "Stop-first intrabar assumption. Break-even excluded because it is not implemented in supplied Pine code.", "",
     "| Variant | Side | Trades | Win rate | PF | Net PnL | Return | Max DD |",
     "|---|---|---:|---:|---:|---:|---:|---:|"];
-  for (const variant of ["baseline", "improved", "v2"]) for (const side of ["combined", "long", "short"]) {
+  for (const variant of ["baseline", "improved", "v2", "v2ShortOnly"]) for (const side of ["combined", "long", "short"]) {
     const x = report[variant][side];
     lines.push("| " + variant + " | " + side + " | " + x.trades + " | " + x.winRate.toFixed(2) + "% | " +
       (x.profitFactor === null ? "∞" : x.profitFactor.toFixed(3)) + " | $" + x.netPnl.toFixed(2) + " | " +
@@ -230,6 +232,7 @@ async function main() {
   console.log(JSON.stringify({ ok: true, venue: report.venue, symbol: SYMBOL, period, data: report.data,
     baseline: { combined: baseline.combined, long: baseline.long, short: baseline.short },
     improved: { combined: improved.combined, long: improved.long, short: improved.short },
-    v2: { combined: v2.combined, long: v2.long, short: v2.short } }, null, 2));
+    v2: { combined: v2.combined, long: v2.long, short: v2.short },
+    v2ShortOnly: { combined: v2ShortOnly.combined, long: v2ShortOnly.long, short: v2ShortOnly.short } }, null, 2));
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
