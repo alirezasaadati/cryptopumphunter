@@ -76,8 +76,9 @@ test("signal alert keeps the approved Persian message layout", () => {
   assert.ok(short.includes("⛔ حد ضرر: <b>64,500</b>"));
   assert.ok(long.includes("جهت معامله: 🟢 لانگ / Long"));
   assert.ok(long.includes("قیمت ورود: <b>65,000</b>"));
-  assert.ok(short.includes("\\u200E"));
-  assert.ok(short.includes("\\n"));
+  assert.ok(!short.includes("\\u200E"));
+  assert.ok(short.includes("\n"));
+  assert.ok(!short.includes("\\n"));
 });
 test("numeric candle timestamps in seconds and milliseconds produce the same identity", () => {
   const seconds = 1794906900;
@@ -94,7 +95,7 @@ test("manual Futures signal formatter matches the approved plain-text layout", a
   assert.ok(source.includes("`Entry Zone 1 : ${formatSignalDisplayPrice(item.entry)}`"));
   assert.ok(source.includes("`Entry Zone 2 : ${formatSignalDisplayPrice(displayEntryPrice(item.entry, item.side))}`"));
   assert.ok(source.includes("`⛔ SL : ${formatSignalDisplayPrice(item.stop)}`"));
-  assert.ok(source.includes('lines.map(line => `\\u200E${line}`).join("\\n")'));
+  assert.ok(source.includes('return lines.join("\\n");'));
 });
 
 
