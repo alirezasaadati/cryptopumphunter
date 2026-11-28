@@ -1,0 +1,44 @@
+name: LONG Research Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Historical test window (7-60 days)"
+        required: false
+        default: "30"
+      symbols:
+        description: "Number of current top-volume Kraken perpetuals (1-10)"
+        required: false
+        default: "5"
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-long-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/long-engine-5m-15m-conservative-20261128
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+      - name: Run repository tests
+        run: npm test
+      - name: Run isolated LONG historical backtest
+        env:
+          LONG_BACKTEST_DAYS: ${{ inputs.days }}
+          LONG_BACKTEST_SYMBOLS: ${{ inputs.symbols }}
+        run: node scripts/backtest-long-engine.mjs
+      - name: Upload research report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-long-backtest-report
+          path: artifacts/long-engine-backtest.*
+          if-no-files-found: warn
