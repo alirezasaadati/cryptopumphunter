@@ -6,20 +6,20 @@ import { join } from "node:path";
 
 const BASE = "https://data.binance.vision/data/futures/um/daily/klines";
 const MIN = 60_000, FIFTEEN = 15 * MIN, DAY = 86_400_000, DAYS = 30;
-const END = Math.floor(Date.now() / DAY) * DAY; // last fully completed UTC day boundary
+const END = Math.floor(Date.now() / DAY) * DAY - DAY; // latest fully published UTC archive boundary
 const START = END - DAYS * DAY, WARMUP = START - 20 * DAY;
 const SYMBOL = "BTCUSDT"; // Binance USDⓈ-M perpetual historical archive.
-const FEE = Number(process.env.FEE_RATE ?? 0.0005);
+const FEE = Number(process.env.FEE_RATE ?? 0.0004);
 const SLIP = Number(process.env.SLIPPAGE ?? 0.0002);
 const INITIAL = 10_000, SIZE = 0.10;
 
 async function getJson(url) {
   const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
   const body = await response.text();
-  if (!response.ok) throw new Error("Kraken HTTP " + response.status + " " + body.slice(0, 180));
+  if (!response.ok) throw new Error("Historical data HTTP " + response.status + " " + body.slice(0, 180));
   let data;
-  try { data = JSON.parse(body); } catch { throw new Error("Invalid JSON from Kraken: " + url); }
-  if (data?.result === "error" || (Array.isArray(data?.errors) && data.errors.length)) throw new Error("Kraken API error: " + JSON.stringify(data.errors || data.error));
+  try { data = JSON.parse(body); } catch { throw new Error("Invalid JSON from historical data source: " + url); }
+  if (data?.result === "error" || (Array.isArray(data?.errors) && data.errors.length)) throw new Error("Historical data API error: " + JSON.stringify(data.errors || data.error));
   return data;
 }
 
@@ -138,7 +138,7 @@ function stats(trades) {
     profitFactor: grossLoss ? grossWin / grossLoss : grossWin ? null : 0, netPnl: equity - INITIAL,
     returnPct: (equity / INITIAL - 1) * 100, maxDrawdownPct: maxDD * 100, endingEquity: equity };
 }
-function runTest(a, improved) {
+function runTest(a, improved, v2 = false) {
   const close = a.map(x => x.close), ema20 = ema(close, 20), avgVol = sma(a.map(x => x.volume), 20), pv = pivots(a, 10);
   const htf = aggregate15(a), ema50 = ema(htf.map(x => x.close), 50);
   let resistance = null, support = null, htfIndex = -1, position = null;
@@ -171,7 +171,7 @@ function runTest(a, improved) {
       }
     }
     if (i < first || i >= a.length - 1 || position || ema20[i] === null || avgVol[i] === null || htfIndex < 0 || ema50[htfIndex] === null) continue;
-    const range = c.high - c.low, body = c.close - c.open, volumeOK = c.volume > avgVol[i] * (improved ? 2 : 1.5);
+    const range = c.high - c.low, body = c.close - c.open, volumeOK = c.volume > avgVol[i] * (improved || v2 ? 2 : 1.5);
     const bullish = body > 0 && c.close > ema20[i] && body > range * 0.6;
     const bearish = body < 0 && c.close < ema20[i] && -body > range * 0.6;
     const nearSupport = support !== null && c.low <= support * 1.001 && c.close > support;
@@ -192,13 +192,13 @@ function runTest(a, improved) {
 }
 async function main() {
   const loaded = await load(), candles = loaded.rows;
-  const baseline = runTest(candles, false), improved = runTest(candles, true);
+  const baseline = runTest(candles, false), improved = runTest(candles, true), v2 = runTest(candles, false, true);
   const period = { from: new Date(START).toISOString(), to: new Date(END).toISOString(), days: DAYS };
   const report = {
     venue: "Binance USDⓈ-M Futures", symbol: SYMBOL, timeframe: "1m", priceFeed: "official daily historical kline archives",
     period, data: { candlesInTestWindow: loaded.testRows, totalWithWarmup: candles.length, dailyArchives: loaded.days, archiveIntegrity: "SHA-256 verified; 1440 contiguous candles required per UTC day" },
     assumptions: { entry: "next 1m candle open", stopTarget: "levels calculated from signal candle close",
-      sizing: "10% equity notional", feePerSide: FEE, slippagePerSide: SLIP, funding: "excluded",
+      sizing: "10% equity notional", feePerSide: FEE, slippagePerSide: SLIP, funding: "excluded", commissionPolicy: "0.04% per side applied uniformly to all three variants for fair comparison",
       intrabar: "stop-first if stop and target both touched in one candle",
       htf: "latest fully closed 15m EMA50; no lookahead" },
     baseline: { settings: { volumeMultiplier: 1.5, rr: 2, slBuffer: 0.001, htf: false },
@@ -211,13 +211,13 @@ async function main() {
   const { mkdir, writeFile } = await import("node:fs/promises");
   await mkdir("artifacts", { recursive: true });
   await writeFile("artifacts/pine-btcusdt-1m-improved-30d.json", JSON.stringify(report, null, 2));
-  const lines = ["# BTC 1m Pine backtest: baseline vs improved", "",
+  const lines = ["# BTC 1m Pine backtest: baseline vs improved vs supplied v2", "",
     "Venue: Binance USDⓈ-M Futures (" + SYMBOL + "), official historical 1m kline archives", "Period: " + period.from + " to " + period.to,
     "Test candles: " + loaded.testRows + " across " + loaded.days + " verified UTC daily archives", "Fees/slippage included as stated assumptions; funding excluded.",
     "Stop-first intrabar assumption. Break-even excluded because it is not implemented in supplied Pine code.", "",
     "| Variant | Side | Trades | Win rate | PF | Net PnL | Return | Max DD |",
     "|---|---|---:|---:|---:|---:|---:|---:|"];
-  for (const variant of ["baseline", "improved"]) for (const side of ["combined", "long", "short"]) {
+  for (const variant of ["baseline", "improved", "v2"]) for (const side of ["combined", "long", "short"]) {
     const x = report[variant][side];
     lines.push("| " + variant + " | " + side + " | " + x.trades + " | " + x.winRate.toFixed(2) + "% | " +
       (x.profitFactor === null ? "∞" : x.profitFactor.toFixed(3)) + " | $" + x.netPnl.toFixed(2) + " | " +
