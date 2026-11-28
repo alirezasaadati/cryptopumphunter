@@ -176,9 +176,10 @@ function runTest(a, improved, v2 = false) {
     const bearish = body < 0 && c.close < ema20[i] && -body > range * 0.6;
     const nearSupport = support !== null && c.low <= support * 1.001 && c.close > support;
     const nearResistance = resistance !== null && c.high >= resistance * 0.999 && c.close < resistance;
-    const longSignal = nearSupport && c.close > ema20[i] && (!improved || c.close > ema50[htfIndex]) && bullish && volumeOK;
-    const shortSignal = nearResistance && c.close < ema20[i] && (!improved || c.close < ema50[htfIndex]) && bearish && volumeOK;
-    const buffer = improved ? 0.002 : 0.001, rr = improved ? 2.5 : 2, next = a[i + 1];
+    const inTimeWindow = !v2 || (new Date(c.time).getUTCHours() >= 8 && new Date(c.time).getUTCHours() < 22);
+    const longSignal = nearSupport && c.close > ema20[i] && (!(improved || v2) || c.close > ema50[htfIndex]) && bullish && volumeOK && inTimeWindow;
+    const shortSignal = nearResistance && c.close < ema20[i] && (!(improved || v2) || c.close < ema50[htfIndex]) && bearish && volumeOK && inTimeWindow;
+    const buffer = (improved || v2) ? 0.002 : 0.001, rr = (improved || v2) ? 2.5 : 2, next = a[i + 1];
     if (longSignal) {
       const stop = support * (1 - buffer), risk = c.close - stop;
       if (risk > 0) position = { side: "LONG", signalTime: c.time, entryTime: next.time, entry: next.open, stop, target: c.close + risk * rr, equity: stats(trades).endingEquity };
@@ -206,7 +207,9 @@ async function main() {
     improved: { settings: { volumeMultiplier: 2, rr: 2.5, slBuffer: 0.002, htf: "15m EMA50" },
       combined: improved.combined, long: improved.long, short: improved.short,
       breakEven: "not implemented in supplied Pine code" },
-    trades: { baseline: baseline.trades, improved: improved.trades }
+    v2: { settings: { volumeMultiplier: 2, rr: 2.5, slBuffer: 0.002, htf: "15m EMA50", timeFilterUTC: "08:00-22:00", commissionPerSide: 0.0004 },
+      combined: v2.combined, long: v2.long, short: v2.short },
+    trades: { baseline: baseline.trades, improved: improved.trades, v2: v2.trades }
   };
   const { mkdir, writeFile } = await import("node:fs/promises");
   await mkdir("artifacts", { recursive: true });
@@ -226,6 +229,7 @@ async function main() {
   await writeFile("artifacts/pine-btcusdt-1m-improved-30d.md", lines.join("\n"));
   console.log(JSON.stringify({ ok: true, venue: report.venue, symbol: SYMBOL, period, data: report.data,
     baseline: { combined: baseline.combined, long: baseline.long, short: baseline.short },
-    improved: { combined: improved.combined, long: improved.long, short: improved.short } }, null, 2));
+    improved: { combined: improved.combined, long: improved.long, short: improved.short },
+    v2: { combined: v2.combined, long: v2.long, short: v2.short } }, null, 2));
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
