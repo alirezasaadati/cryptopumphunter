@@ -26,7 +26,7 @@ function unzip(buffer) {
   throw new Error("No CSV in ZIP");
 }
 async function load(){
-  const end=Math.floor(Date.now()/DAY)*DAY, start=end-DAYS*DAY, warm=start-300*MINUTE;
+  const end=Math.floor(Date.now()/DAY)*DAY-2*DAY, start=end-DAYS*DAY, warm=start-300*MINUTE;
   const rows=[];
   for(let day=Math.floor(warm/DAY)*DAY;day<end;day+=DAY){
     const date=new Date(day).toISOString().slice(0,10);
