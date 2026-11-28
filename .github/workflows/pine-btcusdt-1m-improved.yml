@@ -1,4 +1,4 @@
-name: Pine BTCUSDT 1m Improved Backtest
+name: Pine BTCUSDT 1m Improved Backtest (180d)
 on:
   push:
     branches:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,12 +19,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Run BTCUSDT 1m baseline and improved backtests
+      - name: Run BTCUSDT 1m baseline, improved, v2 and v3 backtests (180d)
         run: node scripts/backtest-pine-btcusdt-1m.mjs
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pine-btcusdt-1m-improved-30d
-          path: artifacts/pine-btcusdt-1m-improved-30d.*
+          name: pine-btcusdt-1m-improved-180d
+          path: artifacts/pine-btcusdt-1m-improved-180d.*
           if-no-files-found: warn

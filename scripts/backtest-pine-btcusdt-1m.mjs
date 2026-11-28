@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const BASE = "https://data.binance.vision/data/futures/um/daily/klines";
-const MIN = 60_000, FIFTEEN = 15 * MIN, DAY = 86_400_000, DAYS = 30;
+const MIN = 60_000, FIFTEEN = 15 * MIN, DAY = 86_400_000, DAYS = 180;
 const END = Math.floor(Date.now() / DAY) * DAY - DAY; // latest fully published UTC archive boundary
 const START = END - DAYS * DAY, WARMUP = START - 20 * DAY;
 const SYMBOL = "BTCUSDT"; // Binance USDⓈ-M perpetual historical archive.
@@ -218,7 +218,7 @@ async function main() {
     assumptions: { entry: "next 1m candle open", stopTarget: "levels calculated from signal candle close",
       sizing: "10% equity notional", feePerSide: FEE, slippagePerSide: SLIP, funding: "excluded", commissionPolicy: "0.04% per side applied uniformly to all three variants for fair comparison",
       intrabar: "stop-first if stop and target both touched in one candle",
-      htf: "latest fully closed 15m EMA50; no lookahead" },
+      htf: "latest fully closed higher-timeframe EMA; v2 uses 15m EMA50 and v3 uses 60m EMA200; no lookahead" },
     baseline: { settings: { volumeMultiplier: 1.5, rr: 2, slBuffer: 0.001, htf: false },
       combined: baseline.combined, long: baseline.long, short: baseline.short },
     improved: { settings: { volumeMultiplier: 2, rr: 2.5, slBuffer: 0.002, htf: "15m EMA50" },
@@ -233,8 +233,8 @@ async function main() {
   };
   const { mkdir, writeFile } = await import("node:fs/promises");
   await mkdir("artifacts", { recursive: true });
-  await writeFile("artifacts/pine-btcusdt-1m-improved-30d.json", JSON.stringify(report, null, 2));
-  const lines = ["# BTC 1m Pine backtest: baseline vs improved vs supplied v2", "",
+  await writeFile("artifacts/pine-btcusdt-1m-improved-180d.json", JSON.stringify(report, null, 2));
+  const lines = ["# BTC 1m Pine backtest: baseline vs improved vs supplied v2/v3 (180d)", "",
     "Venue: Binance USDⓈ-M Futures (" + SYMBOL + "), official historical 1m kline archives", "Period: " + period.from + " to " + period.to,
     "Test candles: " + loaded.testRows + " across " + loaded.days + " verified UTC daily archives", "Fees/slippage included as stated assumptions; funding excluded.",
     "Stop-first intrabar assumption. Break-even excluded because it is not implemented in supplied Pine code.", "",
@@ -246,7 +246,7 @@ async function main() {
       (x.profitFactor === null ? "∞" : x.profitFactor.toFixed(3)) + " | $" + x.netPnl.toFixed(2) + " | " +
       x.returnPct.toFixed(3) + "% | " + x.maxDrawdownPct.toFixed(3) + "% |");
   }
-  await writeFile("artifacts/pine-btcusdt-1m-improved-30d.md", lines.join("\n"));
+  await writeFile("artifacts/pine-btcusdt-1m-improved-180d.md", lines.join("\n"));
   console.log(JSON.stringify({ ok: true, venue: report.venue, symbol: SYMBOL, period, data: report.data,
     baseline: { combined: baseline.combined, long: baseline.long, short: baseline.short },
     improved: { combined: improved.combined, long: improved.long, short: improved.short },
