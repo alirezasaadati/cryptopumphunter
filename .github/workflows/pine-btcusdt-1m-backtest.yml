@@ -1,0 +1,33 @@
+name: Pine BTCUSDT 1m 30-day research backtest
+
+on:
+  push:
+    branches:
+      - research/pine-btcusdt-1m-30d-20261128
+    paths:
+      - 'scripts/backtest-pine-btcusdt-1m.mjs'
+      - '.github/workflows/pine-btcusdt-1m-backtest.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pine-btcusdt-1m-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/pine-btcusdt-1m-30d-20261128
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch Binance Futures 1m candles and run exact-rule backtest
+        run: node scripts/backtest-pine-btcusdt-1m.mjs
+      - name: Upload backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pine-btcusdt-1m-30d-report
+          path: artifacts/pine-btcusdt-1m-30d.*
+          if-no-files-found: warn
