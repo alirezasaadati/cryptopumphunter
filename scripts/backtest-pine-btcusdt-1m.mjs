@@ -38,7 +38,7 @@ async function fetchDay(dayMs, tempDir) {
   const checksumResponse = await fetch(url + ".CHECKSUM", { signal: AbortSignal.timeout(30_000) });
   if (!checksumResponse.ok) throw new Error(`Binance checksum unavailable for ${filename} (HTTP ${checksumResponse.status})`);
   const checksumText = await checksumResponse.text();
-  const expectedHash = checksumText.trim().split(/\\s+/)[0].toLowerCase();
+  const expectedHash = checksumText.match(/[a-f0-9]{64}/i)?.[0]?.toLowerCase();
   const actualHash = createHash("sha256").update(bytes).digest("hex");
   if (!/^[a-f0-9]{64}$/.test(expectedHash) || actualHash !== expectedHash) {
     throw new Error(`SHA-256 checksum mismatch for ${filename}`);
