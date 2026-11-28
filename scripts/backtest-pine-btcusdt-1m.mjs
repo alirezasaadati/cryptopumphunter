@@ -20,7 +20,7 @@ async function fetchChunk(fromMs, toMs) {
   const url = new URL(BASE + "/api/charts/v1/trade/" + SYMBOL + "/1m");
   url.searchParams.set("from", String(Math.floor(fromMs / 1000)));
   url.searchParams.set("to", String(Math.floor(toMs / 1000)));
-  url.searchParams.set("count", "1900");
+  url.searchParams.set("count", "600");
   const data = await getJson(url);
   if (!Array.isArray(data?.candles)) throw new Error("Kraken response has no candles array: " + JSON.stringify(data).slice(0, 300));
   if (data.more_candles === true) throw new Error("Kraken returned more candles than requested for chunk " + new Date(fromMs).toISOString());
@@ -35,10 +35,10 @@ async function fetchChunk(fromMs, toMs) {
 
 async function load() {
   const byTime = new Map();
-  const chunkMs = 1800 * MIN;
+  const chunkMs = 600 * MIN;
   let pages = 0;
   for (let from = WARMUP; from < END; from += chunkMs) {
-    const to = Math.min(END, from + chunkMs);
+    const to = Math.min(END, from + chunkMs - MIN);
     const rows = await fetchChunk(from, to);
     for (const candle of rows) byTime.set(candle.time, candle);
     pages++;
