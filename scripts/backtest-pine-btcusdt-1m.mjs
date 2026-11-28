@@ -53,8 +53,8 @@ async function fetchDay(dayMs, tempDir) {
     throw new Error(`Could not extract ${filename}: ${error.message}`);
   }
   const rows = [];
-  for (const line of csv.split(/\\r?\\n/)) {
-    if (!line || !/^\\d/.test(line)) continue; // skip the USD-M CSV header
+  for (const line of csv.split(/\r?\n/)) {
+    if (!line || !/^\d/.test(line)) continue; // skip the USD-M CSV header
     const fields = line.split(",");
     if (fields.length < 6) continue;
     const c = { time: Number(fields[0]), open: Number(fields[1]), high: Number(fields[2]),
