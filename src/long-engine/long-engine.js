@@ -116,6 +116,14 @@ function buildCandidate({setupId,setupName,entryReference,stop,atr5,score,reason
   };
 }
 
+export function isBullish15mRegime(candles) {
+  if(!validateLongCandles(candles,LONG_CONFIG.MIN_15M_CANDLES)) return false;
+  const closes=candles.map(c=>c.close), e20=ema(closes,20), e50=ema(closes,50);
+  const strength=adx(candles), last=candles.at(-1);
+  return !!(strength && e20.at(-1)>e50.at(-1) && e50.at(-1)>e50.at(-2) &&
+    last.close>e20.at(-1) && strength.value>=LONG_CONFIG.MIN_ADX && strength.plus>strength.minus);
+}
+
 /**
  * Evaluates only fully closed candles. Call after each 5m close with the latest
  * fully closed 15m candle set. btcRegimeBullish must be computed from closed BTC data.
