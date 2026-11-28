@@ -19,7 +19,7 @@ async function getJson(url) {
     const body = await res.text();
     if (res.ok) return JSON.parse(body);
     if (![429, 500, 502, 503, 504].includes(res.status) || attempt === 4) {
-      throw new Error("Binance API HTTP " + res.status + ": " + body.slice(0, 300));
+      throw new Error("Market data API HTTP " + res.status + ": " + body.slice(0, 300));
     }
     await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
   }
@@ -32,7 +32,7 @@ async function loadCandles() {
   const rows = [];
   let cursor = warmupStart;
   while (cursor < end) {
-    const url = new URL(BASE + "/fapi/v1/klines");
+    const url = new URL(BASE + "/v5/market/kline");
     url.searchParams.set("category", "linear");
     url.searchParams.set("symbol", SYMBOL);
     url.searchParams.set("interval", "1");
