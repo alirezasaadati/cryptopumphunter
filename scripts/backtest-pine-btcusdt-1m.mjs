@@ -120,15 +120,26 @@ function pivots(a, n) {
   }
   return { hi, lo };
 }
-function aggregate15(a) {
+function aggregateTf(a, minutes) {
   const map = new Map();
   for (const c of a) {
-    const time = Math.floor(c.time / FIFTEEN) * FIFTEEN;
+    const tfMs = minutes * MIN;
+    const time = Math.floor(c.time / tfMs) * tfMs;
     let item = map.get(time);
     if (!item) { item = { time, close: c.close, count: 0 }; map.set(time, item); }
     item.close = c.close; item.count++;
   }
-  return [...map.values()].filter(x => x.count === 15).sort((a, b) => a.time - b.time);
+  return [...map.values()].filter(x => x.count === minutes).sort((a, b) => a.time - b.time);
+}
+function rsi(values, n) {
+  const out = Array(values.length).fill(null);
+  if (values.length <= n) return out;
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= n; i++) { const d = values[i] - values[i - 1]; gain += Math.max(d, 0); loss += Math.max(-d, 0); }
+  let avgGain = gain / n, avgLoss = loss / n;
+  out[n] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = n + 1; i < values.length; i++) { const d = values[i] - values[i - 1]; avgGain = (avgGain * (n - 1) + Math.max(d, 0)) / n; avgLoss = (avgLoss * (n - 1) + Math.max(-d, 0)) / n; out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss); }
+  return out;
 }
 function stats(trades) {
   let equity = INITIAL, peak = INITIAL, maxDD = 0, grossWin = 0, grossLoss = 0;
@@ -138,10 +149,11 @@ function stats(trades) {
     profitFactor: grossLoss ? grossWin / grossLoss : grossWin ? null : 0, netPnl: equity - INITIAL,
     returnPct: (equity / INITIAL - 1) * 100, maxDrawdownPct: maxDD * 100, endingEquity: equity };
 }
-function runTest(a, improved, v2 = false, allowLong = true) {
-  const close = a.map(x => x.close), ema20 = ema(close, 20), avgVol = sma(a.map(x => x.volume), 20), pv = pivots(a, 10);
-  const htf = aggregate15(a), ema50 = ema(htf.map(x => x.close), 50);
-  let resistance = null, support = null, htfIndex = -1, position = null;
+function runTest(a, improved, v2 = false, allowLong = true, v3 = false) {
+  const close = a.map(x => x.close), ema20 = ema(close, 20), avgVol = sma(a.map(x => x.volume), 20), pv = pivots(a, v3 ? 8 : 10);
+  const htfMinutes = v3 ? 60 : 15, htf = aggregateTf(a, htfMinutes), htfEma = ema(htf.map(x => x.close), v3 ? 200 : 50);
+  const rsiBars = v3 ? aggregateTf(a, 5) : [], rsi5 = v3 ? rsi(rsiBars.map(x => x.close), 14) : [];
+  let resistance = null, support = null, htfIndex = -1, rsiIndex = -1, position = null;
   const trades = [], first = a.findIndex(x => x.time >= START);
   function closePosition(candle, rawPrice, reason) {
     const p = position;
@@ -156,7 +168,8 @@ function runTest(a, improved, v2 = false, allowLong = true) {
   }
   for (let i = 0; i < a.length; i++) {
     const c = a[i];
-    while (htfIndex + 1 < htf.length && htf[htfIndex + 1].time + FIFTEEN <= c.time + MIN) htfIndex++;
+    while (htfIndex + 1 < htf.length && htf[htfIndex + 1].time + htfMinutes * MIN <= c.time + MIN) htfIndex++;
+    while (v3 && rsiIndex + 1 < rsiBars.length && rsiBars[rsiIndex + 1].time + 5 * MIN <= c.time + MIN) rsiIndex++;
     if (pv.hi[i] !== null) resistance = pv.hi[i];
     if (pv.lo[i] !== null) support = pv.lo[i];
     if (position) {
@@ -170,16 +183,19 @@ function runTest(a, improved, v2 = false, allowLong = true) {
         closePosition(c, gap ? c.open : position.target, "TARGET");
       }
     }
-    if (i < first || i >= a.length - 1 || position || ema20[i] === null || avgVol[i] === null || htfIndex < 0 || ema50[htfIndex] === null) continue;
-    const range = c.high - c.low, body = c.close - c.open, volumeOK = c.volume > avgVol[i] * (improved || v2 ? 2 : 1.5);
+    if (i < first || i >= a.length - 1 || position || ema20[i] === null || avgVol[i] === null || htfIndex < 0 || htfEma[htfIndex] === null || (v3 && (rsiIndex < 0 || rsi5[rsiIndex] === null))) continue;
+    const range = c.high - c.low, body = c.close - c.open, volumeOK = c.volume > avgVol[i] * (v3 ? 1.8 : (improved || v2 ? 2 : 1.5));
     const bullish = body > 0 && c.close > ema20[i] && body > range * 0.6;
     const bearish = body < 0 && c.close < ema20[i] && -body > range * 0.6;
     const nearSupport = support !== null && c.low <= support * 1.001 && c.close > support;
     const nearResistance = resistance !== null && c.high >= resistance * 0.999 && c.close < resistance;
-    const inTimeWindow = !v2 || (new Date(c.time).getUTCHours() >= 8 && new Date(c.time).getUTCHours() < 22);
-    const longSignal = allowLong && nearSupport && c.close > ema20[i] && (!(improved || v2) || c.close > ema50[htfIndex]) && bullish && volumeOK && inTimeWindow;
-    const shortSignal = nearResistance && c.close < ema20[i] && (!(improved || v2) || c.close < ema50[htfIndex]) && bearish && volumeOK && inTimeWindow;
-    const buffer = (improved || v2) ? 0.002 : 0.001, rr = (improved || v2) ? 2.5 : 2, next = a[i + 1];
+    const hour = new Date(c.time).getUTCHours();
+    const inTimeWindow = v3 ? (hour >= 8 && hour < 20) : (!v2 || (hour >= 8 && hour < 22));
+    const htfOkLong = c.close > htfEma[htfIndex], htfOkShort = c.close < htfEma[htfIndex];
+    const rsiLongOk = !v3 || rsi5[rsiIndex] < 40, rsiShortOk = !v3 || rsi5[rsiIndex] > 60;
+    const longSignal = allowLong && nearSupport && c.close > ema20[i] && (v3 ? htfOkLong : (!(improved || v2) || htfOkLong)) && bullish && volumeOK && inTimeWindow && rsiLongOk;
+    const shortSignal = nearResistance && c.close < ema20[i] && (v3 ? htfOkShort : (!(improved || v2) || htfOkShort)) && bearish && volumeOK && inTimeWindow && rsiShortOk;
+    const buffer = (v3 || improved || v2) ? 0.002 : 0.001, rr = (v3 || improved || v2) ? 2.5 : 2, next = a[i + 1];
     if (longSignal) {
       const stop = support * (1 - buffer), risk = c.close - stop;
       if (risk > 0) position = { side: "LONG", signalTime: c.time, entryTime: next.time, entry: next.open, stop, target: c.close + risk * rr, equity: stats(trades).endingEquity };
@@ -194,6 +210,7 @@ function runTest(a, improved, v2 = false, allowLong = true) {
 async function main() {
   const loaded = await load(), candles = loaded.rows;
   const baseline = runTest(candles, false), improved = runTest(candles, true), v2 = runTest(candles, false, true), v2ShortOnly = runTest(candles, false, true, false);
+  const v3 = runTest(candles, false, false, true, true), v3ShortOnly = runTest(candles, false, false, false, true);
   const period = { from: new Date(START).toISOString(), to: new Date(END).toISOString(), days: DAYS };
   const report = {
     venue: "Binance USDⓈ-M Futures", symbol: SYMBOL, timeframe: "1m", priceFeed: "official daily historical kline archives",
@@ -209,9 +226,10 @@ async function main() {
       breakEven: "not implemented in supplied Pine code" },
     v2: { settings: { volumeMultiplier: 2, rr: 2.5, slBuffer: 0.002, htf: "15m EMA50", timeFilterUTC: "08:00-22:00", commissionPerSide: 0.0004 },
       combined: v2.combined, long: v2.long, short: v2.short },
-    v2ShortOnly: { settings: { ...{ volumeMultiplier: 2, rr: 2.5, slBuffer: 0.002, htf: "15m EMA50", timeFilterUTC: "08:00-22:00", commissionPerSide: 0.0004 }, longEntries: false },
-      combined: v2ShortOnly.combined, long: v2ShortOnly.long, short: v2ShortOnly.short },
-    trades: { baseline: baseline.trades, improved: improved.trades, v2: v2.trades, v2ShortOnly: v2ShortOnly.trades }
+    v2ShortOnly: { settings: { volumeMultiplier: 2, rr: 2.5, slBuffer: 0.002, htf: "15m EMA50", timeFilterUTC: "08:00-22:00", commissionPerSide: 0.0004, longEntries: false }, combined: v2ShortOnly.combined, long: v2ShortOnly.long, short: v2ShortOnly.short },
+    v3: { settings: { volumeMultiplier: 1.8, rr: 2.5, slBuffer: 0.002, htf: "60m EMA200", pivotLength: 8, rsi5m: "14; short >60; long <40", timeFilterUTC: "08:00-20:00", commissionPerSide: FEE }, combined: v3.combined, long: v3.long, short: v3.short },
+    v3ShortOnly: { settings: { volumeMultiplier: 1.8, rr: 2.5, slBuffer: 0.002, htf: "60m EMA200", pivotLength: 8, rsi5m: "14; short >60; long <40", timeFilterUTC: "08:00-20:00", commissionPerSide: FEE, longEntries: false }, combined: v3ShortOnly.combined, long: v3ShortOnly.long, short: v3ShortOnly.short },
+    trades: { baseline: baseline.trades, improved: improved.trades, v2: v2.trades, v2ShortOnly: v2ShortOnly.trades, v3: v3.trades, v3ShortOnly: v3ShortOnly.trades }
   };
   const { mkdir, writeFile } = await import("node:fs/promises");
   await mkdir("artifacts", { recursive: true });
@@ -222,7 +240,7 @@ async function main() {
     "Stop-first intrabar assumption. Break-even excluded because it is not implemented in supplied Pine code.", "",
     "| Variant | Side | Trades | Win rate | PF | Net PnL | Return | Max DD |",
     "|---|---|---:|---:|---:|---:|---:|---:|"];
-  for (const variant of ["baseline", "improved", "v2", "v2ShortOnly"]) for (const side of ["combined", "long", "short"]) {
+  for (const variant of ["baseline", "improved", "v2", "v3", "v2ShortOnly", "v3ShortOnly"]) for (const side of ["combined", "long", "short"]) {
     const x = report[variant][side];
     lines.push("| " + variant + " | " + side + " | " + x.trades + " | " + x.winRate.toFixed(2) + "% | " +
       (x.profitFactor === null ? "∞" : x.profitFactor.toFixed(3)) + " | $" + x.netPnl.toFixed(2) + " | " +
@@ -233,6 +251,6 @@ async function main() {
     baseline: { combined: baseline.combined, long: baseline.long, short: baseline.short },
     improved: { combined: improved.combined, long: improved.long, short: improved.short },
     v2: { combined: v2.combined, long: v2.long, short: v2.short },
-    v2ShortOnly: { combined: v2ShortOnly.combined, long: v2ShortOnly.long, short: v2ShortOnly.short } }, null, 2));
+    v2ShortOnly: { combined: v2ShortOnly.combined, long: v2ShortOnly.long, short: v2ShortOnly.short }, v3: { combined: v3.combined, long: v3.long, short: v3.short }, v3ShortOnly: { combined: v3ShortOnly.combined, long: v3ShortOnly.long, short: v3ShortOnly.short } }, null, 2));
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
